@@ -1,18 +1,68 @@
 @CONFIG(
   version    -> "1.0.0"
-  generated  -> "2026-04-13T21:34:59Z"
+  generated  -> "2026-04-14T07:33:53Z"
   features   -> "data"
   debug_mode -> "off"
 )
 
 @DATA(
   template      = ".mdix/project_structure/project_structure.mdix"
-  template_hash = "01ba4719c80b"
-  last_run      = "2026-04-13T21:34:59Z"
-  new_this_run  = 0
+  template_hash = "ac76cda38a68"
+  last_run      = "2026-04-14T07:33:53Z"
+  new_this_run  = 47
   overridden    = 0
-  skipped       = 0
+  skipped       = 1
+  deleted       = 0
+  renamed       = 0
+  updated       = 0
 
   created_files::
     "(none)"
+    ".gitignore"
+    ".vscode/extensions.json"
+    ".vscode/settings.json"
+    "Cargo.toml"
+    "crates/mid-common/Cargo.toml"
+    "crates/mid-common/src/error.rs"
+    "crates/mid-common/src/lib.rs"
+    "crates/mid-common/src/traits.rs"
+    "crates/mid-common/src/types.rs"
+    "crates/mid-ecs/Cargo.toml"
+    "crates/mid-ecs/src/archetype.rs"
+    "crates/mid-ecs/src/ffi.rs"
+    "crates/mid-ecs/src/lib.rs"
+    "crates/mid-ecs/src/query.rs"
+    "crates/mid-ecs/src/sync.rs"
+    "crates/mid-ecs/src/world.rs"
+    "crates/mid-log/Cargo.toml"
+    "crates/mid-log/src/buffer.rs"
+    "crates/mid-log/src/ffi.rs"
+    "crates/mid-log/src/level.rs"
+    "crates/mid-log/src/lib.rs"
+    "crates/mid-log/src/writer.rs"
+    "crates/mid-math/Cargo.toml"
+    "crates/mid-math/src/ffi.rs"
+    "crates/mid-math/src/lib.rs"
+    "crates/mid-math/src/mat.rs"
+    "crates/mid-math/src/quat.rs"
+    "crates/mid-math/src/vec.rs"
+    "crates/mid-net/Cargo.toml"
+    "crates/mid-net/src/ffi.rs"
+    "crates/mid-net/src/lib.rs"
+    "crates/mid-net/src/packet.rs"
+    "crates/mid-net/src/reliable.rs"
+    "crates/mid-net/src/sequence.rs"
+    "crates/mid-net/src/socket.rs"
+    "docs/architecture.md"
+    "docs/dev-setup.md"
+    "docs/mid-ecs.md"
+    "docs/mid-log.md"
+    "docs/mid-net.md"
+    "examples/headless-server/Cargo.toml"
+    "examples/headless-server/src/main.rs"
+    "packets/player-event.mdix"
+    "packets/player-state.mdix"
+    "rust-toolchain.toml"
+    "tools/mdix-compiler/Cargo.toml"
+    "tools/mdix-compiler/src/main.rs"
 )

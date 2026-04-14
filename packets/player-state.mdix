@@ -1,0 +1,19 @@
+@CONFIG(
+  version -> "1.0.0"
+  features -> "data"
+)
+
+@DATA(
+  // Unreliable — sent every tick, loss is acceptable
+  channel    = "unreliable"
+  tick_rate  = 128
+
+  player-state:
+    x         = 0.0
+    y         = 0.0
+    z         = 0.0
+    rot-x     = 0.0
+    rot-y     = 0.0
+    rot-z     = 0.0
+    rot-w     = 1.0
+)

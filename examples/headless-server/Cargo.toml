@@ -1,0 +1,14 @@
+[package]
+name = "headless-server"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "headless-server"
+path = "src/main.rs"
+
+[dependencies]
+mid-log    = { path = "../../crates/mid-log" }
+mid-net    = { path = "../../crates/mid-net" }
+mid-ecs    = { path = "../../crates/mid-ecs" }
+mid-common = { path = "../../crates/mid-common" }

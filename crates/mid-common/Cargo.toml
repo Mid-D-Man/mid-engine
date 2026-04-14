@@ -1,0 +1,10 @@
+[package]
+name = "mid-common"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "mid_common"
+crate-type = ["lib"]
+
+[dependencies]

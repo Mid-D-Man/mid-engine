@@ -1,0 +1,14 @@
+@CONFIG(
+  version -> "1.0.0"
+  features -> "data"
+)
+
+@DATA(
+  // Reliable — must arrive
+  channel = "reliable"
+
+  player-event:
+    player-id = 0
+    event     = "unknown"
+    payload   = ""
+)

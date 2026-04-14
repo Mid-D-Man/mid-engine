@@ -1,0 +1,22 @@
+[workspace]
+members = [
+    "crates/mid-log",
+    "crates/mid-net",
+    "crates/mid-ecs",
+    "crates/mid-math",
+    "crates/mid-common",
+    "tools/mdix-compiler",
+    "examples/headless-server",
+]
+resolver = "2"
+
+[profile.release]
+opt-level     = 3
+lto           = true
+codegen-units = 1
+strip         = true
+debug         = false
+
+[profile.dev]
+opt-level = 0
+debug     = true

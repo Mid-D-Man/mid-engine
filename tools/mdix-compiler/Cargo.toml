@@ -1,0 +1,12 @@
+[package]
+name = "mdix-compiler"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "mdix-compiler"
+path = "src/main.rs"
+
+[dependencies]
+dixscript = "1.0.0"
+clap      = { version = "4", features = ["derive"] }

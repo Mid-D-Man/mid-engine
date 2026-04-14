@@ -1,0 +1,17 @@
+[package]
+name = "mid-log"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "mid_log"
+crate-type = ["lib", "cdylib", "staticlib"]
+
+[dependencies]
+rtrb              = "0.3"
+crossbeam-channel = "0.5"
+chrono            = { version = "0.4", features = ["serde"] }
+
+[features]
+default   = []
+backtrace = []

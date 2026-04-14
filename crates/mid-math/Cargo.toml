@@ -1,0 +1,14 @@
+[package]
+name = "mid-math"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "mid_math"
+crate-type = ["lib", "cdylib", "staticlib"]
+
+[dependencies]
+
+[features]
+default = []
+simd    = []
