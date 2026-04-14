@@ -1,1 +1,188 @@
+@CONFIG(
+  version    -> "1.0.0"
+  author     -> "Mid-D-Man"
+  features   -> "quickfuncs,data"
+  debug_mode -> "off"
+)
 
+@QUICKFUNCS(
+  ~f<object>(name, ext) {
+    return {
+      name    = name
+      ext     = ext
+      content = ""
+    }
+  }
+
+  ~fc<object>(name, ext, content) {
+    return {
+      name    = name
+      ext     = ext
+      content = content
+    }
+  }
+
+  ~gitkeep<object>() {
+    return {
+      name    = ".gitkeep"
+      ext     = ""
+      content = ""
+    }
+  }
+
+  ~hidden<object>(segment) {
+    return {
+      segment = segment
+    }
+  }
+)
+
+@DATA(
+  project_name = "mid-engine"
+  description  = "Mid Engine — The Middle Man Modular Anti-Engine"
+  author       = "Mid-D-Man"
+
+  hidden_dirs::
+    hidden("vscode")
+
+  // --- IDE ---
+  vscode::
+    fc("extensions", "json", "{\n  \"recommendations\": [\n    \"rust-lang.rust-analyzer\",\n    \"vadimcn.vscode-lldb\",\n    \"tamasfe.even-better-toml\"\n  ]\n}\n")
+    fc("settings",   "json", "{\n  \"rust-analyzer.checkOnSave.command\": \"clippy\",\n  \"editor.formatOnSave\": true\n}\n")
+
+  // --- crates/mid-log ---
+  crates.mid-log::
+    fc("Cargo", "toml",
+      "[package]\nname = \"mid-log\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[lib]\nname = \"mid_log\"\ncrate-type = [\"lib\", \"cdylib\", \"staticlib\"]\n\n[dependencies]\nrtrb              = \"0.3\"\ncrossbeam-channel = \"0.5\"\nchrono            = { version = \"0.4\", features = [\"serde\"] }\n\n[features]\ndefault   = []\nbacktrace = []\n")
+
+  crates.mid-log.src::
+    fc("lib",    "rs",
+      "//! mid-log — Non-blocking, tiered logger\n//!\n//! Lock-free SPSC ring buffer (rtrb) on the hot path.\n//! A background IO thread handles formatting and disk writes.\n//! Zero frame-rate impact — unlike Unity's Debug.Log.\n\npub mod buffer;\npub mod level;\npub mod writer;\npub mod ffi;\n\npub use level::{LogLevel, Tier};\npub use buffer::LogBuffer;\n")
+    fc("level",  "rs",
+      "//! Log levels and tier metadata.\n\n/// Log level — ordered least to most severe.\n#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]\npub enum LogLevel {\n    /// Per-frame firehose. Enable only in transient debug sessions.\n    Trace = 0,\n    Info  = 1,\n    Warn  = 2,\n    /// Non-fatal. Stack trace behind the 'backtrace' feature flag.\n    Error = 3,\n    /// Immediate memory dump + shutdown.\n    Fatal = 4,\n}\n\n/// Which engine tier produced this log entry.\n#[derive(Debug, Clone, Copy, PartialEq, Eq)]\npub enum Tier {\n    /// Engine internals — [LOW]\n    Low,\n    /// Gameplay logic — [HIGH]\n    High,\n}\n\nimpl std::fmt::Display for Tier {\n    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {\n        match self {\n            Tier::Low  => write!(f, \"LOW\"),\n            Tier::High => write!(f, \"HIGH\"),\n        }\n    }\n}\n")
+    fc("buffer", "rs",
+      "//! Lock-free SPSC ring buffer for the hot logging path.\n//!\n//! Game thread pushes log entries into rtrb.\n//! Background IO thread drains the buffer.\n// Auto-generated stub\n")
+    fc("writer", "rs",
+      "//! Background IO thread — formats and writes log entries to disk.\n//!\n//! Runs on a dedicated thread so the game loop is never blocked.\n// Auto-generated stub\n")
+    fc("ffi",    "rs",
+      "//! C-compatible FFI exports for mid-log.\n//!\n//! Every Mid Engine crate exposes a C API.\n//! Generated header lives in headers/mid_log.h\n// Auto-generated stub\n")
+
+  // --- crates/mid-net ---
+  crates.mid-net::
+    fc("Cargo", "toml",
+      "[package]\nname = \"mid-net\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[lib]\nname = \"mid_net\"\ncrate-type = [\"lib\", \"cdylib\", \"staticlib\"]\n\n[dependencies]\ndixscript = \"1.0.0\"\ntokio     = { version = \"1\", features = [\"full\"] }\nbytes     = \"1.5\"\nbincode   = \"1.3\"\n\n[features]\ndefault = []\n")
+
+  crates.mid-net.src::
+    fc("lib",      "rs",
+      "//! mid-net — Reliable UDP + DixScript packet serialization\n//!\n//! Unreliable channel : position, rotation, animation state (128 Hz)\n//! Reliable channel   : discrete events — join, pickup, damage\n//!\n//! Packet *shapes* are defined in .mdix files.\n//! Wire encoding uses bincode for zero-copy byte layout.\n//!\n//! 7.8ms budget per tick at 128 Hz. Design the packet budget early.\n\npub mod socket;\npub mod packet;\npub mod reliable;\npub mod sequence;\npub mod ffi;\n\npub use socket::MidSocket;\npub use packet::Packet;\n")
+    fc("socket",   "rs",
+      "//! Raw UDP socket abstraction.\n// Auto-generated stub\n")
+    fc("packet",   "rs",
+      "//! Packet type — shape defined via .mdix, encoded via bincode on the wire.\n//!\n//! DixScript gives us AES-256 encrypted packet definitions for free.\n//! Benchmark dixscript deserializer vs bincode early at 128 Hz.\n// Auto-generated stub\n")
+    fc("reliable", "rs",
+      "//! Selective-reliability layer on top of UDP.\n//!\n//! Unreliable: position / rotation / animation (can drop freely)\n//! Reliable  : join, pickup, damage (sequence numbers + ACK + retransmit)\n//!\n//! No head-of-line blocking — a lost position packet is just stale.\n// Auto-generated stub\n")
+    fc("sequence", "rs",
+      "//! Sequence number management and ACK tracking.\n// Auto-generated stub\n")
+    fc("ffi",      "rs",
+      "//! C-compatible FFI exports for mid-net.\n// Auto-generated stub\n")
+
+  // --- crates/mid-ecs ---
+  crates.mid-ecs::
+    fc("Cargo", "toml",
+      "[package]\nname = \"mid-ecs\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[lib]\nname = \"mid_ecs\"\ncrate-type = [\"lib\", \"cdylib\", \"staticlib\"]\n\n[dependencies]\nrayon = \"1.8\"\n\n[features]\ndefault = []\n")
+
+  crates.mid-ecs.src::
+    fc("lib",       "rs",
+      "//! mid-ecs — Data-oriented ECS (Structure of Arrays layout)\n//!\n//! Target: 100 000+ entities per core at 60 Hz physics frequency.\n//! Queries parallelised via rayon.\n//!\n//! Multiplayer-first: the sync module marks components for\n//! mid-net replication from day one.\n\npub mod world;\npub mod archetype;\npub mod query;\npub mod sync;\npub mod ffi;\n\npub use world::World;\n")
+    fc("world",     "rs",
+      "//! The ECS world — entity allocator + archetype registry.\n// Auto-generated stub\n")
+    fc("archetype", "rs",
+      "//! Archetype storage — SoA column layout per component type.\n//!\n//! Entities sharing the same component set live in one archetype.\n//! Components stored in contiguous arrays → cache-friendly iteration.\n// Auto-generated stub\n")
+    fc("query",     "rs",
+      "//! Query iterator — zero-allocation, parallelisable via rayon.\n// Auto-generated stub\n")
+    fc("sync",      "rs",
+      "//! Network sync — marks components for mid-net replication.\n//!\n//! This is the Multiplayer-First mandate in practice:\n//! networking is baked into the ECS, not bolted on later.\n// Auto-generated stub\n")
+    fc("ffi",       "rs",
+      "//! C-compatible FFI exports for mid-ecs.\n// Auto-generated stub\n")
+
+  // --- crates/mid-math ---
+  crates.mid-math::
+    fc("Cargo", "toml",
+      "[package]\nname = \"mid-math\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[lib]\nname = \"mid_math\"\ncrate-type = [\"lib\", \"cdylib\", \"staticlib\"]\n\n[dependencies]\n\n[features]\ndefault = []\nsimd    = []\n")
+
+  crates.mid-math.src::
+    fc("lib",  "rs",
+      "//! mid-math — SIMD-optimized numerics\n//!\n//! Vec2 / Vec3 / Vec4 / Mat4 / Quat.\n//! Enable the 'simd' feature for std::simd acceleration.\n\npub mod vec;\npub mod mat;\npub mod quat;\npub mod ffi;\n")
+    fc("vec",  "rs",
+      "//! Vector types — Vec2, Vec3, Vec4.\n// Auto-generated stub\n")
+    fc("mat",  "rs",
+      "//! Matrix types — Mat4.\n// Auto-generated stub\n")
+    fc("quat", "rs",
+      "//! Quaternion type.\n// Auto-generated stub\n")
+    fc("ffi",  "rs",
+      "//! C-compatible FFI exports for mid-math.\n// Auto-generated stub\n")
+
+  // --- crates/mid-common ---
+  crates.mid-common::
+    fc("Cargo", "toml",
+      "[package]\nname = \"mid-common\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[lib]\nname = \"mid_common\"\ncrate-type = [\"lib\"]\n\n[dependencies]\n")
+
+  crates.mid-common.src::
+    fc("lib",    "rs",
+      "//! mid-common — Shared types and traits\n//!\n//! All other crates depend on this. No circular deps.\n\npub mod traits;\npub mod types;\npub mod error;\n")
+    fc("traits", "rs",
+      "//! Core traits shared across crates.\n//! e.g. NetworkSync, Serialize, TickUpdate\n// Auto-generated stub\n")
+    fc("types",  "rs",
+      "//! Common concrete types.\n//! e.g. EntityId, TickId, PlayerId\n// Auto-generated stub\n")
+    fc("error",  "rs",
+      "//! Unified error type for Mid Engine.\n// Auto-generated stub\n")
+
+  // --- tools/mdix-compiler ---
+  tools.mdix-compiler::
+    fc("Cargo", "toml",
+      "[package]\nname = \"mdix-compiler\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[[bin]]\nname = \"mdix-compiler\"\npath = \"src/main.rs\"\n\n[dependencies]\ndixscript = \"1.0.0\"\nclap      = { version = \"4\", features = [\"derive\"] }\n")
+
+  tools.mdix-compiler.src::
+    fc("main", "rs",
+      "//! mdix-compiler — compiles .mdix packet definitions for mid-net.\n//!\n//! Run at build time to validate packet shape files before\n//! they reach the wire encoder.\n\nfn main() {\n    println!(\"mdix-compiler v0.1.0\");\n}\n")
+
+  // --- examples/headless-server ---
+  examples.headless-server::
+    fc("Cargo", "toml",
+      "[package]\nname = \"headless-server\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[[bin]]\nname = \"headless-server\"\npath = \"src/main.rs\"\n\n[dependencies]\nmid-log    = { path = \"../../crates/mid-log\" }\nmid-net    = { path = \"../../crates/mid-net\" }\nmid-ecs    = { path = \"../../crates/mid-ecs\" }\nmid-common = { path = \"../../crates/mid-common\" }\n")
+
+  examples.headless-server.src::
+    fc("main", "rs",
+      "//! headless-server — integration smoke test\n//!\n//! Verifies mid-log + mid-net + mid-ecs work together\n//! before any rendering layer is added.\n//!\n//! No GPU required. Runs on the 2010 MacBook Pro.\n//! Heavy release builds cross-compile via GitHub Actions.\n\nfn main() {\n    println!(\"Mid Engine headless server starting...\");\n    // TODO: init mid-log ring buffer\n    // TODO: bind mid-net UDP socket\n    // TODO: tick mid-ecs world at 60 Hz\n    // TODO: run mid-net at 128 Hz\n}\n")
+
+  // --- packet definitions (.mdix) ---
+  packets::
+    fc("player-state", "mdix",
+      "@CONFIG(\n  version -> \"1.0.0\"\n  features -> \"data\"\n)\n\n@DATA(\n  // Unreliable — sent every tick, loss is acceptable\n  channel    = \"unreliable\"\n  tick_rate  = 128\n\n  player-state:\n    x         = 0.0\n    y         = 0.0\n    z         = 0.0\n    rot-x     = 0.0\n    rot-y     = 0.0\n    rot-z     = 0.0\n    rot-w     = 1.0\n)\n")
+    fc("player-event", "mdix",
+      "@CONFIG(\n  version -> \"1.0.0\"\n  features -> \"data\"\n)\n\n@DATA(\n  // Reliable — must arrive\n  channel = \"reliable\"\n\n  player-event:\n    player-id = 0\n    event     = \"unknown\"\n    payload   = \"\"\n)\n")
+
+  // --- docs ---
+  docs::
+    fc("architecture",  "md",
+      "# Mid Engine Architecture\n\nModular Anti-Engine — each crate is independently publishable.\n\n## Crates\n\n| Crate | Role | Priority |\n|---|---|---|\n| mid-log | Non-blocking tiered logger | 1 |\n| mid-net | Reliable UDP + DixScript | 2 |\n| mid-ecs | Data-oriented ECS (SoA) | 3 |\n| mid-math | SIMD numerics | 4 |\n| mid-common | Shared types and traits | 0 |\n\n## Technical Mandates\n\n- **No exceptions** — everything fast and memory-safe\n- **Zero-copy** — minimize RAM-to-RAM movement\n- **Multiplayer-first** — net sync baked into ECS from day one\n- **FFI-ready** — every crate exposes a C-compatible API\n\n## Performance Targets\n\n| System | Frequency | Budget |\n|---|---|---|\n| Network tick | 128 Hz | 7.8 ms |\n| Physics | 60 Hz | 16.6 ms |\n| Max entities | 100 000+ per core | — |\n")
+    fc("mid-log",       "md",
+      "# mid-log\n\nNon-blocking tiered logger using a lock-free SPSC ring buffer (rtrb).\n\n## Design\n\nThe game thread pushes log entries into the ring buffer.\nA background IO thread drains it and writes to disk.\nZero frame-rate impact — unlike Unity's Debug.Log.\n\n## Log Levels\n\n| Level | Use |\n|---|---|\n| TRACE | Per-frame firehose — transient mode only |\n| INFO | Normal events |\n| WARN | Recoverable issues |\n| ERROR | Non-fatal failures (stack trace behind 'backtrace' feature) |\n| FATAL | Immediate memory dump + shutdown |\n\n## Tier Metadata\n\nEvery entry is tagged [LOW] (engine internals) or [HIGH] (gameplay logic).\nPrepared for Ubel Stratum integration.\n")
+    fc("mid-net",       "md",
+      "# mid-net\n\nReliable UDP with DixScript (.mdix) packet definitions.\n\n## Why UDP\n\nTCP head-of-line blocking stalls all packets when one is lost.\nFor position updates at 128 Hz, a dropped packet is just stale — skip it.\nUDP delivers the next packet immediately.\n\n## Two Channels\n\n| Channel | Content | Loss behaviour |\n|---|---|---|\n| Unreliable | position, rotation, animation | drop freely |\n| Reliable | join, pickup, damage, events | ACK + retransmit |\n\n## DixScript Integration\n\nPacket shapes are defined in `.mdix` files under `packets/`.\nThe wire encoder uses bincode for zero-copy byte layout.\n\n**Important:** benchmark the DixScript deserializer vs bincode\nearly in development. At 128 Hz with many entities the per-packet\noverhead matters. Use DixScript for definitions; consider a\nseparate fast path for in-flight bytes if needed.\n\n## Packet Budget\n\n7.8 ms per tick at 128 Hz. Design entity delta budgets early.\nThis constrains everything else in the networking system.\n")
+    fc("mid-ecs",       "md",
+      "# mid-ecs\n\nData-oriented ECS using Structure of Arrays (SoA) layout.\n\n## Target\n\n100 000+ entities at 60 Hz physics on a single core.\nParallelised queries via rayon.\n\n## Archetype Model\n\nEntities with the same component set share an archetype.\nComponents stored in contiguous arrays — cache-friendly iteration.\n\n## Network Sync\n\nThe `sync` module marks components for mid-net replication.\nThis is the Multiplayer-First mandate in practice:\nnetworking is baked into the ECS from day one, not bolted on later.\n")
+    fc("dev-setup",     "md",
+      "# Dev Setup\n\n## Local — 2010 MacBook Pro\n\nDevelop headless. No GPU required. The old Mac's GPU drivers\nare a dead end; the CPU is perfectly capable of running\nheadless logic, tests, and ECS simulations.\n\n```bash\n# Build one crate at a time — saves your CPU\ncargo build -p mid-log\ncargo build -p mid-net\ncargo build -p mid-ecs\n\n# Tests\ncargo test -p mid-log\ncargo test -p mid-ecs\n\n# Run the headless integration smoke test\ncargo run --example headless-server\n```\n\n## Cloud Builds — GitHub Actions\n\nPush to main triggers cross-compilation to Linux x86_64.\nAll heavy Release builds run in Actions — not on the Mac.\nThis is the correct strategy for limited local hardware.\n\n## Workspace Structure\n\n```\nmid-engine/\n  crates/\n    mid-log/        # Build first — it is the eyes of the engine\n    mid-net/        # Depends on mid-common\n    mid-ecs/        # Depends on mid-common\n    mid-math/       # No internal deps\n    mid-common/     # No internal deps — build this first\n  tools/\n    mdix-compiler/  # Validates packet .mdix files at build time\n  examples/\n    headless-server/\n  packets/          # .mdix packet shape definitions\n  docs/\n```\n")
+
+  // --- root ---
+  root::
+    fc("README", "md",
+      "# Mid Engine\n\n> The Middle Man — Modular Anti-Engine\n\nUnity is a black box. Unreal needs unlimited hardware.\nMid is for the Mad Scientists who want a modular,\nhigh-speed toolkit they can actually control.\n\n## Crates\n\n| Crate | Role |\n|---|---|\n| `mid-log` | Non-blocking tiered logger |\n| `mid-net` | Reliable UDP + DixScript networking |\n| `mid-ecs` | Data-oriented Entity Component System |\n| `mid-math` | SIMD-optimized numerics |\n| `mid-common` | Shared types and traits |\n\n## Performance Targets\n\n| System | Frequency |\n|---|---|\n| Network tick | 128 Hz |\n| Physics | 60 Hz |\n| Max entities | 100 000+ per core |\n\n## Getting Started\n\n```bash\ncargo build\ncargo test\ncargo run --example headless-server\n```\n\nSee `docs/` for architecture details and `packets/` for\nDixScript packet definitions.\n")
+    fc("Cargo", "toml",
+      "[workspace]\nmembers = [\n    \"crates/mid-log\",\n    \"crates/mid-net\",\n    \"crates/mid-ecs\",\n    \"crates/mid-math\",\n    \"crates/mid-common\",\n    \"tools/mdix-compiler\",\n    \"examples/headless-server\",\n]\nresolver = \"2\"\n\n[profile.release]\nopt-level     = 3\nlto           = true\ncodegen-units = 1\nstrip         = true\ndebug         = false\n\n[profile.dev]\nopt-level = 0\ndebug     = true\n")
+    fc(".gitignore", "",
+      "target/\ndist/\n.env\n*.log\n.DS_Store\n**/.DS_Store\n*.enc\n*.key\n")
+    fc("rust-toolchain", "toml",
+      "[toolchain]\nchannel = \"stable\"\n")
+)
