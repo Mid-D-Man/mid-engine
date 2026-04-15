@@ -31,12 +31,18 @@ impl std::fmt::Display for LogLevel {
     }
 }
 
-/// Engine tier — tags every log entry so you know where it came from.
+/// Engine tier — every log entry is tagged so you know exactly where it came from.
+///
+/// | Tier | C constant      | Description                        |
+/// |------|-----------------|------------------------------------|
+/// | Low  | MID_TIER_LOW  0 | Engine internals — physics, net, ECS |
+/// | Mid  | MID_TIER_MID  1 | Engine-adjacent — scripting, tools |
+/// | High | MID_TIER_HIGH 2 | Gameplay logic — player, AI, events|
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Tier {
     /// Engine internals. Printed as [LOW ].
     Low,
-    /// Arena allocated memory tier. Printed as [MID ].
+    /// Engine-adjacent systems. Printed as [MID ].
     Mid,
     /// Gameplay logic. Printed as [HIGH].
     High,
@@ -51,7 +57,8 @@ impl Tier {
         }
     }
 
-    /// Convert from the C ABI representation (0 = Low, 1 = Mid, anything else = High).
+    /// Convert from the C ABI tier constant.
+    /// 0 = Low, 1 = Mid, 2+ = High.
     pub fn from_u8(v: u8) -> Self {
         match v {
             0 => Tier::Low,
