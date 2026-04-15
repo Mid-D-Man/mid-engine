@@ -8,7 +8,7 @@ name = "mid_net"
 crate-type = ["lib", "cdylib", "staticlib"]
 
 [dependencies]
-dixscript = "1.0.0"
+#dixscript = "1.0.0" not currently existing
 tokio     = { version = "1", features = ["full"] }
 bytes     = "1.5"
 bincode   = "1.3"
