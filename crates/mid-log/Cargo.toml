@@ -2,20 +2,21 @@
 name        = "mid-log"
 version     = "0.1.0"
 edition     = "2021"
-description = "Non-blocking tiered logger for Mid Engine — FFI-ready"
+description = "Non-blocking tiered logger for Mid Engine — FFI-ready, cross-platform"
 
 [lib]
 name = "mid_log"
-# rlib   = links into other Rust crates (Mid Engine, Ubel)
-# cdylib = produces .dylib/.so/.dll for Unity, Unreal, Godot, C test harness
-crate-type = ["rlib", "cdylib"]
+# rlib       = Rust-to-Rust linking (Mid Engine, Ubel, other Rust crates)
+# cdylib     = .dylib/.so/.dll  — C, C++, Unity, Godot, Unreal, Android
+# staticlib  = .a               — iOS (App Store forbids dynamic libs)
+crate-type = ["rlib", "cdylib", "staticlib"]
 
 [dependencies]
-# Purpose-built SPSC lock-free ring buffer.
-# Tighter than crossbeam-channel for a single game-thread → IO-thread path.
 rtrb = "0.3"
+
+[dev-dependencies]
+# Nothing extra needed — tests use only std
 
 [features]
 default   = []
-# Enable stack traces on ERROR and FATAL. Off by default — expensive.
 backtrace = []
