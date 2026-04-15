@@ -1,0 +1,342 @@
+name: mid-log — Tests
+
+on:
+  push:
+    branches: [main, master, develop]
+    paths:
+      - 'crates/mid-log/**'
+  pull_request:
+    branches: [main, master]
+    paths:
+      - 'crates/mid-log/**'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions:  read
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+jobs:
+
+  # ── 1. Gate check ──────────────────────────────────────────────────────────
+  parse-trigger:
+    runs-on: ubuntu-latest
+    outputs:
+      run_tests: ${{ steps.decide.outputs.run_tests }}
+    steps:
+      - name: Decide whether to run
+        id: decide
+        run: |
+          RUN=false
+
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            RUN=true
+          elif [ "${{ github.event_name }}" = "pull_request" ]; then
+            # Path filter on mid-log already narrows it; also check title
+            RUN=true
+          else
+            # Push: run if commit message contains --mid-log OR path filter matched
+            MSG="${{ github.event.head_commit.message }}"
+            echo "$MSG" | grep -qiE '\-\-mid-log\b|\-\-mid-all\b' && RUN=true || true
+            # Also run if the push touched mid-log files (path filter above)
+            if [ "${{ github.event_name }}" = "push" ]; then
+              RUN=true
+            fi
+          fi
+
+          echo "run_tests=$RUN" >> $GITHUB_OUTPUT
+          echo "Run mid-log tests: $RUN"
+
+  # ── 2. Run tests ───────────────────────────────────────────────────────────
+  run-tests:
+    runs-on: ubuntu-latest
+    needs: parse-trigger
+    if: needs.parse-trigger.outputs.run_tests == 'true'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Get Rust version
+        id: rustver
+        run: echo "ver=$(rustc --version)" >> $GITHUB_OUTPUT
+
+      - name: Cache cargo
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ubuntu-cargo-mid-log-${{ hashFiles('crates/mid-log/Cargo.toml') }}
+
+      - name: Check formatting
+        run: cargo fmt -p mid-log --check
+        continue-on-error: true
+
+      - name: Clippy
+        run: cargo clippy -p mid-log -- -D warnings
+        continue-on-error: true
+
+      - name: Build (rlib + cdylib + staticlib)
+        run: |
+          echo "=== Building mid-log (debug, all crate types) ==="
+          cargo build -p mid-log
+          echo ""
+          echo "=== Produced libraries ==="
+          find target/debug -maxdepth 1 \
+            \( -name "libmid_log.so"  \
+            -o -name "libmid_log.a"   \
+            -o -name "libmid_log.dylib" \
+            -o -name "mid_log.dll" \) \
+            -exec ls -lh {} \; 2>/dev/null || echo "  (platform produces different names — that is fine)"
+
+      - name: Run unit tests
+        continue-on-error: true
+        run: |
+          cargo test -p mid-log \
+            --color=never \
+            --no-fail-fast \
+            -- --show-output 2>&1 | tee mid-log-test-raw.txt
+          echo "TEST_EXIT=${PIPESTATUS[0]}" >> $GITHUB_ENV
+
+      - name: Parse results to JSON
+        env:
+          BUILD_NUM:    ${{ github.run_number }}
+          BRANCH:       ${{ github.ref_name }}
+          COMMIT:       ${{ github.sha }}
+          BUILD_DATE:   ${{ github.event.head_commit.timestamp }}
+          RUST_VERSION: ${{ steps.rustver.outputs.ver }}
+        run: |
+          python3 - << 'PYEOF'
+          import re, json, os
+
+          RE_ANSI = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
+          def strip(s): return RE_ANSI.sub('', s)
+
+          raw  = open('mid-log-test-raw.txt', encoding='utf-8', errors='replace').read()
+          text = strip(raw)
+
+          # Capture per-test stdout output blocks
+          test_output = {}
+          for m in re.finditer(
+              r'---- ([\w:]+(?:::\w+)*) stdout ----\n(.*?)'
+              r'(?=\n---- |\n\n(?:successes|failures):\n|\ntest result:|\Z)',
+              text, re.DOTALL):
+              content = m.group(2).strip()
+              if content:
+                  test_output[m.group(1)] = content
+
+          suites    = []
+          cur_name  = None
+          cur_tests = []
+          cur_dur   = 0.0
+
+          RE_RUN    = re.compile(r'Running\s+(?:unittests?\s+)?(\S+)\s+\(')
+          RE_TEST   = re.compile(
+              r'^test\s+([\w:]+(?:::\w+)*)\s+\.\.\.\s+'
+              r'(ok|FAILED|ignored)(?:\s+\(([\d.]+)s\))?'
+          )
+          RE_RESULT = re.compile(r'test result:.*?finished in ([\d.]+)s')
+
+          def flush(name, tests, dur):
+              if name and tests:
+                  suites.append({
+                      'name':       name,
+                      'passed':     sum(1 for t in tests if t['status'] == 'passed'),
+                      'failed':     sum(1 for t in tests if t['status'] == 'failed'),
+                      'ignored':    sum(1 for t in tests if t['status'] == 'ignored'),
+                      'duration_s': round(dur, 4),
+                      'tests':      tests,
+                  })
+
+          for line in text.splitlines():
+              m = RE_RUN.search(line)
+              if m:
+                  flush(cur_name, cur_tests, cur_dur)
+                  base = os.path.splitext(os.path.basename(m.group(1)))[0]
+                  cur_name  = base + ' (unit tests)' if base in ('lib', 'main') else base
+                  cur_tests = []
+                  cur_dur   = 0.0
+                  continue
+
+              m = RE_TEST.match(line)
+              if m:
+                  if cur_name is None:
+                      cur_name, cur_tests, cur_dur = 'mid-log unit tests', [], 0.0
+                  tname, status, dur = m.group(1), m.group(2), m.group(3)
+                  cur_tests.append({
+                      'name':        tname,
+                      'status':      {'ok':'passed','FAILED':'failed','ignored':'ignored'}.get(status, 'unknown'),
+                      'duration_ms': int(float(dur) * 1000) if dur else 0,
+                      'output':      test_output.get(tname, ''),
+                  })
+                  continue
+
+              m = RE_RESULT.search(line)
+              if m:
+                  cur_dur = float(m.group(1))
+                  flush(cur_name, cur_tests, cur_dur)
+                  cur_name, cur_tests, cur_dur = None, [], 0.0
+
+          flush(cur_name, cur_tests, cur_dur)
+
+          total   = sum(s['passed'] + s['failed'] + s['ignored'] for s in suites)
+          passed  = sum(s['passed']  for s in suites)
+          failed  = sum(s['failed']  for s in suites)
+          ignored = sum(s['ignored'] for s in suites)
+          dur     = sum(s['duration_s'] for s in suites)
+
+          result = {
+              'build':        os.environ.get('BUILD_NUM',    '0'),
+              'branch':       os.environ.get('BRANCH',       'unknown'),
+              'commit':       os.environ.get('COMMIT',       'unknown')[:8],
+              'date':         os.environ.get('BUILD_DATE',   ''),
+              'rust_version': os.environ.get('RUST_VERSION', 'stable'),
+              'crate':        'mid-log',
+              'summary': {
+                  'total':      total,
+                  'passed':     passed,
+                  'failed':     failed,
+                  'ignored':    ignored,
+                  'duration_s': round(dur, 3),
+              },
+              'suites': suites,
+          }
+
+          with open('mid-log-test-results.json', 'w') as f:
+              json.dump(result, f, indent=2)
+
+          print(f"Suites:{len(suites)}  Passed:{passed}  Failed:{failed}  Ignored:{ignored}")
+          PYEOF
+
+      - name: Build HTML report
+        env:
+          RUST_VERSION: ${{ steps.rustver.outputs.ver }}
+        run: |
+          cp .github/mid-log-test-template.html mid-log-test-index.html
+          sed -i "s/BUILD_NUM_PLACEHOLDER/${{ github.run_number }}/g"  mid-log-test-index.html
+          sed -i "s/BRANCH_PLACEHOLDER/${{ github.ref_name }}/g"       mid-log-test-index.html
+          sed -i "s/COMMIT_PLACEHOLDER/${GITHUB_SHA:0:8}/g"            mid-log-test-index.html
+          sed -i "s|DATE_PLACEHOLDER|$(date -u)|g"                     mid-log-test-index.html
+          sed -i "s|RUST_VERSION_PLACEHOLDER|${RUST_VERSION}|g"        mid-log-test-index.html
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mid-log-test-results-${{ github.run_number }}
+          path: |
+            mid-log-test-results.json
+            mid-log-test-index.html
+            mid-log-test-raw.txt
+          retention-days: 30
+
+  # ── 3. Deploy to gh-pages ──────────────────────────────────────────────────
+  deploy-results:
+    runs-on: ubuntu-latest
+    needs: [parse-trigger, run-tests]
+    if: always() && needs.run-tests.result != 'skipped'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download artifacts
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: mid-log-test-results-${{ github.run_number }}
+          path: deploy/mid-log/
+
+      - name: Ensure deploy directory has content
+        run: |
+          mkdir -p deploy/mid-log
+
+          if [ ! -f deploy/mid-log/mid-log-test-results.json ]; then
+            echo '{
+              "build":"${{ github.run_number }}",
+              "branch":"${{ github.ref_name }}",
+              "commit":"${{ github.sha }}",
+              "crate":"mid-log",
+              "summary":{"total":0,"passed":0,"failed":0,"ignored":0,"duration_s":0},
+              "suites":[]
+            }' > deploy/mid-log/mid-log-test-results.json
+          fi
+
+          if [ ! -f deploy/mid-log/mid-log-test-index.html ]; then
+            cp .github/mid-log-test-template.html deploy/mid-log/mid-log-test-index.html
+            sed -i "s/BUILD_NUM_PLACEHOLDER/${{ github.run_number }}/g" deploy/mid-log/mid-log-test-index.html
+            sed -i "s/BRANCH_PLACEHOLDER/${{ github.ref_name }}/g"      deploy/mid-log/mid-log-test-index.html
+            sed -i "s/COMMIT_PLACEHOLDER/${GITHUB_SHA:0:8}/g"           deploy/mid-log/mid-log-test-index.html
+            sed -i "s|DATE_PLACEHOLDER|$(date -u)|g"                    deploy/mid-log/mid-log-test-index.html
+            sed -i "s|RUST_VERSION_PLACEHOLDER|unknown|g"               deploy/mid-log/mid-log-test-index.html
+          fi
+
+      - name: Deploy to gh-pages
+        run: |
+          git config --global user.name  "Mid Engine CI"
+          git config --global user.email "ci@mid-engine.dev"
+
+          BUILD_NUM=${{ github.run_number }}
+          WORK=$(mktemp -d)
+
+          if git fetch origin gh-pages:gh-pages 2>/dev/null; then
+            git worktree add "$WORK" gh-pages
+          else
+            git worktree add --orphan -b gh-pages "$WORK"
+          fi
+
+          mkdir -p "$WORK/mid-log" "$WORK/mid-log/builds/build_${BUILD_NUM}"
+
+          cp deploy/mid-log/mid-log-test-results.json "$WORK/mid-log/mid-log-test-results.json"
+          cp deploy/mid-log/mid-log-test-index.html   "$WORK/mid-log/index.html"
+          cp deploy/mid-log/mid-log-test-results.json "$WORK/mid-log/builds/build_${BUILD_NUM}/mid-log-test-results.json"
+          cp deploy/mid-log/mid-log-test-index.html   "$WORK/mid-log/builds/build_${BUILD_NUM}/index.html"
+
+          # Landing index — add mid-log card if not already present
+          if [ -f "$WORK/index.html" ]; then
+            if ! grep -q "mid-log" "$WORK/index.html"; then
+              sed -i 's|</div>.*<div class="section-label">Language|<a class="card" href="mid-log/">\n      <div class="card-icon">🪵</div>\n      <div class="card-title">mid-log Tests</div>\n      <div class="card-lang">Non-blocking logger · ring buffer · FFI</div>\n      <span class="card-badge" style="background:#0f2a1a;color:#3fb950;border:1px solid #2ea043">Rust</span>\n    </a>\n    </div>\n  <div class="section-label">Language|' "$WORK/index.html" 2>/dev/null || true
+            fi
+          fi
+
+          cd "$WORK"
+          git add .
+          if git diff --staged --quiet; then
+            echo "Nothing new to deploy."
+            exit 0
+          fi
+          git commit -m "mid-log tests — Build #${BUILD_NUM} [skip ci]"
+          git push \
+            "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git" \
+            gh-pages
+          echo "Deployed → https://YOUR_GH_USERNAME.github.io/mid-engine/mid-log/"
+
+  # ── 4. Summary ─────────────────────────────────────────────────────────────
+  summary:
+    runs-on: ubuntu-latest
+    needs: [parse-trigger, run-tests, deploy-results]
+    if: always()
+    steps:
+      - name: Print summary
+        run: |
+          echo "============================================="
+          echo "  mid-log Test Summary"
+          echo "============================================="
+          echo "Build:   #${{ github.run_number }}"
+          echo "Branch:  ${{ github.ref_name }}"
+          echo "Tests:   ${{ needs.run-tests.result    || 'skipped' }}"
+          echo "Deploy:  ${{ needs.deploy-results.result || 'skipped' }}"
+          echo ""
+          if [ "${{ needs.parse-trigger.outputs.run_tests }}" != "true" ]; then
+            echo "Tip: include --mid-log in your commit message to trigger manually."
+            echo "     Pushes touching crates/mid-log/ trigger automatically."
+          fi
