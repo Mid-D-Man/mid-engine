@@ -24,3 +24,5 @@ pub mod writer;
 pub mod logger;
 pub mod macros;
 pub mod ffi;
+#[cfg(test)]
+mod tests;
