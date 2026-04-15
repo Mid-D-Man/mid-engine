@@ -1,14 +1,22 @@
+# crates/mid-math/Cargo.toml
+
 [package]
-name = "mid-math"
-version = "0.1.0"
-edition = "2021"
+name        = "mid-math"
+version     = "0.1.0"
+edition     = "2021"
+description = "SIMD-aligned math primitives for Mid Engine — FFI-ready, cross-platform"
 
 [lib]
 name = "mid_math"
-crate-type = ["lib", "cdylib", "staticlib"]
+# rlib      = Rust-to-Rust (Mid Engine, mid-ecs, mid-net, mid-physics)
+# cdylib    = .so/.dylib/.dll — Unity, Unreal, Godot, any C host
+# staticlib = .a              — iOS App Store
+crate-type = ["rlib", "cdylib", "staticlib"]
 
 [dependencies]
 
+[dev-dependencies]
+
 [features]
 default = []
-simd    = []
+simd    = []   # reserved for explicit std::arch intrinsics pass
