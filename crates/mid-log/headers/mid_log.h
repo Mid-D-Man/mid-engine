@@ -1,13 +1,3 @@
-/*
- * mid_log.h — C header for the mid-log FFI surface.
- *
- * Usage:
- *   #include "mid_log.h"
- *   Link against libmid_log.dylib  (macOS)
- *               libmid_log.so      (Linux)
- *               mid_log.dll        (Windows)
- */
-
 #pragma once
 #include <stdint.h>
 
@@ -15,24 +5,14 @@
 extern "C" {
 #endif
 
-/* Tier constants — pass to every log call. */
-#define MID_TIER_LOW  0   /* Engine internals */
-#define MID_TIER_HIGH 1   /* Gameplay logic   */
+/* Tier constants */
+#define MID_TIER_LOW  0   /* Engine internals — physics, net, ECS  */
+#define MID_TIER_MID  1   /* Engine-adjacent — scripting, tools     */
+#define MID_TIER_HIGH 2   /* Gameplay logic — player, AI, events    */
 
-/*
- * mid_log_init — initialise the logger.
- * Call once at engine startup.
- * Returns 1 on success, 0 if already initialised.
- */
 uint8_t mid_log_init(void);
+void    mid_log_shutdown(void);
 
-/*
- * mid_log_shutdown — flush remaining entries and stop the IO thread.
- * Call at engine shutdown.
- */
-void mid_log_shutdown(void);
-
-/* Logging functions. `tier` is MID_TIER_LOW or MID_TIER_HIGH. */
 void mid_log_trace_c(uint8_t tier, const char *msg);
 void mid_log_info_c (uint8_t tier, const char *msg);
 void mid_log_warn_c (uint8_t tier, const char *msg);
