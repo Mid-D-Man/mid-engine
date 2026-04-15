@@ -1,3 +1,5 @@
+// crates/mid-log/src/lib.rs
+
 //! mid-log — Non-blocking, tiered logger for Mid Engine.
 //!
 //! ## Rust face (game thread / engine code)
@@ -5,6 +7,7 @@
 //! use mid_log::{mid_info, mid_warn, level::Tier};
 //!
 //! mid_log::logger::MidLogger::init();
+//! # let (id, x, y) = (1u32, 1.0_f32, 2.0_f32);
 //! mid_info!(Tier::High, "Player {} spawned at ({}, {})", id, x, y);
 //! mid_warn!(Tier::Low,  "Buffer overflow prevented in UDP stream");
 //! ```
