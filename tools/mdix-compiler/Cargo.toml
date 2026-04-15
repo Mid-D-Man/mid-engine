@@ -8,5 +8,5 @@ name = "mdix-compiler"
 path = "src/main.rs"
 
 [dependencies]
-dixscript = "1.0.0"
+#dixscript = "1.0.0"
 clap      = { version = "4", features = ["derive"] }
