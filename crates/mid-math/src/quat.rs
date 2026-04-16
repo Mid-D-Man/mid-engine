@@ -3,8 +3,8 @@
 //! Quaternion — rotation without Gimbal Lock.
 //!
 //! Convention: (x, y, z, w) where w is the scalar part.
-//! Must be normalized before use in rotation / matrix conversion.
-//! `Quat::IDENTITY` is always safe to use as a starting point.
+//! Euler convention: ZYX — yaw applied first, then pitch, then roll.
+//! This matches `to_euler` extraction and aerospace/game standard.
 
 use std::fmt;
 use std::ops::{Mul, Neg};
@@ -33,7 +33,7 @@ impl Quat {
     // ── Constructors ───────────────────────────────────────────────────────
 
     /// Build from a unit axis and an angle in radians.
-    /// `axis` need not be normalized — normalized internally.
+    /// `axis` need not be pre-normalized — normalized internally.
     #[inline]
     pub fn from_axis_angle(axis: Vec3, angle_rad: f32) -> Self {
         let (sin, cos) = (angle_rad * 0.5).sin_cos();
@@ -41,31 +41,37 @@ impl Quat {
         Self::new(n.x * sin, n.y * sin, n.z * sin, cos)
     }
 
-    /// Build from Euler angles in radians, applied in intrinsic XYZ order
-    /// (rotate around X first, then Y, then Z — Unity/OpenGL convention).
+    /// Build from Euler angles in radians, **ZYX convention** (aerospace / game standard).
+    ///
+    /// Applied as: first rotate around **Z** (yaw), then **Y** (pitch), then **X** (roll).
+    /// Equivalent to `q = Rz * Ry * Rx`.
     ///
     /// `roll`  = rotation around X axis  
     /// `pitch` = rotation around Y axis  
     /// `yaw`   = rotation around Z axis
+    ///
+    /// This matches `to_euler` exactly — round-tripping is exact up to floating-point epsilon.
     pub fn from_euler(roll: f32, pitch: f32, yaw: f32) -> Self {
         let (sx, cx) = (roll  * 0.5).sin_cos();
         let (sy, cy) = (pitch * 0.5).sin_cos();
         let (sz, cz) = (yaw   * 0.5).sin_cos();
+        // q = Rz * Ry * Rx
         Self::new(
-            sx*cy*cz + cx*sy*sz,
-            cx*sy*cz - sx*cy*sz,
-            cx*cy*sz + sx*sy*cz,
-            cx*cy*cz - sx*sy*sz,
+            cz * cy * sx - sz * sy * cx,  // x
+            cz * sy * cx + sz * cy * sx,  // y
+            sz * cy * cx - cz * sy * sx,  // z
+            cz * cy * cx + sz * sy * sx,  // w
         ).normalize()
     }
 
     // ── Decomposition ──────────────────────────────────────────────────────
 
-    /// Decompose to Euler angles (intrinsic XYZ order).
+    /// Decompose to Euler angles, **ZYX convention** (matches `from_euler`).
     /// Returns `(roll, pitch, yaw)` in radians.
     ///
     /// Handles the gimbal-lock singularity at `|pitch| ≈ 90°`.
     pub fn to_euler(self) -> (f32, f32, f32) {
+        // ZYX extraction — matches Rz*Ry*Rx construction in from_euler.
         let sinp = 2.0 * (self.w * self.y - self.z * self.x);
         let pitch = if sinp.abs() >= 1.0 {
             sinp.signum() * std::f32::consts::FRAC_PI_2
@@ -73,9 +79,9 @@ impl Quat {
             sinp.asin()
         };
         let roll = (2.0 * (self.w * self.x + self.y * self.z))
-            .atan2(1.0 - 2.0 * (self.x*self.x + self.y*self.y));
+            .atan2(1.0 - 2.0 * (self.x * self.x + self.y * self.y));
         let yaw  = (2.0 * (self.w * self.z + self.x * self.y))
-            .atan2(1.0 - 2.0 * (self.y*self.y + self.z*self.z));
+            .atan2(1.0 - 2.0 * (self.y * self.y + self.z * self.z));
         (roll, pitch, yaw)
     }
 
@@ -113,11 +119,9 @@ impl Quat {
     /// faster than converting to matrix for a single vector.
     #[inline]
     pub fn rotate(self, v: Vec3) -> Vec3 {
-        // Derived from q*v*q^{-1} with q=(xyz,w):
-        //   t = 2 * cross(q.xyz, v)
-        //   result = v + w*t + cross(q.xyz, t)
-        let qv  = Vec3::new(self.x, self.y, self.z);
-        let t   = 2.0 * qv.cross(v);
+        // t = 2 * cross(q.xyz, v);  result = v + w*t + cross(q.xyz, t)
+        let qv = Vec3::new(self.x, self.y, self.z);
+        let t  = 2.0 * qv.cross(v);
         v + self.w * t + qv.cross(t)
     }
 
@@ -127,15 +131,9 @@ impl Quat {
     /// Both quaternions should be normalized. `t` ∈ [0, 1].
     pub fn slerp(self, mut rhs: Self, t: f32) -> Self {
         let mut cos_theta = self.dot(rhs);
-
-        // Take the shorter arc.
-        if cos_theta < 0.0 {
-            rhs = -rhs;
-            cos_theta = -cos_theta;
-        }
+        if cos_theta < 0.0 { rhs = -rhs; cos_theta = -cos_theta; }
 
         if cos_theta > 1.0 - EPSILON {
-            // Quats are nearly identical — linear blend avoids division by ~0.
             return Self::new(
                 self.x + (rhs.x - self.x)*t,
                 self.y + (rhs.y - self.y)*t,
@@ -173,8 +171,7 @@ impl Quat {
 
     // ── Conversion ─────────────────────────────────────────────────────────
 
-    /// Convert to a column-major rotation Mat4.
-    /// `self` must be normalized.
+    /// Convert to a column-major rotation Mat4. `self` must be normalized.
     pub fn to_mat4(self) -> Mat4 {
         let q = self.normalize();
         let (x, y, z, w) = (q.x, q.y, q.z, q.w);
@@ -195,7 +192,6 @@ impl Quat {
 
 impl Mul for Quat {
     type Output = Self;
-    /// Hamilton product — composes two rotations (right-to-left, like matrix multiply).
     #[inline]
     fn mul(self, r: Self) -> Self {
         Self::new(
@@ -209,7 +205,7 @@ impl Mul for Quat {
 
 impl Neg for Quat {
     type Output = Self;
-    #[inline] fn neg(self) -> Self { Self::new(-self.x,-self.y,-self.z,-self.w) }
+    #[inline] fn neg(self) -> Self { Self::new(-self.x, -self.y, -self.z, -self.w) }
 }
 
 impl PartialEq for Quat {
@@ -222,6 +218,6 @@ impl Default for Quat { fn default() -> Self { Self::IDENTITY } }
 
 impl fmt::Display for Quat {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "Quat({}, {}, {}, {})", self.x, self.y, self.z, self.w)
+        write!(f, "Quat({:.4}, {:.4}, {:.4}, {:.4})", self.x, self.y, self.z, self.w)
     }
 }
