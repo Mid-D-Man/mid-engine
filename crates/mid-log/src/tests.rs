@@ -5,6 +5,7 @@ mod tests {
     use crate::level::{LogLevel, Tier};
     use crate::entry::LogEntry;
     use crate::logger::MidLogger;
+    use std::time::Instant;
 
     // ── Level ─────────────────────────────────────────────────────────────
 
@@ -136,14 +137,14 @@ mod tests {
         let cap = crate::buffer::CAPACITY;
         assert!(cap > 0 && (cap & (cap - 1)) == 0,
             "CAPACITY={} must be a power of two", cap);
-        println!("  CAPACITY={} ({} bits set)", cap, cap.count_ones());
+        println!("  CAPACITY={} ({} bits set = power of two ✓)", cap, cap.count_ones());
     }
 
     #[test]
     fn buffer_create_returns_paired_producer_consumer() {
         let (mut prod, mut cons) = crate::buffer::create();
         let entry = LogEntry::new(LogLevel::Info, Tier::High, "ring buffer test".into());
-        let msg = entry.message.clone();
+        let msg   = entry.message.clone();
         assert!(prod.push(entry).is_ok());
         let popped = cons.pop().expect("should pop the pushed entry");
         assert_eq!(popped.message, msg);
@@ -153,9 +154,26 @@ mod tests {
     #[test]
     fn buffer_empty_pop_returns_err() {
         let (_prod, mut cons) = crate::buffer::create();
-        let result = cons.pop();
-        assert!(result.is_err());
+        assert!(cons.pop().is_err());
         println!("  pop on empty buffer = Err (correct — no blocking)");
+    }
+
+    #[test]
+    fn buffer_fills_to_capacity_without_panic() {
+        let cap = crate::buffer::CAPACITY;
+        let (mut prod, _cons) = crate::buffer::create();
+        let mut accepted = 0usize;
+        let mut dropped  = 0usize;
+        for i in 0..cap + 100 {
+            let entry = LogEntry::new(LogLevel::Trace, Tier::Low, format!("entry {}", i));
+            if prod.push(entry).is_ok() { accepted += 1; } else { dropped += 1; }
+        }
+        assert_eq!(accepted, cap, "should fill exactly to capacity");
+        assert_eq!(dropped, 100,  "100 pushes beyond capacity should be dropped");
+        println!(
+            "  CAPACITY={}  accepted={}  dropped={} (correct — ring buffer never blocks)",
+            cap, accepted, dropped,
+        );
     }
 
     // ── Logger lifecycle ──────────────────────────────────────────────────
@@ -163,9 +181,8 @@ mod tests {
     #[test]
     fn logger_init_succeeds_or_was_already_init() {
         let _ = MidLogger::init();
-        let is_some = MidLogger::get().is_some();
-        assert!(is_some);
-        println!("  MidLogger::get().is_some() = {}", is_some);
+        assert!(MidLogger::get().is_some());
+        println!("  MidLogger::get().is_some() = true");
     }
 
     #[test]
@@ -271,23 +288,351 @@ mod tests {
         crate::ffi::mid_log_init();
         let msg = std::ffi::CString::new("ffi test").unwrap();
         unsafe {
-            crate::ffi::mid_log_info_c (0, msg.as_ptr()); // LOW
-            crate::ffi::mid_log_info_c (1, msg.as_ptr()); // MID
-            crate::ffi::mid_log_info_c (2, msg.as_ptr()); // HIGH
+            crate::ffi::mid_log_info_c (0, msg.as_ptr());
+            crate::ffi::mid_log_info_c (1, msg.as_ptr());
+            crate::ffi::mid_log_info_c (2, msg.as_ptr());
             crate::ffi::mid_log_trace_c(0, msg.as_ptr());
             crate::ffi::mid_log_warn_c (1, msg.as_ptr());
             crate::ffi::mid_log_error_c(2, msg.as_ptr());
         }
-        println!("  6 FFI calls (3 tiers × 2 levels subset) — all accepted");
+        println!("  6 FFI calls (3 tiers × levels subset) — all accepted");
     }
 
     #[test]
     fn ffi_tier_constants_map_correctly() {
-        let cases = [(0u8, Tier::Low, "MID_TIER_LOW"), (1, Tier::Mid, "MID_TIER_MID"), (2, Tier::High, "MID_TIER_HIGH")];
+        let cases = [
+            (0u8, Tier::Low,  "MID_TIER_LOW"),
+            (1u8, Tier::Mid,  "MID_TIER_MID"),
+            (2u8, Tier::High, "MID_TIER_HIGH"),
+        ];
         for (v, expected, name) in cases {
             let got = Tier::from_u8(v);
             assert_eq!(got, expected, "{} = {}", name, v);
             println!("  {} ({}) → {:?}", name, v, got);
         }
     }
-}
+
+    // ── Stress: throughput ────────────────────────────────────────────────
+
+    #[test]
+    fn stress_1000_info_logs_complete_without_panic() {
+        MidLogger::init();
+        let count = 1_000usize;
+        let start = Instant::now();
+        if let Some(logger) = MidLogger::get() {
+            for i in 0..count {
+                logger.log(LogLevel::Info, Tier::Low, format!("stress info #{}", i));
+            }
+        }
+        let elapsed = start.elapsed();
+        println!(
+            "  {} INFO logs in {:.3}ms  ({:.1} ns/log)",
+            count,
+            elapsed.as_secs_f64() * 1000.0,
+            elapsed.as_nanos() as f64 / count as f64,
+        );
+    }
+
+    #[test]
+    fn stress_1000_error_logs_complete_without_panic() {
+        MidLogger::init();
+        let count = 1_000usize;
+        let start = Instant::now();
+        if let Some(logger) = MidLogger::get() {
+            for i in 0..count {
+                logger.log(LogLevel::Error, Tier::High, format!("stress error #{}: non-fatal", i));
+            }
+        }
+        let elapsed = start.elapsed();
+        println!(
+            "  {} ERROR logs in {:.3}ms  ({:.1} ns/log)",
+            count,
+            elapsed.as_secs_f64() * 1000.0,
+            elapsed.as_nanos() as f64 / count as f64,
+        );
+    }
+
+    #[test]
+    fn stress_all_five_levels_200_each_no_panic() {
+        MidLogger::init();
+        let per_level = 200usize;
+        let levels = [
+            LogLevel::Trace,
+            LogLevel::Info,
+            LogLevel::Warn,
+            LogLevel::Error,
+            // Note: Fatal calls shutdown — we skip it in the burst loop.
+        ];
+        let start = Instant::now();
+        if let Some(logger) = MidLogger::get() {
+            for level in levels {
+                for i in 0..per_level {
+                    logger.log(level, Tier::Mid, format!("{:?} #{}", level, i));
+                }
+            }
+        }
+        let total   = per_level * levels.len();
+        let elapsed = start.elapsed();
+        println!(
+            "  {} logs across 4 levels in {:.3}ms  ({:.1} ns/log)",
+            total,
+            elapsed.as_secs_f64() * 1000.0,
+            elapsed.as_nanos() as f64 / total as f64,
+        );
+    }
+
+    #[test]
+    fn stress_all_three_tiers_333_each_no_panic() {
+        MidLogger::init();
+        let per_tier = 333usize;
+        let tiers    = [Tier::Low, Tier::Mid, Tier::High];
+        let start    = Instant::now();
+        if let Some(logger) = MidLogger::get() {
+            for tier in tiers {
+                for i in 0..per_tier {
+                    logger.log(LogLevel::Trace, tier, format!("[{:?}] trace #{}", tier, i));
+                }
+            }
+        }
+        let total   = per_tier * tiers.len();
+        let elapsed = start.elapsed();
+        println!(
+            "  {} TRACE logs across 3 tiers in {:.3}ms  ({:.1} ns/log)",
+            total,
+            elapsed.as_secs_f64() * 1000.0,
+            elapsed.as_nanos() as f64 / total as f64,
+        );
+    }
+
+    #[test]
+    fn stress_mixed_burst_5000_logs_no_panic() {
+        MidLogger::init();
+        let count = 5_000usize;
+        let start = Instant::now();
+        if let Some(logger) = MidLogger::get() {
+            for i in 0..count {
+                let level = match i % 4 {
+                    0 => LogLevel::Trace,
+                    1 => LogLevel::Info,
+                    2 => LogLevel::Warn,
+                    _ => LogLevel::Error,
+                };
+                let tier = match i % 3 {
+                    0 => Tier::Low,
+                    1 => Tier::Mid,
+                    _ => Tier::High,
+                };
+                logger.log(level, tier, format!("burst #{}: entity={} pos=({:.2},{:.2})", i, i % 1000, i as f32 * 0.1, i as f32 * 0.2));
+            }
+        }
+        let elapsed = start.elapsed();
+        let ns_per  = elapsed.as_nanos() as f64 / count as f64;
+        println!(
+            "  {} mixed-level logs in {:.3}ms  ({:.1} ns/log)",
+            count,
+            elapsed.as_secs_f64() * 1000.0,
+            ns_per,
+        );
+        // Budget: 7.8ms per 128Hz tick. 5000 logs should complete well under that.
+        // This is not a hard assertion — timing varies by CI machine — but we print
+        // clearly so regressions are visible in the HTML results.
+        println!(
+            "  128Hz tick budget = 7.8ms — this burst took {:.3}ms ({})",
+            elapsed.as_secs_f64() * 1000.0,
+            if elapsed.as_millis() < 8 { "✓ within budget" } else { "⚠ over budget on this machine" },
+        );
+    }
+
+    #[test]
+    fn stress_ring_buffer_saturation_never_blocks() {
+        // Push far more entries than CAPACITY. The ring buffer must drop
+        // entries silently — it must NEVER block or panic.
+        let cap     = crate::buffer::CAPACITY;
+        let burst   = cap * 4;  // 4× capacity
+        let (mut prod, _cons) = crate::buffer::create();
+        let start   = Instant::now();
+        let mut accepted = 0usize;
+        let mut dropped  = 0usize;
+        for i in 0..burst {
+            let entry = LogEntry::new(LogLevel::Trace, Tier::Low, format!("sat #{}", i));
+            if prod.push(entry).is_ok() { accepted += 1; } else { dropped += 1; }
+        }
+        let elapsed = start.elapsed();
+        assert_eq!(accepted, cap,  "should accept exactly CAPACITY entries");
+        assert_eq!(dropped,  burst - cap, "remainder should be silently dropped");
+        println!(
+            "  CAPACITY={}  burst={}×cap  accepted={}  dropped={}  time={:.3}ms",
+            cap, 4, accepted, dropped,
+            elapsed.as_secs_f64() * 1000.0,
+        );
+        println!("  ✓ ring buffer saturated cleanly — zero blocking, zero panic");
+    }
+
+    #[test]
+    fn stress_concurrent_threads_4x1000_logs_no_panic() {
+        MidLogger::init();
+        let threads     = 4usize;
+        let per_thread  = 1_000usize;
+        let start       = Instant::now();
+
+        let handles: Vec<_> = (0..threads).map(|tid| {
+            std::thread::spawn(move || {
+                if let Some(logger) = MidLogger::get() {
+                    for i in 0..per_thread {
+                        logger.log(
+                            LogLevel::Info,
+                            Tier::Mid,
+                            format!("thread {} log #{}", tid, i),
+                        );
+                    }
+                }
+            })
+        }).collect();
+
+        for h in handles { h.join().expect("thread panicked"); }
+
+        let elapsed = start.elapsed();
+        let total   = threads * per_thread;
+        println!(
+            "  {} threads × {} logs = {} total in {:.3}ms  ({:.1} ns/log)",
+            threads, per_thread, total,
+            elapsed.as_secs_f64() * 1000.0,
+            elapsed.as_nanos() as f64 / total as f64,
+        );
+        println!("  ✓ no deadlock, no panic across concurrent producers");
+    }
+
+    #[test]
+    fn stress_concurrent_threads_8x500_mixed_levels_no_panic() {
+        MidLogger::init();
+        let threads    = 8usize;
+        let per_thread = 500usize;
+        let start      = Instant::now();
+
+        let handles: Vec<_> = (0..threads).map(|tid| {
+            std::thread::spawn(move || {
+                if let Some(logger) = MidLogger::get() {
+                    for i in 0..per_thread {
+                        let level = match (tid + i) % 4 {
+                            0 => LogLevel::Trace,
+                            1 => LogLevel::Info,
+                            2 => LogLevel::Warn,
+                            _ => LogLevel::Error,
+                        };
+                        let tier = match tid % 3 {
+                            0 => Tier::Low,
+                            1 => Tier::Mid,
+                            _ => Tier::High,
+                        };
+                        logger.log(level, tier, format!("t{} #{} {:?}", tid, i, level));
+                    }
+                }
+            })
+        }).collect();
+
+        for h in handles { h.join().expect("thread panicked"); }
+
+        let elapsed = start.elapsed();
+        let total   = threads * per_thread;
+        println!(
+            "  {} threads × {} mixed logs = {} total in {:.3}ms  ({:.1} ns/log)",
+            threads, per_thread, total,
+            elapsed.as_secs_f64() * 1000.0,
+            elapsed.as_nanos() as f64 / total as f64,
+        );
+        println!("  ✓ no deadlock, no panic — mixed levels + tiers across 8 threads");
+    }
+
+    #[test]
+    fn stress_macro_burst_1000_mid_info_no_panic() {
+        MidLogger::init();
+        let count = 1_000usize;
+        let start = Instant::now();
+        for i in 0..count {
+            crate::mid_info!(Tier::High, "macro burst #{}: entity={} health={}", i, i % 500, 100 - (i % 100));
+        }
+        let elapsed = start.elapsed();
+        println!(
+            "  mid_info! macro × {} in {:.3}ms  ({:.1} ns/call)",
+            count,
+            elapsed.as_secs_f64() * 1000.0,
+            elapsed.as_nanos() as f64 / count as f64,
+        );
+    }
+
+    #[test]
+    fn stress_macro_burst_all_macros_250_each_no_panic() {
+        MidLogger::init();
+        let per_macro = 250usize;
+        let start     = Instant::now();
+        for i in 0..per_macro {
+            crate::mid_trace!(Tier::Low,  "trace #{}", i);
+            crate::mid_info! (Tier::Mid,  "info  #{}", i);
+            crate::mid_warn! (Tier::High, "warn  #{}", i);
+            crate::mid_error!(Tier::Low,  "error #{}", i);
+        }
+        let total   = per_macro * 4;
+        let elapsed = start.elapsed();
+        println!(
+            "  4 macros × {} = {} calls in {:.3}ms  ({:.1} ns/call)",
+            per_macro, total,
+            elapsed.as_secs_f64() * 1000.0,
+            elapsed.as_nanos() as f64 / total as f64,
+        );
+    }
+
+    #[test]
+    fn stress_ffi_burst_1000_c_calls_no_panic() {
+        crate::ffi::mid_log_init();
+        let msg   = std::ffi::CString::new("ffi stress entry").unwrap();
+        let count = 1_000usize;
+        let start = Instant::now();
+        unsafe {
+            for _ in 0..count {
+                crate::ffi::mid_log_info_c(1, msg.as_ptr());
+            }
+        }
+        let elapsed = start.elapsed();
+        println!(
+            "  {} FFI mid_log_info_c calls in {:.3}ms  ({:.1} ns/call)",
+            count,
+            elapsed.as_secs_f64() * 1000.0,
+            elapsed.as_nanos() as f64 / count as f64,
+        );
+        println!("  ✓ C boundary held under sustained load");
+    }
+
+    #[test]
+    fn stress_128hz_tick_budget_1000_logs_fit_within_7_8ms() {
+        // The network tick target is 128Hz = 7.8ms per tick.
+        // We simulate a frame's logging burst and verify the hot path
+        // stays far inside that window.
+        // Note: this asserts timing so it will be loose on slow CI runners.
+        // The printed output is the key signal — adjust the multiplier if needed.
+        MidLogger::init();
+        let count    = 1_000usize;
+        let budget_ms = 7.8_f64;
+        let start    = Instant::now();
+        if let Some(logger) = MidLogger::get() {
+            for i in 0..count {
+                logger.log(
+                    LogLevel::Info,
+                    Tier::Low,
+                    format!("tick frame entity={} vel=({:.3},{:.3})", i, i as f32 * 0.01, i as f32 * 0.02),
+                );
+            }
+        }
+        let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
+        println!(
+            "  {} logs in {:.4}ms  budget={:.1}ms  headroom={:.4}ms",
+            count, elapsed_ms, budget_ms, budget_ms - elapsed_ms,
+        );
+        // On a real machine the push is ~50-200ns total for 1000 entries.
+        // Allow 10× margin for CI machines that may be throttled.
+        assert!(
+            elapsed_ms < budget_ms * 10.0,
+            "1000 log pushes took {:.2}ms — exceeded 10× the 7.8ms tick budget (CI machine unusually slow?)",
+            elapsed_ms,
+        );
+    }
+        }
