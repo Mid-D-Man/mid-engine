@@ -1,0 +1,327 @@
+# .github/workflows/mid-math-test.yml
+
+name: mid-math — Tests
+
+on:
+  push:
+    branches: [main, master, develop]
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions:  read
+
+jobs:
+
+  parse-trigger:
+    runs-on: ubuntu-latest
+    outputs:
+      run_tests: ${{ steps.decide.outputs.run_tests }}
+    steps:
+      - name: Decide whether to run
+        id: decide
+        run: |
+          RUN=false
+
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            RUN=true
+          else
+            MSG="${{ github.event.head_commit.message }}${{ github.event.pull_request.title }}"
+            echo "$MSG" | grep -qiE '\-\-mid-math\b|\-\-mid-all\b' && RUN=true || true
+          fi
+
+          echo "run_tests=$RUN" >> $GITHUB_OUTPUT
+          echo "Run mid-math tests: $RUN"
+
+  run-tests:
+    runs-on: ubuntu-latest
+    needs: parse-trigger
+    if: needs.parse-trigger.outputs.run_tests == 'true'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Get Rust version
+        id: rustver
+        run: echo "ver=$(rustc --version)" >> $GITHUB_OUTPUT
+
+      - name: Cache cargo
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ubuntu-cargo-mid-math-${{ hashFiles('crates/mid-math/Cargo.toml') }}
+
+      - name: Check formatting
+        run: cargo fmt -p mid-math --check
+        continue-on-error: true
+
+      - name: Clippy
+        run: cargo clippy -p mid-math -- -D warnings
+        continue-on-error: true
+
+      - name: Build all crate types
+        run: |
+          echo "=== Building mid-math (rlib + cdylib + staticlib) ==="
+          cargo build -p mid-math
+          echo ""
+          echo "=== Produced libraries ==="
+          find target/debug -maxdepth 1 \
+            \( -name "libmid_math.so"    \
+            -o -name "libmid_math.a"     \
+            -o -name "libmid_math.dylib" \
+            -o -name "mid_math.dll" \)   \
+            -exec ls -lh {} \; 2>/dev/null || echo "  (platform-specific names — fine)"
+
+      - name: Run unit tests
+        continue-on-error: true
+        run: |
+          cargo test -p mid-math \
+            --color=never \
+            --no-fail-fast \
+            -- --show-output 2>&1 | tee mid-math-test-raw.txt
+          echo "TEST_EXIT=${PIPESTATUS[0]}" >> $GITHUB_ENV
+
+      - name: Parse results to JSON
+        env:
+          BUILD_NUM:    ${{ github.run_number }}
+          BRANCH:       ${{ github.ref_name }}
+          COMMIT:       ${{ github.sha }}
+          BUILD_DATE:   ${{ github.event.head_commit.timestamp }}
+          RUST_VERSION: ${{ steps.rustver.outputs.ver }}
+        run: |
+          python3 - << 'PYEOF'
+          import re, json, os
+
+          RE_ANSI = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
+          def strip(s): return RE_ANSI.sub('', s)
+
+          raw  = open('mid-math-test-raw.txt', encoding='utf-8', errors='replace').read()
+          text = strip(raw)
+
+          test_output = {}
+          for m in re.finditer(
+              r'---- ([\w:]+(?:::\w+)*) stdout ----\n(.*?)'
+              r'(?=\n---- |\n\n(?:successes|failures):\n|\ntest result:|\Z)',
+              text, re.DOTALL):
+              content = m.group(2).strip()
+              if content:
+                  test_output[m.group(1)] = content
+
+          fail_output = {}
+          fail_section = re.search(r'\nfailures:\n(.*?)(?:\ntest result:|\Z)', text, re.DOTALL)
+          if fail_section:
+              for m in re.finditer(
+                  r'---- ([\w:]+(?:::\w+)*) stdout ----\n(.*?)(?=\n---- |\Z)',
+                  fail_section.group(1), re.DOTALL):
+                  content = m.group(2).strip()
+                  if content:
+                      fail_output[m.group(1)] = content
+
+          suites    = []
+          cur_name  = None
+          cur_tests = []
+          cur_dur   = 0.0
+
+          RE_RUN    = re.compile(r'Running\s+(?:unittests?\s+)?(\S+)\s+\(')
+          RE_TEST   = re.compile(
+              r'^test\s+([\w:]+(?:::\w+)*)\s+\.\.\.\s+'
+              r'(ok|FAILED|ignored)(?:\s+\(([\d.]+)s\))?'
+          )
+          RE_RESULT = re.compile(r'test result:.*?finished in ([\d.]+)s')
+
+          def flush(name, tests, dur):
+              if name and tests:
+                  suites.append({
+                      'name':       name,
+                      'passed':     sum(1 for t in tests if t['status'] == 'passed'),
+                      'failed':     sum(1 for t in tests if t['status'] == 'failed'),
+                      'ignored':    sum(1 for t in tests if t['status'] == 'ignored'),
+                      'duration_s': round(dur, 4),
+                      'tests':      tests,
+                  })
+
+          for line in text.splitlines():
+              m = RE_RUN.search(line)
+              if m:
+                  flush(cur_name, cur_tests, cur_dur)
+                  base = os.path.splitext(os.path.basename(m.group(1)))[0]
+                  cur_name  = base + ' (unit tests)' if base in ('lib', 'main') else base
+                  cur_tests = []
+                  cur_dur   = 0.0
+                  continue
+
+              m = RE_TEST.match(line)
+              if m:
+                  if cur_name is None:
+                      cur_name, cur_tests, cur_dur = 'mid-math unit tests', [], 0.0
+                  tname, status, dur = m.group(1), m.group(2), m.group(3)
+                  out = fail_output.get(tname) or test_output.get(tname, '')
+                  cur_tests.append({
+                      'name':        tname,
+                      'status':      {'ok':'passed','FAILED':'failed','ignored':'ignored'}.get(status,'unknown'),
+                      'duration_ms': int(float(dur) * 1000) if dur else 0,
+                      'output':      out,
+                  })
+                  continue
+
+              m = RE_RESULT.search(line)
+              if m:
+                  cur_dur = float(m.group(1))
+                  flush(cur_name, cur_tests, cur_dur)
+                  cur_name, cur_tests, cur_dur = None, [], 0.0
+
+          flush(cur_name, cur_tests, cur_dur)
+
+          total   = sum(s['passed'] + s['failed'] + s['ignored'] for s in suites)
+          passed  = sum(s['passed']  for s in suites)
+          failed  = sum(s['failed']  for s in suites)
+          ignored = sum(s['ignored'] for s in suites)
+          dur     = sum(s['duration_s'] for s in suites)
+
+          result = {
+              'build':        os.environ.get('BUILD_NUM',    '0'),
+              'branch':       os.environ.get('BRANCH',       'unknown'),
+              'commit':       os.environ.get('COMMIT',       'unknown')[:8],
+              'date':         os.environ.get('BUILD_DATE',   ''),
+              'rust_version': os.environ.get('RUST_VERSION', 'stable'),
+              'crate':        'mid-math',
+              'summary': {
+                  'total':      total,
+                  'passed':     passed,
+                  'failed':     failed,
+                  'ignored':    ignored,
+                  'duration_s': round(dur, 3),
+              },
+              'suites': suites,
+          }
+
+          with open('mid-math-test-results.json', 'w') as f:
+              json.dump(result, f, indent=2)
+
+          print(f"Suites:{len(suites)}  Passed:{passed}  Failed:{failed}  Ignored:{ignored}")
+          PYEOF
+
+      - name: Build HTML report
+        env:
+          RUST_VERSION: ${{ steps.rustver.outputs.ver }}
+        run: |
+          cp .github/mid-math-test-template.html mid-math-test-index.html
+          sed -i "s/BUILD_NUM_PLACEHOLDER/${{ github.run_number }}/g"  mid-math-test-index.html
+          sed -i "s/BRANCH_PLACEHOLDER/${{ github.ref_name }}/g"       mid-math-test-index.html
+          sed -i "s/COMMIT_PLACEHOLDER/${GITHUB_SHA:0:8}/g"            mid-math-test-index.html
+          sed -i "s|DATE_PLACEHOLDER|$(date -u)|g"                     mid-math-test-index.html
+          sed -i "s|RUST_VERSION_PLACEHOLDER|${RUST_VERSION}|g"        mid-math-test-index.html
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mid-math-test-results-${{ github.run_number }}
+          path: |
+            mid-math-test-results.json
+            mid-math-test-index.html
+            mid-math-test-raw.txt
+          retention-days: 30
+
+  deploy-results:
+    runs-on: ubuntu-latest
+    needs: [parse-trigger, run-tests]
+    if: always() && needs.run-tests.result != 'skipped'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download artifacts
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: mid-math-test-results-${{ github.run_number }}
+          path: deploy/mid-math/
+
+      - name: Ensure deploy content exists
+        run: |
+          mkdir -p deploy/mid-math
+          if [ ! -f deploy/mid-math/mid-math-test-results.json ]; then
+            echo '{
+              "build":"${{ github.run_number }}",
+              "branch":"${{ github.ref_name }}",
+              "commit":"${{ github.sha }}",
+              "crate":"mid-math",
+              "summary":{"total":0,"passed":0,"failed":0,"ignored":0,"duration_s":0},
+              "suites":[]
+            }' > deploy/mid-math/mid-math-test-results.json
+          fi
+          if [ ! -f deploy/mid-math/mid-math-test-index.html ]; then
+            cp .github/mid-math-test-template.html deploy/mid-math/mid-math-test-index.html
+            sed -i "s/BUILD_NUM_PLACEHOLDER/${{ github.run_number }}/g" deploy/mid-math/mid-math-test-index.html
+            sed -i "s/BRANCH_PLACEHOLDER/${{ github.ref_name }}/g"      deploy/mid-math/mid-math-test-index.html
+            sed -i "s/COMMIT_PLACEHOLDER/${GITHUB_SHA:0:8}/g"           deploy/mid-math/mid-math-test-index.html
+            sed -i "s|DATE_PLACEHOLDER|$(date -u)|g"                    deploy/mid-math/mid-math-test-index.html
+            sed -i "s|RUST_VERSION_PLACEHOLDER|unknown|g"               deploy/mid-math/mid-math-test-index.html
+          fi
+
+      - name: Deploy to gh-pages
+        run: |
+          git config --global user.name  "Mid Engine CI"
+          git config --global user.email "ci@mid-engine.dev"
+
+          BUILD_NUM=${{ github.run_number }}
+          WORK=$(mktemp -d)
+
+          if git fetch origin gh-pages:gh-pages 2>/dev/null; then
+            git worktree add "$WORK" gh-pages
+          else
+            git worktree add --orphan -b gh-pages "$WORK"
+          fi
+
+          mkdir -p "$WORK/mid-math" "$WORK/mid-math/builds/build_${BUILD_NUM}"
+
+          cp deploy/mid-math/mid-math-test-results.json "$WORK/mid-math/mid-math-test-results.json"
+          cp deploy/mid-math/mid-math-test-index.html   "$WORK/mid-math/index.html"
+          cp deploy/mid-math/mid-math-test-results.json "$WORK/mid-math/builds/build_${BUILD_NUM}/mid-math-test-results.json"
+          cp deploy/mid-math/mid-math-test-index.html   "$WORK/mid-math/builds/build_${BUILD_NUM}/index.html"
+
+          cp .github/mid-engine-landing-index.html "$WORK/index.html"
+
+          cd "$WORK"
+          git add .
+          if git diff --staged --quiet; then
+            echo "Nothing new to deploy."
+            exit 0
+          fi
+          git commit -m "mid-math tests — Build #${BUILD_NUM} [skip ci]"
+          git push \
+            "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git" \
+            gh-pages
+
+  summary:
+    runs-on: ubuntu-latest
+    needs: [parse-trigger, run-tests, deploy-results]
+    if: always()
+    steps:
+      - name: Print summary
+        run: |
+          echo "============================================="
+          echo "  mid-math Test Summary"
+          echo "============================================="
+          echo "Build:   #${{ github.run_number }}"
+          echo "Branch:  ${{ github.ref_name }}"
+          echo "Tests:   ${{ needs.run-tests.result    || 'skipped' }}"
+          echo "Deploy:  ${{ needs.deploy-results.result || 'skipped' }}"
+          echo ""
+          if [ "${{ needs.parse-trigger.outputs.run_tests }}" != "true" ]; then
+            echo "Not triggered. Add --mid-math or --mid-all to your commit message."
+          fi
