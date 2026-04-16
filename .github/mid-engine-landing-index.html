@@ -1,3 +1,4 @@
+<!-- .github/mid-engine-landing-index.html -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -61,6 +62,7 @@
     .badge-rust   { background: #2a1500; color: #e05d20; border: 1px solid #7d3800; }
     .badge-ffi    { background: #0f1e3a; color: #79c0ff; border: 1px solid #1f4080; }
     .badge-soon   { background: #1c2128; color: #484f58; border: 1px solid #30363d; }
+    .badge-wip    { background: #1a1500; color: #e3b341; border: 1px solid #5a4500; }
 
     .mandate-grid {
       display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
@@ -112,7 +114,7 @@
 
   <!-- ── Technical mandates ──────────────────────────────────────────────── -->
   <div class="section-label">Technical Mandates</div>
-  <div class="mandate-grid" style="margin-bottom:0">
+  <div class="mandate-grid">
     <div class="mandate-card">
       <div class="m-icon">🚫</div>
       <div class="m-title">No Exceptions</div>
@@ -165,6 +167,12 @@
           <td>zero frame impact</td>
           <td><span style="color:#3fb950;font-size:.72rem">✓ Implemented</span></td>
         </tr>
+        <tr>
+          <td>Math primitives (mid-math)</td>
+          <td class="perf-val">SSE2</td>
+          <td>16-byte aligned Vec3/4/Quat</td>
+          <td><span style="color:#e3b341;font-size:.72rem">⚙ In progress</span></td>
+        </tr>
       </tbody>
     </table>
   </div>
@@ -182,6 +190,17 @@
         <span>Loading…</span>
       </div>
       <span class="badge badge-rust">Rust · Priority 1</span>
+    </a>
+
+    <a class="card" href="mid-math/" id="card-mid-math">
+      <div class="card-icon">📐</div>
+      <div class="card-title">mid-math</div>
+      <div class="card-desc">Vec2/3/4 · Quat · Mat3/Mat4 · Lerp/Slerp · 16-byte SSE2 alignment · FFI-ready</div>
+      <div class="card-status" id="status-mid-math">
+        <div class="dot dot-grey"></div>
+        <span>Loading…</span>
+      </div>
+      <span class="badge badge-wip">Rust · Priority 4</span>
     </a>
 
     <div class="card" style="opacity:.5;cursor:not-allowed">
@@ -204,17 +223,6 @@
         <span style="color:#484f58">Not started</span>
       </div>
       <span class="badge badge-soon">Priority 3</span>
-    </div>
-
-    <div class="card" style="opacity:.5;cursor:not-allowed">
-      <div class="card-icon">📐</div>
-      <div class="card-title">mid-math</div>
-      <div class="card-desc">SIMD numerics · Vec2/3/4 · Mat4 · Quat</div>
-      <div class="card-status">
-        <div class="dot dot-grey"></div>
-        <span style="color:#484f58">Not started</span>
-      </div>
-      <span class="badge badge-soon">Priority 4</span>
     </div>
 
     <div class="card" style="opacity:.5;cursor:not-allowed">
@@ -271,9 +279,9 @@
     <div>Include one of these tokens in your commit message or PR title. <code>workflow_dispatch</code> from the Actions tab always works.</div>
     <div class="gate-row">
       <span class="gate-chip">--mid-log</span>
+      <span class="gate-chip">--mid-math</span>
       <span class="gate-chip">--mid-net</span>
       <span class="gate-chip">--mid-ecs</span>
-      <span class="gate-chip">--mid-math</span>
       <span class="gate-chip">--mid-common</span>
       <span class="gate-chip">--mid-all</span>
     </div>
@@ -283,24 +291,24 @@
 </div>
 
 <script>
-// Live-fetch the latest result for each crate that has run at least once.
-// If the JSON doesn't exist yet the card just stays grey — no error shown.
-const crates = ['mid-log'];  // add mid-net, mid-ecs etc. as they get results
+const crates = [
+  { name: 'mid-log',  jsonFile: 'mid-log/mid-log-test-results.json'   },
+  { name: 'mid-math', jsonFile: 'mid-math/mid-math-test-results.json' },
+];
 
-crates.forEach(name => {
-  const slug = name;  // same as directory name
-  fetch(`${slug}/mid-log-test-results.json`)
+crates.forEach(({ name, jsonFile }) => {
+  fetch(jsonFile)
     .then(r => { if (!r.ok) throw new Error(); return r.json(); })
     .then(data => {
-      const el     = document.getElementById(`status-${name}`);
+      const el    = document.getElementById(`status-${name}`);
       if (!el) return;
-      const s      = data.summary;
-      const allOk  = s.failed === 0;
-      const dotCls = allOk ? 'dot-green' : 'dot-red';
-      const label  = allOk
+      const s     = data.summary;
+      const allOk = s.failed === 0;
+      const dot   = allOk ? 'dot-green' : 'dot-red';
+      const label = allOk
         ? `${s.passed} passed — Build #${data.build}`
         : `${s.failed} failed · ${s.passed} passed — Build #${data.build}`;
-      el.innerHTML = `<div class="dot ${dotCls}"></div><span>${label}</span>`;
+      el.innerHTML = `<div class="dot ${dot}"></div><span>${label}</span>`;
     })
     .catch(() => {
       const el = document.getElementById(`status-${name}`);
@@ -309,4 +317,4 @@ crates.forEach(name => {
 });
 </script>
 </body>
-                                    </html>
+</html>
