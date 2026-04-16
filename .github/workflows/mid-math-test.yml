@@ -1,5 +1,4 @@
 # .github/workflows/mid-math-test.yml
-
 name: mid-math — Tests
 
 on:
@@ -24,14 +23,12 @@ jobs:
         id: decide
         run: |
           RUN=false
-
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             RUN=true
           else
             MSG="${{ github.event.head_commit.message }}${{ github.event.pull_request.title }}"
             echo "$MSG" | grep -qiE '\-\-mid-math\b|\-\-mid-all\b' && RUN=true || true
           fi
-
           echo "run_tests=$RUN" >> $GITHUB_OUTPUT
           echo "Run mid-math tests: $RUN"
 
@@ -53,7 +50,9 @@ jobs:
         id: rustver
         run: echo "ver=$(rustc --version)" >> $GITHUB_OUTPUT
 
-      - name: Cache cargo
+      # Cache only the cargo registry — NOT target/.
+      # target/ is 200-500 MB and exhausts the 0.5 GB Actions storage limit.
+      - name: Cache cargo registry
         uses: actions/cache@v3
         with:
           path: |
@@ -61,8 +60,9 @@ jobs:
             ~/.cargo/registry/index/
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
-            target/
-          key: ubuntu-cargo-mid-math-${{ hashFiles('crates/mid-math/Cargo.toml') }}
+          key: cargo-registry-${{ hashFiles('crates/mid-math/Cargo.toml') }}
+          restore-keys: |
+            cargo-registry-
 
       - name: Check formatting
         run: cargo fmt -p mid-math --check
@@ -162,7 +162,6 @@ jobs:
                   cur_tests = []
                   cur_dur   = 0.0
                   continue
-
               m = RE_TEST.match(line)
               if m:
                   if cur_name is None:
@@ -176,7 +175,6 @@ jobs:
                       'output':      out,
                   })
                   continue
-
               m = RE_RESULT.search(line)
               if m:
                   cur_dur = float(m.group(1))
@@ -233,8 +231,7 @@ jobs:
           path: |
             mid-math-test-results.json
             mid-math-test-index.html
-            mid-math-test-raw.txt
-          retention-days: 30
+          retention-days: 7
 
   deploy-results:
     runs-on: ubuntu-latest
@@ -321,7 +318,6 @@ jobs:
           echo "Branch:  ${{ github.ref_name }}"
           echo "Tests:   ${{ needs.run-tests.result    || 'skipped' }}"
           echo "Deploy:  ${{ needs.deploy-results.result || 'skipped' }}"
-          echo ""
           if [ "${{ needs.parse-trigger.outputs.run_tests }}" != "true" ]; then
             echo "Not triggered. Add --mid-math or --mid-all to your commit message."
           fi
