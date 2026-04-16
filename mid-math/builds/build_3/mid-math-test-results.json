@@ -1,0 +1,284 @@
+{
+  "build": "3",
+  "branch": "main",
+  "commit": "d0484014",
+  "date": "2026-04-16T07:37:06+01:00",
+  "rust_version": "rustc 1.94.1 (e408947bf 2026-03-25)",
+  "crate": "mid-math",
+  "summary": {
+    "total": 43,
+    "passed": 42,
+    "failed": 1,
+    "ignored": 0,
+    "duration_s": 0.0
+  },
+  "suites": [
+    {
+      "name": "lib (unit tests)",
+      "passed": 42,
+      "failed": 1,
+      "ignored": 0,
+      "duration_s": 0.0,
+      "tests": [
+        {
+          "name": "tests::tests::mat3_identity_times_vec_is_vec",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": "IDENTITY \u00d7 (1, 2, 3) = (1, 2, 3)  (unchanged)"
+        },
+        {
+          "name": "tests::tests::lerp_scalar_midpoint",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": "lerp(0, 10, 0.5) = 5"
+        },
+        {
+          "name": "tests::tests::mat3_inverse_of_identity_is_identity",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": "inverse(IDENTITY) = IDENTITY \u2713"
+        },
+        {
+          "name": "tests::tests::mat3_inverse_roundtrip",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": "diagonal Mat3 * inverse \u2248 identity \u2713"
+        },
+        {
+          "name": "tests::tests::mat3_multiply_identity_is_identity",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": "IDENTITY \u00d7 IDENTITY = IDENTITY \u2713"
+        },
+        {
+          "name": "tests::tests::mat4_identity_transform_point_unchanged",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": "IDENTITY.transform_point((1, 2, 3)) = (1, 2, 3)  (unchanged)"
+        },
+        {
+          "name": "tests::tests::mat4_inverse_of_identity_is_identity",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": "inverse(IDENTITY) = IDENTITY \u2713"
+        },
+        {
+          "name": "tests::tests::mat4_inverse_roundtrip",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": "TRS Mat4 * inverse \u2248 identity \u2713"
+        },
+        {
+          "name": "tests::tests::mat4_look_at_z_axis_points_toward_target",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": "look_at: target in view space = (0, 0, -5)  (should be on -Z)"
+        },
+        {
+          "name": "tests::tests::mat4_perspective_has_negative_one_at_col3_row2",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": "perspective_rh cols[2][3] = -1.0000 (expected -1.0)"
+        },
+        {
+          "name": "tests::tests::mat4_multiply_identity_is_identity",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": "IDENTITY \u00d7 IDENTITY = IDENTITY \u2713"
+        },
+        {
+          "name": "tests::tests::mat4_scale_scales_point",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": "scale((2, 3, 4)).transform_point((1, 1, 1)) = (2, 3, 4)"
+        },
+        {
+          "name": "tests::tests::mat4_singular_inverse_returns_none",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": "inverse(ZERO) = None \u2713"
+        },
+        {
+          "name": "tests::tests::quat_90deg_around_y_rotates_x_to_neg_z",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": "rotate X by 90\u00b0 around Y = (0.000000059604645, 0, -0.99999994)  (expected NEG_Z)"
+        },
+        {
+          "name": "tests::tests::mat4_size_is_64_bytes",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": "size_of::<Mat4>() = 64 bytes"
+        },
+        {
+          "name": "tests::tests::mat4_translation_does_not_affect_vectors",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": "translate(99).transform_vector((1, 0, 0)) = (1, 0, 0)  (unchanged)"
+        },
+        {
+          "name": "tests::tests::mat4_translation_moves_point",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": "translate((10, 20, 30)).transform_point((1, 1, 1)) = (11, 21, 31)"
+        },
+        {
+          "name": "tests::tests::quat_identity_does_not_rotate_vector",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": "IDENTITY.rotate((1, 2, 3)) = (1, 2, 3)  (unchanged)"
+        },
+        {
+          "name": "tests::tests::quat_conjugate_is_inverse_for_unit",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": "q * q.conjugate() \u2248 IDENTITY  w=1.000000 x=0.000000"
+        },
+        {
+          "name": "tests::tests::quat_euler_round_trip",
+          "status": "failed",
+          "duration_ms": 0,
+          "output": "thread 'tests::tests::quat_euler_round_trip' (2460) panicked at crates/mid-math/src/tests.rs:233:9:\nroll  mismatch: 0.3 vs 0.5671121\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n\n\nfailures:\n    tests::tests::quat_euler_round_trip"
+        },
+        {
+          "name": "tests::tests::quat_slerp_endpoints",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": "slerp(0.0)  \u2192 Quat { x: 0.0, y: 0.0, z: 0.0, w: 1.0 }\n  slerp(0.5)  \u2192 rotates X to (0.7071067, 0, -0.70710695)\n  slerp(1.0)  \u2192 Quat { x: 0.0, y: 0.7071068, z: 0.0, w: 0.7071068 }"
+        },
+        {
+          "name": "tests::tests::quat_multiply_composes_rotations",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": "(90\u00b0Y \u00d7 90\u00b0Y).rotate(X) = (-1, 0, 0)  (expected NEG_X)"
+        },
+        {
+          "name": "tests::tests::quat_to_mat4_identity_roundtrip",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": "IDENTITY.to_mat4() == Mat4::IDENTITY \u2713"
+        },
+        {
+          "name": "tests::tests::smoothstep_clamps_outside_range",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": "smoothstep outside range: lo=0, hi=1"
+        },
+        {
+          "name": "tests::tests::smoothstep_midpoint_is_not_linear",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": "smoothstep(0, 1, 0.5) = 0.500000 (exact midpoint)"
+        },
+        {
+          "name": "tests::tests::vec2_addition",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": "(1, 2) + (3, 4) = (4, 6)"
+        },
+        {
+          "name": "tests::tests::vec2_dot_product",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": "dot((1, 0), (0, 1)) = 0 (perpendicular \u2192 0)"
+        },
+        {
+          "name": "tests::tests::vec2_lerp_midpoint",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": "lerp((0, 0), (2, 4), 0.5) = (1, 2)"
+        },
+        {
+          "name": "tests::tests::vec2_normalize_unit_length",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": "normalize((3, 4)) = (0.6, 0.8)  |n| = 1.000000"
+        },
+        {
+          "name": "tests::tests::vec2_perpendicular_is_orthogonal",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": "perp((1, 0)) = (-0, 1)  dot = 0"
+        },
+        {
+          "name": "tests::tests::vec2_zero_normalize_returns_zero",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": "normalize(ZERO) = (0, 0) (safe fallback)"
+        },
+        {
+          "name": "tests::tests::vec3_align_is_16",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": "align_of::<Vec3>() = 16 bytes"
+        },
+        {
+          "name": "tests::tests::vec3_cross_anticommutative",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": "a\u00d7b + b\u00d7a = ZERO (anticommutative \u2713)  a\u00d7b = (-3, 6, -3)"
+        },
+        {
+          "name": "tests::tests::vec3_cross_product_basis",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": "X \u00d7 Y = (0, 0, 1)  (expected Z = (0, 0, 1))"
+        },
+        {
+          "name": "tests::tests::vec3_distance",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": "distance((0, 0, 0), (3, 4, 0)) = 5.0000 (expected 5.0)"
+        },
+        {
+          "name": "tests::tests::vec3_normalize_unit_length",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": "normalize((1, 2, 3)) = (0.26726124, 0.5345225, 0.8017837)  |n| = 1.000000"
+        },
+        {
+          "name": "tests::tests::vec3_reflect",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": "reflect((0.70710677, -0.70710677, 0)) off Y-normal = (0.70710677, 0.70710677, 0)  (y flipped)"
+        },
+        {
+          "name": "tests::tests::vec3_equality_ignores_pad",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": "Vec3 equality ignores _pad (99.0 vs 0.0) \u2014 correct"
+        },
+        {
+          "name": "tests::tests::vec3_pad_field_is_zero_after_new",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": "Vec3::new(1, 2, 3)._pad = 0  (always 0)"
+        },
+        {
+          "name": "tests::tests::vec3_size_is_16_bytes",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": "size_of::<Vec3>() = 16 bytes"
+        },
+        {
+          "name": "tests::tests::vec4_dot_with_self_is_length_sq",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": "dot((1, 2, 3, 4), (1, 2, 3, 4)) = 30  length_sq = 30  (match)"
+        },
+        {
+          "name": "tests::tests::vec4_normalize_unit_length",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": "normalize((1, 2, 3, 4)) \u2192 |n| = 1.000000"
+        },
+        {
+          "name": "tests::tests::vec4_size_is_16_bytes",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": "size_of::<Vec4>() = 16 bytes"
+        }
+      ]
+    }
+  ]
+}
