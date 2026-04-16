@@ -37,30 +37,28 @@ mod tests {
 
     #[test]
     fn vec2_addition() {
-        let a = Vec2::new(1.0, 2.0);
-        let b = Vec2::new(3.0, 4.0);
-        let c = a + b;
-        assert!(c.approx_eq(Vec2::new(4.0, 6.0)));
-        println!("  {} + {} = {}", a, b, c);
+        let c = Vec2::new(1.0,2.0) + Vec2::new(3.0,4.0);
+        assert!(c.approx_eq(Vec2::new(4.0,6.0)));
+        println!("  (1, 2) + (3, 4) = {}", c);
     }
 
     #[test]
     fn vec2_dot_product() {
-        let d = Vec2::new(1.0, 0.0).dot(Vec2::new(0.0, 1.0));
+        let d = Vec2::new(1.0,0.0).dot(Vec2::new(0.0,1.0));
         assert!(approx_eq(d, 0.0));
         println!("  dot(X, Y) = {} (perpendicular → 0)", d);
     }
 
     #[test]
     fn vec2_normalize_unit_length() {
-        let n = Vec2::new(3.0, 4.0).normalize();
+        let n = Vec2::new(3.0,4.0).normalize();
         assert!(approx_eq(n.length(), 1.0));
         println!("  normalize(3,4) → |n| = {:.6}", n.length());
     }
 
     #[test]
     fn vec2_perpendicular_is_orthogonal() {
-        let v = Vec2::new(1.0, 0.0);
+        let v = Vec2::new(1.0,0.0);
         let p = v.perpendicular();
         assert!(approx_eq(v.dot(p), 0.0));
         println!("  perp({}) = {}  dot = {}", v, p, v.dot(p));
@@ -68,8 +66,8 @@ mod tests {
 
     #[test]
     fn vec2_lerp_midpoint() {
-        let m = Vec2::new(0.0, 0.0).lerp(Vec2::new(2.0, 4.0), 0.5);
-        assert!(m.approx_eq(Vec2::new(1.0, 2.0)));
+        let m = Vec2::ZERO.lerp(Vec2::new(2.0,4.0), 0.5);
+        assert!(m.approx_eq(Vec2::new(1.0,2.0)));
         println!("  lerp(0,0 → 2,4, 0.5) = {}", m);
     }
 
@@ -85,7 +83,7 @@ mod tests {
     #[test]
     fn vec3_size_is_16_bytes() {
         let size = std::mem::size_of::<Vec3>();
-        assert_eq!(size, 16, "Vec3 must be 16 bytes for SIMD alignment");
+        assert_eq!(size, 16);
         println!("  size_of::<Vec3>() = {} bytes", size);
     }
 
@@ -105,22 +103,22 @@ mod tests {
 
     #[test]
     fn vec3_cross_anticommutative() {
-        let a = Vec3::new(1.0, 2.0, 3.0);
-        let b = Vec3::new(4.0, 5.0, 6.0);
+        let a = Vec3::new(1.0,2.0,3.0);
+        let b = Vec3::new(4.0,5.0,6.0);
         assert!((a.cross(b) + b.cross(a)).approx_eq(Vec3::ZERO));
         println!("  a×b + b×a = ZERO ✓");
     }
 
     #[test]
     fn vec3_normalize_unit_length() {
-        let n = Vec3::new(1.0, 2.0, 3.0).normalize();
+        let n = Vec3::new(1.0,2.0,3.0).normalize();
         assert!(approx_eq(n.length(), 1.0));
         println!("  normalize(1,2,3) → |n| = {:.6}", n.length());
     }
 
     #[test]
     fn vec3_reflect() {
-        let v = Vec3::new(1.0, -1.0, 0.0).normalize();
+        let v = Vec3::new(1.0,-1.0,0.0).normalize();
         let r = v.reflect(Vec3::Y);
         assert!(approx_eq(r.y, -v.y));
         println!("  reflect off Y: {} → {}  (y flipped)", v, r);
@@ -128,23 +126,23 @@ mod tests {
 
     #[test]
     fn vec3_pad_field_is_zero_after_new() {
-        let v = Vec3::new(1.0, 2.0, 3.0);
+        let v = Vec3::new(1.0,2.0,3.0);
         assert_eq!(v._pad, 0.0);
         println!("  Vec3::new(1,2,3)._pad = {} (always 0)", v._pad);
     }
 
     #[test]
     fn vec3_equality_ignores_pad() {
-        let mut a = Vec3::new(1.0, 2.0, 3.0);
-        let     b = Vec3::new(1.0, 2.0, 3.0);
+        let mut a = Vec3::new(1.0,2.0,3.0);
+        let     b = Vec3::new(1.0,2.0,3.0);
         a._pad = 99.0;
-        assert_eq!(a, b, "PartialEq must ignore _pad");
+        assert_eq!(a, b);
         println!("  Vec3 equality ignores _pad ✓");
     }
 
     #[test]
     fn vec3_distance() {
-        let d = Vec3::new(0.0, 0.0, 0.0).distance(Vec3::new(3.0, 4.0, 0.0));
+        let d = Vec3::ZERO.distance(Vec3::new(3.0,4.0,0.0));
         assert!(approx_eq(d, 5.0));
         println!("  distance(origin → 3,4,0) = {:.4} (expected 5.0)", d);
     }
@@ -159,14 +157,14 @@ mod tests {
 
     #[test]
     fn vec4_dot_with_self_is_length_sq() {
-        let v = Vec4::new(1.0, 2.0, 3.0, 4.0);
+        let v = Vec4::new(1.0,2.0,3.0,4.0);
         assert!(approx_eq(v.dot(v), v.length_sq()));
         println!("  dot(v,v) == length_sq ✓  value = {}", v.length_sq());
     }
 
     #[test]
     fn vec4_normalize_unit_length() {
-        let n = Vec4::new(1.0, 2.0, 3.0, 4.0).normalize();
+        let n = Vec4::new(1.0,2.0,3.0,4.0).normalize();
         assert!(approx_eq(n.length(), 1.0));
         println!("  normalize(1,2,3,4) → |n| = {:.6}", n.length());
     }
@@ -175,7 +173,7 @@ mod tests {
 
     #[test]
     fn quat_identity_does_not_rotate_vector() {
-        let v = Vec3::new(1.0, 2.0, 3.0);
+        let v = Vec3::new(1.0,2.0,3.0);
         let r = Quat::IDENTITY.rotate(v);
         assert!(r.approx_eq(v));
         println!("  IDENTITY.rotate({}) = {}  (unchanged)", v, r);
@@ -207,7 +205,6 @@ mod tests {
 
     #[test]
     fn quat_euler_round_trip() {
-        // ZYX convention: from_euler and to_euler must be exact inverses.
         let cases = [
             (0.3_f32, 0.5_f32, 1.2_f32),
             (0.0,     0.0,     0.0),
@@ -217,9 +214,9 @@ mod tests {
         for (roll0, pitch0, yaw0) in cases {
             let q = Quat::from_euler(roll0, pitch0, yaw0);
             let (roll1, pitch1, yaw1) = q.to_euler();
-            assert!(approx_eq(roll0, roll1),   "roll  {} vs {} (diff={})", roll0, roll1, (roll0-roll1).abs());
-            assert!(approx_eq(pitch0, pitch1), "pitch {} vs {} (diff={})", pitch0, pitch1, (pitch0-pitch1).abs());
-            assert!(approx_eq(yaw0, yaw1),     "yaw   {} vs {} (diff={})", yaw0, yaw1, (yaw0-yaw1).abs());
+            assert!(approx_eq(roll0, roll1),   "roll  {} vs {}", roll0, roll1);
+            assert!(approx_eq(pitch0, pitch1), "pitch {} vs {}", pitch0, pitch1);
+            assert!(approx_eq(yaw0, yaw1),     "yaw   {} vs {}", yaw0, yaw1);
             println!(
                 "  euler({:.2},{:.2},{:.2}) → quat → euler({:.2},{:.2},{:.2}) ✓",
                 roll0, pitch0, yaw0, roll1, pitch1, yaw1,
@@ -229,8 +226,8 @@ mod tests {
 
     #[test]
     fn quat_slerp_endpoints() {
-        let a = Quat::from_axis_angle(Vec3::Y, to_radians(0.0));
-        let b = Quat::from_axis_angle(Vec3::Y, to_radians(90.0));
+        let a   = Quat::from_axis_angle(Vec3::Y, to_radians(0.0));
+        let b   = Quat::from_axis_angle(Vec3::Y, to_radians(90.0));
         let mid = a.slerp(b, 0.5).rotate(Vec3::X);
         assert!(mid.x > 0.0 && mid.z < 0.0, "expected first quadrant, got {}", mid);
         println!("  slerp(0°,90°,t=0.5).rotate(X) = {}  ✓ first quadrant", mid);
@@ -246,7 +243,7 @@ mod tests {
 
     #[test]
     fn mat3_identity_times_vec_is_vec() {
-        let v = Vec3::new(1.0, 2.0, 3.0);
+        let v = Vec3::new(1.0,2.0,3.0);
         assert!(Mat3::IDENTITY.transform(v).approx_eq(v));
         println!("  IDENTITY × {} = {}  ✓", v, Mat3::IDENTITY.transform(v));
     }
@@ -265,13 +262,12 @@ mod tests {
 
     #[test]
     fn mat3_inverse_roundtrip() {
-        let m = Mat3::from_cols([2.0,0.0,0.0],[0.0,3.0,0.0],[0.0,0.0,4.0]);
+        let m   = Mat3::from_cols([2.0,0.0,0.0],[0.0,3.0,0.0],[0.0,0.0,4.0]);
         let inv = m.inverse().expect("diagonal matrix is invertible");
-        let product = m * inv;
+        let p   = m * inv;
         for c in 0..3 { for r in 0..3 {
-            let expected = if c == r { 1.0 } else { 0.0 };
-            assert!((product.cols[c][r] - expected).abs() < 1e-5,
-                "m*inv[{}][{}] = {} (expected {})", c, r, product.cols[c][r], expected);
+            let exp = if c==r{1.0}else{0.0};
+            assert!((p.cols[c][r]-exp).abs()<1e-5, "m*inv[{}][{}]={}", c,r,p.cols[c][r]);
         }}
         println!("  diagonal Mat3 * inverse ≈ identity ✓");
     }
@@ -286,7 +282,7 @@ mod tests {
 
     #[test]
     fn mat4_identity_transform_point_unchanged() {
-        let p = Vec3::new(1.0, 2.0, 3.0);
+        let p = Vec3::new(1.0,2.0,3.0);
         assert!(Mat4::IDENTITY.transform_point(p).approx_eq(p));
         println!("  IDENTITY.transform_point({}) = {}  ✓", p, p);
     }
@@ -301,8 +297,7 @@ mod tests {
     #[test]
     fn mat4_translation_does_not_affect_vectors() {
         let m = Mat4::from_translation(Vec3::new(99.0,99.0,99.0));
-        let v = Vec3::X;
-        assert!(m.transform_vector(v).approx_eq(v));
+        assert!(m.transform_vector(Vec3::X).approx_eq(Vec3::X));
         println!("  translation does not affect w=0 vectors ✓");
     }
 
@@ -328,16 +323,16 @@ mod tests {
     #[test]
     fn mat4_inverse_roundtrip() {
         let m   = Mat4::from_trs(
-            Vec3::new(1.0, 2.0, 3.0),
+            Vec3::new(1.0,2.0,3.0),
             Quat::from_axis_angle(Vec3::Y, to_radians(45.0)),
-            Vec3::new(2.0, 2.0, 2.0),
+            Vec3::new(2.0,2.0,2.0),
         );
         let inv = m.inverse().expect("TRS matrix is invertible");
         let eye = m * inv;
         for c in 0..4 { for r in 0..4 {
-            let expected = if c == r { 1.0 } else { 0.0 };
-            assert!((eye.cols[c][r] - expected).abs() < 1e-4,
-                "m*inv[{}][{}] = {:.6} (expected {:.1})", c, r, eye.cols[c][r], expected);
+            let exp = if c==r{1.0}else{0.0};
+            assert!((eye.cols[c][r]-exp).abs()<1e-4,
+                "m*inv[{}][{}]={:.6}", c, r, eye.cols[c][r]);
         }}
         println!("  TRS Mat4 * inverse ≈ identity ✓");
     }
@@ -351,8 +346,7 @@ mod tests {
     #[test]
     fn mat4_perspective_has_negative_one_at_col3_row2() {
         let m = Mat4::perspective_rh(to_radians(60.0), 16.0/9.0, 0.1, 1000.0);
-        assert!(approx_eq(m.cols[2][3], -1.0),
-            "cols[2][3] = {} (expected -1.0)", m.cols[2][3]);
+        assert!(approx_eq(m.cols[2][3], -1.0), "cols[2][3]={}", m.cols[2][3]);
         println!("  perspective_rh cols[2][3] = {:.4} ✓", m.cols[2][3]);
     }
 
@@ -368,54 +362,55 @@ mod tests {
 
     #[test]
     fn stress_100k_vec3_add() {
-        let a     = Vec3::new(1.0, 2.0, 3.0);
-        let b     = Vec3::new(0.1, 0.2, 0.3);
+        let a = Vec3::new(1.0,2.0,3.0);
+        let b = Vec3::new(0.1,0.2,0.3);
         let count = 100_000usize;
         let start = Instant::now();
         let mut acc = Vec3::ZERO;
         for _ in 0..count { acc = acc + a; acc = acc + b; }
         let elapsed = start.elapsed();
-        assert!(acc.length() > 0.0, "prevent dead-code elimination");
+        let _ = std::hint::black_box(acc);
+        assert!(acc.length() > 0.0);
         println!(
             "  {} Vec3 adds in {:.3}ms  ({:.1} ns/op)  final_x={:.0}",
-            count * 2, elapsed.as_secs_f64() * 1000.0,
-            elapsed.as_nanos() as f64 / (count * 2) as f64,
-            acc.x,
+            count*2, elapsed.as_secs_f64()*1000.0,
+            elapsed.as_nanos() as f64/(count*2) as f64, acc.x,
         );
     }
 
     #[test]
     fn stress_100k_vec3_dot() {
-        let a     = Vec3::new(1.0, 0.0, 0.0);
-        let b     = Vec3::new(0.6, 0.8, 0.0);
+        let a = Vec3::new(1.0,0.0,0.0);
+        let b = Vec3::new(0.6,0.8,0.0);
         let count = 100_000usize;
         let start = Instant::now();
         let mut acc = 0.0f32;
         for _ in 0..count { acc += a.dot(b); }
         let elapsed = start.elapsed();
+        let _ = std::hint::black_box(acc);
         assert!(acc > 0.0);
         println!(
             "  {} Vec3 dot products in {:.3}ms  ({:.1} ns/op)  avg={:.4}",
-            count, elapsed.as_secs_f64() * 1000.0,
-            elapsed.as_nanos() as f64 / count as f64,
-            acc / count as f32,
+            count, elapsed.as_secs_f64()*1000.0,
+            elapsed.as_nanos() as f64/count as f64, acc/count as f32,
         );
     }
 
     #[test]
     fn stress_100k_vec3_cross() {
-        let a     = Vec3::new(1.0, 0.0, 0.0);
-        let b     = Vec3::new(0.0, 1.0, 0.0);
+        let a = Vec3::X;
+        let b = Vec3::Y;
         let count = 100_000usize;
         let start = Instant::now();
         let mut acc = Vec3::ZERO;
         for _ in 0..count { acc = acc + a.cross(b); }
         let elapsed = start.elapsed();
+        let _ = std::hint::black_box(acc);
         assert!(acc.length() > 0.0);
         println!(
             "  {} Vec3 cross products in {:.3}ms  ({:.1} ns/op)",
-            count, elapsed.as_secs_f64() * 1000.0,
-            elapsed.as_nanos() as f64 / count as f64,
+            count, elapsed.as_secs_f64()*1000.0,
+            elapsed.as_nanos() as f64/count as f64,
         );
     }
 
@@ -425,36 +420,37 @@ mod tests {
         let start = Instant::now();
         let mut acc = 0.0f32;
         for i in 0..count {
-            let v = Vec3::new(i as f32 + 1.0, i as f32 * 0.5 + 1.0, i as f32 * 0.3 + 1.0);
+            let v = Vec3::new(i as f32+1.0, i as f32*0.5+1.0, i as f32*0.3+1.0);
             acc += v.normalize().x;
         }
         let elapsed = start.elapsed();
+        let _ = std::hint::black_box(acc);
         assert!(acc.is_finite());
         println!(
             "  {} Vec3 normalizes in {:.3}ms  ({:.1} ns/op)  acc={:.2}",
-            count, elapsed.as_secs_f64() * 1000.0,
-            elapsed.as_nanos() as f64 / count as f64,
-            acc,
+            count, elapsed.as_secs_f64()*1000.0,
+            elapsed.as_nanos() as f64/count as f64, acc,
         );
     }
 
     #[test]
     fn stress_100k_vec3_lerp() {
-        let a     = Vec3::ZERO;
-        let b     = Vec3::ONE;
+        let a = Vec3::ZERO;
+        let b = Vec3::ONE;
         let count = 100_000usize;
         let start = Instant::now();
         let mut acc = Vec3::ZERO;
         for i in 0..count {
-            let t = (i as f32) / count as f32;
+            let t = (i as f32)/count as f32;
             acc = acc + a.lerp(b, t);
         }
         let elapsed = start.elapsed();
+        let _ = std::hint::black_box(acc);
         assert!(acc.length() > 0.0);
         println!(
             "  {} Vec3 lerps in {:.3}ms  ({:.1} ns/op)",
-            count, elapsed.as_secs_f64() * 1000.0,
-            elapsed.as_nanos() as f64 / count as f64,
+            count, elapsed.as_secs_f64()*1000.0,
+            elapsed.as_nanos() as f64/count as f64,
         );
     }
 
@@ -469,18 +465,16 @@ mod tests {
         let mut acc = Vec3::ZERO;
         for _ in 0..count { acc = acc + q.rotate(v); }
         let elapsed = start.elapsed();
+        let _ = std::hint::black_box(acc);
         assert!(acc.length() > 0.0);
+        let ms = elapsed.as_secs_f64()*1000.0;
         println!(
             "  {} Quat rotations in {:.3}ms  ({:.1} ns/op)",
-            count, elapsed.as_secs_f64() * 1000.0,
-            elapsed.as_nanos() as f64 / count as f64,
+            count, ms, elapsed.as_nanos() as f64/count as f64,
         );
-        // 100k rotations per frame is the ECS target at 60Hz.
-        // This is the critical path: entities with rotation components.
-        let ms = elapsed.as_secs_f64() * 1000.0;
         println!(
             "  ECS 60Hz frame budget=16.6ms — 100k rotations took {:.3}ms ({})",
-            ms, if ms < 16.6 { "✓ within budget" } else { "⚠ over budget on this machine" },
+            ms, if ms < 16.6 {"✓ within budget"} else {"⚠ over budget"},
         );
     }
 
@@ -493,11 +487,12 @@ mod tests {
         let mut acc = Quat::IDENTITY;
         for _ in 0..count { acc = acc * q1 * q2; }
         let elapsed = start.elapsed();
+        let _ = std::hint::black_box(acc);
         assert!(acc.length_sq() > 0.0);
         println!(
             "  {} Quat multiplications in {:.3}ms  ({:.1} ns/op)",
-            count * 2, elapsed.as_secs_f64() * 1000.0,
-            elapsed.as_nanos() as f64 / (count * 2) as f64,
+            count*2, elapsed.as_secs_f64()*1000.0,
+            elapsed.as_nanos() as f64/(count*2) as f64,
         );
     }
 
@@ -509,36 +504,37 @@ mod tests {
         let start = Instant::now();
         let mut acc = Quat::IDENTITY;
         for i in 0..count {
-            let t = (i as f32) / count as f32;
+            let t = (i as f32)/count as f32;
             acc = acc * a.slerp(b, t);
         }
         let elapsed = start.elapsed();
+        let _ = std::hint::black_box(acc);
         assert!(acc.length_sq() > 0.0);
         println!(
             "  {} Quat slerps in {:.3}ms  ({:.1} ns/op)",
-            count, elapsed.as_secs_f64() * 1000.0,
-            elapsed.as_nanos() as f64 / count as f64,
+            count, elapsed.as_secs_f64()*1000.0,
+            elapsed.as_nanos() as f64/count as f64,
         );
     }
 
     #[test]
     fn stress_50k_euler_from_to_roundtrip() {
-        // Simulate an animation system converting angles every frame.
         let count = 50_000usize;
         let start = Instant::now();
         let mut acc = 0.0f32;
         for i in 0..count {
-            let f  = i as f32 * 0.0001;
-            let q  = Quat::from_euler(f, f * 0.7, f * 1.3);
+            let f = i as f32*0.0001;
+            let q = Quat::from_euler(f, f*0.7, f*1.3);
             let (r, p, y) = q.to_euler();
             acc += r + p + y;
         }
         let elapsed = start.elapsed();
+        let _ = std::hint::black_box(acc);
         assert!(acc.is_finite());
         println!(
             "  {} euler↔quat round-trips in {:.3}ms  ({:.1} ns/op)",
-            count, elapsed.as_secs_f64() * 1000.0,
-            elapsed.as_nanos() as f64 / count as f64,
+            count, elapsed.as_secs_f64()*1000.0,
+            elapsed.as_nanos() as f64/count as f64,
         );
     }
 
@@ -546,27 +542,39 @@ mod tests {
 
     #[test]
     fn stress_10k_mat4_mul() {
-        let a     = Mat4::from_translation(Vec3::new(1.0, 2.0, 3.0));
-        let b     = Mat4::from_scale(Vec3::new(2.0, 2.0, 2.0));
+        // Root cause of the previous failure:
+        // Multiplying from_scale(2,2,2) 10k times overflows f32 to INFINITY.
+        // Then INFINITY * 0.0 = NaN, and NaN > 0.0 is false → assert fires.
+        //
+        // Fix: use rotation matrices — they are orthogonal (all entries in
+        // [-1, 1]) and never overflow, giving a real throughput measurement.
+        let a = Mat4::from_rotation(Quat::from_axis_angle(Vec3::Y, to_radians(0.01)));
+        let b = Mat4::from_rotation(Quat::from_axis_angle(Vec3::X, to_radians(0.01)));
         let count = 10_000usize;
         let start = Instant::now();
         let mut acc = Mat4::IDENTITY;
         for _ in 0..count { acc = acc * a * b; }
         let elapsed = start.elapsed();
-        assert!(acc.cols[3][0] > 0.0, "prevent DCE");
+        // black_box prevents the compiler from discarding the loop,
+        // and rotation matrices guarantee all entries are finite.
+        let acc = std::hint::black_box(acc);
+        assert!(
+            acc.cols[0][0].is_finite(),
+            "rotation matrix entries must be finite, got NaN/Inf — this is a math bug"
+        );
         println!(
             "  {} Mat4 multiplications in {:.3}ms  ({:.1} ns/op)",
-            count * 2, elapsed.as_secs_f64() * 1000.0,
-            elapsed.as_nanos() as f64 / (count * 2) as f64,
+            count*2, elapsed.as_secs_f64()*1000.0,
+            elapsed.as_nanos() as f64/(count*2) as f64,
         );
     }
 
     #[test]
     fn stress_10k_mat4_transform_point() {
-        let m     = Mat4::from_trs(
-            Vec3::new(1.0, 2.0, 3.0),
+        let m = Mat4::from_trs(
+            Vec3::new(1.0,2.0,3.0),
             Quat::from_axis_angle(Vec3::Y, to_radians(45.0)),
-            Vec3::new(2.0, 2.0, 2.0),
+            Vec3::new(2.0,2.0,2.0),
         );
         let count = 10_000usize;
         let start = Instant::now();
@@ -575,11 +583,12 @@ mod tests {
             acc = acc + m.transform_point(Vec3::new(i as f32, 0.0, 0.0));
         }
         let elapsed = start.elapsed();
+        let _ = std::hint::black_box(acc);
         assert!(acc.length() > 0.0);
         println!(
             "  {} Mat4 transform_point in {:.3}ms  ({:.1} ns/op)",
-            count, elapsed.as_secs_f64() * 1000.0,
-            elapsed.as_nanos() as f64 / count as f64,
+            count, elapsed.as_secs_f64()*1000.0,
+            elapsed.as_nanos() as f64/count as f64,
         );
     }
 
@@ -590,9 +599,9 @@ mod tests {
         let mut passed = 0usize;
         for i in 0..count {
             let m = Mat4::from_trs(
-                Vec3::new(i as f32 * 0.1, 0.0, 0.0),
+                Vec3::new(i as f32*0.1, 0.0, 0.0),
                 Quat::from_axis_angle(Vec3::Y, to_radians(i as f32)),
-                Vec3::new(1.0 + i as f32 * 0.001, 1.0, 1.0),
+                Vec3::new(1.0+i as f32*0.001, 1.0, 1.0),
             );
             if m.inverse().is_some() { passed += 1; }
         }
@@ -600,78 +609,64 @@ mod tests {
         assert_eq!(passed, count, "all TRS matrices should be invertible");
         println!(
             "  {} Mat4 inverses in {:.3}ms  ({:.1} ns/op)  all invertible ✓",
-            count, elapsed.as_secs_f64() * 1000.0,
-            elapsed.as_nanos() as f64 / count as f64,
+            count, elapsed.as_secs_f64()*1000.0,
+            elapsed.as_nanos() as f64/count as f64,
         );
     }
 
     #[test]
     fn stress_100k_entity_transform_simulation() {
-        // Simulates the mid-ecs hot path: 100k entities, each with a TRS transform.
-        // This is the design target. The budget is 16.6ms at 60Hz.
         let entity_count = 100_000usize;
         let trs = Mat4::from_trs(
-            Vec3::new(1.0, 0.0, 0.0),
+            Vec3::new(1.0,0.0,0.0),
             Quat::from_axis_angle(Vec3::Y, to_radians(45.0)),
             Vec3::ONE,
         );
         let mut positions: Vec<Vec3> = (0..entity_count)
-            .map(|i| Vec3::new(i as f32 * 0.01, 0.0, 0.0))
+            .map(|i| Vec3::new(i as f32*0.01, 0.0, 0.0))
             .collect();
 
         let start = Instant::now();
-        for p in positions.iter_mut() {
-            *p = trs.transform_point(*p);
-        }
+        for p in positions.iter_mut() { *p = trs.transform_point(*p); }
         let elapsed = start.elapsed();
-        let ms = elapsed.as_secs_f64() * 1000.0;
+        let ms = elapsed.as_secs_f64()*1000.0;
 
-        // Prevent DCE
+        let _ = std::hint::black_box(&positions);
         assert!(positions[0].length() > 0.0);
 
         println!(
             "  {} entity transforms in {:.3}ms  ({:.1} ns/entity)",
-            entity_count, ms,
-            elapsed.as_nanos() as f64 / entity_count as f64,
+            entity_count, ms, elapsed.as_nanos() as f64/entity_count as f64,
         );
         println!(
             "  ECS 60Hz budget=16.6ms — 100k transforms took {:.3}ms ({})",
-            ms, if ms < 16.6 { "✓ within budget" } else { "⚠ over budget on this machine" },
+            ms, if ms < 16.6 {"✓ within budget"} else {"⚠ over budget"},
         );
     }
 
     #[test]
     fn stress_mixed_math_1k_frames_simulation() {
-        // Simulates 1000 game ticks worth of math:
-        // each tick: build TRS, rotate 10 vectors, lerp positions.
         let ticks = 1_000usize;
         let start = Instant::now();
         let mut total_pos = Vec3::ZERO;
 
         for tick in 0..ticks {
-            let t = tick as f32 * 0.016;
-            let q = Quat::from_euler(t * 0.1, t * 0.2, t * 0.3);
-            let m = Mat4::from_trs(
-                Vec3::new(t, 0.0, 0.0),
-                q,
-                Vec3::ONE,
-            );
+            let t = tick as f32*0.016;
+            let q = Quat::from_euler(t*0.1, t*0.2, t*0.3);
+            let m = Mat4::from_trs(Vec3::new(t,0.0,0.0), q, Vec3::ONE);
             for i in 0..10 {
                 let p = Vec3::new(i as f32, 0.0, 0.0);
-                let transformed = m.transform_point(p);
-                let lerped      = p.lerp(transformed, 0.5);
-                total_pos = total_pos + lerped;
+                total_pos = total_pos + p.lerp(m.transform_point(p), 0.5);
             }
         }
 
         let elapsed = start.elapsed();
+        let _ = std::hint::black_box(total_pos);
         assert!(total_pos.length() > 0.0);
         println!(
             "  {} ticks × (TRS + 10 transforms + 10 lerps) = {} ops in {:.3}ms  ({:.1} µs/tick)",
-            ticks,
-            ticks * 21,
-            elapsed.as_secs_f64() * 1000.0,
-            elapsed.as_secs_f64() * 1_000_000.0 / ticks as f64,
+            ticks, ticks*21, elapsed.as_secs_f64()*1000.0,
+            elapsed.as_secs_f64()*1_000_000.0/ticks as f64,
         );
     }
 }
