@@ -1,3 +1,4 @@
+# .github/workflows/mid-log-test.yml
 name: mid-log — Tests
 
 on:
@@ -22,14 +23,12 @@ jobs:
         id: decide
         run: |
           RUN=false
-
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             RUN=true
           else
             MSG="${{ github.event.head_commit.message }}${{ github.event.pull_request.title }}"
             echo "$MSG" | grep -qiE '\-\-mid-log\b|\-\-mid-all\b' && RUN=true || true
           fi
-
           echo "run_tests=$RUN" >> $GITHUB_OUTPUT
           echo "Run mid-log tests: $RUN"
 
@@ -51,7 +50,11 @@ jobs:
         id: rustver
         run: echo "ver=$(rustc --version)" >> $GITHUB_OUTPUT
 
-      - name: Cache cargo
+      # Cache only the cargo registry — NOT target/.
+      # target/ for a Rust workspace is 200-500 MB and blows the 0.5 GB
+      # Actions storage limit within a single billing cycle.
+      # The registry cache is ~20-50 MB and is stable across runs.
+      - name: Cache cargo registry
         uses: actions/cache@v3
         with:
           path: |
@@ -59,8 +62,9 @@ jobs:
             ~/.cargo/registry/index/
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
-            target/
-          key: ubuntu-cargo-mid-log-${{ hashFiles('crates/mid-log/Cargo.toml') }}
+          key: cargo-registry-${{ hashFiles('crates/mid-log/Cargo.toml') }}
+          restore-keys: |
+            cargo-registry-
 
       - name: Check formatting
         run: cargo fmt -p mid-log --check
@@ -77,10 +81,10 @@ jobs:
           echo ""
           echo "=== Produced libraries ==="
           find target/debug -maxdepth 1 \
-            \( -name "libmid_log.so"     \
-            -o -name "libmid_log.a"      \
-            -o -name "libmid_log.dylib"  \
-            -o -name "mid_log.dll" \)    \
+            \( -name "libmid_log.so"    \
+            -o -name "libmid_log.a"     \
+            -o -name "libmid_log.dylib" \
+            -o -name "mid_log.dll" \)   \
             -exec ls -lh {} \; 2>/dev/null || echo "  (platform-specific names — fine)"
 
       - name: Run unit tests
@@ -118,7 +122,6 @@ jobs:
               if content:
                   test_output[m.group(1)] = content
 
-          # Also capture failure output (panics appear after "failures:" block)
           fail_output = {}
           fail_section = re.search(r'\nfailures:\n(.*?)(?:\ntest result:|\Z)', text, re.DOTALL)
           if fail_section:
@@ -161,13 +164,11 @@ jobs:
                   cur_tests = []
                   cur_dur   = 0.0
                   continue
-
               m = RE_TEST.match(line)
               if m:
                   if cur_name is None:
                       cur_name, cur_tests, cur_dur = 'mid-log unit tests', [], 0.0
                   tname, status, dur = m.group(1), m.group(2), m.group(3)
-                  # Prefer failure output so panics show up in the detail box
                   out = fail_output.get(tname) or test_output.get(tname, '')
                   cur_tests.append({
                       'name':        tname,
@@ -176,7 +177,6 @@ jobs:
                       'output':      out,
                   })
                   continue
-
               m = RE_RESULT.search(line)
               if m:
                   cur_dur = float(m.group(1))
@@ -225,6 +225,8 @@ jobs:
           sed -i "s|DATE_PLACEHOLDER|$(date -u)|g"                     mid-log-test-index.html
           sed -i "s|RUST_VERSION_PLACEHOLDER|${RUST_VERSION}|g"        mid-log-test-index.html
 
+      # raw.txt is excluded — it's the largest artifact and is only needed
+      # during the parsing step above (which has already run).
       - name: Upload artifacts
         if: always()
         uses: actions/upload-artifact@v4
@@ -233,8 +235,7 @@ jobs:
           path: |
             mid-log-test-results.json
             mid-log-test-index.html
-            mid-log-test-raw.txt
-          retention-days: 30
+          retention-days: 7
 
   deploy-results:
     runs-on: ubuntu-latest
@@ -294,7 +295,6 @@ jobs:
           cp deploy/mid-log/mid-log-test-results.json "$WORK/mid-log/builds/build_${BUILD_NUM}/mid-log-test-results.json"
           cp deploy/mid-log/mid-log-test-index.html   "$WORK/mid-log/builds/build_${BUILD_NUM}/index.html"
 
-          # Always regenerate the landing index so it reflects the latest state
           cp .github/mid-engine-landing-index.html "$WORK/index.html"
 
           cd "$WORK"
@@ -322,7 +322,6 @@ jobs:
           echo "Branch:  ${{ github.ref_name }}"
           echo "Tests:   ${{ needs.run-tests.result    || 'skipped' }}"
           echo "Deploy:  ${{ needs.deploy-results.result || 'skipped' }}"
-          echo ""
           if [ "${{ needs.parse-trigger.outputs.run_tests }}" != "true" ]; then
             echo "Not triggered. Add --mid-log or --mid-all to your commit message."
           fi
