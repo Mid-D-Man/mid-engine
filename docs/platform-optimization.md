@@ -64,3 +64,28 @@ containing at minimum:
 ```
 
 ### What a compliant summary looks like
+
+Need to optimize a hot path?
+│
+├─ Do you have a [RELEASE] number from cargo test --release?
+│   └─ No → Get it first. Then check the Step Summary for context.
+│
+├─ Is it in the Priority Queue (Section 5)?
+│   └─ No → It probably does not need optimizing. Check the baseline table.
+│
+├─ Is the bottleneck in a #[repr(C)] type layout?
+│   └─ Yes → Forbidden. FFI contract is immutable.
+│
+├─ Can a Tier 1 approach solve it (unroll, math property)?
+│   └─ Yes → Do that first. Free wins before unsafe code.
+│
+├─ Tier 2: Are you using core::arch intrinsics (not asm!)?
+│   └─ No → Switch to intrinsics. asm! is forbidden for math.
+│
+├─ Does a scalar fallback exist?
+│   └─ No → Write it first.
+│
+├─ Is gain ≥10% at 100k scale in [RELEASE] mode?
+│   └─ No → Not worth the maintenance cost. Close the PR.
+│
+└─ Add benchmark comment, Step Summary, run --mid-all, merge.
