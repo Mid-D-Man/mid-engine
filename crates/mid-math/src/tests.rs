@@ -1,4 +1,13 @@
 // crates/mid-math/src/tests.rs
+//
+// NOTE ON TIMING NUMBERS:
+// The stress test durations printed here are from DEBUG builds
+// (cargo test runs without --release by default). They are useful
+// for confirming correctness and catching regressions, but they are
+// NOT comparable to release-mode performance numbers from other libraries.
+// The CI now also runs `cargo test --release -p mid-math` as a separate
+// step so you get both sets of numbers in the HTML report.
+// All SIMD optimization decisions must be based on the --release numbers.
 
 #[cfg(test)]
 mod tests {
@@ -358,6 +367,65 @@ mod tests {
         println!("  look_at: target in view space = {}  (z < 0) ✓", t);
     }
 
+    // ── Mat4::inverse_trs ─────────────────────────────────────────────────
+
+    #[test]
+    fn mat4_inverse_trs_identity() {
+        let inv = Mat4::IDENTITY.inverse_trs();
+        assert_eq!(inv, Mat4::IDENTITY);
+        println!("  inverse_trs(IDENTITY) = IDENTITY ✓");
+    }
+
+    #[test]
+    fn mat4_inverse_trs_translation_only() {
+        let t   = Vec3::new(5.0, -3.0, 7.0);
+        let m   = Mat4::from_translation(t);
+        let inv = m.inverse_trs();
+        let p   = inv.transform_point(Vec3::ZERO);
+        assert!(p.approx_eq(-t), "expected {} got {}", -t, p);
+        println!("  inverse_trs(translate({},{},{})) applied to origin = {}  ✓", t.x, t.y, t.z, p);
+    }
+
+    #[test]
+    fn mat4_inverse_trs_scale_only() {
+        let m   = Mat4::from_scale(Vec3::new(2.0, 4.0, 0.5));
+        let inv = m.inverse_trs();
+        let p   = inv.transform_point(Vec3::new(2.0, 4.0, 0.5));
+        assert!(p.approx_eq(Vec3::ONE), "expected (1,1,1) got {}", p);
+        println!("  inverse_trs(scale(2,4,0.5)) undoes scaling ✓  result={}", p);
+    }
+
+    #[test]
+    fn mat4_inverse_trs_roundtrip_matches_general_inverse() {
+        // For a TRS matrix, inverse_trs() and inverse() must agree.
+        let m = Mat4::from_trs(
+            Vec3::new(3.0, -1.0, 5.0),
+            Quat::from_axis_angle(Vec3::new(1.0,1.0,0.0).normalize(), to_radians(37.0)),
+            Vec3::new(2.0, 0.5, 3.0),
+        );
+        let inv_general = m.inverse().expect("TRS matrix is invertible");
+        let inv_trs     = m.inverse_trs();
+
+        for c in 0..4 { for r in 0..4 {
+            // Tolerance slightly looser than general inverse due to different
+            // arithmetic paths, both are within 1e-4.
+            assert!(
+                (inv_general.cols[c][r] - inv_trs.cols[c][r]).abs() < 1e-4,
+                "mismatch at col={} row={}: general={:.6} trs={:.6}",
+                c, r, inv_general.cols[c][r], inv_trs.cols[c][r],
+            );
+        }}
+        println!("  inverse_trs matches general inverse for TRS matrix ✓");
+    }
+
+    #[test]
+    fn mat4_inverse_trs_zero_scale_does_not_panic() {
+        // Zero-scale axis should return a degenerate but non-panicking result.
+        let m = Mat4::from_scale(Vec3::new(0.0, 1.0, 1.0));
+        let _ = m.inverse_trs(); // must not panic
+        println!("  inverse_trs with zero-scale axis = no panic ✓");
+    }
+
     // ── Stress: Vec ops ───────────────────────────────────────────────────
 
     #[test]
@@ -372,7 +440,7 @@ mod tests {
         let _ = std::hint::black_box(acc);
         assert!(acc.length() > 0.0);
         println!(
-            "  {} Vec3 adds in {:.3}ms  ({:.1} ns/op)  final_x={:.0}",
+            "  {} Vec3 adds in {:.3}ms  ({:.1} ns/op)  final_x={:.0}  [DEBUG BUILD]",
             count*2, elapsed.as_secs_f64()*1000.0,
             elapsed.as_nanos() as f64/(count*2) as f64, acc.x,
         );
@@ -390,7 +458,7 @@ mod tests {
         let _ = std::hint::black_box(acc);
         assert!(acc > 0.0);
         println!(
-            "  {} Vec3 dot products in {:.3}ms  ({:.1} ns/op)  avg={:.4}",
+            "  {} Vec3 dot products in {:.3}ms  ({:.1} ns/op)  avg={:.4}  [DEBUG BUILD]",
             count, elapsed.as_secs_f64()*1000.0,
             elapsed.as_nanos() as f64/count as f64, acc/count as f32,
         );
@@ -408,7 +476,7 @@ mod tests {
         let _ = std::hint::black_box(acc);
         assert!(acc.length() > 0.0);
         println!(
-            "  {} Vec3 cross products in {:.3}ms  ({:.1} ns/op)",
+            "  {} Vec3 cross products in {:.3}ms  ({:.1} ns/op)  [DEBUG BUILD]",
             count, elapsed.as_secs_f64()*1000.0,
             elapsed.as_nanos() as f64/count as f64,
         );
@@ -427,7 +495,7 @@ mod tests {
         let _ = std::hint::black_box(acc);
         assert!(acc.is_finite());
         println!(
-            "  {} Vec3 normalizes in {:.3}ms  ({:.1} ns/op)  acc={:.2}",
+            "  {} Vec3 normalizes in {:.3}ms  ({:.1} ns/op)  acc={:.2}  [DEBUG BUILD]",
             count, elapsed.as_secs_f64()*1000.0,
             elapsed.as_nanos() as f64/count as f64, acc,
         );
@@ -448,7 +516,7 @@ mod tests {
         let _ = std::hint::black_box(acc);
         assert!(acc.length() > 0.0);
         println!(
-            "  {} Vec3 lerps in {:.3}ms  ({:.1} ns/op)",
+            "  {} Vec3 lerps in {:.3}ms  ({:.1} ns/op)  [DEBUG BUILD]",
             count, elapsed.as_secs_f64()*1000.0,
             elapsed.as_nanos() as f64/count as f64,
         );
@@ -469,7 +537,7 @@ mod tests {
         assert!(acc.length() > 0.0);
         let ms = elapsed.as_secs_f64()*1000.0;
         println!(
-            "  {} Quat rotations in {:.3}ms  ({:.1} ns/op)",
+            "  {} Quat rotations in {:.3}ms  ({:.1} ns/op)  [DEBUG BUILD]",
             count, ms, elapsed.as_nanos() as f64/count as f64,
         );
         println!(
@@ -490,7 +558,7 @@ mod tests {
         let _ = std::hint::black_box(acc);
         assert!(acc.length_sq() > 0.0);
         println!(
-            "  {} Quat multiplications in {:.3}ms  ({:.1} ns/op)",
+            "  {} Quat multiplications in {:.3}ms  ({:.1} ns/op)  [DEBUG BUILD]",
             count*2, elapsed.as_secs_f64()*1000.0,
             elapsed.as_nanos() as f64/(count*2) as f64,
         );
@@ -511,7 +579,7 @@ mod tests {
         let _ = std::hint::black_box(acc);
         assert!(acc.length_sq() > 0.0);
         println!(
-            "  {} Quat slerps in {:.3}ms  ({:.1} ns/op)",
+            "  {} Quat slerps in {:.3}ms  ({:.1} ns/op)  [DEBUG BUILD]",
             count, elapsed.as_secs_f64()*1000.0,
             elapsed.as_nanos() as f64/count as f64,
         );
@@ -532,7 +600,7 @@ mod tests {
         let _ = std::hint::black_box(acc);
         assert!(acc.is_finite());
         println!(
-            "  {} euler↔quat round-trips in {:.3}ms  ({:.1} ns/op)",
+            "  {} euler↔quat round-trips in {:.3}ms  ({:.1} ns/op)  [DEBUG BUILD]",
             count, elapsed.as_secs_f64()*1000.0,
             elapsed.as_nanos() as f64/count as f64,
         );
@@ -542,12 +610,6 @@ mod tests {
 
     #[test]
     fn stress_10k_mat4_mul() {
-        // Root cause of the previous failure:
-        // Multiplying from_scale(2,2,2) 10k times overflows f32 to INFINITY.
-        // Then INFINITY * 0.0 = NaN, and NaN > 0.0 is false → assert fires.
-        //
-        // Fix: use rotation matrices — they are orthogonal (all entries in
-        // [-1, 1]) and never overflow, giving a real throughput measurement.
         let a = Mat4::from_rotation(Quat::from_axis_angle(Vec3::Y, to_radians(0.01)));
         let b = Mat4::from_rotation(Quat::from_axis_angle(Vec3::X, to_radians(0.01)));
         let count = 10_000usize;
@@ -555,15 +617,13 @@ mod tests {
         let mut acc = Mat4::IDENTITY;
         for _ in 0..count { acc = acc * a * b; }
         let elapsed = start.elapsed();
-        // black_box prevents the compiler from discarding the loop,
-        // and rotation matrices guarantee all entries are finite.
         let acc = std::hint::black_box(acc);
         assert!(
             acc.cols[0][0].is_finite(),
-            "rotation matrix entries must be finite, got NaN/Inf — this is a math bug"
+            "rotation matrix entries must be finite"
         );
         println!(
-            "  {} Mat4 multiplications in {:.3}ms  ({:.1} ns/op)",
+            "  {} Mat4 multiplications in {:.3}ms  ({:.1} ns/op)  [DEBUG BUILD]",
             count*2, elapsed.as_secs_f64()*1000.0,
             elapsed.as_nanos() as f64/(count*2) as f64,
         );
@@ -586,7 +646,7 @@ mod tests {
         let _ = std::hint::black_box(acc);
         assert!(acc.length() > 0.0);
         println!(
-            "  {} Mat4 transform_point in {:.3}ms  ({:.1} ns/op)",
+            "  {} Mat4 transform_point in {:.3}ms  ({:.1} ns/op)  [DEBUG BUILD]",
             count, elapsed.as_secs_f64()*1000.0,
             elapsed.as_nanos() as f64/count as f64,
         );
@@ -608,9 +668,36 @@ mod tests {
         let elapsed = start.elapsed();
         assert_eq!(passed, count, "all TRS matrices should be invertible");
         println!(
-            "  {} Mat4 inverses in {:.3}ms  ({:.1} ns/op)  all invertible ✓",
+            "  {} Mat4 general inverses in {:.3}ms  ({:.1} ns/op)  all invertible ✓  [DEBUG BUILD]",
             count, elapsed.as_secs_f64()*1000.0,
             elapsed.as_nanos() as f64/count as f64,
+        );
+    }
+
+    #[test]
+    fn stress_5k_mat4_inverse_trs() {
+        // Baseline for inverse_trs vs general inverse (Build #13 debug: 2751.6 ns/op).
+        // Expected: significantly cheaper due to ~30 muls vs ~200 for Cramer's rule.
+        // See docs/platform-optimization.md for the Tier 1 annotation.
+        let count = 5_000usize;
+        let start = Instant::now();
+        for i in 0..count {
+            let m = Mat4::from_trs(
+                Vec3::new(i as f32*0.1, 0.0, 0.0),
+                Quat::from_axis_angle(Vec3::Y, to_radians(i as f32)),
+                Vec3::new(1.0+i as f32*0.001, 1.0, 1.0),
+            );
+            let _ = std::hint::black_box(m.inverse_trs());
+        }
+        let elapsed = start.elapsed();
+        let ns_per = elapsed.as_nanos() as f64 / count as f64;
+        println!(
+            "  {} Mat4 inverse_trs in {:.3}ms  ({:.1} ns/op)  [DEBUG BUILD]",
+            count, elapsed.as_secs_f64()*1000.0, ns_per,
+        );
+        println!(
+            "  Build #13 general inverse baseline: 2751.6 ns/op — speedup vs that: {:.1}×",
+            2751.6 / ns_per,
         );
     }
 
@@ -635,7 +722,7 @@ mod tests {
         assert!(positions[0].length() > 0.0);
 
         println!(
-            "  {} entity transforms in {:.3}ms  ({:.1} ns/entity)",
+            "  {} entity transforms in {:.3}ms  ({:.1} ns/entity)  [DEBUG BUILD]",
             entity_count, ms, elapsed.as_nanos() as f64/entity_count as f64,
         );
         println!(
@@ -664,7 +751,7 @@ mod tests {
         let _ = std::hint::black_box(total_pos);
         assert!(total_pos.length() > 0.0);
         println!(
-            "  {} ticks × (TRS + 10 transforms + 10 lerps) = {} ops in {:.3}ms  ({:.1} µs/tick)",
+            "  {} ticks × (TRS + 10 transforms + 10 lerps) = {} ops in {:.3}ms  ({:.1} µs/tick)  [DEBUG BUILD]",
             ticks, ticks*21, elapsed.as_secs_f64()*1000.0,
             elapsed.as_secs_f64()*1_000_000.0/ticks as f64,
         );
