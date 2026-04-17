@@ -50,8 +50,6 @@ jobs:
         id: rustver
         run: echo "ver=$(rustc --version)" >> $GITHUB_OUTPUT
 
-      # Cache only the cargo registry — NOT target/.
-      # target/ is 200-500 MB and exhausts the 0.5 GB Actions storage limit.
       - name: Cache cargo registry
         uses: actions/cache@v3
         with:
@@ -85,37 +83,53 @@ jobs:
             -o -name "mid_math.dll" \)   \
             -exec ls -lh {} \; 2>/dev/null || echo "  (platform-specific names — fine)"
 
-      # ── Debug build tests (correctness) ──────────────────────────────────
-      # These run without optimizations. Timing numbers are debug-mode and
-      # should NOT be used to compare against release-mode libraries (glam etc).
-      # They exist to catch logic regressions, not to benchmark performance.
+      # ── Debug build — correctness ─────────────────────────────────────
+      # Stress timings in this pass will print [DEBUG] because
+      # cfg!(debug_assertions) == true. These are NOT performance numbers.
       - name: Run unit tests (debug — correctness)
         continue-on-error: true
         run: |
-          echo "=== DEBUG BUILD (correctness checks, timing is NOT representative) ==="
+          echo "=== DEBUG BUILD: correctness pass ==="
+          echo "Stress timings will show [DEBUG] — do not use for perf decisions."
           cargo test -p mid-math \
             --color=never \
             --no-fail-fast \
             -- --show-output 2>&1 | tee mid-math-test-raw.txt
-          echo "TEST_EXIT=${PIPESTATUS[0]}" >> $GITHUB_ENV
+          echo "DEBUG_EXIT=${PIPESTATUS[0]}" >> $GITHUB_ENV
 
-      # ── Release build tests (performance) ─────────────────────────────────
-      # These are the numbers to use for optimization decisions.
-      # Per platform-optimization.md Rule 1: "An optimization that cannot be
-      # benchmarked does not exist." These are the actual benchmarks.
+      # ── Release build — performance ───────────────────────────────────
+      # Stress timings in this pass will print [RELEASE] because
+      # cfg!(debug_assertions) == false. These ARE the performance numbers.
+      # Use these for all Tier 2 optimization decisions per platform-optimization.md.
       - name: Run unit tests (release — performance baseline)
         continue-on-error: true
         run: |
           echo ""
-          echo "=== RELEASE BUILD (use these numbers for optimization decisions) ==="
+          echo "=== RELEASE BUILD: performance pass ==="
+          echo "Stress timings will show [RELEASE] — these are the real numbers."
           cargo test -p mid-math \
             --release \
             --color=never \
             --no-fail-fast \
             -- --show-output 2>&1 | tee mid-math-test-release-raw.txt
-          echo "RELEASE_TEST_EXIT=${PIPESTATUS[0]}" >> $GITHUB_ENV
+          echo "RELEASE_EXIT=${PIPESTATUS[0]}" >> $GITHUB_ENV
 
-      - name: Parse results to JSON
+      # ── Extract release perf numbers for job summary ──────────────────
+      - name: Extract release performance numbers
+        run: |
+          echo "## mid-math Release Performance (Build #${{ github.run_number }})" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "These are the authoritative numbers for optimization decisions." >> $GITHUB_STEP_SUMMARY
+          echo "All [RELEASE] tagged stress tests from \`cargo test --release\`:" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          grep -E '\[RELEASE\]|ns/op|ns/entity|µs/tick|speedup|budget' \
+            mid-math-test-release-raw.txt 2>/dev/null | head -60 >> $GITHUB_STEP_SUMMARY || true
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Full release raw log is in the build artifacts." >> $GITHUB_STEP_SUMMARY
+
+      - name: Parse debug results to JSON (used for HTML dashboard pass/fail)
         env:
           BUILD_NUM:    ${{ github.run_number }}
           BRANCH:       ${{ github.ref_name }}
@@ -217,7 +231,7 @@ jobs:
               'date':         os.environ.get('BUILD_DATE',   ''),
               'rust_version': os.environ.get('RUST_VERSION', 'stable'),
               'crate':        'mid-math',
-              'build_mode':   'debug (correctness)',
+              'note':         'Pass/fail from debug build. Perf numbers in release artifact.',
               'summary': {
                   'total':      total,
                   'passed':     passed,
@@ -254,7 +268,7 @@ jobs:
             mid-math-test-results.json
             mid-math-test-index.html
             mid-math-test-release-raw.txt
-          retention-days: 7
+          retention-days: 14
 
   deploy-results:
     runs-on: ubuntu-latest
@@ -314,6 +328,12 @@ jobs:
           cp deploy/mid-math/mid-math-test-results.json "$WORK/mid-math/builds/build_${BUILD_NUM}/mid-math-test-results.json"
           cp deploy/mid-math/mid-math-test-index.html   "$WORK/mid-math/builds/build_${BUILD_NUM}/index.html"
 
+          # Copy release raw log alongside build snapshot so it's accessible.
+          if [ -f deploy/mid-math/mid-math-test-release-raw.txt ]; then
+            cp deploy/mid-math/mid-math-test-release-raw.txt \
+               "$WORK/mid-math/builds/build_${BUILD_NUM}/release-perf.txt"
+          fi
+
           cp .github/mid-engine-landing-index.html "$WORK/index.html"
 
           cd "$WORK"
@@ -335,15 +355,18 @@ jobs:
       - name: Print summary
         run: |
           echo "============================================="
-          echo "  mid-math Test Summary"
+          echo "  mid-math Test Summary — Build #${{ github.run_number }}"
           echo "============================================="
-          echo "Build:   #${{ github.run_number }}"
           echo "Branch:  ${{ github.ref_name }}"
           echo "Tests:   ${{ needs.run-tests.result    || 'skipped' }}"
           echo "Deploy:  ${{ needs.deploy-results.result || 'skipped' }}"
           echo ""
-          echo "NOTE: Debug-mode timing (cargo test) is for correctness only."
-          echo "See mid-math-test-release-raw.txt in artifacts for real perf numbers."
+          echo "HOW TO READ THE NUMBERS:"
+          echo "  HTML dashboard = debug pass (correctness, [DEBUG] label)"
+          echo "  Job summary    = release pass (perf, [RELEASE] label)"
+          echo "  Artifacts      = mid-math-test-release-raw.txt (full release log)"
+          echo ""
+          echo "Tier 2 optimization decisions require [RELEASE] numbers only."
           if [ "${{ needs.parse-trigger.outputs.run_tests }}" != "true" ]; then
             echo "Not triggered. Add --mid-math or --mid-all to your commit message."
           fi
