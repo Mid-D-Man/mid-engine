@@ -1,4 +1,3 @@
-# .github/workflows/mid-math-test.yml
 name: mid-math — Tests
 
 on:
@@ -114,20 +113,81 @@ jobs:
             -- --show-output 2>&1 | tee mid-math-test-release-raw.txt
           echo "RELEASE_EXIT=${PIPESTATUS[0]}" >> $GITHUB_ENV
 
-      # ── Extract release perf numbers for job summary ──────────────────
-      - name: Extract release performance numbers
+      # ── Publish release performance as GitHub Step Summary ────────────────
+      # Per platform-optimization.md Section 1: all significant perf numbers
+      # must appear in a Step Summary so they are permanently linked to this
+      # CI run and visible without downloading artifacts.
+      - name: Publish release performance summary
         run: |
-          echo "## mid-math Release Performance (Build #${{ github.run_number }})" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "These are the authoritative numbers for optimization decisions." >> $GITHUB_STEP_SUMMARY
-          echo "All [RELEASE] tagged stress tests from \`cargo test --release\`:" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
-          grep -E '\[RELEASE\]|ns/op|ns/entity|µs/tick|speedup|budget' \
-            mid-math-test-release-raw.txt 2>/dev/null | head -60 >> $GITHUB_STEP_SUMMARY || true
-          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "Full release raw log is in the build artifacts." >> $GITHUB_STEP_SUMMARY
+          {
+            echo "## mid-math Release Performance — Build #${{ github.run_number }}"
+            echo ""
+            echo "**Branch:** \`${{ github.ref_name }}\` &nbsp; **Commit:** \`${GITHUB_SHA:0:8}\` &nbsp; **Rust:** \`$(rustc --version)\`"
+            echo ""
+            echo "> Numbers labeled \`[RELEASE]\` from \`cargo test --release\`."
+            echo "> These are the authoritative baseline for Tier 2 optimization decisions."
+            echo "> Debug-mode numbers are in the HTML dashboard (correctness only)."
+            echo ""
+            echo "| Operation | Result | Budget / Note |"
+            echo "|---|---|---|"
+
+            # Parse each [RELEASE] stress line into a table row.
+            # Lines look like:  "  200000 Vec3 adds in 0.292ms  (1.5 ns/op)  final_x=110101  [RELEASE]"
+            python3 - << 'PYEOF'
+          import re, sys
+
+          try:
+              raw = open('mid-math-test-release-raw.txt', encoding='utf-8', errors='replace').read()
+          except FileNotFoundError:
+              print("| *(release log not found)* | — | — |")
+              sys.exit(0)
+
+          RE_ANSI = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
+          text = RE_ANSI.sub('', raw)
+
+          # Extract lines that contain [RELEASE] and a timing figure.
+          RE_LINE = re.compile(r'\[RELEASE\]')
+          RE_TIME = re.compile(r'\(([\d.]+)\s*(ns/op|ns/entity|µs/tick|ms)\)')
+          RE_BUDGET = re.compile(r'(✓ within budget|⚠ over budget|✓|⚠)')
+
+          rows = []
+          for line in text.splitlines():
+              line = line.strip()
+              if '[RELEASE]' not in line:
+                  continue
+              if not RE_TIME.search(line):
+                  continue
+
+              # Clean up the line for display.
+              display = line.replace('[RELEASE]', '').strip()
+              # Truncate very long lines.
+              if len(display) > 100:
+                  display = display[:97] + '...'
+
+              time_match = RE_TIME.search(line)
+              time_str = f"{time_match.group(1)} {time_match.group(2)}" if time_match else '—'
+
+              budget_match = RE_BUDGET.search(line)
+              budget_str = budget_match.group(1) if budget_match else '—'
+
+              # Shorten the operation description.
+              op = display
+              for pattern in [r'\d+ Vec3 adds', r'\d+ Vec3 dot', r'\d+ Vec3 cross',
+                              r'\d+ Vec3 lerp', r'\d+ Vec3 normal',
+                              r'\d+ Quat rot', r'\d+ Quat mul', r'\d+ Quat slerp',
+                              r'\d+ euler', r'\d+ Mat4 mul', r'\d+ Mat4 trans',
+                              r'\d+ Mat4 gen', r'\d+ Mat4 inv',
+                              r'\d+ entity', r'\d+ tick']:
+                  m = re.search(pattern, display, re.IGNORECASE)
+                  if m:
+                      op = m.group(0)
+                      break
+
+              print(f"| {op} | {time_str} | {budget_str} |")
+
+          PYEOF
+
+          } >> $GITHUB_STEP_SUMMARY
 
       - name: Parse debug results to JSON (used for HTML dashboard pass/fail)
         env:
