@@ -1,0 +1,343 @@
+   Compiling mid-math v0.1.0 (/home/runner/work/mid-engine/mid-engine/crates/mid-math)
+    Finished `release` profile [optimized] target(s) in 6.37s
+     Running unittests src/lib.rs (target/release/deps/mid_math-eeb2af02510b3d01)
+
+running 63 tests
+test tests::tests::lerp_scalar_midpoint ... ok
+test tests::tests::mat3_identity_times_vec_is_vec ... ok
+test tests::tests::mat3_inverse_of_identity_is_identity ... ok
+test tests::tests::mat3_inverse_roundtrip ... ok
+test tests::tests::mat4_identity_transform_point_unchanged ... ok
+test tests::tests::mat4_inverse_roundtrip ... ok
+test tests::tests::mat3_multiply_identity_is_identity ... ok
+test tests::tests::mat4_inverse_trs_identity ... ok
+test tests::tests::mat4_inverse_of_identity_is_identity ... ok
+test tests::tests::mat4_inverse_trs_roundtrip_matches_general_inverse ... ok
+test tests::tests::mat4_inverse_trs_scale_only ... ok
+test tests::tests::mat4_look_at_z_axis_points_toward_target ... ok
+test tests::tests::mat4_inverse_trs_translation_only ... ok
+test tests::tests::mat4_inverse_trs_zero_scale_does_not_panic ... ok
+test tests::tests::mat4_perspective_has_negative_one_at_col3_row2 ... ok
+test tests::tests::mat4_singular_inverse_returns_none ... ok
+test tests::tests::mat4_size_is_64_bytes ... ok
+test tests::tests::mat4_multiply_identity_is_identity ... ok
+test tests::tests::mat4_scale_scales_point ... ok
+test tests::tests::mat4_translation_does_not_affect_vectors ... ok
+test tests::tests::mat4_translation_moves_point ... ok
+test tests::tests::quat_90deg_around_y_rotates_x_to_neg_z ... ok
+test tests::tests::quat_conjugate_is_inverse_for_unit ... ok
+test tests::tests::quat_euler_round_trip ... ok
+test tests::tests::quat_identity_does_not_rotate_vector ... ok
+test tests::tests::quat_to_mat4_identity_roundtrip ... ok
+test tests::tests::quat_slerp_endpoints ... ok
+test tests::tests::quat_multiply_composes_rotations ... ok
+test tests::tests::smoothstep_clamps_outside_range ... ok
+test tests::tests::smoothstep_midpoint_is_not_linear ... ok
+test tests::tests::stress_100k_quat_rotate ... ok
+test tests::tests::stress_100k_vec3_add ... ok
+test tests::tests::stress_100k_vec3_cross ... ok
+test tests::tests::stress_100k_vec3_dot ... ok
+test tests::tests::stress_100k_entity_transform_simulation ... ok
+test tests::tests::stress_100k_quat_mul ... ok
+test tests::tests::stress_100k_vec3_lerp ... ok
+test tests::tests::stress_10k_mat4_mul ... ok
+test tests::tests::stress_10k_mat4_transform_point ... ok
+test tests::tests::stress_100k_vec3_normalize ... ok
+test tests::tests::stress_5k_mat4_inverse ... ok
+test tests::tests::stress_50k_quat_slerp ... ok
+test tests::tests::vec2_addition ... ok
+test tests::tests::stress_mixed_math_1k_frames_simulation ... ok
+test tests::tests::stress_5k_mat4_inverse_trs ... ok
+test tests::tests::vec2_dot_product ... ok
+test tests::tests::vec2_lerp_midpoint ... ok
+test tests::tests::vec2_normalize_unit_length ... ok
+test tests::tests::vec2_perpendicular_is_orthogonal ... ok
+test tests::tests::vec2_zero_normalize_returns_zero ... ok
+test tests::tests::vec3_align_is_16 ... ok
+test tests::tests::vec3_cross_anticommutative ... ok
+test tests::tests::vec3_cross_product_basis ... ok
+test tests::tests::vec3_distance ... ok
+test tests::tests::vec3_equality_ignores_pad ... ok
+test tests::tests::vec3_normalize_unit_length ... ok
+test tests::tests::vec3_pad_field_is_zero_after_new ... ok
+test tests::tests::vec3_reflect ... ok
+test tests::tests::vec3_size_is_16_bytes ... ok
+test tests::tests::vec4_dot_with_self_is_length_sq ... ok
+test tests::tests::vec4_size_is_16_bytes ... ok
+test tests::tests::vec4_normalize_unit_length ... ok
+test tests::tests::stress_50k_euler_from_to_roundtrip ... ok
+
+successes:
+
+---- tests::tests::lerp_scalar_midpoint stdout ----
+  lerp(0, 10, 0.5) = 5
+
+---- tests::tests::mat3_identity_times_vec_is_vec stdout ----
+  IDENTITY × (1, 2, 3) = (1, 2, 3)  ✓
+
+---- tests::tests::mat3_inverse_of_identity_is_identity stdout ----
+  inverse(IDENTITY) = IDENTITY ✓
+
+---- tests::tests::mat3_inverse_roundtrip stdout ----
+  diagonal Mat3 * inverse ≈ identity ✓
+
+---- tests::tests::mat4_identity_transform_point_unchanged stdout ----
+  IDENTITY.transform_point((1, 2, 3)) = (1, 2, 3)  ✓
+
+---- tests::tests::mat4_inverse_roundtrip stdout ----
+  TRS Mat4 * inverse ≈ identity ✓
+
+---- tests::tests::mat3_multiply_identity_is_identity stdout ----
+  IDENTITY × IDENTITY = IDENTITY ✓
+
+---- tests::tests::mat4_inverse_trs_identity stdout ----
+  inverse_trs(IDENTITY) = IDENTITY ✓
+
+---- tests::tests::mat4_inverse_of_identity_is_identity stdout ----
+  inverse(IDENTITY) = IDENTITY ✓
+
+---- tests::tests::mat4_inverse_trs_roundtrip_matches_general_inverse stdout ----
+  inverse_trs matches general inverse for TRS matrix ✓
+
+---- tests::tests::mat4_inverse_trs_scale_only stdout ----
+  inverse_trs(scale(2,4,0.5)) undoes scaling ✓  result=(1, 1, 1)
+
+---- tests::tests::mat4_look_at_z_axis_points_toward_target stdout ----
+  look_at: target in view space = (0, 0, -5)  (z < 0) ✓
+
+---- tests::tests::mat4_inverse_trs_translation_only stdout ----
+  inverse_trs(translate(5,-3,7)) applied to origin = (-5, 3, -7)  ✓
+
+---- tests::tests::mat4_inverse_trs_zero_scale_does_not_panic stdout ----
+  inverse_trs with zero-scale axis = no panic ✓
+
+---- tests::tests::mat4_perspective_has_negative_one_at_col3_row2 stdout ----
+  perspective_rh cols[2][3] = -1.0000 ✓
+
+---- tests::tests::mat4_singular_inverse_returns_none stdout ----
+  inverse(ZERO) = None ✓
+
+---- tests::tests::mat4_size_is_64_bytes stdout ----
+  size_of::<Mat4>() = 64 bytes
+
+---- tests::tests::mat4_multiply_identity_is_identity stdout ----
+  IDENTITY × IDENTITY = IDENTITY ✓
+
+---- tests::tests::mat4_scale_scales_point stdout ----
+  scale(2,3,4) × (1,1,1) = (2, 3, 4)  ✓
+
+---- tests::tests::mat4_translation_does_not_affect_vectors stdout ----
+  translation does not affect w=0 vectors ✓
+
+---- tests::tests::mat4_translation_moves_point stdout ----
+  translate(10,20,30) + (1,1,1) = (11, 21, 31)  ✓
+
+---- tests::tests::quat_90deg_around_y_rotates_x_to_neg_z stdout ----
+  rotate X by 90°Y = (0.000000059604645, 0, -0.99999994)  (expected NEG_Z)
+
+---- tests::tests::quat_conjugate_is_inverse_for_unit stdout ----
+  q * q.conjugate() ≈ IDENTITY  w=1.000000 x=0.000000
+
+---- tests::tests::quat_euler_round_trip stdout ----
+  euler(0.30,0.50,1.20) → quat → euler(0.30,0.50,1.20) ✓
+  euler(0.00,0.00,0.00) → quat → euler(0.00,0.00,0.00) ✓
+  euler(1.00,-0.50,2.00) → quat → euler(1.00,-0.50,2.00) ✓
+  euler(-0.70,0.30,-1.50) → quat → euler(-0.70,0.30,-1.50) ✓
+
+---- tests::tests::quat_identity_does_not_rotate_vector stdout ----
+  IDENTITY.rotate((1, 2, 3)) = (1, 2, 3)  (unchanged)
+
+---- tests::tests::quat_to_mat4_identity_roundtrip stdout ----
+  IDENTITY.to_mat4() == Mat4::IDENTITY ✓
+
+---- tests::tests::quat_slerp_endpoints stdout ----
+  slerp(0°,90°,t=0.5).rotate(X) = (0.7071067, 0, -0.70710695)  ✓ first quadrant
+
+---- tests::tests::quat_multiply_composes_rotations stdout ----
+  (90°Y × 90°Y).rotate(X) = (-1, 0, 0)  (expected NEG_X)
+
+---- tests::tests::smoothstep_clamps_outside_range stdout ----
+  smoothstep outside range: lo=0, hi=1
+
+---- tests::tests::smoothstep_midpoint_is_not_linear stdout ----
+  smoothstep(0, 1, 0.5) = 0.500000 (exact midpoint)
+
+---- tests::tests::stress_100k_quat_rotate stdout ----
+  100000 Quat rotations in 0.093ms  (0.9 ns/op)  [RELEASE]
+  ECS 60Hz frame budget=16.6ms — 100k rotations took 0.093ms (✓ within budget)
+
+---- tests::tests::stress_100k_vec3_add stdout ----
+  200000 Vec3 adds in 0.292ms  (1.5 ns/op)  final_x=110101  [RELEASE]
+
+---- tests::tests::stress_100k_vec3_cross stdout ----
+  100000 Vec3 cross products in 0.093ms  (0.9 ns/op)  [RELEASE]
+
+---- tests::tests::stress_100k_vec3_dot stdout ----
+  100000 Vec3 dot products in 0.128ms  (1.3 ns/op)  avg=0.6006  [RELEASE]
+
+---- tests::tests::stress_100k_entity_transform_simulation stdout ----
+  100000 entity transforms in 0.187ms  (1.9 ns/entity)  [RELEASE]
+  ECS 60Hz budget=16.6ms — 100k transforms took 0.187ms (✓ within budget)
+
+---- tests::tests::stress_100k_quat_mul stdout ----
+  200000 Quat multiplications in 1.445ms  (7.2 ns/op)  [RELEASE]
+
+---- tests::tests::stress_100k_vec3_lerp stdout ----
+  100000 Vec3 lerps in 0.275ms  (2.8 ns/op)  [RELEASE]
+
+---- tests::tests::stress_10k_mat4_mul stdout ----
+  20000 Mat4 multiplications in 0.143ms  (7.1 ns/op)  [RELEASE]
+
+---- tests::tests::stress_10k_mat4_transform_point stdout ----
+  10000 Mat4 transform_point in 0.024ms  (2.4 ns/op)  [RELEASE]
+
+---- tests::tests::stress_100k_vec3_normalize stdout ----
+  100000 Vec3 normalizes in 0.375ms  (3.8 ns/op)  acc=86433.90  [RELEASE]
+
+---- tests::tests::stress_5k_mat4_inverse stdout ----
+  5000 Mat4 general inverses in 0.586ms  (117.1 ns/op)  all invertible ✓  [RELEASE]
+
+---- tests::tests::stress_50k_quat_slerp stdout ----
+  50000 Quat slerps in 1.000ms  (20.0 ns/op)  [RELEASE]
+
+---- tests::tests::vec2_addition stdout ----
+  (1, 2) + (3, 4) = (4, 6)
+
+---- tests::tests::stress_mixed_math_1k_frames_simulation stdout ----
+  1000 ticks × (TRS + 10 transforms + 10 lerps) = 21000 ops in 0.121ms  (0.1 µs/tick)  [RELEASE]
+
+---- tests::tests::stress_5k_mat4_inverse_trs stdout ----
+  5000 Mat4 inverse_trs in 0.392ms  (78.4 ns/op)  [RELEASE]
+
+---- tests::tests::vec2_dot_product stdout ----
+  dot(X, Y) = 0 (perpendicular → 0)
+
+---- tests::tests::vec2_lerp_midpoint stdout ----
+  lerp(0,0 → 2,4, 0.5) = (1, 2)
+
+---- tests::tests::vec2_normalize_unit_length stdout ----
+  normalize(3,4) → |n| = 1.000000
+
+---- tests::tests::vec2_perpendicular_is_orthogonal stdout ----
+  perp((1, 0)) = (-0, 1)  dot = 0
+
+---- tests::tests::vec2_zero_normalize_returns_zero stdout ----
+  normalize(ZERO) = (0, 0) (safe fallback)
+
+---- tests::tests::vec3_align_is_16 stdout ----
+  align_of::<Vec3>() = 16 bytes
+
+---- tests::tests::vec3_cross_anticommutative stdout ----
+  a×b + b×a = ZERO ✓
+
+---- tests::tests::vec3_cross_product_basis stdout ----
+  X × Y = (0, 0, 1)  (expected Z)
+
+---- tests::tests::vec3_distance stdout ----
+  distance(origin → 3,4,0) = 5.0000 (expected 5.0)
+
+---- tests::tests::vec3_equality_ignores_pad stdout ----
+  Vec3 equality ignores _pad ✓
+
+---- tests::tests::vec3_normalize_unit_length stdout ----
+  normalize(1,2,3) → |n| = 1.000000
+
+---- tests::tests::vec3_pad_field_is_zero_after_new stdout ----
+  Vec3::new(1,2,3)._pad = 0 (always 0)
+
+---- tests::tests::vec3_reflect stdout ----
+  reflect off Y: (0.70710677, -0.70710677, 0) → (0.70710677, 0.70710677, 0)  (y flipped)
+
+---- tests::tests::vec3_size_is_16_bytes stdout ----
+  size_of::<Vec3>() = 16 bytes
+
+---- tests::tests::vec4_dot_with_self_is_length_sq stdout ----
+  dot(v,v) == length_sq ✓  value = 30
+
+---- tests::tests::vec4_size_is_16_bytes stdout ----
+  size_of::<Vec4>() = 16 bytes
+
+---- tests::tests::vec4_normalize_unit_length stdout ----
+  normalize(1,2,3,4) → |n| = 1.000000
+
+---- tests::tests::stress_50k_euler_from_to_roundtrip stdout ----
+  50000 euler↔quat round-trips in 5.244ms  (104.9 ns/op)  [RELEASE]
+
+
+successes:
+    tests::tests::lerp_scalar_midpoint
+    tests::tests::mat3_identity_times_vec_is_vec
+    tests::tests::mat3_inverse_of_identity_is_identity
+    tests::tests::mat3_inverse_roundtrip
+    tests::tests::mat3_multiply_identity_is_identity
+    tests::tests::mat4_identity_transform_point_unchanged
+    tests::tests::mat4_inverse_of_identity_is_identity
+    tests::tests::mat4_inverse_roundtrip
+    tests::tests::mat4_inverse_trs_identity
+    tests::tests::mat4_inverse_trs_roundtrip_matches_general_inverse
+    tests::tests::mat4_inverse_trs_scale_only
+    tests::tests::mat4_inverse_trs_translation_only
+    tests::tests::mat4_inverse_trs_zero_scale_does_not_panic
+    tests::tests::mat4_look_at_z_axis_points_toward_target
+    tests::tests::mat4_multiply_identity_is_identity
+    tests::tests::mat4_perspective_has_negative_one_at_col3_row2
+    tests::tests::mat4_scale_scales_point
+    tests::tests::mat4_singular_inverse_returns_none
+    tests::tests::mat4_size_is_64_bytes
+    tests::tests::mat4_translation_does_not_affect_vectors
+    tests::tests::mat4_translation_moves_point
+    tests::tests::quat_90deg_around_y_rotates_x_to_neg_z
+    tests::tests::quat_conjugate_is_inverse_for_unit
+    tests::tests::quat_euler_round_trip
+    tests::tests::quat_identity_does_not_rotate_vector
+    tests::tests::quat_multiply_composes_rotations
+    tests::tests::quat_slerp_endpoints
+    tests::tests::quat_to_mat4_identity_roundtrip
+    tests::tests::smoothstep_clamps_outside_range
+    tests::tests::smoothstep_midpoint_is_not_linear
+    tests::tests::stress_100k_entity_transform_simulation
+    tests::tests::stress_100k_quat_mul
+    tests::tests::stress_100k_quat_rotate
+    tests::tests::stress_100k_vec3_add
+    tests::tests::stress_100k_vec3_cross
+    tests::tests::stress_100k_vec3_dot
+    tests::tests::stress_100k_vec3_lerp
+    tests::tests::stress_100k_vec3_normalize
+    tests::tests::stress_10k_mat4_mul
+    tests::tests::stress_10k_mat4_transform_point
+    tests::tests::stress_50k_euler_from_to_roundtrip
+    tests::tests::stress_50k_quat_slerp
+    tests::tests::stress_5k_mat4_inverse
+    tests::tests::stress_5k_mat4_inverse_trs
+    tests::tests::stress_mixed_math_1k_frames_simulation
+    tests::tests::vec2_addition
+    tests::tests::vec2_dot_product
+    tests::tests::vec2_lerp_midpoint
+    tests::tests::vec2_normalize_unit_length
+    tests::tests::vec2_perpendicular_is_orthogonal
+    tests::tests::vec2_zero_normalize_returns_zero
+    tests::tests::vec3_align_is_16
+    tests::tests::vec3_cross_anticommutative
+    tests::tests::vec3_cross_product_basis
+    tests::tests::vec3_distance
+    tests::tests::vec3_equality_ignores_pad
+    tests::tests::vec3_normalize_unit_length
+    tests::tests::vec3_pad_field_is_zero_after_new
+    tests::tests::vec3_reflect
+    tests::tests::vec3_size_is_16_bytes
+    tests::tests::vec4_dot_with_self_is_length_sq
+    tests::tests::vec4_normalize_unit_length
+    tests::tests::vec4_size_is_16_bytes
+
+test result: ok. 63 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+   Doc-tests mid_math
+
+running 0 tests
+
+successes:
+
+successes:
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
