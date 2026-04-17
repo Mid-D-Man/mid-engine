@@ -85,14 +85,35 @@ jobs:
             -o -name "mid_math.dll" \)   \
             -exec ls -lh {} \; 2>/dev/null || echo "  (platform-specific names — fine)"
 
-      - name: Run unit tests
+      # ── Debug build tests (correctness) ──────────────────────────────────
+      # These run without optimizations. Timing numbers are debug-mode and
+      # should NOT be used to compare against release-mode libraries (glam etc).
+      # They exist to catch logic regressions, not to benchmark performance.
+      - name: Run unit tests (debug — correctness)
         continue-on-error: true
         run: |
+          echo "=== DEBUG BUILD (correctness checks, timing is NOT representative) ==="
           cargo test -p mid-math \
             --color=never \
             --no-fail-fast \
             -- --show-output 2>&1 | tee mid-math-test-raw.txt
           echo "TEST_EXIT=${PIPESTATUS[0]}" >> $GITHUB_ENV
+
+      # ── Release build tests (performance) ─────────────────────────────────
+      # These are the numbers to use for optimization decisions.
+      # Per platform-optimization.md Rule 1: "An optimization that cannot be
+      # benchmarked does not exist." These are the actual benchmarks.
+      - name: Run unit tests (release — performance baseline)
+        continue-on-error: true
+        run: |
+          echo ""
+          echo "=== RELEASE BUILD (use these numbers for optimization decisions) ==="
+          cargo test -p mid-math \
+            --release \
+            --color=never \
+            --no-fail-fast \
+            -- --show-output 2>&1 | tee mid-math-test-release-raw.txt
+          echo "RELEASE_TEST_EXIT=${PIPESTATUS[0]}" >> $GITHUB_ENV
 
       - name: Parse results to JSON
         env:
@@ -196,6 +217,7 @@ jobs:
               'date':         os.environ.get('BUILD_DATE',   ''),
               'rust_version': os.environ.get('RUST_VERSION', 'stable'),
               'crate':        'mid-math',
+              'build_mode':   'debug (correctness)',
               'summary': {
                   'total':      total,
                   'passed':     passed,
@@ -231,6 +253,7 @@ jobs:
           path: |
             mid-math-test-results.json
             mid-math-test-index.html
+            mid-math-test-release-raw.txt
           retention-days: 7
 
   deploy-results:
@@ -318,6 +341,9 @@ jobs:
           echo "Branch:  ${{ github.ref_name }}"
           echo "Tests:   ${{ needs.run-tests.result    || 'skipped' }}"
           echo "Deploy:  ${{ needs.deploy-results.result || 'skipped' }}"
+          echo ""
+          echo "NOTE: Debug-mode timing (cargo test) is for correctness only."
+          echo "See mid-math-test-release-raw.txt in artifacts for real perf numbers."
           if [ "${{ needs.parse-trigger.outputs.run_tests }}" != "true" ]; then
             echo "Not triggered. Add --mid-math or --mid-all to your commit message."
           fi
