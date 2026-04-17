@@ -2,9 +2,25 @@
 
 # Mid Engine — Platform Optimization Rules
 
-> **Rule 0:** The compiler is smarter than you think. Profile before you optimize.  
-> **Rule 1:** An optimization that cannot be benchmarked does not exist.  
+> **Rule 0:** The compiler is smarter than you think. Profile before you optimize.
+> **Rule 1:** An optimization that cannot be benchmarked does not exist.
 > **Rule 2:** An optimization that breaks FFI is a bug, not a feature.
+> **Rule 3:** Debug-mode timing is not a benchmark. All optimization decisions
+>             require `cargo test --release` or `cargo bench` numbers.
+
+---
+
+## 0. Build Mode Discipline
+
+`cargo test` runs in **debug mode** (opt-level = 0, no inlining, no auto-vectorization).
+Debug numbers are useful for catching logic regressions. They are **not** comparable
+to any release-mode library (glam, nalgebra, etc.).
+
+The CI runs two test passes:
+- `cargo test -p mid-math` — debug, confirms correctness, timing ignored for perf decisions.
+- `cargo test -p mid-math --release` — release, provides the actual performance baseline.
+
+Any claim of "X is Yns/op" must cite which build mode produced it.
 
 ---
 
@@ -15,43 +31,54 @@ to enter the codebase and carries a higher maintenance cost.
 
 ### Tier 1 — Compiler-guided (default)
 
-Use `#[repr(C, align(16))]` and let the compiler auto-vectorize. This is the
-default for all math types. The compiler with SSE2 enabled will emit equivalent
-instructions to hand-written intrinsics for simple arithmetic (add, dot, lerp).
+Use `#[repr(C, align(16))]`, `#[inline(always)]`, and explicit loop unrolling.
+Let the compiler auto-vectorize. This is the default for all math types.
+
+With SSE2 enabled (the x86_64 baseline since 2003), the compiler with `-O3`
+will emit equivalent instructions to hand-written intrinsics for simple
+arithmetic (add, dot, lerp, unrolled mat-mul).
 
 **Cost:** Zero maintenance. **Benefit:** Immediate. **Required proof:** None.
 
+Examples of Tier 1 work:
+- Replacing a loop-based `Mat4::mul` with an explicitly unrolled sum-of-products.
+- Adding a `Mat4::inverse_trs()` fast-path using arithmetic properties of TRS matrices.
+
 ### Tier 2 — Intrinsics (`std::arch`)
 
-Hand-written SIMD using `std::arch::x86_64::*` or `std::arch::aarch64::*`.
+Hand-written SIMD using `core::arch::x86_64::*` or `core::arch::aarch64::*`.
 Required only when profiling proves the compiler is leaving measurable performance
 on the table (>10% wall-clock gap between the auto-vectorized and hand-written paths
 on the same inputs).
 
-**Cost:** Per-architecture maintenance, unsafe code review, and a fallback path.  
-**Benefit:** Required to be measurable in a benchmark under the CI stress tests.  
+**Cost:** Per-architecture maintenance, unsafe code review, and a fallback path.
+**Benefit:** Required to be measurable in a benchmark under the CI stress tests.
 **Required proof:** A benchmark showing ≥10% improvement at the relevant data scale
 (e.g. 100k entity operations, not 10).
 
+**Important:** Use `core::arch` intrinsics, NOT `asm!`. Intrinsics are visible to
+LLVM for register allocation and inlining. Inline assembly is a black box that
+prevents these optimizations. See Section 3 for the asm! policy.
+
 ### Tier 3 — Inline assembly (`asm!`)
 
-Raw CPU instructions via the stable `asm!` macro. Reserved for operations the
-compiler cannot express at all:
+Raw CPU instructions via the stable `asm!` macro. Reserved **only** for:
 
 - `rdtsc` — CPU cycle counter for micro-benchmarks inside the engine itself.
 - `prefetcht0` — Cache prefetch ahead of bulk SoA iteration in mid-ecs.
 - `pause` — Spin-wait hint in any future lock-free synchronization primitives.
 
-**Cost:** Architecture-locked, unsafe, zero compiler assistance.  
-**Benefit:** Must be documented with a specific instruction-count or latency measurement.  
+**`asm!` is explicitly forbidden for linear algebra.** The correct tool for
+math acceleration is `core::arch` intrinsics (Tier 2), not raw assembly.
+
+**Cost:** Architecture-locked, unsafe, zero compiler assistance.
+**Benefit:** Must be documented with a specific instruction-count or latency measurement.
 **Required proof:** Both a before/after benchmark AND an explanation of why the
 compiler cannot generate the equivalent instruction sequence automatically.
 
 ---
 
 ## 2. When Optimization Is Forbidden
-
-These situations block any Tier 2 or Tier 3 optimization regardless of the speedup:
 
 ### 2.1 FFI contract violation
 
@@ -67,14 +94,12 @@ Any optimization that changes the memory layout of a `#[repr(C)]` type is
 | Mat3 | 36 B | 4         | cols[0][0]  |
 | Mat4 | 64 B | 16        | cols[0][0]  |
 
-If an optimization would change any of the above values, it is rejected
-unconditionally. Unity, Unreal, Godot, and any C host depend on these numbers
-being stable forever. Run `size_of` and `align_of` assertions in the test suite
-for every type (they are already there — do not remove them).
+All verified by `size_of` and `align_of` assertions in the test suite.
+Do not remove those assertions.
 
 ### 2.2 No fallback path
 
-Tier 2 and Tier 3 code must always have a scalar fallback. The pattern is:
+Tier 2 and Tier 3 code must always have a scalar fallback:
 
 ```rust
 pub fn operation(a: Vec3, b: Vec3) -> Vec3 {
@@ -87,21 +112,14 @@ pub fn operation(a: Vec3, b: Vec3) -> Vec3 {
 }
 ```
 
-A Tier 2 or Tier 3 function with no fallback is a build error, not a warning.
-
 ### 2.3 Maintenance cost exceeds benefit
 
-If maintaining an optimized path requires more than one hour of engineering
-time per calendar quarter (updating for new Rust versions, fixing LLVM regressions,
-handling new target triples), the optimized path is removed and replaced with the
-scalar fallback until the cost/benefit ratio improves.
-
-Track this in a comment above the function:
+Track maintenance cost above the function:
 
 ```rust
 // SIMD path — maintenance estimate: 15 min/quarter.
 // Benchmark: 100k dot products: scalar=2.1ms, sse2=0.9ms (-57%).
-// Added: 2026-04-16. Review: 2026-07-16.
+// Added: 2026-04-17. Review: 2026-07-17.
 ```
 
 ---
@@ -118,18 +136,10 @@ Track this in a comment above the function:
 
 ### AVX / AVX-512 policy
 
-AVX requires runtime detection (`is_x86_feature_detected!("avx")`). The 2010 MacBook
-Pro does not have AVX. AVX optimizations are permitted only if:
-
-1. The fallback path (SSE2 or scalar) is present and tested.
-2. The AVX path is gated behind a `--features avx` Cargo feature flag.
-3. CI continues to pass on `ubuntu-latest` without the feature flag.
-
-### ARM / iOS
-
-All iOS builds use `staticlib` only (App Store rule). Tier 2 ARM NEON paths are
-permitted under the same rules as x86_64 SSE2 but require a separate benchmark
-on an actual ARM device before merging.
+The 2010 MacBook Pro does not have AVX. AVX optimizations require:
+1. A fallback path (SSE2 or scalar) is present and tested.
+2. Gated behind `--features avx` Cargo feature flag.
+3. CI passes without the feature flag.
 
 ---
 
@@ -137,18 +147,13 @@ on an actual ARM device before merging.
 
 Before any Tier 2 or Tier 3 optimization can be merged:
 
-**Step 1:** Write the stress test first (before the optimization). Run it. Record
-the baseline timing printed by the test runner in the HTML report.
+**Step 1:** Write the stress test first. Run `cargo test --release`. Record baseline.
 
 **Step 2:** Implement the optimization behind a `#[cfg]` gate.
 
-**Step 3:** Run the same stress test again. The optimized path must show ≥10%
-improvement at the scale relevant to the engine's targets:
-- Math operations: 100k iterations (ECS entity count).
-- Network: 128 iterations per second (tick rate).
-- Logging: 1000 entries per tick.
+**Step 3:** Run the same stress test. Improvement must be ≥10% at 100k-entity scale.
 
-**Step 4:** Add a comment above the function with the benchmark numbers and date.
+**Step 4:** Add the benchmark comment above the function.
 
 **Step 5:** Confirm `size_of` and `align_of` assertions still pass.
 
@@ -156,63 +161,86 @@ improvement at the scale relevant to the engine's targets:
 
 ---
 
-## 5. `asm!` Safety Checklist
+## 5. Tier 1 Work Log
 
-Every use of `asm!` must pass this checklist before merging:
+These are pure-scalar, zero-intrinsic improvements applied to the codebase.
+No benchmark proof required per the rules (Tier 1 is free).
 
-- [ ] The block is inside `unsafe {}`.
-- [ ] Input and output registers are declared explicitly (no implicit clobbers).
-- [ ] The `options(nostack)` flag is set if the instruction does not touch the stack.
-- [ ] The fallback scalar path exists and is tested separately.
-- [ ] The `#[cfg(target_arch = "x86_64")]` guard prevents compilation on other architectures.
-- [ ] A comment explains what the instruction does and why the compiler cannot generate it.
-- [ ] A benchmark confirms the instruction produces measurable benefit.
+### Mat4::mul — explicit unroll (Build #14+)
 
-Example of a correctly annotated `asm!` block:
+Replaced the 3-level nested loop with 64 explicit multiply-accumulate terms.
 
+In release mode, LLVM produces identical assembly either way. In debug mode,
+the explicit form avoids loop overhead and makes auto-vectorization intent clear.
+No maintenance cost. Zero risk to FFI layout.
+
+### Mat4::inverse_trs — TRS fast-path (Build #14+)
+
+Added `inverse_trs()` for pure Translation × Rotation × Scale matrices.
+
+**Correctness basis:** For M = T·R·S, the inverse M⁻¹ = S⁻¹·Rᵀ·T⁻¹.
+This exploits that R is orthogonal (Rᵀ = R⁻¹) and S is diagonal (S⁻¹ = diag(1/sx, 1/sy, 1/sz)).
+The result is ~30 multiplications vs ~200 for the general Cramer's rule path.
+
+**Debug baseline (Build #13):** 2751.6 ns/op (general inverse, 5k mats).
+**Release baseline:** TBD after Build #14 CI run. See `stress_5k_mat4_inverse_trs`.
+**Maintenance estimate:** 0 min/quarter. Added: 2026-04-17. Review: 2026-07-17.
+
+Usage in engine code:
 ```rust
-/// Returns the CPU timestamp counter. Used only inside benchmarks — never in
-/// production game-loop code. The compiler cannot generate `rdtsc` without
-/// this because `std::time::Instant` has ~100 ns overhead vs ~1 ns for rdtsc.
-#[cfg(target_arch = "x86_64")]
-pub fn cpu_cycles() -> u64 {
-    let lo: u32;
-    let hi: u32;
-    // SAFETY: rdtsc is available on all x86_64 CPUs.
-    // options(nostack, nomem): does not touch memory or the stack.
-    unsafe {
-        std::arch::asm!(
-            "rdtsc",
-            out("eax") lo,
-            out("edx") hi,
-            options(nostack, nomem, pure),
-        );
-    }
-    ((hi as u64) << 32) | (lo as u64)
-}
+// Entity world transform inverse — always TRS, use the fast path.
+let inv = entity.world_transform.inverse_trs();
+
+// Projection matrix inverse — general case, may contain shear.
+let inv = projection.inverse().unwrap_or(Mat4::IDENTITY);
 ```
+
+### Math constants — additions (Build #14+)
+
+Added: `FRAC_PI_3`, `FRAC_PI_4`, `FRAC_PI_6`, `FRAC_1_PI`, `SQRT_2`, `FRAC_1_SQRT_2`.
+
+These appear in lighting equations (`FRAC_1_PI` for Lambert normalisation),
+hexagonal grid math (`FRAC_PI_3`, `FRAC_PI_6`), and normalized diagonal
+computations (`FRAC_1_SQRT_2`). All are free `f32` constants — zero cost.
 
 ---
 
-## 6. Decision Tree
+## 6. Next Optimization Decision Point
+
+After Build #14 CI runs, compare `stress_5k_mat4_inverse_trs` release numbers
+against the Build #13 general inverse baseline (2751.6 ns debug / TBD release).
+
+If after release mode the general `Mat4::mul` is still above ~10 ns/op,
+that is the target for a Tier 2 SSE2 implementation. The mandatory protocol
+in Section 4 applies.
+
+---
+
+## 7. Decision Tree
 
 ```
 Need to optimize a hot path?
 │
-├─ Have you profiled it?
-│   └─ No → Profile first. Use the stress tests in the HTML report.
+├─ Have you run cargo test --release and recorded the number?
+│   └─ No → Get the release-mode number first. Debug numbers are meaningless.
 │
 ├─ Is the bottleneck in a #[repr(C)] type's layout?
 │   └─ Yes → Forbidden. The FFI contract is immutable.
 │
-├─ Does the compiler already auto-vectorize with align(16)?
-│   └─ Yes → Stop. The compiler wins here.
+├─ Have you tried explicit unrolling or inverse_trs? (Tier 1)
+│   └─ Not yet → Try Tier 1 first. Free wins come before unsafe code.
 │
-├─ Is the gain ≥10% at 100k-entity scale?
+├─ Does the compiler already auto-vectorize with align(16)?
+│   └─ Check with `cargo asm` or LLVM MCA → If yes, stop.
+│
+├─ Is the gain ≥10% at 100k-entity scale in release mode?
 │   └─ No → Not worth the maintenance cost.
 │
 ├─ Does a scalar fallback exist?
 │   └─ No → Write the fallback first.
+│
+├─ Are you using core::arch intrinsics (not asm!)?
+│   └─ No → Switch to intrinsics. asm! is forbidden for math.
 │
 └─ Add the benchmark comment, run --mid-all, merge.
 ```
