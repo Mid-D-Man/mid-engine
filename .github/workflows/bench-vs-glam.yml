@@ -1,6 +1,5 @@
 # .github/workflows/bench-vs-glam.yml
 # Run: Actions → "mid-math: bench vs glam" → Run workflow
-# Results appear in the job summary of that specific run.
 # DO NOT add push/pull_request triggers — benchmarks take 5-10 minutes.
 
 name: mid-math — bench vs glam
@@ -43,82 +42,88 @@ jobs:
           key: cargo-registry-bench-${{ hashFiles('crates/mid-math/Cargo.toml') }}
           restore-keys: cargo-registry-
 
-      - name: Run criterion benchmarks
+      # ── Bench 1: vs_glam (direct comparison, existing) ───────────────────
+      - name: Run vs_glam criterion benchmarks
         run: |
           echo "Running: cargo bench --bench vs_glam -p mid-math"
           echo "Note: ${{ inputs.baseline_note }}"
-          cargo bench --bench vs_glam -p mid-math 2>&1 | tee bench-raw.txt
+          cargo bench --bench vs_glam -p mid-math 2>&1 | tee bench-vs-glam-raw.txt
 
+      # ── Bench 2: wrapped_glam (wrapping cost measurement) ─────────────────
+      - name: Run wrapped_glam criterion benchmarks
+        run: |
+          echo "Running: cargo bench --bench wrapped_glam -p mid-math"
+          cargo bench --bench wrapped_glam -p mid-math 2>&1 | tee bench-wrapped-raw.txt
+
+      # ── Publish combined summary ──────────────────────────────────────────
       - name: Publish benchmark summary
         run: |
           {
-            echo "## mid-math vs glam — Criterion Benchmark"
+            echo "## mid-math vs glam — Criterion Benchmarks"
             echo ""
             echo "**Build:** #${{ github.run_number }} &nbsp; **Rust:** \`${{ steps.rustver.outputs.ver }}\`"
             echo ""
             echo "**Note:** ${{ inputs.baseline_note }}"
             echo ""
-            echo "> Criterion reports mean time per operation with confidence intervals."
-            echo "> Lower is faster. Each group shows mid-math vs glam side by side."
+            echo "> Lower is faster. Each group shows implementations side by side."
             echo ""
 
             python3 - << 'PYEOF'
           import re, sys
 
-          try:
-              raw = open('bench-raw.txt', encoding='utf-8', errors='replace').read()
-          except FileNotFoundError:
-              print("*(bench-raw.txt not found)*")
-              sys.exit(0)
-
-          RE_ANSI = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
-          text = RE_ANSI.sub('', raw)
-
-          # Extract criterion result lines.
-          # Format: "test_name    time:   [lo  mean  hi]"
+          RE_ANSI  = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
           RE_RESULT = re.compile(
               r'^(\S[^\n]+?)\s+time:\s+\[\s*([\d.]+\s+\S+)\s+([\d.]+\s+\S+)\s+([\d.]+\s+\S+)\s*\]',
               re.MULTILINE,
           )
 
-          current_group = None
-          rows = []
+          def parse_bench_file(path, title):
+              try:
+                  raw = open(path, encoding='utf-8', errors='replace').read()
+              except FileNotFoundError:
+                  print(f"*({path} not found)*")
+                  return
 
-          for m in RE_RESULT.finditer(text):
-              name = m.group(1).strip()
-              mean = m.group(3).strip()  # middle of the confidence interval
+              text = RE_ANSI.sub('', raw)
+              current_group = None
 
-              # Detect group from name (e.g. "vec3/add/mid-math" → group "vec3/add")
-              parts = name.split('/')
-              if len(parts) >= 2:
-                  group = '/'.join(parts[:-1])
-                  variant = parts[-1]
-              else:
-                  group = name
-                  variant = ''
+              print(f"\n---\n\n### {title}\n")
 
-              if group != current_group:
-                  if rows:
-                      print()
-                  print(f"### {group}")
-                  print("| Impl | Mean |")
-                  print("|---|---|")
-                  current_group = group
+              for m in RE_RESULT.finditer(text):
+                  name = m.group(1).strip()
+                  mean = m.group(3).strip()
 
-              print(f"| {variant} | {mean} |")
+                  parts = name.split('/')
+                  if len(parts) >= 2:
+                      group   = '/'.join(parts[:-1])
+                      variant = parts[-1]
+                  else:
+                      group   = name
+                      variant = ''
 
-          if not rows and not RE_RESULT.search(text):
-              # Fallback: print raw lines that look like timing output
-              for line in text.splitlines():
-                  if 'time:' in line or 'ns' in line or 'µs' in line:
-                      print(line.strip())
+                  if group != current_group:
+                      if current_group is not None:
+                          print()
+                      print(f"#### {group}")
+                      print("| Impl | Mean |")
+                      print("|---|---|")
+                      current_group = group
+
+                  print(f"| {variant} | {mean} |")
+
+          parse_bench_file('bench-vs-glam-raw.txt',   'vs_glam — Direct Comparison')
+          parse_bench_file('bench-wrapped-raw.txt', 'wrapped_glam — Wrapping Cost')
           PYEOF
 
           } >> $GITHUB_STEP_SUMMARY
 
-      - name: Upload criterion HTML report
+      # ── Upload both raw logs and criterion HTML ───────────────────────────
+      - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: criterion-report-${{ github.run_number }}
-          path: target/criterion/
+          name: bench-results-${{ github.run_number }}
+          path: |
+            bench-vs-glam-raw.txt
+            bench-wrapped-raw.txt
+            target/criterion/
           retention-days: 30
