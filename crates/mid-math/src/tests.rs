@@ -1,10 +1,12 @@
 // crates/mid-math/src/tests.rs
 //
-// Build mode labeling: every stress test prints [DEBUG] or [RELEASE] based on
-// cfg!(debug_assertions) — which is true in `cargo test` and false in
-// `cargo test --release`. This is how you tell which build produced a number.
+// Build mode labeling:
+// Every stress test prints [DEBUG] or [RELEASE] based on cfg!(debug_assertions).
+// cfg!(debug_assertions) == true  → cargo test           (opt-level 0, no vectorization)
+// cfg!(debug_assertions) == false → cargo test --release (opt-level 3, full LLVM)
 //
-// Correctness tests have no timing and need no label.
+// ONLY [RELEASE] numbers are valid for optimization decisions.
+// [DEBUG] numbers confirm correctness and catch structural regressions.
 
 #[cfg(test)]
 mod tests {
@@ -14,7 +16,7 @@ mod tests {
     use crate::{EPSILON, to_radians, lerp, smoothstep, approx_eq};
     use std::time::Instant;
 
-    // Resolved at compile time — zero runtime cost, correct in both modes.
+    /// Resolved at compile time — zero runtime cost, correct in both modes.
     const BUILD_MODE: &str = if cfg!(debug_assertions) { "[DEBUG]" } else { "[RELEASE]" };
 
     // ── Scalar utilities ──────────────────────────────────────────────────
@@ -331,7 +333,7 @@ mod tests {
 
     #[test]
     fn mat4_inverse_roundtrip() {
-        let m   = Mat4::from_trs(
+        let m = Mat4::from_trs(
             Vec3::new(1.0,2.0,3.0),
             Quat::from_axis_angle(Vec3::Y, to_radians(45.0)),
             Vec3::new(2.0,2.0,2.0),
@@ -367,7 +369,7 @@ mod tests {
         println!("  look_at: target in view space = {}  (z < 0) ✓", t);
     }
 
-    // ── Mat4::inverse_trs ─────────────────────────────────────────────────
+    // ── Mat4::inverse_trs correctness ─────────────────────────────────────
 
     #[test]
     fn mat4_inverse_trs_identity() {
@@ -419,6 +421,56 @@ mod tests {
         let m = Mat4::from_scale(Vec3::new(0.0, 1.0, 1.0));
         let _ = m.inverse_trs();
         println!("  inverse_trs with zero-scale axis = no panic ✓");
+    }
+
+    // ── SSE2 path matches scalar path (x86_64 only) ───────────────────────
+
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn mat4_inverse_trs_sse2_matches_scalar() {
+        let cases: &[(Vec3, Quat, Vec3)] = &[
+            (Vec3::ZERO,
+             Quat::IDENTITY,
+             Vec3::ONE),
+            (Vec3::new(1.0, 2.0, 3.0),
+             Quat::IDENTITY,
+             Vec3::ONE),
+            (Vec3::ZERO,
+             Quat::from_axis_angle(Vec3::Y, to_radians(90.0)),
+             Vec3::ONE),
+            (Vec3::ZERO,
+             Quat::IDENTITY,
+             Vec3::new(2.0, 3.0, 4.0)),
+            (Vec3::new(5.0, -2.0, 7.0),
+             Quat::from_axis_angle(Vec3::new(1.0,1.0,0.0).normalize(), to_radians(37.0)),
+             Vec3::new(2.0, 0.5, 3.0)),
+            (Vec3::new(-10.0, 0.5, 3.3),
+             Quat::from_axis_angle(Vec3::Z, to_radians(180.0)),
+             Vec3::new(0.1, 5.0, 2.0)),
+        ];
+        for (i, &(t, r, s)) in cases.iter().enumerate() {
+            let m      = Mat4::from_trs(t, r, s);
+            let sse2   = m.inverse_trs();         // dispatches to SSE2 on x86_64
+            let scalar = m.inverse_trs_scalar();  // always scalar
+
+            for c in 0..4 { for row in 0..4 {
+                let diff = (sse2.cols[c][row] - scalar.cols[c][row]).abs();
+                assert!(
+                    diff < 1e-5,
+                    "case {} col={} row={}: sse2={:.7} scalar={:.7} diff={:.2e}",
+                    i, c, row, sse2.cols[c][row], scalar.cols[c][row], diff,
+                );
+            }}
+        }
+        println!("  SSE2 inverse_trs matches scalar for 6 TRS cases ✓");
+    }
+
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn mat4_inverse_trs_sse2_zero_scale_does_not_panic() {
+        let m = Mat4::from_scale(Vec3::new(0.0, 1.0, 1.0));
+        let _ = m.inverse_trs();
+        println!("  SSE2 inverse_trs with zero-scale axis = no panic ✓");
     }
 
     // ── Stress: Vec ops ───────────────────────────────────────────────────
@@ -668,9 +720,9 @@ mod tests {
 
     #[test]
     fn stress_5k_mat4_inverse_trs() {
-        // Tier 1 TRS fast-path. Debug baseline Build #19: 290.7 ns/op.
-        // General inverse same build debug: 707.6 ns/op → 2.4× faster.
-        // Release numbers: pending Build #20 first run with correct label.
+        // Build #29 [RELEASE] scalar baseline: 81.8 ns/op.
+        // This build: SSE2 path on x86_64, scalar on other archs.
+        // First SSE2 measurement will appear in the next [RELEASE] Step Summary.
         let count = 5_000usize;
         let start = Instant::now();
         for i in 0..count {
@@ -687,9 +739,12 @@ mod tests {
             "  {} Mat4 inverse_trs in {:.3}ms  ({:.1} ns/op)  {}",
             count, elapsed.as_secs_f64()*1000.0, ns_per, BUILD_MODE,
         );
-        // In-build comparison: how much faster than the general inverse in this build?
-        // We don't have that number here directly, but the benchmark comment in mat.rs
-        // records the cross-build and in-build ratios for audit.
+        if !cfg!(debug_assertions) {
+            println!(
+                "  Scalar baseline Build #29 [RELEASE]: 81.8 ns/op — speedup this build: {:.1}×",
+                81.8 / ns_per,
+            );
+        }
     }
 
     #[test]
