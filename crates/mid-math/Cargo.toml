@@ -1,4 +1,4 @@
-# crates/mid-math/Cargo.toml
+
 
 [package]
 name        = "mid-math"
@@ -16,6 +16,18 @@ crate-type = ["rlib", "cdylib", "staticlib"]
 [dependencies]
 
 [dev-dependencies]
+# criterion: benchmark harness. HTML reports at target/criterion/
+criterion = { version = "0.5", features = ["html_reports"] }
+# glam: the reference SIMD math library. Used ONLY for vs_glam comparison.
+# Update version here if crates.io has a newer release.
+# https://crates.io/crates/glam
+glam = { version = "0.28", features = [] }
+
+[[bench]]
+# Run: cargo bench --bench vs_glam -p mid-math
+# HTML report: target/criterion/report/index.html
+name    = "vs_glam"
+harness = false
 
 [features]
 default = []
