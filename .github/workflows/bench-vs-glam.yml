@@ -1,0 +1,124 @@
+# .github/workflows/bench-vs-glam.yml
+# Run: Actions → "mid-math: bench vs glam" → Run workflow
+# Results appear in the job summary of that specific run.
+# DO NOT add push/pull_request triggers — benchmarks take 5-10 minutes.
+
+name: mid-math — bench vs glam
+
+on:
+  workflow_dispatch:
+    inputs:
+      baseline_note:
+        description: 'Why are you running this? (e.g. "post SSE2 inverse_trs")'
+        required: false
+        default: 'manual benchmark run'
+
+permissions:
+  contents: read
+  actions:  read
+
+jobs:
+  bench:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Get Rust version
+        id: rustver
+        run: echo "ver=$(rustc --version)" >> $GITHUB_OUTPUT
+
+      - name: Cache cargo registry
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+          key: cargo-registry-bench-${{ hashFiles('crates/mid-math/Cargo.toml') }}
+          restore-keys: cargo-registry-
+
+      - name: Run criterion benchmarks
+        run: |
+          echo "Running: cargo bench --bench vs_glam -p mid-math"
+          echo "Note: ${{ inputs.baseline_note }}"
+          cargo bench --bench vs_glam -p mid-math 2>&1 | tee bench-raw.txt
+
+      - name: Publish benchmark summary
+        run: |
+          {
+            echo "## mid-math vs glam — Criterion Benchmark"
+            echo ""
+            echo "**Build:** #${{ github.run_number }} &nbsp; **Rust:** \`${{ steps.rustver.outputs.ver }}\`"
+            echo ""
+            echo "**Note:** ${{ inputs.baseline_note }}"
+            echo ""
+            echo "> Criterion reports mean time per operation with confidence intervals."
+            echo "> Lower is faster. Each group shows mid-math vs glam side by side."
+            echo ""
+
+            python3 - << 'PYEOF'
+          import re, sys
+
+          try:
+              raw = open('bench-raw.txt', encoding='utf-8', errors='replace').read()
+          except FileNotFoundError:
+              print("*(bench-raw.txt not found)*")
+              sys.exit(0)
+
+          RE_ANSI = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
+          text = RE_ANSI.sub('', raw)
+
+          # Extract criterion result lines.
+          # Format: "test_name    time:   [lo  mean  hi]"
+          RE_RESULT = re.compile(
+              r'^(\S[^\n]+?)\s+time:\s+\[\s*([\d.]+\s+\S+)\s+([\d.]+\s+\S+)\s+([\d.]+\s+\S+)\s*\]',
+              re.MULTILINE,
+          )
+
+          current_group = None
+          rows = []
+
+          for m in RE_RESULT.finditer(text):
+              name = m.group(1).strip()
+              mean = m.group(3).strip()  # middle of the confidence interval
+
+              # Detect group from name (e.g. "vec3/add/mid-math" → group "vec3/add")
+              parts = name.split('/')
+              if len(parts) >= 2:
+                  group = '/'.join(parts[:-1])
+                  variant = parts[-1]
+              else:
+                  group = name
+                  variant = ''
+
+              if group != current_group:
+                  if rows:
+                      print()
+                  print(f"### {group}")
+                  print("| Impl | Mean |")
+                  print("|---|---|")
+                  current_group = group
+
+              print(f"| {variant} | {mean} |")
+
+          if not rows and not RE_RESULT.search(text):
+              # Fallback: print raw lines that look like timing output
+              for line in text.splitlines():
+                  if 'time:' in line or 'ns' in line or 'µs' in line:
+                      print(line.strip())
+          PYEOF
+
+          } >> $GITHUB_STEP_SUMMARY
+
+      - name: Upload criterion HTML report
+        uses: actions/upload-artifact@v4
+        with:
+          name: criterion-report-${{ github.run_number }}
+          path: target/criterion/
+          retention-days: 30
