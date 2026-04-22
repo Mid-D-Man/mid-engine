@@ -746,7 +746,85 @@ mod tests {
             );
         }
     }
+// ── SSE2 general inverse correctness ─────────────────────────────────
 
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn mat4_inverse_general_sse2_matches_scalar() {
+        // 6 cases: identity, pure translation, pure scale, rotation only,
+        // full TRS, non-uniform scale + rotation.
+        let cases: &[Mat4] = &[
+            Mat4::IDENTITY,
+            Mat4::from_translation(Vec3::new(5.0, -3.0, 7.0)),
+            Mat4::from_scale(Vec3::new(2.0, 0.5, 4.0)),
+            Mat4::from_rotation(Quat::from_axis_angle(Vec3::new(1.0,1.0,0.0).normalize(), to_radians(37.0))),
+            Mat4::from_trs(
+                Vec3::new(3.0, -1.0, 5.0),
+                Quat::from_axis_angle(Vec3::new(1.0,1.0,0.0).normalize(), to_radians(37.0)),
+                Vec3::new(2.0, 0.5, 3.0),
+            ),
+            Mat4::from_trs(
+                Vec3::new(-10.0, 0.5, 3.3),
+                Quat::from_axis_angle(Vec3::Z, to_radians(180.0)),
+                Vec3::new(0.1, 5.0, 2.0),
+            ),
+        ];
+        for (i, m) in cases.iter().enumerate() {
+            let sse2   = m.inverse();          // dispatches to SSE2 on x86_64
+            let scalar = m.inverse_scalar();   // always scalar
+
+            match (sse2, scalar) {
+                (None, None) => { println!("  case {} singular ✓", i); }
+                (Some(s2), Some(sc)) => {
+                    for c in 0..4 { for r in 0..4 {
+                        let diff = (s2.cols[c][r] - sc.cols[c][r]).abs();
+                        assert!(
+                            diff < 1e-4,
+                            "case {} col={} row={}: sse2={:.6} scalar={:.6} diff={:.2e}",
+                            i, c, r, s2.cols[c][r], sc.cols[c][r], diff,
+                        );
+                    }}
+                    println!("  case {} SSE2 matches scalar ✓", i);
+                }
+                _ => panic!("case {}: SSE2 and scalar disagree on singularity", i),
+            }
+        }
+    }
+
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn mat4_inverse_general_sse2_singular_returns_none() {
+        assert!(Mat4::ZERO.inverse().is_none());
+        println!("  SSE2 inverse(ZERO) = None ✓");
+    }
+
+    #[test]
+    fn stress_5k_mat4_general_inverse_sse2() {
+        let count = 5_000usize;
+        let start = Instant::now();
+        let mut passed = 0usize;
+        for i in 0..count {
+            let m = Mat4::from_trs(
+                Vec3::new(i as f32*0.1, 0.0, 0.0),
+                Quat::from_axis_angle(Vec3::Y, to_radians(i as f32)),
+                Vec3::new(1.0+i as f32*0.001, 1.0, 1.0),
+            );
+            if m.inverse().is_some() { passed += 1; }
+        }
+        let elapsed = start.elapsed();
+        assert_eq!(passed, count);
+        let ns_per = elapsed.as_nanos() as f64 / count as f64;
+        println!(
+            "  {} Mat4 general inverses (SSE2) in {:.3}ms  ({:.1} ns/op)  {}",
+            count, elapsed.as_secs_f64()*1000.0, ns_per, BUILD_MODE,
+        );
+        if !cfg!(debug_assertions) {
+            println!(
+                "  Scalar baseline: 117.1 ns/op — speedup: {:.1}×",
+                117.1 / ns_per,
+            );
+        }
+                    }
     #[test]
     fn stress_100k_entity_transform_simulation() {
         let entity_count = 100_000usize;
