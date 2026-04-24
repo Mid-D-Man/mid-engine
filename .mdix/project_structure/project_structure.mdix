@@ -59,7 +59,7 @@
     fc("lib",    "rs",
       "//! mid-log — Non-blocking, tiered logger\n//!\n//! Lock-free SPSC ring buffer (rtrb) on the hot path.\n//! A background IO thread handles formatting and disk writes.\n//! Zero frame-rate impact — unlike Unity's Debug.Log.\n\npub mod buffer;\npub mod level;\npub mod writer;\npub mod ffi;\n\npub use level::{LogLevel, Tier};\npub use buffer::LogBuffer;\n")
     fc("level",  "rs",
-      "//! Log levels and tier metadata.\n\n/// Log level — ordered least to most severe.\n#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]\npub enum LogLevel {\n    /// Per-frame firehose. Enable only in transient debug sessions.\n    Trace = 0,\n    Info  = 1,\n    Warn  = 2,\n    /// Non-fatal. Stack trace behind the 'backtrace' feature flag.\n    Error = 3,\n    /// Immediate memory dump + shutdown.\n    Fatal = 4,\n}\n\n/// Which engine tier produced this log entry.\n#[derive(Debug, Clone, Copy, PartialEq, Eq)]\npub enum Tier {\n    /// Engine internals — [LOW]\n    Low,\n    /// Gameplay logic — [HIGH]\n    High,\n}\n\nimpl std::fmt::Display for Tier {\n    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {\n        match self {\n            Tier::Low  => write!(f, \"LOW\"),\n            Tier::High => write!(f, \"HIGH\"),\n        }\n    }\n}\n")
+      "//! Log levels and tier metadata.\n\n/// Log level — ordered least to most severe.\n#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]\npub enum LogLevel {\n    /// Per-frame firehose. Enable only in transient debug sessions.\n    Trace = 0,\n    Info  = 1,\n    Warn  = 2,\n    /// Non-fatal. Stack trace behind the 'backtrace' feature flag.\n    Error = 3,\n    /// Immediate memory dump + shutdown.\n    Fatal = 4,\n}\n\n/// Which engine tier produced this log entry.\n#[derive(Debug, Clone, Copy, PartialEq, Eq)]\npub enum Tier {\n    /// Engine internals — [LOW]\n    Tier,\n    /// Gameplay logic — [HIGH]\n    High,\n}\n\nimpl std::fmt::Display for Tier {\n    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {\n        match self {\n            Tier::Low  => write!(f, \"LOW\"),\n            Tier::High => write!(f, \"HIGH\"),\n        }\n    }\n}\n")
     fc("buffer", "rs",
       "//! Lock-free SPSC ring buffer for the hot logging path.\n//!\n//! Game thread pushes log entries into rtrb.\n//! Background IO thread drains the buffer.\n// Auto-generated stub\n")
     fc("writer", "rs",
@@ -110,19 +110,78 @@
     fc("Cargo", "toml",
       "[package]\nname = \"mid-math\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[lib]\nname = \"mid_math\"\ncrate-type = [\"lib\", \"cdylib\", \"staticlib\"]\n\n[dependencies]\n\n[features]\ndefault = []\nsimd    = []\n")
 
-  crates.mid-math.src::
-    fc("lib",  "rs",
-      "//! mid-math — SIMD-optimized numerics\n//!\n//! Vec2 / Vec3 / Vec4 / Mat4 / Quat.\n//! Enable the 'simd' feature for std::simd acceleration.\n\npub mod vec;\npub mod mat;\npub mod quat;\npub mod ffi;\n")
-    fc("vec",  "rs",
-      "//! Vector types — Vec2, Vec3, Vec4.\n// Auto-generated stub\n")
-    fc("mat",  "rs",
-      "//! Matrix types — Mat4.\n// Auto-generated stub\n")
-    fc("quat", "rs",
-      "//! Quaternion type.\n// Auto-generated stub\n")
-    fc("ffi",  "rs",
-      "//! C-compatible FFI exports for mid-math.\n// Auto-generated stub\n")
+  // Directory in the main mid-math root for features (Cargo related)
+  crates.mid-math.features::
+    gitkeep()
 
-  // --- crates/mid-common ---
+  // New mid-math architecture
+  crates.mid-math.src::
+    fc("lib",       "rs", "//! mid-math — SIMD-optimized numerics\n//!\n//! Enable the 'simd' feature for std::simd acceleration.\n\npub mod constants;\npub mod sse2;\npub mod neon;\npub mod wasm;\npub mod deref;\npub mod features;\n\npub mod f32;\npub mod f64;\npub mod ffi;\n\n#[cfg(test)]\nmod tests;\n")
+    fc("constants", "rs", "//! Universal math constants (PI, TAU, EPSILON).\n// Auto-generated stub\n")
+    fc("sse2",      "rs", "//! Shared SSE2 helpers (dot3_in_x, m128_abs, etc.)\n// Auto-generated stub\n")
+    fc("neon",      "rs", "//! Shared NEON helpers [aarch64/iOS — stub first]\n// Auto-generated stub\n")
+    fc("wasm",      "rs", "//! Shared WASM SIMD helpers [wasm32/64 — stub first]\n// Auto-generated stub\n")
+    fc("deref",     "rs", "//! .x .y .z .w access on __m128 storage types\n// Auto-generated stub\n")
+
+  // src/features module just in case you need programmatic feature extensions
+  crates.mid-math.src.features::
+    fc("mod", "rs", "//! Programmatic feature flags and extensions\n// Auto-generated stub\n")
+
+  crates.mid-math.src.f32::
+    fc("mod",  "rs", "//! f32 module — cfg dispatch, type re-exports\n// Auto-generated stub\n")
+    fc("math", "rs", "//! sin_cos, sqrt, acos_approx, etc.\n// Auto-generated stub\n")
+    fc("vec2", "rs", "//! Vec2: always scalar (8B, no SIMD benefit)\n// Auto-generated stub\n")
+
+  crates.mid-math.src.f32.scalar::
+    fc("mod",  "rs", "// Auto-generated stub\n")
+    fc("vec3", "rs", "//! fallback Vec3 (non-x86_64, non-aarch64, non-wasm)\n// Auto-generated stub\n")
+    fc("vec4", "rs", "// Auto-generated stub\n")
+    fc("quat", "rs", "// Auto-generated stub\n")
+    fc("mat3", "rs", "//! Mat3 always scalar\n// Auto-generated stub\n")
+    fc("mat4", "rs", "// Auto-generated stub\n")
+
+  crates.mid-math.src.f32.sse2::
+    fc("mod",  "rs", "// Auto-generated stub\n")
+    fc("vec3", "rs", "//! Vec3 backed by __m128\n// Auto-generated stub\n")
+    fc("vec4", "rs", "//! Vec4 backed by __m128\n// Auto-generated stub\n")
+    fc("quat", "rs", "//! Quat backed by __m128\n// Auto-generated stub\n")
+    fc("mat4", "rs", "//! Mat4 SSE2 mul, inverse, transform\n// Auto-generated stub\n")
+
+  crates.mid-math.src.f32.neon::
+    fc("mod",  "rs", "// Auto-generated stub\n")
+    fc("vec3", "rs", "//! Vec3 backed by float32x4_t\n// Auto-generated stub\n")
+    fc("vec4", "rs", "// Auto-generated stub\n")
+    fc("quat", "rs", "// Auto-generated stub\n")
+    fc("mat4", "rs", "// Auto-generated stub\n")
+
+  crates.mid-math.src.f32.wasm::
+    fc("mod",  "rs", "// Auto-generated stub\n")
+    fc("vec3", "rs", "//! Vec3 backed by v128\n// Auto-generated stub\n")
+    fc("vec4", "rs", "// Auto-generated stub\n")
+    fc("quat", "rs", "// Auto-generated stub\n")
+    fc("mat4", "rs", "// Auto-generated stub\n")
+
+  crates.mid-math.src.f64::
+    fc("mod",   "rs", "//! Double precision (large worlds, physics, tools)\n// Auto-generated stub\n")
+    fc("dvec2", "rs", "// Auto-generated stub\n")
+    fc("dvec3", "rs", "// Auto-generated stub\n")
+    fc("dvec4", "rs", "// Auto-generated stub\n")
+    fc("dquat", "rs", "// Auto-generated stub\n")
+    fc("dmat4", "rs", "// Auto-generated stub\n")
+
+  crates.mid-math.src.ffi::
+    fc("mod",     "rs", "// Auto-generated stub\n")
+    fc("types",   "rs", "//! #[repr(C)] CVec2/3/4, CQuat, CMat3/4, CDVec3 etc.\n// Auto-generated stub\n")
+    fc("exports", "rs", "//! #[no_mangle] C functions (Unity/Unreal/Godot)\n// Auto-generated stub\n")
+
+  crates.mid-math.src.tests::
+    fc("mod",           "rs", "// Auto-generated stub\n")
+    fc("vec_tests",     "rs", "// Auto-generated stub\n")
+    fc("quat_tests",    "rs", "// Auto-generated stub\n")
+    fc("mat_tests",     "rs", "// Auto-generated stub\n")
+    fc("stress_tests",  "rs", "// Auto-generated stub\n")
+
+  // --- mid-common ---
   crates.mid-common::
     fc("Cargo", "toml",
       "[package]\nname = \"mid-common\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[lib]\nname = \"mid_common\"\ncrate-type = [\"lib\"]\n\n[dependencies]\n")
