@@ -18,10 +18,10 @@
 //!   Maintenance: 15 min/quarter. Added: 2026-04-18. Review: 2026-07-18.
 //!
 //! - Mat4::inverse — SSE2 aligned loads/stores + scalar cofactor expansion.
-//!   Criterion Build #3: 35 ns/op. Scalar: 117.1 ns/op. Glam ref: 13.3 ns.
-//!   Bug in Build #45: minor4 macro produced m[12] at lane 2 instead of m[13].
-//!   Fix (this build): extract all 16 scalars explicitly; compute all 6 minors
-//!   per pair as scalar arithmetic. SSE2 value = aligned loads + packed stores.
+//!   Bug in Build #47: adj packing stored C(k,j) instead of C(j,k) per column,
+//!   causing wrong results for any non-symmetric matrix (e.g. translation,
+//!   non-uniform scale + rotation). Fix: transpose the packing so cols[j]
+//!   receives [C(j,0), C(j,1), C(j,2), C(j,3)] / det.
 //!   Maintenance: 20 min/quarter. Added: 2026-04-19. Review: 2026-07-19.
 //!
 //! ## Priority 2 (next)
@@ -192,9 +192,27 @@ impl Mat4 {
 
     #[inline] pub fn from_rotation(q: Quat) -> Self { q.to_mat4() }
 
+    /// Build a TRS matrix directly from components — avoids three matrix
+    /// multiplies and the floating-point error they accumulate.
+    ///
+    /// Equivalent to T * R * S but more precise and faster.
     #[inline]
     pub fn from_trs(t: Vec3, r: Quat, s: Vec3) -> Self {
-        Self::from_translation(t) * Self::from_rotation(r) * Self::from_scale(s)
+        // Build rotation columns from quaternion, then scale and insert
+        // translation — matches glam's from_scale_rotation_translation approach.
+        let q = r.normalize();
+        let (x, y, z, w) = (q.x, q.y, q.z, q.w);
+        let (x2, y2, z2) = (x+x, y+y, z+z);
+        let (xx, yy, zz) = (x*x2, y*y2, z*z2);
+        let (xy, xz, yz) = (x*y2, x*z2, y*z2);
+        let (wx, wy, wz) = (w*x2, w*y2, w*z2);
+
+        Self::from_cols(
+            [(1.0-yy-zz)*s.x,  (xy+wz)*s.x,  (xz-wy)*s.x,  0.0],
+            [  (xy-wz)*s.y, (1.0-xx-zz)*s.y,  (yz+wx)*s.y,  0.0],
+            [  (xz+wy)*s.z,    (yz-wx)*s.z, (1.0-xx-yy)*s.z, 0.0],
+            [t.x, t.y, t.z, 1.0],
+        )
     }
 
     pub fn look_at_rh(eye: Vec3, center: Vec3, up: Vec3) -> Self {
@@ -437,33 +455,42 @@ mod sse2 {
 
     // ── General inverse ────────────────────────────────────────────────────
     //
-    // The previous minor4 macro produced {m[01], m[02], m[12], m[23]} at
-    // lanes {0,1,2,3} — lane 2 was m[12] not m[13] as the variable names
-    // implied. This caused wrong results for any matrix where m[13] ≠ m[12].
+    // Correctness invariant for column-major storage:
+    //   out.cols[j][i] = A^{-1}[i][j] = C(j, i) / det
+    // where C(j, i) = cofactor at row j, col i of A.
     //
-    // Fix: extract all 16 scalars with aligned SSE loads, compute all 6
-    // minors per column pair as explicit scalar arithmetic, build the 16
-    // cofactors, then pack with _mm_set_ps and write back with aligned stores.
+    // Therefore out.cols[j] must hold [C(j,0), C(j,1), C(j,2), C(j,3)] / det —
+    // i.e. the j-th ROW of the cofactor matrix, not the j-th column.
     //
-    // SSE2 value over pure scalar: aligned _mm_load_ps (vs unaligned scalar
-    // reads) and _mm_set_ps + _mm_store_ps for packed column writes.
+    // The computation below names cofactors as c{row}{col} meaning C(row, col).
+    // Groups are labelled "adj col k" meaning "cofactors that delete column k of A",
+    // which produces the k-th row of the cofactor matrix:
     //
-    // Correctness: matches inverse_scalar exactly for all 6 test cases.
-    // Criterion Build #3 (buggy): 35 ns. Expected after fix: similar or
-    // slightly slower due to removing the (incorrect) vectorised minor step.
-    // Added: 2026-04-19. Review: 2026-07-19.
+    //   adj col 0 → c00 c10 c20 c30  (C(k,0) for k=0..3)
+    //   adj col 1 → c01 c11 c21 c31  (C(k,1) for k=0..3)
+    //   adj col 2 → c02 c12 c22 c32
+    //   adj col 3 → c03 c13 c23 c33
+    //
+    // Packing into output columns:
+    //   out.cols[0] ← [c00, c01, c02, c03]   ← row 0 of cofactor matrix
+    //   out.cols[1] ← [c10, c11, c12, c13]   ← row 1
+    //   out.cols[2] ← [c20, c21, c22, c23]   ← row 2
+    //   out.cols[3] ← [c30, c31, c32, c33]   ← row 3
+    //
+    // Previous bug (Build #47): packed [c00,c10,c20,c30] into cols[0] etc.,
+    // which is the cofactor COLUMN instead of cofactor ROW — a transpose error.
+    // That gave correct results only for symmetric matrices (e.g. identity).
 
     pub(super) unsafe fn inverse_general(m: &Mat4) -> Option<Mat4> {
-        // Aligned loads — Mat4 is align(16), so cols[n].as_ptr() is 16-byte aligned.
+        // Aligned loads — Mat4 is align(16).
         let r0 = _mm_load_ps(m.cols[0].as_ptr());
         let r1 = _mm_load_ps(m.cols[1].as_ptr());
         let r2 = _mm_load_ps(m.cols[2].as_ptr());
         let r3 = _mm_load_ps(m.cols[3].as_ptr());
 
-        // Extract all 16 scalar values. _mm_cvtss_f32 reads lane 0.
-        // To read lane k, shuffle k into lane 0 first.
-        // Encoding: shuffle_ps::<IMM>(a,b) where result[i] = src[IMM[2i+1:2i]].
-        // For a==b, broadcasting lane k: IMM = k | (k<<2) | (k<<4) | (k<<6).
+        // Extract all 16 scalars. _mm_cvtss_f32 reads lane 0; shuffle to bring
+        // lane k to position 0 first.
+        // Encoding: broadcast lane k → IMM = k | (k<<2) | (k<<4) | (k<<6)
         macro_rules! lane {
             ($v:expr, 0) => { _mm_cvtss_f32($v) };
             ($v:expr, 1) => { _mm_cvtss_f32(_mm_shuffle_ps::<0b01_01_01_01>($v, $v)) };
@@ -471,81 +498,73 @@ mod sse2 {
             ($v:expr, 3) => { _mm_cvtss_f32(_mm_shuffle_ps::<0b11_11_11_11>($v, $v)) };
         }
 
+        // a = cols[0], b = cols[1], c = cols[2], d = cols[3]
         let (a0, a1, a2, a3) = (lane!(r0,0), lane!(r0,1), lane!(r0,2), lane!(r0,3));
         let (b0, b1, b2, b3) = (lane!(r1,0), lane!(r1,1), lane!(r1,2), lane!(r1,3));
         let (c0, c1, c2, c3) = (lane!(r2,0), lane!(r2,1), lane!(r2,2), lane!(r2,3));
         let (d0, d1, d2, d3) = (lane!(r3,0), lane!(r3,1), lane!(r3,2), lane!(r3,3));
 
-        // All 6 two-row minors for each column pair needed.
-        // m_XY_ij = col_X[i]*col_Y[j] - col_X[j]*col_Y[i]
-        //
-        // Adj col 0 needs minors of (c1,c2,c3) = (b,c,d):
+        // 2×2 minors of column pairs (c, d) — used in adj col 0 and adj col 1.
         let cd01 = c0*d1 - c1*d0;  let cd02 = c0*d2 - c2*d0;  let cd03 = c0*d3 - c3*d0;
         let cd12 = c1*d2 - c2*d1;  let cd13 = c1*d3 - c3*d1;  let cd23 = c2*d3 - c3*d2;
-        // Adj col 1 needs minors of (c0,c2,c3) = (a,c,d) — same cd set plus:
+
+        // 2×2 minors of (a, d) — used in adj col 1.
         let ad01 = a0*d1 - a1*d0;  let ad02 = a0*d2 - a2*d0;  let ad03 = a0*d3 - a3*d0;
         let ad12 = a1*d2 - a2*d1;  let ad13 = a1*d3 - a3*d1;  let ad23 = a2*d3 - a3*d2;
-        // Adj col 2 needs minors of (c0,c1,c3) = (a,b,d):
+
+        // 2×2 minors of (a, c) — used in adj col 2 (via (b,d) and adj col 3).
         let bd01 = b0*d1 - b1*d0;  let bd02 = b0*d2 - b2*d0;  let bd03 = b0*d3 - b3*d0;
         let bd12 = b1*d2 - b2*d1;  let bd13 = b1*d3 - b3*d1;  let bd23 = b2*d3 - b3*d2;
-        // Adj col 3 needs minors of (c0,c1,c2) = (a,b,c):
+
+        // 2×2 minors of (b, c) — used in adj col 3.
         let bc01 = b0*c1 - b1*c0;  let bc02 = b0*c2 - b2*c0;  let bc03 = b0*c3 - b3*c0;
         let bc12 = b1*c2 - b2*c1;  let bc13 = b1*c3 - b3*c1;  let bc23 = b2*c3 - b3*c2;
 
-        // 16 cofactors. C[row][col] = (-1)^(row+col) * M_{row,col}.
-        // Each 3×3 minor is expanded along the first remaining column.
+        // ── Cofactors: C(row, col) where col = which column of A was deleted ──
         //
-        // Adj col 0 (delete col 0): weighted by b = cols[1] rows.
-        // C[0][0] = + b1*cd23 - b2*cd13 + b3*cd12
-        // C[1][0] = -(b0*cd23 - b2*cd03 + b3*cd02)
-        // C[2][0] = + b0*cd13 - b1*cd03 + b3*cd01
-        // C[3][0] = -(b0*cd12 - b1*cd02 + b2*cd01)
-        let c00 =  b1*cd23 - b2*cd13 + b3*cd12;
-        let c10 = -(b0*cd23 - b2*cd03 + b3*cd02);
-        let c20 =  b0*cd13 - b1*cd03 + b3*cd01;
-        let c30 = -(b0*cd12 - b1*cd02 + b2*cd01);
+        // Naming: c{row}{col_deleted} = C(row, col_deleted)
+        //
+        // adj col 0 — delete col 0, expand remaining (b,c,d) along col b:
+        let c00 =  b1*cd23 - b2*cd13 + b3*cd12;   // C(0,0)
+        let c10 = -(b0*cd23 - b2*cd03 + b3*cd02);  // C(1,0)
+        let c20 =  b0*cd13 - b1*cd03 + b3*cd01;    // C(2,0)
+        let c30 = -(b0*cd12 - b1*cd02 + b2*cd01);  // C(3,0)
 
-        // Adj col 1 (delete col 1): weighted by a = cols[0] rows.
-        // C[0][1] = -(a1*cd23 - a2*cd13 + a3*cd12)
-        // C[1][1] = + a0*cd23 - a2*cd03 + a3*cd02
-        // C[2][1] = -(a0*cd13 - a1*cd03 + a3*cd01)
-        // C[3][1] = + a0*cd12 - a1*cd02 + a2*cd01
-        let c01 = -(a1*cd23 - a2*cd13 + a3*cd12);
-        let c11 =  a0*cd23 - a2*cd03 + a3*cd02;
-        let c21 = -(a0*cd13 - a1*cd03 + a3*cd01);
-        let c31 =  a0*cd12 - a1*cd02 + a2*cd01;
+        // adj col 1 — delete col 1, expand remaining (a,c,d) along col a:
+        let c01 = -(a1*cd23 - a2*cd13 + a3*cd12);  // C(0,1)
+        let c11 =  a0*cd23 - a2*cd03 + a3*cd02;    // C(1,1)
+        let c21 = -(a0*cd13 - a1*cd03 + a3*cd01);  // C(2,1)
+        let c31 =  a0*cd12 - a1*cd02 + a2*cd01;    // C(3,1)
 
-        // Adj col 2 (delete col 2): 3×3 from {a,b,d}, weighted by a rows.
-        // C[0][2] = + a1*bd23 - a2*bd13 + a3*bd12
-        // C[1][2] = -(a0*bd23 - a2*bd03 + a3*bd02)
-        // C[2][2] = + a0*bd13 - a1*bd03 + a3*bd01
-        // C[3][2] = -(a0*bd12 - a1*bd02 + a2*bd01)
-        let c02 =  a1*bd23 - a2*bd13 + a3*bd12;
-        let c12 = -(a0*bd23 - a2*bd03 + a3*bd02);
-        let c22 =  a0*bd13 - a1*bd03 + a3*bd01;
-        let c32 = -(a0*bd12 - a1*bd02 + a2*bd01);
+        // adj col 2 — delete col 2, expand remaining (a,b,d) along col a:
+        let c02 =  a1*bd23 - a2*bd13 + a3*bd12;    // C(0,2)
+        let c12 = -(a0*bd23 - a2*bd03 + a3*bd02);  // C(1,2)
+        let c22 =  a0*bd13 - a1*bd03 + a3*bd01;    // C(2,2)
+        let c32 = -(a0*bd12 - a1*bd02 + a2*bd01);  // C(3,2)
 
-        // Adj col 3 (delete col 3): 3×3 from {a,b,c}, weighted by a rows.
-        // C[0][3] = -(a1*bc23 - a2*bc13 + a3*bc12)
-        // C[1][3] = + a0*bc23 - a2*bc03 + a3*bc02
-        // C[2][3] = -(a0*bc13 - a1*bc03 + a3*bc01)
-        // C[3][3] = + a0*bc12 - a1*bc02 + a2*bc01
-        let c03 = -(a1*bc23 - a2*bc13 + a3*bc12);
-        let c13 =  a0*bc23 - a2*bc03 + a3*bc02;
-        let c23 = -(a0*bc13 - a1*bc03 + a3*bc01);
-        let c33 =  a0*bc12 - a1*bc02 + a2*bc01;
+        // adj col 3 — delete col 3, expand remaining (a,b,c) along col a:
+        let c03 = -(a1*bc23 - a2*bc13 + a3*bc12);  // C(0,3)
+        let c13 =  a0*bc23 - a2*bc03 + a3*bc02;    // C(1,3)
+        let c23 = -(a0*bc13 - a1*bc03 + a3*bc01);  // C(2,3)
+        let c33 =  a0*bc12 - a1*bc02 + a2*bc01;    // C(3,3)
 
-        // Determinant = dot(col0, cofactors of col0)
+        // Determinant via Laplace expansion along column 0 of A:
+        //   det = a0*C(0,0) + a1*C(1,0) + a2*C(2,0) + a3*C(3,0)
         let det = a0*c00 + a1*c10 + a2*c20 + a3*c30;
         if det.abs() < EPSILON { return None; }
         let s = 1.0 / det;
 
-        // Pack each adjugate column into SSE and store aligned.
-        // _mm_set_ps(lane3, lane2, lane1, lane0) — arguments are high-to-low.
-        let adj0 = _mm_set_ps(c30*s, c20*s, c10*s, c00*s);
-        let adj1 = _mm_set_ps(c31*s, c21*s, c11*s, c01*s);
-        let adj2 = _mm_set_ps(c32*s, c22*s, c12*s, c02*s);
-        let adj3 = _mm_set_ps(c33*s, c23*s, c13*s, c03*s);
+        // Pack output: out.cols[j] = [C(j,0), C(j,1), C(j,2), C(j,3)] / det
+        // _mm_set_ps(lane3, lane2, lane1, lane0) — arguments are HIGH to LOW.
+        // Memory after _mm_store_ps: [lane0, lane1, lane2, lane3].
+        //
+        //   out.cols[0][k] = C(0,k)/det  → pick row 0 from each adj-col group
+        //   out.cols[1][k] = C(1,k)/det  → pick row 1 from each adj-col group
+        //   etc.
+        let adj0 = _mm_set_ps(c03*s, c02*s, c01*s, c00*s); // cols[0]: C(0,0..3)
+        let adj1 = _mm_set_ps(c13*s, c12*s, c11*s, c10*s); // cols[1]: C(1,0..3)
+        let adj2 = _mm_set_ps(c23*s, c22*s, c21*s, c20*s); // cols[2]: C(2,0..3)
+        let adj3 = _mm_set_ps(c33*s, c32*s, c31*s, c30*s); // cols[3]: C(3,0..3)
 
         let mut out = Mat4::ZERO;
         _mm_store_ps(out.cols[0].as_mut_ptr(), adj0);
@@ -556,6 +575,7 @@ mod sse2 {
     }
 
     // ── TRS inverse ────────────────────────────────────────────────────────
+    // Unchanged — already correct per mat4_inverse_trs_sse2_matches_scalar.
 
     pub(super) unsafe fn inverse_trs(m: &Mat4) -> Mat4 {
         let c0 = _mm_load_ps(m.cols[0].as_ptr());
@@ -622,4 +642,4 @@ mod sse2 {
         _mm_store_ps(out.cols[3].as_mut_ptr(), ic3);
         out
     }
-}
+            }
