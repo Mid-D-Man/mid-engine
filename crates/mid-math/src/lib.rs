@@ -1,7 +1,5 @@
 // crates/mid-math/src/lib.rs
-// REMOVED: #![cfg_attr(not(feature = "std"), no_std)]
-// Reason: f32::sin/cos/sqrt/etc live in std, not core.
-// no_std support requires libm — add as optional feature later (same as glam).
+// Fix 2: use f32::Mat3 directly (f32::mod.rs now re-exports it as pub)
 
 pub(crate) mod sse2;
 
@@ -13,7 +11,7 @@ pub mod constants;
 pub use constants::*;
 
 pub use f32::Vec2;
-pub use f32::mat3::Mat3;
+pub use f32::Mat3;   // ← works now that f32::mat3 is pub
 
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 pub use f32::sse2::{Vec3, Vec4, Quat, Mat4};
@@ -64,8 +62,6 @@ pub use f32::scalar::{Vec3, Vec4, Quat, Mat4};
 #[inline(always)] pub fn approx_eq(a: f32, b: f32) -> bool {
     (a - b).abs() < constants::EPSILON
 }
-
-// ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests;
