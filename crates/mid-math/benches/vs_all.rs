@@ -26,10 +26,10 @@ use mid_math::{to_radians, Mat4, Quat, Vec3, Vec4};
 use glam::{Mat4 as GMat4, Quat as GQuat, Vec3A as GVec3, Vec4 as GVec4};
 
 // ── nalgebra ──────────────────────────────────────────────────────────────────
-use nalgebra::{Matrix4, Point3, UnitQuaternion, Vector3, Vector4};
+use nalgebra::{Matrix4, Point3, Unit, UnitQuaternion, Vector3, Vector4};
 
 // ── ultraviolet ───────────────────────────────────────────────────────────────
-use ultraviolet::{Mat4 as UMat4, Rotor3, Vec3 as UVec3, Vec4 as UVec4};
+use ultraviolet::{Mat4 as UMat4, Rotor3, Slerp, Vec3 as UVec3, Vec4 as UVec4};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Helpers
@@ -52,7 +52,7 @@ fn glam_trs(tx: f32, angle_deg: f32, sx: f32) -> GMat4 {
 }
 
 fn na_trs(tx: f32, angle_deg: f32, sx: f32) -> Matrix4<f32> {
-    use nalgebra::{Isometry3, Scale3, Translation3};
+    use nalgebra::{Isometry3, Translation3};
     let iso = Isometry3::from_parts(
         Translation3::new(tx, 0.0, 0.0),
         UnitQuaternion::from_axis_angle(&Vector3::y_axis(), angle_deg.to_radians()),
@@ -63,7 +63,7 @@ fn na_trs(tx: f32, angle_deg: f32, sx: f32) -> Matrix4<f32> {
 fn uv_trs(tx: f32, angle_deg: f32, sx: f32) -> UMat4 {
     let t = UMat4::from_translation(ultraviolet::Vec3::new(tx, 0.0, 0.0));
     let r = UMat4::from_rotation_y(angle_deg.to_radians());
-    let s = UMat4::from_nonuniform_scale(ultraviolet::Vec3::splat(sx));
+    let s = UMat4::from_nonuniform_scale(ultraviolet::Vec3::broadcast(sx));
     t * r * s
 }
 
@@ -194,7 +194,7 @@ fn bench_rotation(c: &mut Criterion) {
     g.bench_function("slerp/mid-math-quat",     |b| b.iter(|| black_box(mm_q1).slerp(black_box(mm_q2), 0.5)));
     g.bench_function("slerp/glam-quat",         |b| b.iter(|| black_box(gl_q1).slerp(black_box(gl_q2), 0.5)));
     g.bench_function("slerp/nalgebra-unitquat", |b| b.iter(|| black_box(na_q1).slerp(&black_box(na_q2), 0.5)));
-    g.bench_function("slerp/ultraviolet-rotor", |b| b.iter(|| Rotor3::slerp(black_box(uv_r1), black_box(uv_r2), 0.5)));
+    g.bench_function("slerp/ultraviolet-rotor", |b| b.iter(|| black_box(uv_r1).slerp(black_box(uv_r2), 0.5)));
 
     // nlerp ───────────────────────────────────────────────────────────────────
     g.bench_function("nlerp/mid-math-quat",     |b| b.iter(|| black_box(mm_q1).nlerp(black_box(mm_q2), 0.5)));
