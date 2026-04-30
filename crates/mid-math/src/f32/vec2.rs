@@ -145,7 +145,11 @@ impl Vec2 {
     #[inline(always)]
     pub fn approx_eq(self, rhs: Self) -> bool {
         (self.x - rhs.x).abs() < EPSILON && (self.y - rhs.y).abs() < EPSILON
-    }
+    }// Add to Vec2 impl in f32/vec2.rs (after the existing approx_eq method)
+#[inline(always)]
+pub fn approx_eq_eps(self, rhs: Self, eps: f32) -> bool {
+    (self.x - rhs.x).abs() < eps && (self.y - rhs.y).abs() < eps
+}
 }
 
 // ── Operators ─────────────────────────────────────────────────────────────────
