@@ -53,21 +53,32 @@ jobs:
           restore-keys: cargo-registry-
 
       # ── Compile cglm C benchmark ──────────────────────────────────────────
+      # -lcglm is required alongside the header -I flags from pkg-config.
+      # Without -lcglm the linker only gets the inline functions baked into
+      # headers; any non-inlined cglm symbol causes an undefined reference.
+      # Previously the compile succeeded because cglm is heavily header-only,
+      # but the explicit link flag guarantees stability across cglm versions.
       - name: Compile cglm benchmark
         run: |
           gcc -O3 -march=native \
               -o cglm_bench \
               crates/mid-math/benches/cglm_bench.c \
               $(pkg-config --cflags cglm) \
+              -lcglm \
               -lm
           echo "cglm_bench compiled OK"
 
       # ── Run cglm benchmark ────────────────────────────────────────────────
+      # stdbuf -oL forces line-buffered stdout on the cglm_bench process so
+      # every printf flushes immediately through the pipe to tee.
+      # This is the belt-AND-suspenders fix alongside setvbuf() in the C code:
+      # setvbuf handles the C runtime buffer, stdbuf handles the OS pipe buffer.
+      # Together they ensure output survives any crash mid-run.
       - name: Run cglm benchmark
         run: |
           echo "=== cglm benchmark output ==="
-          ./cglm_bench 2>&1 | tee cglm-bench-raw.txt
-          echo "cglm_bench exit: $?"
+          stdbuf -oL ./cglm_bench 2>&1 | tee cglm-bench-raw.txt
+          echo "cglm_bench exit: ${PIPESTATUS[0]}"
 
       # ── Run mid-math criterion bench for same operations ──────────────────
       - name: Run mid-math vs_all criterion benchmarks
@@ -99,7 +110,7 @@ jobs:
 
           # ── Parse cglm output ──────────────────────────────────────────────
           # Lines look like: "  add/cglm                                    0.96 ns/op"
-          RE_CGLM = re.compile(r'^\s+(\S[^|]+?)\s{2,}([\d.]+)\s+(ns/op|µs)', re.MULTILINE)
+          RE_CGLM = re.compile(r'^\s+(\S[^|]+?)\s{2,}([\d.]+)\s+(ns/op|us)', re.MULTILINE)
 
           cglm_results = {}
           try:
@@ -140,17 +151,16 @@ jobs:
           # Map cglm keys to criterion group/op keys
           op_map = {
               'add/cglm':           'vec3/add',
-              'dot/cglm':           'vec3/dot',       # will also match vec4
+              'dot/cglm':           'vec3/dot',
               'cross/cglm':         'vec3/cross',
               'normalize/cglm':     'vec3/normalize',
               'lerp/cglm':          'vec3/lerp',
-              'mul/cglm':           'quat/mul',        # quat section
+              'mul/cglm':           'quat/mul',
               'rotate/cglm':        'rotation/rotate',
               'slerp/cglm':         'rotation/slerp',
               'nlerp/cglm':         'rotation/nlerp',
           }
 
-          # Print vec3
           for cglm_key, mm_key in op_map.items():
               cglm_val = cglm_results.get(cglm_key, None)
               mm_val   = midmath_results.get(mm_key, None)
