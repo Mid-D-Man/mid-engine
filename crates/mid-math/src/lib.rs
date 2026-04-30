@@ -11,7 +11,8 @@ pub mod constants;
 pub use constants::*;
 
 pub use f32::Vec2;
-pub use f32::Mat3;   // ← works now that f32::mat3 is pub
+pub use f32::Mat2;   // ← NEW
+pub use f32::Mat3;
 
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 pub use f32::sse2::{Vec3, Vec4, Quat, Mat4};
