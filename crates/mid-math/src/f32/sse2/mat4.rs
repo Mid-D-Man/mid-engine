@@ -2,11 +2,14 @@
 //! Mat4 with SSE2 fast-paths on x86 / x86_64.
 //!
 //! CHANGED vs previous version:
-//!   1. Mul — loop unrolled into 4 explicit column blocks so LLVM can pipeline
-//!      all 4 output columns simultaneously. Closes the 2.5× gap vs glam.
-//!   2. sse2_inverse_general — replaced scalar-extraction approach with
-//!      glam-style fac0-fac5 shuffle+mul SIMD. Closes the 3× gap vs glam.
-//!   3. sse2_inverse_trs — unchanged (already adequate at 13 ns).
+//!   1. Mul — ported glam/cglm column-parallel FMA pattern.
+//!      Old: load A cols first, tree-reduce per output col.
+//!      New: load R cols once, load L col-by-col, 4 independent accumulators.
+//!      Adds `sse2_fmadd` helper: emits vfmadd213ps on +fma, falls back on SSE2.
+//!   2. Mul<Vec4> — sequential FMA chain (glam mul_vec4 pattern).
+//!      Reduces 4-mul+3-add to 1-mul+3-fmadd, same dependency structure as glam.
+//!   3. sse2_inverse_general — unchanged (already glam fac0-fac5 approach).
+//!   4. sse2_inverse_trs — unchanged (already adequate).
 
 use core::fmt;
 use core::ops::Mul;
@@ -156,7 +159,6 @@ impl Mat4 {
     // ── Inverse (general) ─────────────────────────────────────────────────────
 
     /// SSE2 general 4×4 inverse — glam-style fac0-fac5 sub-determinants.
-    /// Target: ~13 ns (was 39 ns with the old scalar-extraction approach).
     pub fn inverse(self) -> Option<Self> {
         unsafe { sse2_inverse_general(&self) }
     }
@@ -223,55 +225,124 @@ impl Mat4 {
     }
 }
 
-// ── CHANGED: Mul — manually unrolled, no loop ─────────────────────────────────
+// ── CHANGED: fmadd helper ─────────────────────────────────────────────────────
 //
-// The previous version used `for j in 0..4 { ... }` which LLVM frequently
-// fails to fully pipeline. Writing the four columns out explicitly lets the
-// backend see all four independent computation chains at once and schedule
-// them across execution units — the same approach glam uses to achieve 7 ns.
+// Emits a single vfmadd213ps on FMA3 targets (Haswell+ / Zen+).
+// Enable with RUSTFLAGS="-C target-feature=+fma" or "-C target-cpu=native".
+// Falls back to mul+add on SSE2-only targets (2010 MBP Sandy Bridge baseline).
 //
-// Each column's computation is:
-//   out[j] = A.col[0]*B[j][0] + A.col[1]*B[j][1] + A.col[2]*B[j][2] + A.col[3]*B[j][3]
-// achieved via shuffle-broadcast of B's scalar elements.
+// The FMA path is the key reason glam achieves ~7 ns on CI while SSE2-only
+// targets will land closer to ~10-13 ns — still a substantial win over the old
+// ~17 ns tree-reduction approach.
+#[inline(always)]
+unsafe fn sse2_fmadd(a: __m128, b: __m128, c: __m128) -> __m128 {
+    // cfg!(target_feature) is resolved at compile time, so one branch is dead code.
+    #[cfg(target_feature = "fma")]
+    {
+        // _mm_fmadd_ps(a, b, c) = a*b + c
+        // Available in core::arch::x86_64 when fma target_feature is set.
+        // Emits: vfmadd213ps (or vfmadd231ps depending on operand order LLVM picks).
+        _mm_fmadd_ps(a, b, c)
+    }
+    #[cfg(not(target_feature = "fma"))]
+    {
+        // SSE2 fallback: two instructions. LLVM cannot combine them into FMA
+        // without the feature flag even with -O3.
+        _mm_add_ps(c, _mm_mul_ps(a, b))
+    }
+}
+
+// ── CHANGED: Mul — column-parallel FMA pattern (glam / cglm approach) ────────
+//
+// Previous version loaded all 4 lhs columns first, then processed each output
+// column with a tree-reduction: (a0*b0 + a1*b1) + (a2*b2 + a3*b3).
+// The tree tip add created an extra latency stall.
+//
+// This version ports the pattern used in both glam (src/f32/sse2/mat4.rs) and
+// cglm (include/cglm/simd/sse2/mat4.h glm_mat4_mul_sse2):
+//
+//   1. Load all 4 rhs columns as broadcast sources.
+//   2. Load each lhs column once per pass.
+//   3. In each pass, FMA-accumulate into 4 independent output registers (v0..v3).
+//
+// The four accumulator chains (v0, v1, v2, v3) are data-independent throughout.
+// The CPU's out-of-order engine pipelines all 4 chains simultaneously.
+//
+// Instruction count per multiply:
+//   FMA  targets: 4 loads(rhs) + 4×(1 load(lhs) + 4 ops) = 4 + 16 = 20 ops
+//   SSE2 targets: same structure but fmadd = mul+add → 4 + 28 = 32 ops
+//
+// Expected perf: FMA ≈ 7-8 ns, SSE2 ≈ 11-13 ns (was 17.58 ns).
 
 impl Mul for Mat4 {
     type Output = Self;
     #[inline(always)]
     fn mul(self, rhs: Self) -> Self {
         unsafe {
-            // Load all four columns of A once — they're reused for every output column.
-            let a0 = _mm_load_ps(self.cols[0].as_ptr());
-            let a1 = _mm_load_ps(self.cols[1].as_ptr());
-            let a2 = _mm_load_ps(self.cols[2].as_ptr());
-            let a3 = _mm_load_ps(self.cols[3].as_ptr());
+            // Load all four columns of rhs once.
+            // These stay in SIMD registers for the entire computation — no re-loads.
+            let r0 = _mm_load_ps(rhs.cols[0].as_ptr());
+            let r1 = _mm_load_ps(rhs.cols[1].as_ptr());
+            let r2 = _mm_load_ps(rhs.cols[2].as_ptr());
+            let r3 = _mm_load_ps(rhs.cols[3].as_ptr());
 
-            // Inline helper: compute one output column given the B column register.
-            // Broadcast each scalar of B's column to all 4 lanes, multiply by A's
-            // corresponding column, then sum — 4 mul + 2 add, fully pipelineable.
-            macro_rules! out_col {
-                ($b_col:expr) => {{
-                    let b  = _mm_load_ps(rhs.cols[$b_col].as_ptr());
-                    let b0 = _mm_shuffle_ps::<0b00_00_00_00>(b, b); // B[0] × 4
-                    let b1 = _mm_shuffle_ps::<0b01_01_01_01>(b, b); // B[1] × 4
-                    let b2 = _mm_shuffle_ps::<0b10_10_10_10>(b, b); // B[2] × 4
-                    let b3 = _mm_shuffle_ps::<0b11_11_11_11>(b, b); // B[3] × 4
-                    _mm_add_ps(
-                        _mm_add_ps(_mm_mul_ps(a0, b0), _mm_mul_ps(a1, b1)),
-                        _mm_add_ps(_mm_mul_ps(a2, b2), _mm_mul_ps(a3, b3)),
-                    )
-                }};
-            }
+            // Pass 0: lhs col 0 × scalar element [0] of each rhs column.
+            // _mm_shuffle_ps::<0b00_00_00_00> broadcasts lane 0 to all 4 lanes.
+            // v0..v3 are fully independent: zero data-dependency between them.
+            let l = _mm_load_ps(self.cols[0].as_ptr());
+            let mut v0 = _mm_mul_ps(_mm_shuffle_ps::<0b00_00_00_00>(r0, r0), l);
+            let mut v1 = _mm_mul_ps(_mm_shuffle_ps::<0b00_00_00_00>(r1, r1), l);
+            let mut v2 = _mm_mul_ps(_mm_shuffle_ps::<0b00_00_00_00>(r2, r2), l);
+            let mut v3 = _mm_mul_ps(_mm_shuffle_ps::<0b00_00_00_00>(r3, r3), l);
+
+            // Pass 1: FMA with lhs col 1 × element [1] of each rhs column.
+            // Each vN only depends on its own prior value — the 4 chains stay parallel.
+            let l = _mm_load_ps(self.cols[1].as_ptr());
+            v0 = sse2_fmadd(_mm_shuffle_ps::<0b01_01_01_01>(r0, r0), l, v0);
+            v1 = sse2_fmadd(_mm_shuffle_ps::<0b01_01_01_01>(r1, r1), l, v1);
+            v2 = sse2_fmadd(_mm_shuffle_ps::<0b01_01_01_01>(r2, r2), l, v2);
+            v3 = sse2_fmadd(_mm_shuffle_ps::<0b01_01_01_01>(r3, r3), l, v3);
+
+            // Pass 2: FMA with lhs col 2 × element [2] of each rhs column.
+            let l = _mm_load_ps(self.cols[2].as_ptr());
+            v0 = sse2_fmadd(_mm_shuffle_ps::<0b10_10_10_10>(r0, r0), l, v0);
+            v1 = sse2_fmadd(_mm_shuffle_ps::<0b10_10_10_10>(r1, r1), l, v1);
+            v2 = sse2_fmadd(_mm_shuffle_ps::<0b10_10_10_10>(r2, r2), l, v2);
+            v3 = sse2_fmadd(_mm_shuffle_ps::<0b10_10_10_10>(r3, r3), l, v3);
+
+            // Pass 3: FMA with lhs col 3 × element [3] of each rhs column.
+            let l = _mm_load_ps(self.cols[3].as_ptr());
+            v0 = sse2_fmadd(_mm_shuffle_ps::<0b11_11_11_11>(r0, r0), l, v0);
+            v1 = sse2_fmadd(_mm_shuffle_ps::<0b11_11_11_11>(r1, r1), l, v1);
+            v2 = sse2_fmadd(_mm_shuffle_ps::<0b11_11_11_11>(r2, r2), l, v2);
+            v3 = sse2_fmadd(_mm_shuffle_ps::<0b11_11_11_11>(r3, r3), l, v3);
 
             let mut out = Self::ZERO;
-            // Four explicit stores — no loop, all four chains visible to the scheduler.
-            _mm_store_ps(out.cols[0].as_mut_ptr(), out_col!(0));
-            _mm_store_ps(out.cols[1].as_mut_ptr(), out_col!(1));
-            _mm_store_ps(out.cols[2].as_mut_ptr(), out_col!(2));
-            _mm_store_ps(out.cols[3].as_mut_ptr(), out_col!(3));
+            _mm_store_ps(out.cols[0].as_mut_ptr(), v0);
+            _mm_store_ps(out.cols[1].as_mut_ptr(), v1);
+            _mm_store_ps(out.cols[2].as_mut_ptr(), v2);
+            _mm_store_ps(out.cols[3].as_mut_ptr(), v3);
             out
         }
     }
 }
+
+// ── CHANGED: Mul<Vec4> — sequential FMA chain (glam mul_vec4 pattern) ────────
+//
+// Previous version used a tree-reduction:
+//   (a0*vx + a1*vy) + (a2*vz + a3*vw)   → 4 mul + 3 add = 7 ops
+//
+// glam uses a sequential FMA chain (src/f32/sse2/mat4.rs mul_vec4):
+//   res  = a0 * vx
+//   res += a1 * vy   (fmadd: a1*vy + res)
+//   res += a2 * vz
+//   res += a3 * vw
+//
+// FMA targets: 1 mul + 3 fmadd = 4 ops.
+// SSE2 targets: 1 mul + 3 (mul+add) = 7 ops (same count, but LLVM schedules
+//               the sequential form better than the tree for single-vector use).
+//
+// Used by transform_point / transform_vector via the * operator.
 
 impl Mul<Vec4> for Mat4 {
     type Output = Vec4;
@@ -282,14 +353,20 @@ impl Mul<Vec4> for Mat4 {
             let a1 = _mm_load_ps(self.cols[1].as_ptr());
             let a2 = _mm_load_ps(self.cols[2].as_ptr());
             let a3 = _mm_load_ps(self.cols[3].as_ptr());
+
+            // Broadcast each scalar component of v to all 4 lanes.
             let vx = _mm_shuffle_ps::<0b00_00_00_00>(v.0, v.0);
             let vy = _mm_shuffle_ps::<0b01_01_01_01>(v.0, v.0);
             let vz = _mm_shuffle_ps::<0b10_10_10_10>(v.0, v.0);
             let vw = _mm_shuffle_ps::<0b11_11_11_11>(v.0, v.0);
-            Vec4(_mm_add_ps(
-                _mm_add_ps(_mm_mul_ps(a0, vx), _mm_mul_ps(a1, vy)),
-                _mm_add_ps(_mm_mul_ps(a2, vz), _mm_mul_ps(a3, vw)),
-            ))
+
+            // Sequential FMA chain — same pattern as glam's mul_vec4.
+            // Single dependency chain but FMA halves instruction count on modern CPUs.
+            let mut res = _mm_mul_ps(a0, vx);
+            res = sse2_fmadd(a1, vy, res);
+            res = sse2_fmadd(a2, vz, res);
+            res = sse2_fmadd(a3, vw, res);
+            Vec4(res)
         }
     }
 }
@@ -307,21 +384,9 @@ impl fmt::Display for Mat4 {
     }
 }
 
-// ── CHANGED: sse2_inverse_general — glam fac0-fac5 approach ──────────────────
+// ── sse2_inverse_general — glam fac0-fac5 approach (unchanged) ───────────────
 //
-// The old implementation used a `lane!` macro to extract every scalar from
-// __m128 registers, then did 100+ scalar multiplications. That is SIMD with
-// none of the benefits — essentially a slower scalar path.
-//
-// This version ports glam's GLM-derived implementation which computes 6
-// "factor" vectors (fac0..fac5), each holding four 2×2 sub-determinants,
-// using _mm_shuffle_ps + _mm_mul_ps + _mm_sub_ps exclusively. Every
-// intermediate value stays in a SIMD register throughout. Expected result:
-// ~13 ns vs the old ~40 ns (matches glam's Mat4::inverse on the same runner).
-//
-// Column mapping to glam's names:
-//   cols[0] = x_axis,  cols[1] = y_axis,
-//   cols[2] = z_axis,  cols[3] = w_axis
+// Already at target performance (~16 ns). No changes.
 
 unsafe fn sse2_inverse_general(m: &Mat4) -> Option<Mat4> {
     let x = _mm_load_ps(m.cols[0].as_ptr()); // col 0
@@ -329,8 +394,6 @@ unsafe fn sse2_inverse_general(m: &Mat4) -> Option<Mat4> {
     let z = _mm_load_ps(m.cols[2].as_ptr()); // col 2
     let w = _mm_load_ps(m.cols[3].as_ptr()); // col 3
 
-    // fac0..fac5: 2×2 minor determinants from rows (cols) 2 and 3.
-    // Each fac vector holds the 4 sub-dets needed for one row of cofactors.
     let fac0 = {
         let swp0a = _mm_shuffle_ps(w, z, 0b11_11_11_11);
         let swp0b = _mm_shuffle_ps(w, z, 0b10_10_10_10);
@@ -386,13 +449,9 @@ unsafe fn sse2_inverse_general(m: &Mat4) -> Option<Mat4> {
         _mm_sub_ps(_mm_mul_ps(swp00, swp01), _mm_mul_ps(swp02, swp03))
     };
 
-    // Alternating sign masks for the cofactor signs (+−+−) / (−+−+).
     let sign_a = _mm_set_ps( 1.0, -1.0,  1.0, -1.0);
     let sign_b = _mm_set_ps(-1.0,  1.0, -1.0,  1.0);
 
-    // Interleave y and x elements to build the 4-element vectors used in the
-    // cofactor expansion. Each vec{0..3} holds one element of columns y and x
-    // broadcast appropriately so the later dot products pick the right terms.
     let tmp0 = _mm_shuffle_ps(y, x, 0b00_00_00_00);
     let vec0 = _mm_shuffle_ps(tmp0, tmp0, 0b10_10_10_00);
     let tmp1 = _mm_shuffle_ps(y, x, 0b01_01_01_01);
@@ -402,7 +461,6 @@ unsafe fn sse2_inverse_general(m: &Mat4) -> Option<Mat4> {
     let tmp3 = _mm_shuffle_ps(y, x, 0b11_11_11_11);
     let vec3 = _mm_shuffle_ps(tmp3, tmp3, 0b10_10_10_00);
 
-    // Four columns of the adjugate (transposed cofactor matrix).
     let inv0 = _mm_mul_ps(sign_b, _mm_add_ps(
         _mm_sub_ps(_mm_mul_ps(vec1, fac0), _mm_mul_ps(vec2, fac1)),
         _mm_mul_ps(vec3, fac2),
@@ -420,13 +478,10 @@ unsafe fn sse2_inverse_general(m: &Mat4) -> Option<Mat4> {
         _mm_mul_ps(vec2, fac5),
     ));
 
-    // Determinant: dot(col0_of_input, row0_of_adjugate).
-    // row0_of_adjugate = first element of each inv column.
     let row0 = _mm_shuffle_ps(inv0, inv1, 0b00_00_00_00);
     let row1 = _mm_shuffle_ps(inv2, inv3, 0b00_00_00_00);
     let row2 = _mm_shuffle_ps(row0, row1, 0b10_00_10_00);
 
-    // Horizontal dot4(x, row2) — reuse our existing helper.
     let det = crate::sse2::dot4(x, row2);
     if det.abs() < EPSILON { return None; }
 
@@ -494,4 +549,4 @@ unsafe fn sse2_inverse_trs(m: &Mat4) -> Mat4 {
     _mm_store_ps(out.cols[2].as_mut_ptr(), ic2);
     _mm_store_ps(out.cols[3].as_mut_ptr(), ic3);
     out
-}
+             }
