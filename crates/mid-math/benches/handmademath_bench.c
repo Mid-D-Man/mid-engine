@@ -1,18 +1,23 @@
 /* crates/mid-math/benches/handmademath_bench.c
  * HandmadeMath v2 benchmark — popular single-header indie game math library.
  * Widely used in the Handmade Hero / Casey Muratori community.
- * Scalar by default; SIMD enabled when HMM_USE_SSE is defined.
+ *
+ * NOTE: HMM v2 does not expose a general 4x4 matrix inverse.
+ * We implement it manually via Cramer's rule (same algorithm used internally
+ * by most math libraries). This benchmarks the HMM Mat4 data layout overhead.
  *
  * Build: see bench-vs-handmademath.yml
  */
 
-/* Enable SSE2 intrinsics in HandmadeMath */
-#define HANDMADE_MATH_USE_SSE
+/* HMM v2 uses HANDMADE_MATH_IMPLEMENTATION to include the implementation.
+ * SIMD is auto-detected by HMM v2; the old HANDMADE_MATH_USE_SSE define
+ * from v1 is harmless if present but not required. */
 #define HANDMADE_MATH_IMPLEMENTATION
 #include "HandmadeMath.h"
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <math.h>
 #include <time.h>
 
 /* ── timing ────────────────────────────────────────────────────────────────── */
@@ -30,6 +35,51 @@ volatile float sink = 0.0f;
 static void report(const char *label, long long ns, int iters) {
     printf("  %-52s %7.2f ns/op\n", label, (double)ns / iters);
     fflush(stdout);
+}
+
+/* ── Manual 4×4 general inverse via Cramer's rule ────────────────────────────
+ * HMM v2 does not provide HMM_InvM4 / HMM_InvGeneralM4.
+ * This matches the algorithm in mid-math's scalar fallback exactly.
+ * Layout: HMM_Mat4.Elements[col][row] — column-major, same as mid-math.
+ */
+static HMM_Mat4 hmm_mat4_inv(HMM_Mat4 m) {
+    float a[16];
+    int c, r;
+    for (c = 0; c < 4; c++)
+        for (r = 0; r < 4; r++)
+            a[c * 4 + r] = m.Elements[c][r];
+
+    float inv[16];
+    inv[ 0] =  a[5]*a[10]*a[15]-a[5]*a[11]*a[14]-a[9]*a[6]*a[15]+a[9]*a[7]*a[14]+a[13]*a[6]*a[11]-a[13]*a[7]*a[10];
+    inv[ 4] = -a[4]*a[10]*a[15]+a[4]*a[11]*a[14]+a[8]*a[6]*a[15]-a[8]*a[7]*a[14]-a[12]*a[6]*a[11]+a[12]*a[7]*a[10];
+    inv[ 8] =  a[4]*a[9]*a[15]-a[4]*a[11]*a[13]-a[8]*a[5]*a[15]+a[8]*a[7]*a[13]+a[12]*a[5]*a[11]-a[12]*a[7]*a[9];
+    inv[12] = -a[4]*a[9]*a[14]+a[4]*a[10]*a[13]+a[8]*a[5]*a[14]-a[8]*a[6]*a[13]-a[12]*a[5]*a[10]+a[12]*a[6]*a[9];
+    inv[ 1] = -a[1]*a[10]*a[15]+a[1]*a[11]*a[14]+a[9]*a[2]*a[15]-a[9]*a[3]*a[14]-a[13]*a[2]*a[11]+a[13]*a[3]*a[10];
+    inv[ 5] =  a[0]*a[10]*a[15]-a[0]*a[11]*a[14]-a[8]*a[2]*a[15]+a[8]*a[3]*a[14]+a[12]*a[2]*a[11]-a[12]*a[3]*a[10];
+    inv[ 9] = -a[0]*a[9]*a[15]+a[0]*a[11]*a[13]+a[8]*a[1]*a[15]-a[8]*a[3]*a[13]-a[12]*a[1]*a[11]+a[12]*a[3]*a[9];
+    inv[13] =  a[0]*a[9]*a[14]-a[0]*a[10]*a[13]-a[8]*a[1]*a[14]+a[8]*a[2]*a[13]+a[12]*a[1]*a[10]-a[12]*a[2]*a[9];
+    inv[ 2] =  a[1]*a[6]*a[15]-a[1]*a[7]*a[14]-a[5]*a[2]*a[15]+a[5]*a[3]*a[14]+a[13]*a[2]*a[7]-a[13]*a[3]*a[6];
+    inv[ 6] = -a[0]*a[6]*a[15]+a[0]*a[7]*a[14]+a[4]*a[2]*a[15]-a[4]*a[3]*a[14]-a[12]*a[2]*a[7]+a[12]*a[3]*a[6];
+    inv[10] =  a[0]*a[5]*a[15]-a[0]*a[7]*a[13]-a[4]*a[1]*a[15]+a[4]*a[3]*a[13]+a[12]*a[1]*a[7]-a[12]*a[3]*a[5];
+    inv[14] = -a[0]*a[5]*a[14]+a[0]*a[6]*a[13]+a[4]*a[1]*a[14]-a[4]*a[2]*a[13]-a[12]*a[1]*a[6]+a[12]*a[2]*a[5];
+    inv[ 3] = -a[1]*a[6]*a[11]+a[1]*a[7]*a[10]+a[5]*a[2]*a[11]-a[5]*a[3]*a[10]-a[9]*a[2]*a[7]+a[9]*a[3]*a[6];
+    inv[ 7] =  a[0]*a[6]*a[11]-a[0]*a[7]*a[10]-a[4]*a[2]*a[11]+a[4]*a[3]*a[10]+a[8]*a[2]*a[7]-a[8]*a[3]*a[6];
+    inv[11] = -a[0]*a[5]*a[11]+a[0]*a[7]*a[9]+a[4]*a[1]*a[11]-a[4]*a[3]*a[9]-a[8]*a[1]*a[7]+a[8]*a[3]*a[5];
+    inv[15] =  a[0]*a[5]*a[10]-a[0]*a[6]*a[9]-a[4]*a[1]*a[10]+a[4]*a[2]*a[9]+a[8]*a[1]*a[6]-a[8]*a[2]*a[5];
+
+    float det = a[0]*inv[0] + a[1]*inv[4] + a[2]*inv[8] + a[3]*inv[12];
+    if (fabsf(det) < 1e-6f) {
+        HMM_Mat4 z;
+        int i;
+        for (i = 0; i < 16; i++) ((float*)&z)[i] = 0.0f;
+        return z;
+    }
+    float id = 1.0f / det;
+    HMM_Mat4 result;
+    for (c = 0; c < 4; c++)
+        for (r = 0; r < 4; r++)
+            result.Elements[c][r] = inv[c * 4 + r] * id;
+    return result;
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════ */
@@ -172,14 +222,12 @@ static void bench_mat4(void) {
     HMM_Quat q1=HMM_QFromAxisAngle_RH(axis_y, HMM_AngleDeg(45.0f));
     HMM_Quat q2=HMM_QFromAxisAngle_RH(axis_y, HMM_AngleDeg(30.0f));
 
-    /* TRS = Scale * Rotate * Translate (HMM is column-major) */
+    /* TRS: Scale * Rotate * Translate (HMM is column-major, right-multiply) */
     HMM_Mat4 ma = HMM_MulM4(
-        HMM_MulM4(HMM_Scale(HMM_V3(2,2,2)),
-                  HMM_QToM4(q1)),
+        HMM_MulM4(HMM_Scale(HMM_V3(2,2,2)), HMM_QToM4(q1)),
         HMM_Translate(HMM_V3(1,0,0)));
     HMM_Mat4 mb = HMM_MulM4(
-        HMM_MulM4(HMM_Scale(HMM_V3(1.5f,1.5f,1.5f)),
-                  HMM_QToM4(q2)),
+        HMM_MulM4(HMM_Scale(HMM_V3(1.5f,1.5f,1.5f)), HMM_QToM4(q2)),
         HMM_Translate(HMM_V3(0.5f,0,0)));
 
     /* — mul — */
@@ -206,12 +254,12 @@ static void bench_mat4(void) {
         report("transform_point/handmademath", ns_now()-t, ITERS);
     }
 
-    /* — inverse general — */
+    /* — inverse general (manual Cramer — HMM v2 has no builtin) — */
     {
         HMM_Mat4 m=ma;
         long long t = ns_now();
         for (int i = 0; i < ITERS; i++) {
-            m = HMM_InvM4(m);
+            m = hmm_mat4_inv(m);
         }
         BARRIER(m); sink += m.Elements[0][0];
         report("inverse_general/handmademath", ns_now()-t, ITERS);
@@ -230,7 +278,7 @@ static void bench_bulk(void) {
     HMM_Quat q=HMM_QFromAxisAngle_RH(axis_y, HMM_AngleDeg(45.0f));
     HMM_Mat4 trs=HMM_MulM4(HMM_QToM4(q), HMM_Translate(HMM_V3(1,0,0)));
 
-    HMM_Vec4 *pos = (HMM_Vec4*)aligned_alloc(16, N * sizeof(HMM_Vec4));
+    HMM_Vec4 *pos = (HMM_Vec4*)aligned_alloc(16, (size_t)N * sizeof(HMM_Vec4));
     if (!pos) { fprintf(stderr, "alloc failed\n"); return; }
     for (int i = 0; i < N; i++) pos[i] = HMM_V4(i*0.01f, 0, 0, 1);
 
@@ -250,7 +298,7 @@ static void bench_bulk(void) {
 int main(void) {
     setvbuf(stdout, NULL, _IOLBF, 0);
     printf("HandmadeMath v2 benchmark — compiled %s\n", __DATE__);
-    printf("SSE2 intrinsics enabled (HANDMADE_MATH_USE_SSE)\n\n");
+    printf("SIMD: auto-detected by HMM v2\n\n");
 
     bench_vec3();
     bench_quat();
