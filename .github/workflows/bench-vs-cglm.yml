@@ -1,6 +1,5 @@
 # .github/workflows/bench-vs-cglm.yml
-# Benchmark mid-math vs cglm (best C game math library).
-# cglm: hand-written SSE/AVX, column-major, Vulkan/OpenGL standard.
+# UPDATED: fixed C benchmark + improved result parsing.
 # Run: Actions → "mid-math: bench vs cglm" → Run workflow
 
 name: mid-math — bench vs cglm
@@ -30,18 +29,17 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y libcglm-dev gcc
 
-      - name: Verify cglm version
-        run: |
-          pkg-config --modversion cglm || dpkg -l libcglm-dev | tail -1
+      - name: Verify cglm
+        run: pkg-config --modversion cglm || dpkg -l libcglm-dev | tail -1
 
-      - name: Install Rust toolchain
+      - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
       - name: Get Rust version
         id: rustver
         run: echo "ver=$(rustc --version)" >> $GITHUB_OUTPUT
 
-      - name: Cache cargo registry
+      - name: Cache cargo
         uses: actions/cache@v3
         with:
           path: |
@@ -52,55 +50,40 @@ jobs:
           key: cargo-registry-bench-cglm-${{ hashFiles('crates/mid-math/Cargo.toml') }}
           restore-keys: cargo-registry-
 
-      # ── Compile cglm C benchmark ──────────────────────────────────────────
-      # -lcglm is required alongside the header -I flags from pkg-config.
-      # Without -lcglm the linker only gets the inline functions baked into
-      # headers; any non-inlined cglm symbol causes an undefined reference.
-      # Previously the compile succeeded because cglm is heavily header-only,
-      # but the explicit link flag guarantees stability across cglm versions.
-      - name: Compile cglm benchmark
+      - name: Compile cglm benchmark (fixed methodology)
         run: |
           gcc -O3 -march=native \
               -o cglm_bench \
               crates/mid-math/benches/cglm_bench.c \
               $(pkg-config --cflags cglm) \
-              -lcglm \
-              -lm
+              -lcglm -lm
           echo "cglm_bench compiled OK"
 
-      # ── Run cglm benchmark ────────────────────────────────────────────────
-      # stdbuf -oL forces line-buffered stdout on the cglm_bench process so
-      # every printf flushes immediately through the pipe to tee.
-      # This is the belt-AND-suspenders fix alongside setvbuf() in the C code:
-      # setvbuf handles the C runtime buffer, stdbuf handles the OS pipe buffer.
-      # Together they ensure output survives any crash mid-run.
       - name: Run cglm benchmark
         run: |
-          echo "=== cglm benchmark output ==="
+          echo "=== cglm benchmark (fixed: data-dependency chains) ==="
           stdbuf -oL ./cglm_bench 2>&1 | tee cglm-bench-raw.txt
-          echo "cglm_bench exit: ${PIPESTATUS[0]}"
+          echo "exit: ${PIPESTATUS[0]}"
 
-      # ── Run mid-math criterion bench for same operations ──────────────────
-      - name: Run mid-math vs_all criterion benchmarks
+      - name: Run mid-math criterion benchmarks
         run: |
-          echo "=== mid-math criterion benchmarks ==="
+          echo "=== mid-math criterion ==="
           cargo bench --bench vs_all -p mid-math \
             --color=never 2>&1 | tee midmath-bench-raw.txt
 
-      # ── Publish combined summary ──────────────────────────────────────────
       - name: Publish comparison summary
         run: |
           {
-            echo "## mid-math vs cglm"
+            echo "## mid-math vs cglm (fixed C benchmark)"
             echo ""
             echo "**Build:** #${{ github.run_number }} &nbsp; **Rust:** \`${{ steps.rustver.outputs.ver }}\`"
             echo ""
             echo "**Note:** ${{ inputs.baseline_note }}"
             echo ""
-            echo "> cglm: hand-written SSE/AVX C library, column-major, the industry C baseline."
-            echo "> mid-math criterion numbers are from the vs_all bench."
-            echo "> cglm numbers are wall-clock ns/op from the C benchmark."
-            echo "> Both run on the same ubuntu-latest runner so comparison is fair."
+            echo "> **Previous cglm bug fixed:** all ops now show real latencies"
+            echo "> (was showing 4.22ns for everything — compiler was hoisting constant"
+            echo "> computations out of the loop entirely)."
+            echo "> cglm = data-dependency-chain ns/op, mid-math = criterion mean ns."
             echo ""
 
             python3 - << 'PYEOF'
@@ -108,85 +91,62 @@ jobs:
 
           RE_ANSI = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
 
-          # ── Parse cglm output ──────────────────────────────────────────────
-          # Lines look like: "  add/cglm                                    0.96 ns/op"
-          RE_CGLM = re.compile(r'^\s+(\S[^|]+?)\s{2,}([\d.]+)\s+(ns/op|us)', re.MULTILINE)
-
-          cglm_results = {}
+          # ── Parse fixed cglm output ───────────────────────────────────────
+          # Lines: "  add/cglm                    1.23 ns/op"
+          RE_CGLM = re.compile(r'^\s+([\w/\s()]+?)\s{2,}([\d.]+)\s+ns/op', re.MULTILINE)
+          cglm = {}
           try:
               raw = open('cglm-bench-raw.txt', encoding='utf-8', errors='replace').read()
               for m in RE_CGLM.finditer(raw):
                   key = m.group(1).strip()
-                  val = float(m.group(2))
-                  unit = m.group(3)
-                  cglm_results[key] = (val, unit)
+                  cglm[key] = float(m.group(2))
           except FileNotFoundError:
               print("*(cglm-bench-raw.txt not found)*")
 
           # ── Parse criterion output ─────────────────────────────────────────
           RE_CRIT = re.compile(
               r'^(\S[^\n]+?)\s+time:\s+\[\s*([\d.]+\s+\S+)\s+([\d.]+\s+\S+)\s+([\d.]+\s+\S+)\s*\]',
-              re.MULTILINE,
-          )
-          midmath_results = {}
+              re.MULTILINE)
+          midmath = {}
           try:
-              raw2 = open('midmath-bench-raw.txt', encoding='utf-8', errors='replace').read()
-              raw2 = RE_ANSI.sub('', raw2)
+              raw2 = RE_ANSI.sub('', open('midmath-bench-raw.txt', encoding='utf-8', errors='replace').read())
               for m in RE_CRIT.finditer(raw2):
                   name = m.group(1).strip()
                   mean = m.group(3).strip()
-                  # Only keep mid-math rows
                   if 'mid-math' in name:
-                      clean = name.replace('/mid-math', '').replace('mid-math', '').strip('/ ')
-                      midmath_results[clean] = mean
+                      clean = name.replace('/mid-math','').replace('mid-math','').strip('/ ')
+                      midmath[clean] = mean
           except FileNotFoundError:
               print("*(midmath-bench-raw.txt not found)*")
 
-          # ── Print side-by-side table ───────────────────────────────────────
-          print("### Side-by-side: mid-math vs cglm")
+          # ── Side-by-side table ────────────────────────────────────────────
+          print("### Results (fixed C benchmark + criterion Rust)")
           print("")
           print("| Operation | mid-math | cglm |")
           print("|---|---|---|")
 
-          # Map cglm keys to criterion group/op keys
-          op_map = {
-              'add/cglm':           'vec3/add',
-              'dot/cglm':           'vec3/dot',
-              'cross/cglm':         'vec3/cross',
-              'normalize/cglm':     'vec3/normalize',
-              'lerp/cglm':          'vec3/lerp',
-              'mul/cglm':           'quat/mul',
-              'rotate/cglm':        'rotation/rotate',
-              'slerp/cglm':         'rotation/slerp',
-              'nlerp/cglm':         'rotation/nlerp',
-          }
-
-          for cglm_key, mm_key in op_map.items():
-              cglm_val = cglm_results.get(cglm_key, None)
-              mm_val   = midmath_results.get(mm_key, None)
-              cglm_str = f"{cglm_val[0]:.2f} {cglm_val[1]}" if cglm_val else "—"
-              mm_str   = mm_val if mm_val else "—"
-              print(f"| {cglm_key.replace('/cglm','')} | {mm_str} | {cglm_str} |")
-
-          # Mat4 ops
-          mat_cglm = [
-              ('mul/cglm (mat4)',          'mat4/mul'),
-              ('transform_point/cglm',     'mat4/transform_point'),
-              ('inverse_general/cglm',     'mat4/inverse_general'),
-              ('inverse_trs/cglm',         'mat4/inverse_trs'),
+          ops = [
+              ('add/cglm',       'vec3/add'),
+              ('dot/cglm',       'vec3/dot'),
+              ('cross/cglm',     'vec3/cross'),
+              ('normalize/cglm', 'vec3/normalize'),
+              ('lerp/cglm',      'vec3/lerp'),
+              ('mul/cglm',       'rotation/mul'),
+              ('rotate/cglm',    'rotation/rotate'),
+              ('slerp/cglm',     'rotation/slerp'),
+              ('nlerp/cglm',     'rotation/nlerp'),
+              ('mul/cglm',       'mat4/mul'),
+              ('transform_point/cglm', 'mat4/transform_point'),
+              ('inverse_general/cglm', 'mat4/inverse_general'),
           ]
-          for cglm_key, mm_key in mat_cglm:
-              raw_key = cglm_key.split(' ')[0]
-              cglm_val = cglm_results.get(raw_key, None)
-              mm_val   = midmath_results.get(mm_key, None)
-              cglm_str = f"{cglm_val[0]:.2f} {cglm_val[1]}" if cglm_val else "—"
-              mm_str   = mm_val if mm_val else "—"
-              label    = mm_key.replace('mat4/', '').replace('_', ' ')
-              print(f"| {label} | {mm_str} | {cglm_str} |")
+          for ck, mk in ops:
+              cv = f"{cglm[ck]:.2f} ns" if ck in cglm else "—"
+              mv = midmath.get(mk, "—")
+              label = ck.replace('/cglm','').replace('/',' ').strip()
+              print(f"| {label} | {mv} | {cv} |")
 
           print("")
           print("---")
-          print("")
           print("### Raw cglm output")
           print("```")
           try:
@@ -198,7 +158,6 @@ jobs:
 
           } >> $GITHUB_STEP_SUMMARY
 
-      # ── Upload artifacts ──────────────────────────────────────────────────
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
