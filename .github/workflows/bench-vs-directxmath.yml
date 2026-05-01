@@ -1,0 +1,168 @@
+# .github/workflows/bench-vs-directxmath.yml
+# Benchmark mid-math vs DirectXMath — the AAA industry standard (Microsoft).
+# DirectXMath: explicit SIMD, XMVECTOR register type vs XMFLOAT3 storage type.
+# Run: Actions → "mid-math: bench vs DirectXMath" → Run workflow
+
+name: mid-math — bench vs DirectXMath
+
+on:
+  workflow_dispatch:
+    inputs:
+      baseline_note:
+        description: 'Context for this run'
+        required: false
+        default: 'manual benchmark run'
+
+permissions:
+  contents: read
+  actions:  read
+
+jobs:
+  bench:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install build tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y g++ cmake git
+
+      - name: Download DirectXMath headers
+        run: |
+          git clone --depth 1 \
+            https://github.com/microsoft/DirectXMath.git \
+            /tmp/DirectXMath
+          echo "DirectXMath cloned: $(ls /tmp/DirectXMath/Inc/)"
+
+      - name: Compile DirectXMath benchmark
+        run: |
+          g++ -O3 -march=native -std=c++17 \
+              -I/tmp/DirectXMath/Inc \
+              -o dxmath_bench \
+              crates/mid-math/benches/directxmath_bench.cpp \
+              -lm
+          echo "dxmath_bench compiled OK"
+        continue-on-error: false
+
+      - name: Run DirectXMath benchmark
+        run: |
+          echo "=== DirectXMath benchmark ==="
+          stdbuf -oL ./dxmath_bench 2>&1 | tee dxmath-bench-raw.txt
+          echo "exit: ${PIPESTATUS[0]}"
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Get Rust version
+        id: rustver
+        run: echo "ver=$(rustc --version)" >> $GITHUB_OUTPUT
+
+      - name: Cache cargo
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+          key: cargo-registry-bench-dxmath-${{ hashFiles('crates/mid-math/Cargo.toml') }}
+          restore-keys: cargo-registry-
+
+      - name: Run mid-math criterion benchmarks
+        run: |
+          cargo bench --bench vs_all -p mid-math \
+            --color=never 2>&1 | tee midmath-bench-raw.txt
+
+      - name: Publish comparison summary
+        run: |
+          {
+            echo "## mid-math vs DirectXMath"
+            echo ""
+            echo "**Build:** #${{ github.run_number }} &nbsp; **Rust:** \`${{ steps.rustver.outputs.ver }}\`"
+            echo ""
+            echo "**Note:** ${{ inputs.baseline_note }}"
+            echo ""
+            echo "> DirectXMath (XMVECTOR) keeps data in SIMD registers between ops,"
+            echo "> matching our Vec3/Vec4 design. This is an apples-to-apples comparison."
+            echo "> Both avoid per-op load/store overhead."
+            echo ""
+
+            python3 - << 'PYEOF'
+          import re, sys
+
+          RE_ANSI = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
+
+          # Parse DirectXMath output: "  add/directxmath       1.23 ns/op"
+          RE_DX = re.compile(r'^\s+([\w/]+)\s{2,}([\d.]+)\s+ns/op', re.MULTILINE)
+          dx = {}
+          try:
+              raw = open('dxmath-bench-raw.txt', encoding='utf-8', errors='replace').read()
+              for m in RE_DX.finditer(raw):
+                  dx[m.group(1).strip()] = float(m.group(2))
+          except FileNotFoundError:
+              print("*(dxmath-bench-raw.txt not found)*")
+
+          # Parse criterion
+          RE_CRIT = re.compile(
+              r'^(\S[^\n]+?)\s+time:\s+\[\s*([\d.]+\s+\S+)\s+([\d.]+\s+\S+)\s+([\d.]+\s+\S+)\s*\]',
+              re.MULTILINE)
+          mm = {}
+          try:
+              raw2 = RE_ANSI.sub('', open('midmath-bench-raw.txt', encoding='utf-8', errors='replace').read())
+              for m in RE_CRIT.finditer(raw2):
+                  name = m.group(1).strip()
+                  mean = m.group(3).strip()
+                  if 'mid-math' in name:
+                      clean = name.replace('/mid-math','').replace('mid-math','').strip('/ ')
+                      mm[clean] = mean
+          except FileNotFoundError:
+              print("*(midmath-bench-raw.txt not found)*")
+
+          print("### Side-by-side: mid-math vs DirectXMath")
+          print("")
+          print("| Operation | mid-math (criterion) | DirectXMath (ns/op) |")
+          print("|---|---|---|")
+
+          ops = [
+              ('add/directxmath',       'vec3/add',            'vec3 add'),
+              ('dot/directxmath',       'vec3/dot',            'vec3 dot'),
+              ('cross/directxmath',     'vec3/cross',          'vec3 cross'),
+              ('normalize/directxmath', 'vec3/normalize',      'vec3 normalize'),
+              ('lerp/directxmath',      'vec3/lerp',           'vec3 lerp'),
+              ('mul/directxmath',       'rotation/mul',        'quat mul'),
+              ('rotate/directxmath',    'rotation/rotate',     'quat rotate'),
+              ('slerp/directxmath',     'rotation/slerp',      'quat slerp'),
+              ('mul/directxmath',       'mat4/mul',            'mat4 mul'),
+              ('transform_point/directxmath','mat4/transform_point','mat4 transform_point'),
+              ('inverse_general/directxmath','mat4/inverse_general','mat4 inverse'),
+          ]
+          for dk, mk, label in ops:
+              dv = f"{dx[dk]:.2f} ns" if dk in dx else "—"
+              mv = mm.get(mk, "—")
+              print(f"| {label} | {mv} | {dv} |")
+
+          print("")
+          print("---")
+          print("### Raw DirectXMath output")
+          print("```")
+          try:
+              print(open('dxmath-bench-raw.txt').read().strip())
+          except FileNotFoundError:
+              print("(not found)")
+          print("```")
+          PYEOF
+
+          } >> $GITHUB_STEP_SUMMARY
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: bench-vs-directxmath-${{ github.run_number }}
+          path: |
+            dxmath-bench-raw.txt
+            midmath-bench-raw.txt
+            target/criterion/
+          retention-days: 30
