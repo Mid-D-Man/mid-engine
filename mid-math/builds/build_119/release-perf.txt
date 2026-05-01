@@ -1,0 +1,567 @@
+   Compiling proc-macro2 v1.0.106
+   Compiling unicode-ident v1.0.24
+   Compiling autocfg v1.5.0
+   Compiling quote v1.0.45
+   Compiling crossbeam-utils v0.8.21
+   Compiling serde_core v1.0.228
+   Compiling zerocopy v0.8.48
+   Compiling num-traits v0.2.19
+   Compiling serde v1.0.228
+   Compiling syn v2.0.117
+   Compiling bytemuck v1.25.0
+   Compiling zmij v1.0.21
+   Compiling safe_arch v0.7.4
+   Compiling crossbeam-epoch v0.9.18
+   Compiling libc v0.2.186
+   Compiling paste v1.0.15
+   Compiling either v1.15.0
+   Compiling rayon-core v1.13.0
+   Compiling cfg-if v1.0.4
+   Compiling serde_json v1.0.149
+   Compiling crossbeam-deque v0.8.6
+   Compiling wide v0.7.33
+   Compiling matrixmultiply v0.3.10
+   Compiling clap_lex v1.1.0
+   Compiling memchr v2.8.0
+   Compiling itoa v1.0.18
+   Compiling plotters-backend v0.3.7
+   Compiling ciborium-io v0.2.2
+   Compiling anstyle v1.0.14
+   Compiling regex-syntax v0.8.10
+   Compiling clap_builder v4.6.0
+   Compiling zerocopy-derive v0.8.48
+   Compiling serde_derive v1.0.228
+   Compiling regex-automata v0.4.14
+   Compiling plotters-svg v0.3.7
+   Compiling itertools v0.10.5
+   Compiling half v2.7.1
+   Compiling num-integer v0.1.46
+   Compiling ciborium-ll v0.2.2
+   Compiling num-complex v0.4.6
+   Compiling approx v0.5.1
+   Compiling cast v0.3.0
+   Compiling rawpointer v0.2.1
+   Compiling same-file v1.0.6
+   Compiling walkdir v2.5.0
+   Compiling criterion-plot v0.5.0
+   Compiling simba v0.9.1
+   Compiling num-rational v0.4.2
+   Compiling ciborium v0.2.2
+   Compiling is-terminal v0.4.17
+   Compiling tinytemplate v1.2.1
+   Compiling rayon v1.12.0
+   Compiling regex v1.12.3
+   Compiling plotters v0.3.7
+   Compiling clap v4.6.1
+   Compiling nalgebra-macros v0.2.2
+   Compiling oorandom v11.1.5
+   Compiling anes v0.1.6
+   Compiling once_cell v1.21.4
+   Compiling typenum v1.20.0
+   Compiling ultraviolet v0.9.2
+   Compiling glam v0.28.0
+   Compiling criterion v0.5.1
+   Compiling mid-math v0.1.0 (/home/runner/work/mid-engine/mid-engine/crates/mid-math)
+   Compiling nalgebra v0.33.3
+warning: function `m128_floor` is never used
+   --> crates/mid-math/src/sse2.rs:101:22
+    |
+101 | pub(crate) unsafe fn m128_floor(v: __m128) -> __m128 {
+    |                      ^^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: function `m128_ceil` is never used
+   --> crates/mid-math/src/sse2.rs:112:22
+    |
+112 | pub(crate) unsafe fn m128_ceil(v: __m128) -> __m128 {
+    |                      ^^^^^^^^^
+
+warning: function `m128_trunc` is never used
+   --> crates/mid-math/src/sse2.rs:123:22
+    |
+123 | pub(crate) unsafe fn m128_trunc(v: __m128) -> __m128 {
+    |                      ^^^^^^^^^^
+
+warning: function `m128_round` is never used
+   --> crates/mid-math/src/sse2.rs:129:22
+    |
+129 | pub(crate) unsafe fn m128_round(v: __m128) -> __m128 {
+    |                      ^^^^^^^^^^
+
+warning: function `sin` is never used
+  --> crates/mid-math/src/f32/math.rs:15:33
+   |
+15 | #[inline(always)] pub(crate) fn sin(v: f32) -> f32 { v.sin() }
+   |                                 ^^^
+
+warning: function `cos` is never used
+  --> crates/mid-math/src/f32/math.rs:16:33
+   |
+16 | #[inline(always)] pub(crate) fn cos(v: f32) -> f32 { v.cos() }
+   |                                 ^^^
+
+warning: function `tan` is never used
+  --> crates/mid-math/src/f32/math.rs:17:33
+   |
+17 | #[inline(always)] pub(crate) fn tan(v: f32) -> f32 { v.tan() }
+   |                                 ^^^
+
+warning: function `abs` is never used
+  --> crates/mid-math/src/f32/math.rs:19:33
+   |
+19 | #[inline(always)] pub(crate) fn abs(v: f32) -> f32 { v.abs() }
+   |                                 ^^^
+
+warning: function `signum` is never used
+  --> crates/mid-math/src/f32/math.rs:20:33
+   |
+20 | #[inline(always)] pub(crate) fn signum(v: f32) -> f32 { v.signum() }
+   |                                 ^^^^^^
+
+warning: function `atan2` is never used
+  --> crates/mid-math/src/f32/math.rs:21:33
+   |
+21 | #[inline(always)] pub(crate) fn atan2(y: f32, x: f32) -> f32 { y.atan2(x) }
+   |                                 ^^^^^
+
+warning: function `exp` is never used
+  --> crates/mid-math/src/f32/math.rs:22:33
+   |
+22 | #[inline(always)] pub(crate) fn exp(v: f32) -> f32 { v.exp() }
+   |                                 ^^^
+
+warning: function `exp2` is never used
+  --> crates/mid-math/src/f32/math.rs:23:33
+   |
+23 | #[inline(always)] pub(crate) fn exp2(v: f32) -> f32 { v.exp2() }
+   |                                 ^^^^
+
+warning: function `ln` is never used
+  --> crates/mid-math/src/f32/math.rs:24:33
+   |
+24 | #[inline(always)] pub(crate) fn ln(v: f32) -> f32 { v.ln() }
+   |                                 ^^
+
+warning: function `log2` is never used
+  --> crates/mid-math/src/f32/math.rs:25:33
+   |
+25 | #[inline(always)] pub(crate) fn log2(v: f32) -> f32 { v.log2() }
+   |                                 ^^^^
+
+warning: function `powf` is never used
+  --> crates/mid-math/src/f32/math.rs:26:33
+   |
+26 | #[inline(always)] pub(crate) fn powf(v: f32, n: f32) -> f32 { v.powf(n) }
+   |                                 ^^^^
+
+warning: function `div_euclid` is never used
+  --> crates/mid-math/src/f32/math.rs:27:33
+   |
+27 | #[inline(always)] pub(crate) fn div_euclid(a: f32, b: f32) -> f32 { a.div_euclid(b) }
+   |                                 ^^^^^^^^^^
+
+warning: function `rem_euclid` is never used
+  --> crates/mid-math/src/f32/math.rs:28:33
+   |
+28 | #[inline(always)] pub(crate) fn rem_euclid(a: f32, b: f32) -> f32 { a.rem_euclid(b) }
+   |                                 ^^^^^^^^^^
+
+warning: function `mul_add` is never used
+  --> crates/mid-math/src/f32/math.rs:38:15
+   |
+38 | pub(crate) fn mul_add(a: f32, b: f32, c: f32) -> f32 {
+   |               ^^^^^^^
+
+warning: struct `Quat` is never constructed
+  --> crates/mid-math/src/f32/scalar/quat.rs:14:12
+   |
+14 | pub struct Quat {
+   |            ^^^^
+
+warning: multiple associated items are never used
+   --> crates/mid-math/src/f32/scalar/quat.rs:22:15
+    |
+ 21 | impl Quat {
+    | --------- associated items in this implementation
+ 22 |     pub const IDENTITY: Self = Self { x:0.0, y:0.0, z:0.0, w:1.0 };
+    |               ^^^^^^^^
+ 23 |     const ZERO: Self         = Self { x:0.0, y:0.0, z:0.0, w:0.0 };
+    |           ^^^^
+...
+ 26 |     pub fn new(x:f32, y:f32, z:f32, w:f32) -> Self { Self{x,y,z,w} }
+    |            ^^^
+...
+ 29 |     pub fn from_xyzw(x:f32, y:f32, z:f32, w:f32) -> Self { Self::new(x,y,z,w) }
+    |            ^^^^^^^^^
+ 30 |
+ 31 |     pub fn from_axis_angle(axis: Vec3, angle_rad: f32) -> Self {
+    |            ^^^^^^^^^^^^^^^
+...
+ 37 |     pub fn from_euler(roll: f32, pitch: f32, yaw: f32) -> Self {
+    |            ^^^^^^^^^^
+...
+ 49 |     pub fn to_euler(self) -> (f32, f32, f32) {
+    |            ^^^^^^^^
+...
+ 64 |     pub fn dot(self, r: Self) -> f32 {
+    |            ^^^
+...
+ 68 |     #[inline] pub fn length_sq(self) -> f32 { self.dot(self) }
+    |                      ^^^^^^^^^
+ 69 |     #[inline] pub fn length(self)    -> f32 { self.length_sq().sqrt() }
+    |                      ^^^^^^
+...
+ 72 |     pub fn normalize(self) -> Self {
+    |            ^^^^^^^^^
+...
+ 79 |     pub fn conjugate(self) -> Self {
+    |            ^^^^^^^^^
+...
+ 84 |     pub fn inverse(self) -> Self {
+    |            ^^^^^^^
+...
+ 93 |     pub fn rotate(self, v: Vec3) -> Vec3 {
+    |            ^^^^^^
+...
+100 |     pub fn mul_quat(self, r: Self) -> Self {
+    |            ^^^^^^^^
+...
+109 |     pub fn nlerp(self, mut rhs: Self, t: f32) -> Self {
+    |            ^^^^^
+...
+119 |     pub fn slerp(self, mut rhs: Self, t: f32) -> Self {
+    |            ^^^^^
+...
+137 |     pub fn to_mat4(self) -> Mat4 {
+    |            ^^^^^^^
+...
+153 |     pub fn is_normalized(self) -> bool { (self.length_sq() - 1.0).abs() <= 2e-4 }
+    |            ^^^^^^^^^^^^^
+...
+156 |     pub fn is_finite(self) -> bool {
+    |            ^^^^^^^^^
+
+warning: struct `Mat4` is never constructed
+  --> crates/mid-math/src/f32/scalar/mat4.rs:15:12
+   |
+15 | pub struct Mat4 {
+   |            ^^^^
+
+warning: multiple associated items are never used
+   --> crates/mid-math/src/f32/scalar/mat4.rs:20:15
+    |
+ 19 | impl Mat4 {
+    | --------- associated items in this implementation
+ 20 |     pub const ZERO: Self = Self { cols: [[0.0;4];4] };
+    |               ^^^^
+ 21 |     pub const IDENTITY: Self = Self { cols: [
+    |               ^^^^^^^^
+...
+ 29 |     pub fn from_cols(c0:[f32;4], c1:[f32;4], c2:[f32;4], c3:[f32;4]) -> Self {
+    |            ^^^^^^^^^
+...
+ 34 |     pub fn from_translation(t: Vec3) -> Self {
+    |            ^^^^^^^^^^^^^^^^
+...
+ 41 |     pub fn from_scale(s: Vec3) -> Self {
+    |            ^^^^^^^^^^
+...
+ 51 |     pub fn from_rotation(q: Quat) -> Self { q.to_mat4() }
+    |            ^^^^^^^^^^^^^
+...
+ 54 |     pub fn from_trs(t: Vec3, r: Quat, s: Vec3) -> Self {
+    |            ^^^^^^^^
+...
+ 69 |     pub fn look_at_rh(eye: Vec3, center: Vec3, up: Vec3) -> Self {
+    |            ^^^^^^^^^^
+...
+ 81 |     pub fn perspective_rh(fov_y:f32, aspect:f32, near:f32, far:f32) -> Self {
+    |            ^^^^^^^^^^^^^^
+...
+ 92 |     pub fn ortho_rh(left:f32,right:f32,bottom:f32,top:f32,near:f32,far:f32)->Self{
+    |            ^^^^^^^^
+...
+102 |     pub fn transpose(self) -> Self {
+    |            ^^^^^^^^^
+...
+112 |     pub fn transform_point(self, p: Vec3) -> Vec3 {
+    |            ^^^^^^^^^^^^^^^
+...
+116 |     pub fn transform_vector(self, v: Vec3) -> Vec3 {
+    |            ^^^^^^^^^^^^^^^^
+...
+120 |     pub fn inverse(self) -> Option<Self> {
+    |            ^^^^^^^
+...
+124 |     pub fn inverse_scalar(self) -> Option<Self> {
+    |            ^^^^^^^^^^^^^^
+...
+160 |     pub fn inverse_trs(self) -> Self { self.inverse_trs_scalar() }
+    |            ^^^^^^^^^^^
+161 |
+162 |     pub fn inverse_trs_scalar(self) -> Self {
+    |            ^^^^^^^^^^^^^^^^^^
+
+warning: associated constant `ZERO` is never used
+  --> crates/mid-math/src/f32/sse2/quat.rs:62:11
+   |
+57 | impl Quat {
+   | --------- associated constant in this implementation
+...
+62 |     const ZERO: Self         = unsafe { UnionCast { f: [0.0; 4] }.v };
+   |           ^^^^
+
+warning: `mid-math` (lib) generated 23 warnings
+warning: unused import: `EPSILON`
+ --> crates/mid-math/src/tests/vec_tests.rs:4:46
+  |
+4 |     use crate::{Vec2, Vec3, Vec4, approx_eq, EPSILON};
+  |                                              ^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused imports: `EPSILON` and `Mat4`
+ --> crates/mid-math/src/tests/quat_tests.rs:4:29
+  |
+4 |     use crate::{Quat, Vec3, Mat4, approx_eq, to_radians, EPSILON};
+  |                             ^^^^                         ^^^^^^^
+
+warning: unused imports: `Vec4` and `approx_eq`
+ --> crates/mid-math/src/tests/stress_tests.rs:5:23
+  |
+5 |     use crate::{Vec3, Vec4, Quat, Mat4, to_radians, lerp, smoothstep, approx_eq, EPSILON};
+  |                       ^^^^                                            ^^^^^^^^^
+
+warning: `mid-math` (lib test) generated 26 warnings (23 duplicates) (run `cargo fix --lib -p mid-math --tests` to apply 3 suggestions)
+    Finished `release` profile [optimized] target(s) in 30.65s
+     Running unittests src/lib.rs (target/release/deps/mid_math-090bb52b6188fb97)
+
+running 68 tests
+test tests::mat_tests::tests::mat3_identity_times_vec_is_vec ... ok
+test tests::mat_tests::tests::mat3_multiply_identity_is_identity ... ok
+test tests::mat_tests::tests::mat3_inverse_of_identity_is_identity ... ok
+test tests::mat_tests::tests::mat3_inverse_roundtrip ... ok
+test tests::mat_tests::tests::mat4_identity_transform_point_unchanged ... ok
+test tests::mat_tests::tests::mat4_inverse_of_identity_is_identity ... ok
+test tests::mat_tests::tests::mat4_inverse_roundtrip ... ok
+test tests::mat_tests::tests::mat4_inverse_trs_identity ... ok
+test tests::mat_tests::tests::mat4_inverse_trs_scale_only ... ok
+test tests::mat_tests::tests::mat4_inverse_trs_sse2_matches_scalar ... ok
+test tests::mat_tests::tests::mat4_inverse_general_sse2_matches_scalar ... ok
+test tests::mat_tests::tests::mat4_inverse_trs_roundtrip_matches_general_inverse ... ok
+test tests::mat_tests::tests::mat4_inverse_trs_zero_scale_does_not_panic ... ok
+test tests::mat_tests::tests::mat4_look_at_z_axis_points_toward_target ... ok
+test tests::mat_tests::tests::mat4_perspective_has_negative_one_at_col3_row2 ... ok
+test tests::mat_tests::tests::mat4_inverse_trs_translation_only ... ok
+test tests::mat_tests::tests::mat4_singular_inverse_returns_none ... ok
+test tests::mat_tests::tests::mat4_multiply_identity_is_identity ... ok
+test tests::mat_tests::tests::mat4_scale_scales_point ... ok
+test tests::mat_tests::tests::mat4_size_is_64_bytes ... ok
+test tests::quat_tests::tests::quat_90deg_around_y_rotates_x_to_neg_z ... FAILED
+test tests::mat_tests::tests::mat4_translation_does_not_affect_vectors ... ok
+test tests::mat_tests::tests::mat4_translation_moves_point ... ok
+test tests::quat_tests::tests::quat_identity_does_not_rotate_vector ... ok
+test tests::quat_tests::tests::quat_conjugate_is_inverse_for_unit ... ok
+test tests::quat_tests::tests::quat_euler_round_trip ... ok
+test tests::quat_tests::tests::quat_inverse_undoes_rotation ... ok
+test tests::quat_tests::tests::quat_mul_matches_scalar_reference ... ok
+test tests::quat_tests::tests::quat_slerp_midpoint_in_first_quadrant ... FAILED
+test tests::quat_tests::tests::quat_nlerp_stays_normalized ... ok
+test tests::quat_tests::tests::quat_multiply_composes_rotations ... ok
+test tests::quat_tests::tests::quat_to_mat4_identity_roundtrip ... ok
+test tests::stress_tests::tests::smoothstep_midpoint_is_half ... ok
+test tests::stress_tests::tests::lerp_scalar_midpoint ... ok
+test tests::stress_tests::tests::smoothstep_clamps_outside_range ... ok
+test tests::stress_tests::tests::stress_100k_vec3_add ... ok
+test tests::stress_tests::tests::stress_100k_entity_transform_simulation ... ok
+test tests::stress_tests::tests::stress_100k_quat_rotate ... ok
+test tests::stress_tests::tests::stress_100k_vec3_cross ... ok
+test tests::stress_tests::tests::stress_100k_vec3_dot ... ok
+test tests::stress_tests::tests::stress_100k_vec3_lerp ... ok
+test tests::stress_tests::tests::stress_10k_mat4_mul ... ok
+test tests::stress_tests::tests::stress_10k_mat4_transform_point ... ok
+test tests::stress_tests::tests::stress_100k_quat_mul ... ok
+test tests::stress_tests::tests::stress_100k_vec3_normalize ... ok
+test tests::stress_tests::tests::stress_5k_mat4_inverse ... ok
+test tests::stress_tests::tests::stress_5k_mat4_inverse_trs ... ok
+test tests::vec_tests::tests::vec2_addition ... ok
+test tests::stress_tests::tests::stress_mixed_math_1k_frames_simulation ... ok
+test tests::vec_tests::tests::vec2_dot_product ... ok
+test tests::stress_tests::tests::stress_50k_quat_slerp ... ok
+test tests::vec_tests::tests::vec2_normalize_unit_length ... ok
+test tests::vec_tests::tests::vec2_perpendicular_is_orthogonal ... ok
+test tests::vec_tests::tests::vec2_zero_normalize_returns_zero ... ok
+test tests::vec_tests::tests::vec2_lerp_midpoint ... ok
+test tests::vec_tests::tests::vec3_align_is_16 ... ok
+test tests::vec_tests::tests::vec3_cross_anticommutative ... ok
+test tests::vec_tests::tests::vec3_cross_product_basis ... FAILED
+test tests::vec_tests::tests::vec3_distance ... ok
+test tests::vec_tests::tests::vec3_equality_ignores_padding_lane ... ok
+test tests::vec_tests::tests::vec3_extend_and_truncate_roundtrip ... ok
+test tests::vec_tests::tests::vec3_normalize_unit_length ... ok
+test tests::vec_tests::tests::vec3_reflect ... ok
+test tests::vec_tests::tests::vec3_size_is_16_bytes ... ok
+test tests::vec_tests::tests::vec4_dot_with_self_is_length_sq ... ok
+test tests::vec_tests::tests::vec4_normalize_unit_length ... ok
+test tests::vec_tests::tests::vec4_size_is_16_bytes ... ok
+test tests::stress_tests::tests::stress_50k_euler_from_to_roundtrip ... ok
+
+successes:
+
+---- tests::stress_tests::tests::stress_100k_vec3_add stdout ----
+  200000 Vec3 adds in 0.198ms  (1.0 ns/op)  final_x=110101  [RELEASE]
+
+---- tests::stress_tests::tests::stress_100k_entity_transform_simulation stdout ----
+  100k entity transforms in 0.093ms  (0.9 ns/entity)  [RELEASE]
+  ECS 60Hz budget=16.6ms — (✓ within budget)
+
+---- tests::stress_tests::tests::stress_100k_quat_rotate stdout ----
+  100000 Quat rotations in 0.089ms  (0.9 ns/op)  [RELEASE]
+  ECS 60Hz budget=16.6ms — 100k rotations took 0.089ms (✓ within budget)
+
+---- tests::stress_tests::tests::stress_100k_vec3_cross stdout ----
+  100000 Vec3 cross in 0.086ms  (0.9 ns/op)  [RELEASE]
+
+---- tests::stress_tests::tests::stress_100k_vec3_dot stdout ----
+  100000 Vec3 dot products in 0.085ms  (0.9 ns/op)  [RELEASE]
+
+---- tests::stress_tests::tests::stress_100k_vec3_lerp stdout ----
+  100000 Vec3 lerp in 0.125ms  (1.2 ns/op)  [RELEASE]
+
+---- tests::stress_tests::tests::stress_10k_mat4_mul stdout ----
+  20000 Mat4 mul in 0.112ms  (5.6 ns/op)  [RELEASE]
+
+---- tests::stress_tests::tests::stress_10k_mat4_transform_point stdout ----
+  10000 Mat4 transform_point in 0.013ms  (1.3 ns/op)  [RELEASE]
+
+---- tests::stress_tests::tests::stress_100k_quat_mul stdout ----
+  200000 Quat mul in 1.024ms  (5.1 ns/op)  [RELEASE]
+
+---- tests::stress_tests::tests::stress_100k_vec3_normalize stdout ----
+  100000 Vec3 normalize in 0.647ms  (6.5 ns/op)  [RELEASE]
+
+---- tests::stress_tests::tests::stress_5k_mat4_inverse stdout ----
+  5000 Mat4 general inverse in 0.240ms  (48.0 ns/op)  [RELEASE]
+  Scalar baseline 117.1 ns/op — speedup: 2.4×
+
+---- tests::stress_tests::tests::stress_5k_mat4_inverse_trs stdout ----
+  5000 Mat4 inverse_trs in 0.244ms  (48.7 ns/op)  [RELEASE]
+  Scalar baseline 81.8 ns/op — speedup: 1.7×
+
+---- tests::stress_tests::tests::stress_mixed_math_1k_frames_simulation stdout ----
+  1000 ticks × (TRS + 10 transforms + 10 lerps) in 0.075ms  (0.1 µs/tick)  [RELEASE]
+
+---- tests::stress_tests::tests::stress_50k_quat_slerp stdout ----
+  50000 Quat slerp in 1.689ms  (33.8 ns/op)  [RELEASE]
+
+---- tests::stress_tests::tests::stress_50k_euler_from_to_roundtrip stdout ----
+  50000 euler round-trips in 4.666ms  (93.3 ns/op)  [RELEASE]
+
+
+successes:
+    tests::mat_tests::tests::mat3_identity_times_vec_is_vec
+    tests::mat_tests::tests::mat3_inverse_of_identity_is_identity
+    tests::mat_tests::tests::mat3_inverse_roundtrip
+    tests::mat_tests::tests::mat3_multiply_identity_is_identity
+    tests::mat_tests::tests::mat4_identity_transform_point_unchanged
+    tests::mat_tests::tests::mat4_inverse_general_sse2_matches_scalar
+    tests::mat_tests::tests::mat4_inverse_of_identity_is_identity
+    tests::mat_tests::tests::mat4_inverse_roundtrip
+    tests::mat_tests::tests::mat4_inverse_trs_identity
+    tests::mat_tests::tests::mat4_inverse_trs_roundtrip_matches_general_inverse
+    tests::mat_tests::tests::mat4_inverse_trs_scale_only
+    tests::mat_tests::tests::mat4_inverse_trs_sse2_matches_scalar
+    tests::mat_tests::tests::mat4_inverse_trs_translation_only
+    tests::mat_tests::tests::mat4_inverse_trs_zero_scale_does_not_panic
+    tests::mat_tests::tests::mat4_look_at_z_axis_points_toward_target
+    tests::mat_tests::tests::mat4_multiply_identity_is_identity
+    tests::mat_tests::tests::mat4_perspective_has_negative_one_at_col3_row2
+    tests::mat_tests::tests::mat4_scale_scales_point
+    tests::mat_tests::tests::mat4_singular_inverse_returns_none
+    tests::mat_tests::tests::mat4_size_is_64_bytes
+    tests::mat_tests::tests::mat4_translation_does_not_affect_vectors
+    tests::mat_tests::tests::mat4_translation_moves_point
+    tests::quat_tests::tests::quat_conjugate_is_inverse_for_unit
+    tests::quat_tests::tests::quat_euler_round_trip
+    tests::quat_tests::tests::quat_identity_does_not_rotate_vector
+    tests::quat_tests::tests::quat_inverse_undoes_rotation
+    tests::quat_tests::tests::quat_mul_matches_scalar_reference
+    tests::quat_tests::tests::quat_multiply_composes_rotations
+    tests::quat_tests::tests::quat_nlerp_stays_normalized
+    tests::quat_tests::tests::quat_to_mat4_identity_roundtrip
+    tests::stress_tests::tests::lerp_scalar_midpoint
+    tests::stress_tests::tests::smoothstep_clamps_outside_range
+    tests::stress_tests::tests::smoothstep_midpoint_is_half
+    tests::stress_tests::tests::stress_100k_entity_transform_simulation
+    tests::stress_tests::tests::stress_100k_quat_mul
+    tests::stress_tests::tests::stress_100k_quat_rotate
+    tests::stress_tests::tests::stress_100k_vec3_add
+    tests::stress_tests::tests::stress_100k_vec3_cross
+    tests::stress_tests::tests::stress_100k_vec3_dot
+    tests::stress_tests::tests::stress_100k_vec3_lerp
+    tests::stress_tests::tests::stress_100k_vec3_normalize
+    tests::stress_tests::tests::stress_10k_mat4_mul
+    tests::stress_tests::tests::stress_10k_mat4_transform_point
+    tests::stress_tests::tests::stress_50k_euler_from_to_roundtrip
+    tests::stress_tests::tests::stress_50k_quat_slerp
+    tests::stress_tests::tests::stress_5k_mat4_inverse
+    tests::stress_tests::tests::stress_5k_mat4_inverse_trs
+    tests::stress_tests::tests::stress_mixed_math_1k_frames_simulation
+    tests::vec_tests::tests::vec2_addition
+    tests::vec_tests::tests::vec2_dot_product
+    tests::vec_tests::tests::vec2_lerp_midpoint
+    tests::vec_tests::tests::vec2_normalize_unit_length
+    tests::vec_tests::tests::vec2_perpendicular_is_orthogonal
+    tests::vec_tests::tests::vec2_zero_normalize_returns_zero
+    tests::vec_tests::tests::vec3_align_is_16
+    tests::vec_tests::tests::vec3_cross_anticommutative
+    tests::vec_tests::tests::vec3_distance
+    tests::vec_tests::tests::vec3_equality_ignores_padding_lane
+    tests::vec_tests::tests::vec3_extend_and_truncate_roundtrip
+    tests::vec_tests::tests::vec3_normalize_unit_length
+    tests::vec_tests::tests::vec3_reflect
+    tests::vec_tests::tests::vec3_size_is_16_bytes
+    tests::vec_tests::tests::vec4_dot_with_self_is_length_sq
+    tests::vec_tests::tests::vec4_normalize_unit_length
+    tests::vec_tests::tests::vec4_size_is_16_bytes
+
+failures:
+
+---- tests::quat_tests::tests::quat_90deg_around_y_rotates_x_to_neg_z stdout ----
+
+thread 'tests::quat_tests::tests::quat_90deg_around_y_rotates_x_to_neg_z' (4593) panicked at crates/mid-math/src/tests/quat_tests.rs:17:9:
+expected NEG_Z, got Vec3(5.9604645e-8, 0.0, 0.99999994)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- tests::quat_tests::tests::quat_slerp_midpoint_in_first_quadrant stdout ----
+
+thread 'tests::quat_tests::tests::quat_slerp_midpoint_in_first_quadrant' (4601) panicked at crates/mid-math/src/tests/quat_tests.rs:58:9:
+expected first quadrant, got Vec3(0.7071067, 0.0, 0.7071068)
+
+---- tests::vec_tests::tests::vec3_cross_product_basis stdout ----
+
+thread 'tests::vec_tests::tests::vec3_cross_product_basis' (4629) panicked at crates/mid-math/src/tests/vec_tests.rs:60:9:
+X × Y = Vec3(0.0, 0.0, -1.0), expected Z
+
+
+failures:
+    tests::quat_tests::tests::quat_90deg_around_y_rotates_x_to_neg_z
+    tests::quat_tests::tests::quat_slerp_midpoint_in_first_quadrant
+    tests::vec_tests::tests::vec3_cross_product_basis
+
+test result: FAILED. 65 passed; 3 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+error: test failed, to rerun pass `-p mid-math --lib`
+   Doc-tests mid_math
+
+running 0 tests
+
+successes:
+
+successes:
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+error: 1 target failed:
+    `-p mid-math --lib`
