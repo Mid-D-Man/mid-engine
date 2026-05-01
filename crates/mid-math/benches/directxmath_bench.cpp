@@ -4,13 +4,30 @@
  * We benchmark with data kept IN registers between ops (no store/load per iter)
  * which is how both DirectXMath and our Rust types (SIMD register = the type) work.
  *
+ * Linux compatibility: sal.h stub must be on the include path (created by CI).
+ *
  * Build: see bench-vs-directxmath.yml
  */
 
-// DirectXMath Linux compatibility
+/* ── Linux / GCC compatibility ───────────────────────────────────────────── */
 #ifndef _WIN32
   #ifndef __cdecl
     #define __cdecl
+  #endif
+  /* _mm_malloc / _mm_free: available via xmmintrin.h on GCC.
+     Provide aligned_alloc fallback in case the header path misses it. */
+  #include <stdlib.h>
+  #include <cstring>
+  #ifdef __has_include
+    #if __has_include(<mm_malloc.h>)
+      #include <mm_malloc.h>
+    #else
+      /* fallback: POSIX aligned_alloc */
+      #ifndef _mm_malloc
+        static inline void* _mm_malloc(size_t sz, size_t al) { return aligned_alloc(al, sz); }
+        static inline void  _mm_free(void* p)                 { free(p); }
+      #endif
+    #endif
   #endif
 #endif
 
@@ -40,7 +57,11 @@ static void report(const char* label, long long ns, int iters) {
 }
 
 /* ── barrier: prevents GCC from reordering across ─────────────────────────── */
+#ifdef __GNUC__
 #define BARRIER(x) asm volatile("" : "+x"(x))
+#else
+#define BARRIER(x) (void)(x)
+#endif
 
 /* ═══════════════════════════════════════════════════════════════════════════ */
 /*  Vec3 operations (stored in XMVECTOR — no load/store overhead)             */
@@ -74,7 +95,6 @@ static void bench_vec3() {
         long long t = ns_now();
         for (int i = 0; i < ITERS; i++) {
             XMVECTOR d = XMVector3Dot(v, bv);
-            /* feed dot scalar back into v to create dependency */
             v = XMVectorSetX(v, XMVectorGetX(v) + XMVectorGetX(d) * 1e-30f);
             BARRIER(v);
         }
@@ -197,7 +217,6 @@ static void bench_mat4() {
         for (int i = 0; i < ITERS; i++) {
             a = XMMatrixMultiply(a, b);
         }
-        /* access to prevent elimination */
         XMFLOAT4X4 tmp; XMStoreFloat4x4(&tmp, a);
         sink += tmp._11;
         report("mul/directxmath", ns_now()-t, ITERS);
@@ -242,8 +261,7 @@ static void bench_bulk() {
     XMMATRIX trs = XMMatrixScaling(1,1,1) * XMMatrixRotationQuaternion(q)
                  * XMMatrixTranslation(1,0,0);
 
-    // Aligned storage for XMVECTOR arrays
-    XMFLOAT4 *pos_store = (XMFLOAT4*)_mm_malloc(N * sizeof(XMFLOAT4), 16);
+    XMFLOAT4 *pos_store = (XMFLOAT4*)_mm_malloc((size_t)N * sizeof(XMFLOAT4), 16);
     if (!pos_store) { fprintf(stderr, "alloc failed\n"); return; }
 
     for (int i = 0; i < N; i++) {
