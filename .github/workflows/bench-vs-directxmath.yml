@@ -37,15 +37,96 @@ jobs:
             /tmp/DirectXMath
           echo "DirectXMath cloned: $(ls /tmp/DirectXMath/Inc/)"
 
+      - name: Create SAL stub for Linux
+        run: |
+          mkdir -p /tmp/compat
+          cat > /tmp/compat/sal.h << 'SALEOF'
+          #pragma once
+          /* Minimal SAL (Source Annotation Language) stub for Linux/GCC.
+             DirectXMath.h includes sal.h for MSVC annotations.
+             On Linux these expand to nothing. */
+          #define _In_
+          #define _In_z_
+          #define _In_opt_
+          #define _In_opt_z_
+          #define _In_reads_(n)
+          #define _In_reads_opt_(n)
+          #define _In_reads_bytes_(n)
+          #define _In_reads_bytes_opt_(n)
+          #define _In_range_(lo,hi)
+          #define _In_z_count_(n)
+          #define _Out_
+          #define _Out_opt_
+          #define _Out_writes_(n)
+          #define _Out_writes_opt_(n)
+          #define _Out_writes_bytes_(n)
+          #define _Out_writes_bytes_opt_(n)
+          #define _Out_writes_to_(n,c)
+          #define _Out_writes_all_(n)
+          #define _Out_range_(lo,hi)
+          #define _Inout_
+          #define _Inout_opt_
+          #define _Inout_updates_(n)
+          #define _Inout_updates_bytes_(n)
+          #define _Inout_updates_to_(n,c)
+          #define _Inout_updates_all_(n)
+          #define _Inout_updates_bytes_all_(n)
+          #define _Check_return_
+          #define _Must_inspect_result_
+          #define _Use_decl_annotations_
+          #define _Analysis_assume_(e)
+          #define _Pre_satisfies_(c)
+          #define _Post_satisfies_(c)
+          #define _Deref_in_range_(lo,hi)
+          #define _Deref_out_range_(lo,hi)
+          #define _Field_range_(lo,hi)
+          #define _Ret_range_(lo,hi)
+          #define _COM_Outptr_
+          #define _Outptr_
+          #define _Outptr_opt_
+          #define _Outptr_result_maybenull_
+          #define _Outptr_opt_result_maybenull_
+          #define _Outptr_result_z_
+          #define _Outptr_opt_result_z_
+          #define _Outptr_result_buffer_(n)
+          #define _Outptr_opt_result_buffer_(n)
+          #define _Outptr_result_buffer_all_(n)
+          #define _Outptr_opt_result_buffer_all_(n)
+          #define _Outptr_result_bytebuffer_(n)
+          #define _Outptr_result_bytebuffer_all_(n)
+          #define _Outptr_result_maybenull_z_
+          #define _Result_nullonfailure_
+          #define _Result_zeroonfailure_
+          #define _Ret_maybenull_
+          #define _Ret_notnull_
+          #define _Ret_null_
+          #define _Ret_valid_
+          #define _Success_(e)
+          #define _On_failure_(a)
+          #define _Always_(a)
+          #define _Printf_format_string_
+          #define _Scanf_format_string_
+          #define _Scanf_s_format_string_
+          #define __inner_success(expr)
+          #define __inner_checkReturn
+          #define __inner_typefix(ctype)
+          #define __inner_override
+          #define __inner_callback
+          #define __inner_blocksOn(resource)
+          #define __inner_fallthrough_dec
+          #define __inner_fallthrough
+          SALEOF
+          echo "SAL stub created at /tmp/compat/sal.h"
+
       - name: Compile DirectXMath benchmark
         run: |
           g++ -O3 -march=native -std=c++17 \
+              -I/tmp/compat \
               -I/tmp/DirectXMath/Inc \
               -o dxmath_bench \
               crates/mid-math/benches/directxmath_bench.cpp \
               -lm
           echo "dxmath_bench compiled OK"
-        continue-on-error: false
 
       - name: Run DirectXMath benchmark
         run: |
@@ -91,69 +172,81 @@ jobs:
             echo ""
 
             python3 - << 'PYEOF'
-          import re, sys
+import re, sys
 
-          RE_ANSI = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
+RE_ANSI = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
 
-          # Parse DirectXMath output: "  add/directxmath       1.23 ns/op"
-          RE_DX = re.compile(r'^\s+([\w/]+)\s{2,}([\d.]+)\s+ns/op', re.MULTILINE)
-          dx = {}
-          try:
-              raw = open('dxmath-bench-raw.txt', encoding='utf-8', errors='replace').read()
-              for m in RE_DX.finditer(raw):
-                  dx[m.group(1).strip()] = float(m.group(2))
-          except FileNotFoundError:
-              print("*(dxmath-bench-raw.txt not found)*")
+# ── Parse DirectXMath output with section awareness ───────────────────────────
+# 'mul/directxmath' appears in both quat and mat4 sections.
+dx = {}
+try:
+    raw = open('dxmath-bench-raw.txt', encoding='utf-8', errors='replace').read()
+    section = 'other'
+    RE_OP = re.compile(r'^\s+([\w/]+)\s{2,}([\d.]+)\s+ns/op')
+    for line in raw.splitlines():
+        stripped = line.strip().lower()
+        for sec in ('vec3', 'vec4', 'quat', 'mat4'):
+            if stripped.startswith(sec):
+                section = sec
+                break
+        m = RE_OP.match(line)
+        if m:
+            key = m.group(1).strip()
+            key = re.sub(r'/directxmath\b', '', key).strip('/ ')
+            dx[f'{section}/{key}'] = float(m.group(2))
+except FileNotFoundError:
+    print("*(dxmath-bench-raw.txt not found)*")
 
-          # Parse criterion
-          RE_CRIT = re.compile(
-              r'^(\S[^\n]+?)\s+time:\s+\[\s*([\d.]+\s+\S+)\s+([\d.]+\s+\S+)\s+([\d.]+\s+\S+)\s*\]',
-              re.MULTILINE)
-          mm = {}
-          try:
-              raw2 = RE_ANSI.sub('', open('midmath-bench-raw.txt', encoding='utf-8', errors='replace').read())
-              for m in RE_CRIT.finditer(raw2):
-                  name = m.group(1).strip()
-                  mean = m.group(3).strip()
-                  if 'mid-math' in name:
-                      clean = name.replace('/mid-math','').replace('mid-math','').strip('/ ')
-                      mm[clean] = mean
-          except FileNotFoundError:
-              print("*(midmath-bench-raw.txt not found)*")
+# ── Parse criterion output ────────────────────────────────────────────────────
+RE_CRIT = re.compile(
+    r'^(\S[^\n]+?)\s+time:\s+\[\s*([\d.]+\s+\S+)\s+([\d.]+\s+\S+)\s+([\d.]+\s+\S+)\s*\]',
+    re.MULTILINE)
+mm = {}
+try:
+    raw2 = RE_ANSI.sub('', open('midmath-bench-raw.txt', encoding='utf-8', errors='replace').read())
+    for m in RE_CRIT.finditer(raw2):
+        name = m.group(1).strip()
+        mean = m.group(3).strip()
+        if 'mid-math' in name:
+            clean = re.sub(r'/mid-math[^/\s]*', '', name).strip('/ ')
+            mm[clean] = mean
+except FileNotFoundError:
+    print("*(midmath-bench-raw.txt not found)*")
 
-          print("### Side-by-side: mid-math vs DirectXMath")
-          print("")
-          print("| Operation | mid-math (criterion) | DirectXMath (ns/op) |")
-          print("|---|---|---|")
+print("### Side-by-side: mid-math vs DirectXMath")
+print("")
+print("| Operation | mid-math (criterion) | DirectXMath (ns/op) |")
+print("|---|---|---|")
 
-          ops = [
-              ('add/directxmath',       'vec3/add',            'vec3 add'),
-              ('dot/directxmath',       'vec3/dot',            'vec3 dot'),
-              ('cross/directxmath',     'vec3/cross',          'vec3 cross'),
-              ('normalize/directxmath', 'vec3/normalize',      'vec3 normalize'),
-              ('lerp/directxmath',      'vec3/lerp',           'vec3 lerp'),
-              ('mul/directxmath',       'rotation/mul',        'quat mul'),
-              ('rotate/directxmath',    'rotation/rotate',     'quat rotate'),
-              ('slerp/directxmath',     'rotation/slerp',      'quat slerp'),
-              ('mul/directxmath',       'mat4/mul',            'mat4 mul'),
-              ('transform_point/directxmath','mat4/transform_point','mat4 transform_point'),
-              ('inverse_general/directxmath','mat4/inverse_general','mat4 inverse'),
-          ]
-          for dk, mk, label in ops:
-              dv = f"{dx[dk]:.2f} ns" if dk in dx else "—"
-              mv = mm.get(mk, "—")
-              print(f"| {label} | {mv} | {dv} |")
+ops = [
+    # (dx section/key,           midmath key,             display label)
+    ('vec3/add',             'vec3/add',              'vec3 add'),
+    ('vec3/dot',             'vec3/dot',              'vec3 dot'),
+    ('vec3/cross',           'vec3/cross',            'vec3 cross'),
+    ('vec3/normalize',       'vec3/normalize',        'vec3 normalize'),
+    ('vec3/lerp',            'vec3/lerp',             'vec3 lerp'),
+    ('quat/mul',             'rotation/mul',          'quat mul'),
+    ('quat/rotate',          'rotation/rotate',       'quat rotate'),
+    ('quat/slerp',           'rotation/slerp',        'quat slerp'),
+    ('mat4/mul',             'mat4/mul',              'mat4 mul'),
+    ('mat4/transform_point', 'mat4/transform_point',  'mat4 transform_point'),
+    ('mat4/inverse_general', 'mat4/inverse_general',  'mat4 inverse'),
+]
+for dk, mk, label in ops:
+    dv = f"{dx[dk]:.2f} ns" if dk in dx else "—"
+    mv = mm.get(mk, "—")
+    print(f"| {label} | {mv} | {dv} |")
 
-          print("")
-          print("---")
-          print("### Raw DirectXMath output")
-          print("```")
-          try:
-              print(open('dxmath-bench-raw.txt').read().strip())
-          except FileNotFoundError:
-              print("(not found)")
-          print("```")
-          PYEOF
+print("")
+print("---")
+print("### Raw DirectXMath output")
+print("```")
+try:
+    print(open('dxmath-bench-raw.txt').read().strip())
+except FileNotFoundError:
+    print("(not found)")
+print("```")
+PYEOF
 
           } >> $GITHUB_STEP_SUMMARY
 
