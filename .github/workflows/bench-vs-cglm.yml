@@ -50,7 +50,7 @@ jobs:
           key: cargo-registry-bench-cglm-${{ hashFiles('crates/mid-math/Cargo.toml') }}
           restore-keys: cargo-registry-
 
-      - name: Compile cglm benchmark (fixed methodology)
+      - name: Compile cglm benchmark
         run: |
           gcc -O3 -march=native \
               -o cglm_bench \
@@ -87,74 +87,89 @@ jobs:
             echo ""
 
             python3 - << 'PYEOF'
-          import re, sys
+import re, sys
 
-          RE_ANSI = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
+RE_ANSI = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
 
-          # ── Parse fixed cglm output ───────────────────────────────────────
-          # Lines: "  add/cglm                    1.23 ns/op"
-          RE_CGLM = re.compile(r'^\s+([\w/\s()]+?)\s{2,}([\d.]+)\s+ns/op', re.MULTILINE)
-          cglm = {}
-          try:
-              raw = open('cglm-bench-raw.txt', encoding='utf-8', errors='replace').read()
-              for m in RE_CGLM.finditer(raw):
-                  key = m.group(1).strip()
-                  cglm[key] = float(m.group(2))
-          except FileNotFoundError:
-              print("*(cglm-bench-raw.txt not found)*")
+# ── Parse cglm with section awareness ────────────────────────────────────────
+# 'mul/cglm' appears in BOTH quat and mat4 sections — must track section.
+# 'dot/cglm' and 'normalize/cglm' also appear in both vec3 and vec4 sections.
+cglm = {}
+try:
+    raw = open('cglm-bench-raw.txt', encoding='utf-8', errors='replace').read()
+    section = 'other'
+    RE_OP = re.compile(r'^\s+([\w/\s()]+?)\s{2,}([\d.]+)\s+ns/op')
+    for line in raw.splitlines():
+        stripped = line.strip().lower()
+        for sec in ('vec3', 'vec4', 'quat', 'mat4'):
+            if stripped.startswith(sec):
+                section = sec
+                break
+        m = RE_OP.match(line)
+        if m:
+            key = m.group(1).strip()
+            # Strip /cglm suffix and any parenthetical notes
+            key = re.sub(r'/cglm\b', '', key).strip()
+            key = re.sub(r'\s*\(.*\)\s*$', '', key).strip()
+            cglm[f'{section}/{key}'] = float(m.group(2))
+except FileNotFoundError:
+    print("*(cglm-bench-raw.txt not found)*")
 
-          # ── Parse criterion output ─────────────────────────────────────────
-          RE_CRIT = re.compile(
-              r'^(\S[^\n]+?)\s+time:\s+\[\s*([\d.]+\s+\S+)\s+([\d.]+\s+\S+)\s+([\d.]+\s+\S+)\s*\]',
-              re.MULTILINE)
-          midmath = {}
-          try:
-              raw2 = RE_ANSI.sub('', open('midmath-bench-raw.txt', encoding='utf-8', errors='replace').read())
-              for m in RE_CRIT.finditer(raw2):
-                  name = m.group(1).strip()
-                  mean = m.group(3).strip()
-                  if 'mid-math' in name:
-                      clean = name.replace('/mid-math','').replace('mid-math','').strip('/ ')
-                      midmath[clean] = mean
-          except FileNotFoundError:
-              print("*(midmath-bench-raw.txt not found)*")
+# ── Parse criterion output ────────────────────────────────────────────────────
+# Criterion emits names like:  rotation/mul/mid-math-quat
+# We strip '/mid-math' and any trailing variant suffix (-quat, -unitquat, etc.)
+RE_CRIT = re.compile(
+    r'^(\S[^\n]+?)\s+time:\s+\[\s*([\d.]+\s+\S+)\s+([\d.]+\s+\S+)\s+([\d.]+\s+\S+)\s*\]',
+    re.MULTILINE)
+midmath = {}
+try:
+    raw2 = RE_ANSI.sub('', open('midmath-bench-raw.txt', encoding='utf-8', errors='replace').read())
+    for m in RE_CRIT.finditer(raw2):
+        name = m.group(1).strip()
+        mean = m.group(3).strip()
+        if 'mid-math' in name:
+            # Remove '/mid-math' and any trailing non-path suffix like '-quat'
+            clean = re.sub(r'/mid-math[^/\s]*', '', name).strip('/ ')
+            midmath[clean] = mean
+except FileNotFoundError:
+    print("*(midmath-bench-raw.txt not found)*")
 
-          # ── Side-by-side table ────────────────────────────────────────────
-          print("### Results (fixed C benchmark + criterion Rust)")
-          print("")
-          print("| Operation | mid-math | cglm |")
-          print("|---|---|---|")
+# ── Side-by-side table ────────────────────────────────────────────────────────
+print("### Results (section-aware cglm + criterion Rust)")
+print("")
+print("| Operation | mid-math | cglm |")
+print("|---|---|---|")
 
-          ops = [
-              ('add/cglm',       'vec3/add'),
-              ('dot/cglm',       'vec3/dot'),
-              ('cross/cglm',     'vec3/cross'),
-              ('normalize/cglm', 'vec3/normalize'),
-              ('lerp/cglm',      'vec3/lerp'),
-              ('mul/cglm',       'rotation/mul'),
-              ('rotate/cglm',    'rotation/rotate'),
-              ('slerp/cglm',     'rotation/slerp'),
-              ('nlerp/cglm',     'rotation/nlerp'),
-              ('mul/cglm',       'mat4/mul'),
-              ('transform_point/cglm', 'mat4/transform_point'),
-              ('inverse_general/cglm', 'mat4/inverse_general'),
-          ]
-          for ck, mk in ops:
-              cv = f"{cglm[ck]:.2f} ns" if ck in cglm else "—"
-              mv = midmath.get(mk, "—")
-              label = ck.replace('/cglm','').replace('/',' ').strip()
-              print(f"| {label} | {mv} | {cv} |")
+ops = [
+    # (cglm section/key,        midmath criterion key,    display label)
+    ('vec3/add',             'vec3/add',              'vec3 add'),
+    ('vec3/dot',             'vec3/dot',              'vec3 dot'),
+    ('vec3/cross',           'vec3/cross',            'vec3 cross'),
+    ('vec3/normalize',       'vec3/normalize',        'vec3 normalize'),
+    ('vec3/lerp',            'vec3/lerp',             'vec3 lerp'),
+    ('quat/mul',             'rotation/mul',          'quat mul'),
+    ('quat/rotate',          'rotation/rotate',       'quat rotate'),
+    ('quat/slerp',           'rotation/slerp',        'quat slerp'),
+    ('quat/nlerp',           'rotation/nlerp',        'quat nlerp'),
+    ('mat4/mul',             'mat4/mul',              'mat4 mul'),
+    ('mat4/transform_point', 'mat4/transform_point',  'mat4 transform_point'),
+    ('mat4/inverse_general', 'mat4/inverse_general',  'mat4 inverse_general'),
+]
+for ck, mk, label in ops:
+    cv = f"{cglm[ck]:.2f} ns" if ck in cglm else "—"
+    mv = midmath.get(mk, "—")
+    print(f"| {label} | {mv} | {cv} |")
 
-          print("")
-          print("---")
-          print("### Raw cglm output")
-          print("```")
-          try:
-              print(open('cglm-bench-raw.txt').read().strip())
-          except FileNotFoundError:
-              print("(not found)")
-          print("```")
-          PYEOF
+print("")
+print("---")
+print("### Raw cglm output")
+print("```")
+try:
+    print(open('cglm-bench-raw.txt').read().strip())
+except FileNotFoundError:
+    print("(not found)")
+print("```")
+PYEOF
 
           } >> $GITHUB_STEP_SUMMARY
 
