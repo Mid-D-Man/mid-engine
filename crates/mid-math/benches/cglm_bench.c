@@ -1,14 +1,18 @@
 /* crates/mid-math/benches/cglm_bench.c
- * Standalone C benchmark for cglm.
- * Compiled and timed by bench-vs-cglm.yml.
+ * FIXED: proper data-dependency chains throughout.
  *
- * Mirrors the same operations as vs_all.rs so numbers are comparable.
- * Uses clock_gettime(CLOCK_MONOTONIC) — nanosecond wall time.
+ * ROOT CAUSE OF OLD BUG: The BENCH macro held a,b as compile-time constants.
+ * GCC hoisted all cglm ops out of the loop entirely and just ran
+ * `sink_f += constant` 1M times — every op showed ~4.22ns (loop overhead).
  *
- * Build:
- *   gcc -O3 -march=native -o cglm_bench cglm_bench.c -lcglm -lm
- * Run:
- *   ./cglm_bench
+ * FIX: each BENCH_DEP call copies output back into one of the inputs, forcing
+ * a true RAW (read-after-write) data dependency. The compiler cannot move or
+ * eliminate the operation without computing the correct chain.
+ *
+ * Uses 4-way interleaving to approximate throughput (match criterion).
+ * Single chain would measure latency (2-3x slower for compute-heavy ops).
+ *
+ * Build: see bench-vs-cglm.yml
  */
 
 #include <cglm/cglm.h>
@@ -25,270 +29,371 @@ static inline long long ns_now(void) {
     return (long long)ts.tv_sec * 1000000000LL + ts.tv_nsec;
 }
 
-#define BENCH(label, iters, body)                                  \
-    do {                                                           \
-        long long _t0 = ns_now();                                  \
-        for (int _i = 0; _i < (iters); _i++) { body; }            \
-        long long _dt = ns_now() - _t0;                            \
-        printf("  %-45s %6.2f ns/op\n",                           \
-               label, (double)_dt / (iters));                      \
-        fflush(stdout);                                            \
-    } while(0)
+/* ── compiler barrier — prevents GCC/Clang from hoisting loop body ─────────── */
+#define BARRIER(v) __asm__ volatile("" : "+m"(v))
 
-/* ── prevent dead-code elimination ─────────────────────────────────────────── */
+/* ── 4-way interleaved benchmark: approx throughput (matches criterion) ─────── 
+ * Each chain has an independent RAW dependency.
+ * ITERS must be divisible by 4.
+ */
+#define ITERS 1000000
 
-volatile float sink_f = 0.0f;
-volatile int   sink_i = 0;
+volatile float sink = 0.0f;
 
-static void consume_vec3(vec3 v) { sink_f += v[0]; }
-static void consume_vec4(vec4 v) { sink_f += v[0]; }
-static void consume_mat4(mat4 m) { sink_f += m[0][0]; }
+/* ── prevent dead code elimination without touching loop measurement ─────────── */
+#define SINK_VEC3(v)  do { sink += (v)[0]; } while(0)
+#define SINK_VEC4(v)  do { sink += (v)[0]; } while(0)
+#define SINK_MAT4(m)  do { sink += (m)[0][0]; } while(0)
+#define SINK_FLOAT(f) do { sink += (f); } while(0)
 
-/* ── main ───────────────────────────────────────────────────────────────────── */
+/* ── print helper ─────────────────────────────────────────────────────────── */
+static void report(const char *label, long long ns, int iters) {
+    printf("  %-48s %7.2f ns/op\n", label, (double)ns / iters);
+    fflush(stdout);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════ */
+/*  Vec3                                                                       */
+/* ═══════════════════════════════════════════════════════════════════════════ */
+
+static void bench_vec3(void) {
+    printf("vec3 (4-way interleaved, throughput approx):\n");
+
+    /* — add — */
+    {
+        vec3 a0={1.0f,2.0f,3.0f}, a1={1.1f,2.1f,3.1f},
+             a2={1.2f,2.2f,3.2f}, a3={1.3f,2.3f,3.3f};
+        vec3 b={4.0f,5.0f,6.0f};
+        vec3 o0,o1,o2,o3;
+        long long t = ns_now();
+        for (int i = 0; i < ITERS; i += 4) {
+            glm_vec3_add(a0,b,o0); glm_vec3_copy(o0,a0);
+            glm_vec3_add(a1,b,o1); glm_vec3_copy(o1,a1);
+            glm_vec3_add(a2,b,o2); glm_vec3_copy(o2,a2);
+            glm_vec3_add(a3,b,o3); glm_vec3_copy(o3,a3);
+        }
+        SINK_VEC3(a0);
+        report("add/cglm", ns_now()-t, ITERS);
+    }
+
+    /* — dot — */
+    {
+        vec3 a={1.0f,2.0f,3.0f}, b={4.0f,5.0f,6.0f};
+        float d0=0,d1=0,d2=0,d3=0;
+        long long t = ns_now();
+        for (int i = 0; i < ITERS; i += 4) {
+            d0 = glm_vec3_dot(a,b);
+            d1 = glm_vec3_dot(a,b);
+            d2 = glm_vec3_dot(a,b);
+            d3 = glm_vec3_dot(a,b);
+            /* feed result into next a to create dependency */
+            a[0] += (d0+d1+d2+d3) * 1e-30f;
+            BARRIER(a);
+        }
+        SINK_FLOAT(d0);
+        report("dot/cglm", ns_now()-t, ITERS);
+    }
+
+    /* — cross — */
+    {
+        vec3 a0={1.0f,2.0f,3.0f}, a1={1.1f,2.1f,3.1f},
+             a2={1.2f,2.2f,3.2f}, a3={1.3f,2.3f,3.3f};
+        vec3 b={4.0f,5.0f,6.0f};
+        vec3 o0,o1,o2,o3;
+        long long t = ns_now();
+        for (int i = 0; i < ITERS; i += 4) {
+            glm_vec3_cross(a0,b,o0); glm_vec3_copy(o0,a0);
+            glm_vec3_cross(a1,b,o1); glm_vec3_copy(o1,a1);
+            glm_vec3_cross(a2,b,o2); glm_vec3_copy(o2,a2);
+            glm_vec3_cross(a3,b,o3); glm_vec3_copy(o3,a3);
+        }
+        SINK_VEC3(a0);
+        report("cross/cglm", ns_now()-t, ITERS);
+    }
+
+    /* — normalize — */
+    {
+        vec3 a0={1.0f,2.0f,3.0f}, a1={1.1f,2.1f,3.1f},
+             a2={1.2f,2.2f,3.2f}, a3={1.3f,2.3f,3.3f};
+        long long t = ns_now();
+        for (int i = 0; i < ITERS; i += 4) {
+            glm_vec3_normalize(a0);
+            glm_vec3_normalize(a1);
+            glm_vec3_normalize(a2);
+            glm_vec3_normalize(a3);
+            /* tiny perturbation to prevent collapse to constant */
+            a0[0] += 1e-30f; a1[0] += 1e-30f;
+            a2[0] += 1e-30f; a3[0] += 1e-30f;
+            BARRIER(a0); BARRIER(a1); BARRIER(a2); BARRIER(a3);
+        }
+        SINK_VEC3(a0);
+        report("normalize/cglm", ns_now()-t, ITERS);
+    }
+
+    /* — lerp — */
+    {
+        vec3 a={0.0f,0.0f,0.0f}, b={1.0f,1.0f,1.0f}, o;
+        long long t = ns_now();
+        for (int i = 0; i < ITERS; i++) {
+            glm_vec3_lerp(a, b, 0.5f, o);
+            glm_vec3_copy(o, a);
+        }
+        SINK_VEC3(a);
+        report("lerp/cglm", ns_now()-t, ITERS);
+    }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════ */
+/*  Vec4                                                                       */
+/* ═══════════════════════════════════════════════════════════════════════════ */
+
+static void bench_vec4(void) {
+    printf("\nvec4:\n");
+
+    /* — dot — */
+    {
+        vec4 a={1.0f,2.0f,3.0f,4.0f}, b={5.0f,6.0f,7.0f,8.0f};
+        float d=0;
+        long long t = ns_now();
+        for (int i = 0; i < ITERS; i++) {
+            d = glm_vec4_dot(a, b);
+            a[0] += d * 1e-30f;
+            BARRIER(a);
+        }
+        SINK_FLOAT(d);
+        report("dot/cglm", ns_now()-t, ITERS);
+    }
+
+    /* — normalize — */
+    {
+        vec4 a0={1.0f,2.0f,3.0f,4.0f}, a1={1.1f,2.1f,3.1f,4.1f},
+             a2={1.2f,2.2f,3.2f,4.2f}, a3={1.3f,2.3f,3.3f,4.3f};
+        long long t = ns_now();
+        for (int i = 0; i < ITERS; i += 4) {
+            glm_vec4_normalize(a0); a0[0] += 1e-30f; BARRIER(a0);
+            glm_vec4_normalize(a1); a1[0] += 1e-30f; BARRIER(a1);
+            glm_vec4_normalize(a2); a2[0] += 1e-30f; BARRIER(a2);
+            glm_vec4_normalize(a3); a3[0] += 1e-30f; BARRIER(a3);
+        }
+        SINK_VEC4(a0);
+        report("normalize/cglm", ns_now()-t, ITERS);
+    }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════ */
+/*  Quaternion                                                                 */
+/* ═══════════════════════════════════════════════════════════════════════════ */
+
+static void bench_quat(void) {
+    printf("\nquat (xyzw):\n");
+
+    versor q1, q2, q3, q4, qout;
+    vec3 axis_y={0.0f,1.0f,0.0f}, axis_d={0.7071068f,0.7071068f,0.0f};
+    glm_quatv(q1, glm_rad(45.0f), axis_y);
+    glm_quatv(q2, glm_rad(30.0f), axis_d);
+    glm_quat_copy(q1, q3);
+    glm_quat_copy(q2, q4);
+
+    /* — mul — */
+    {
+        versor a, b;
+        glm_quat_copy(q1, a);
+        glm_quat_copy(q2, b);
+        long long t = ns_now();
+        for (int i = 0; i < ITERS; i++) {
+            glm_quat_mul(a, b, qout);
+            glm_quat_copy(qout, a);
+        }
+        SINK_VEC4(a);
+        report("mul/cglm", ns_now()-t, ITERS);
+    }
+
+    /* — rotate vec — */
+    {
+        vec3 v={1.0f,0.0f,0.0f}, vout;
+        versor q; glm_quat_copy(q1, q);
+        long long t = ns_now();
+        for (int i = 0; i < ITERS; i++) {
+            glm_quat_rotatev(q, v, vout);
+            v[0] = vout[0]; v[1] = vout[1]; v[2] = vout[2];
+            BARRIER(v);
+        }
+        SINK_VEC3(v);
+        report("rotate/cglm", ns_now()-t, ITERS);
+    }
+
+    /* — slerp — */
+    {
+        versor a, b, o;
+        glm_quat_copy(q1, a);
+        glm_quat_copy(q2, b);
+        long long t = ns_now();
+        for (int i = 0; i < ITERS; i++) {
+            glm_quat_slerp(a, b, 0.5f, o);
+            glm_quat_copy(o, a);
+        }
+        SINK_VEC4(a);
+        report("slerp/cglm", ns_now()-t, ITERS);
+    }
+
+    /* — nlerp — */
+    {
+        versor a, b, o;
+        glm_quat_copy(q1, a);
+        glm_quat_copy(q2, b);
+        long long t = ns_now();
+        for (int i = 0; i < ITERS; i++) {
+            glm_quat_nlerp(a, b, 0.5f, o);
+            glm_quat_copy(o, a);
+        }
+        SINK_VEC4(a);
+        report("nlerp/cglm", ns_now()-t, ITERS);
+    }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════ */
+/*  Mat4                                                                       */
+/* ═══════════════════════════════════════════════════════════════════════════ */
+
+static void bench_mat4(void) {
+    printf("\nmat4:\n");
+
+    /* Build two TRS matrices */
+    mat4 ma, mb, mout;
+    versor q;
+    vec3 axis_y={0.0f,1.0f,0.0f}, t={1.0f,0.0f,0.0f}, s={2.0f,2.0f,2.0f};
+    glm_quatv(q, glm_rad(45.0f), axis_y);
+    glm_mat4_identity(ma);
+    glm_translate(ma, t);
+    glm_quat_rotate(ma, q, ma);
+    glm_scale(ma, s);
+
+    vec3 t2={0.5f,0.0f,0.0f}, s2={1.5f,1.5f,1.5f};
+    versor q2; glm_quatv(q2, glm_rad(30.0f), axis_y);
+    glm_mat4_identity(mb);
+    glm_translate(mb, t2); glm_quat_rotate(mb, q2, mb); glm_scale(mb, s2);
+
+    /* — mul — */
+    {
+        mat4 a, b; glm_mat4_copy(ma, a); glm_mat4_copy(mb, b);
+        long long tt = ns_now();
+        for (int i = 0; i < ITERS; i++) {
+            glm_mat4_mul(a, b, mout);
+            glm_mat4_copy(mout, a);
+        }
+        SINK_MAT4(a);
+        report("mul/cglm", ns_now()-tt, ITERS);
+    }
+
+    /* — transform point — */
+    {
+        vec4 p={1.0f,2.0f,3.0f,1.0f}, pout;
+        mat4 m; glm_mat4_copy(ma, m);
+        long long tt = ns_now();
+        for (int i = 0; i < ITERS; i++) {
+            glm_mat4_mulv(m, p, pout);
+            p[0]=pout[0]; p[1]=pout[1]; p[2]=pout[2];
+            BARRIER(p);
+        }
+        SINK_VEC4(p);
+        report("transform_point/cglm", ns_now()-tt, ITERS);
+    }
+
+    /* — inverse general — */
+    {
+        mat4 m; glm_mat4_copy(ma, m);
+        long long tt = ns_now();
+        for (int i = 0; i < ITERS; i++) {
+            glm_mat4_inv(m, mout);
+            /* alternate m/mout so there is a dep chain but no drift */
+            glm_mat4_inv(mout, m);
+            i++;  /* counted as 2 */
+        }
+        SINK_MAT4(m);
+        report("inverse_general/cglm", ns_now()-tt, ITERS);
+    }
+
+    /* — inverse TRS (rot+trans only, no scale) — */
+    {
+        mat4 rt; glm_mat4_identity(rt);
+        glm_translate(rt, t); glm_quat_rotate(rt, q, rt);
+        mat4 m; glm_mat4_copy(rt, m);
+        long long tt = ns_now();
+        for (int i = 0; i < ITERS; i++) {
+            glm_mat4_inv_fast(m, mout);
+            glm_mat4_copy(mout, m);
+        }
+        SINK_MAT4(m);
+        report("inverse_trs/cglm (glm_mat4_inv_fast, rot+trans)", ns_now()-tt, ITERS);
+    }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════ */
+/*  Bulk transforms                                                            */
+/* ═══════════════════════════════════════════════════════════════════════════ */
+
+static void bench_bulk(void) {
+    printf("\n100k entity transforms (single run):\n");
+    const int N = 100000;
+
+    mat4 trs;
+    versor q; vec3 axis_y={0.0f,1.0f,0.0f}, t={1.0f,0.0f,0.0f}, s={1.0f,1.0f,1.0f};
+    glm_quatv(q, glm_rad(45.0f), axis_y);
+    glm_mat4_identity(trs);
+    glm_translate(trs, t); glm_quat_rotate(trs, q, trs); glm_scale(trs, s);
+
+    vec4 *pos = (vec4*)aligned_alloc(32, N * sizeof(vec4));
+    if (!pos) { fprintf(stderr, "alloc failed\n"); return; }
+    for (int i = 0; i < N; i++) {
+        pos[i][0]=i*0.01f; pos[i][1]=0.0f; pos[i][2]=0.0f; pos[i][3]=1.0f;
+    }
+
+    long long t0 = ns_now();
+    for (int i = 0; i < N; i++) {
+        vec4 o; glm_mat4_mulv(trs, pos[i], o);
+        glm_vec4_copy(o, pos[i]);
+    }
+    long long dt = ns_now() - t0;
+    printf("  %-48s %7.1f µs  (%.2f ns/entity)\n",
+        "transform_point/cglm", (double)dt/1000.0, (double)dt/N);
+    fflush(stdout);
+    sink += pos[0][0];
+    free(pos);
+
+    printf("\n5k inverse_general (single run):\n");
+    const int M = 5000;
+    mat4 *mats = (mat4*)aligned_alloc(32, M * sizeof(mat4));
+    if (!mats) { fprintf(stderr, "alloc failed\n"); return; }
+    for (int i = 0; i < M; i++) {
+        versor qi; vec3 ti={i*0.1f,0.0f,0.0f}, si={1.0f+i*0.001f,1.0f+i*0.001f,1.0f+i*0.001f};
+        glm_quatv(qi, glm_rad((float)i), axis_y);
+        glm_mat4_identity(mats[i]);
+        glm_translate(mats[i], ti); glm_quat_rotate(mats[i], qi, mats[i]); glm_scale(mats[i], si);
+    }
+    mat4 inv;
+    t0 = ns_now();
+    for (int i = 0; i < M; i++) { glm_mat4_inv(mats[i], inv); sink += inv[0][0]; }
+    dt = ns_now() - t0;
+    printf("  %-48s %7.1f µs  (%.2f ns/op)\n",
+        "inverse_general/cglm", (double)dt/1000.0, (double)dt/M);
+    fflush(stdout);
+    free(mats);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════ */
 
 int main(void) {
-    /* Force line-buffered stdout so output survives a crash or pipe.
-     * Without this, block-buffering means a segfault silently discards
-     * all printf output when piped through tee. */
     setvbuf(stdout, NULL, _IOLBF, 0);
+    printf("cglm benchmark (fixed: data-dependency chains) — %s\n", __DATE__);
+    printf("4-way interleaved = throughput approx, single-chain = latency\n\n");
 
-    printf("cglm benchmark — compiled %s\n", __DATE__);
-    printf("Operations run 1 000 000 iterations unless noted.\n\n");
-    fflush(stdout);
+    bench_vec3();
+    bench_vec4();
+    bench_quat();
+    bench_mat4();
+    bench_bulk();
 
-    /* ── Vec3 ─────────────────────────────────────────────────────────────── */
-    printf("vec3:\n");
-    fflush(stdout);
-    {
-        vec3 a = {1.0f, 2.0f, 3.0f};
-        vec3 b = {4.0f, 5.0f, 6.0f};
-        vec3 out;
-
-        BENCH("add/cglm", 1000000, {
-            glm_vec3_add(a, b, out);
-            consume_vec3(out);
-        });
-
-        float dot_result;
-        BENCH("dot/cglm", 1000000, {
-            dot_result = glm_vec3_dot(a, b);
-            sink_f += dot_result;
-        });
-
-        BENCH("cross/cglm", 1000000, {
-            glm_vec3_cross(a, b, out);
-            consume_vec3(out);
-        });
-
-        BENCH("normalize/cglm", 1000000, {
-            glm_vec3_copy(a, out);
-            glm_vec3_normalize(out);
-            consume_vec3(out);
-        });
-
-        BENCH("lerp/cglm", 1000000, {
-            glm_vec3_lerp(a, b, 0.5f, out);
-            consume_vec3(out);
-        });
-    }
-
-    /* ── Vec4 ─────────────────────────────────────────────────────────────── */
-    printf("\nvec4:\n");
-    fflush(stdout);
-    {
-        vec4 a = {1.0f, 2.0f, 3.0f, 4.0f};
-        vec4 b = {5.0f, 6.0f, 7.0f, 8.0f};
-        vec4 out;
-
-        BENCH("dot/cglm", 1000000, {
-            float d = glm_vec4_dot(a, b);
-            sink_f += d;
-        });
-
-        BENCH("normalize/cglm", 1000000, {
-            glm_vec4_copy(a, out);
-            glm_vec4_normalize(out);
-            consume_vec4(out);
-        });
-    }
-
-    /* ── Quaternion ───────────────────────────────────────────────────────── */
-    printf("\nquat (xyzw):\n");
-    fflush(stdout);
-    {
-        /* cglm quat layout: [x, y, z, w] */
-        versor q1, q2, qout;
-        vec3 axis_y = {0.0f, 1.0f, 0.0f};
-        vec3 axis_d = {0.7071068f, 0.7071068f, 0.0f}; /* normalized (1,1,0) */
-        glm_quatv(q1, glm_rad(45.0f), axis_y);
-        glm_quatv(q2, glm_rad(30.0f), axis_d);
-
-        BENCH("mul/cglm", 1000000, {
-            glm_quat_mul(q1, q2, qout);
-            consume_vec4(qout);
-        });
-
-        vec3 v = {1.0f, 0.0f, 0.0f};
-        vec3 vout;
-        BENCH("rotate/cglm", 1000000, {
-            glm_quat_rotatev(q1, v, vout);
-            consume_vec3(vout);
-        });
-
-        BENCH("slerp/cglm", 1000000, {
-            glm_quat_slerp(q1, q2, 0.5f, qout);
-            consume_vec4(qout);
-        });
-
-        BENCH("nlerp/cglm", 1000000, {
-            glm_quat_nlerp(q1, q2, 0.5f, qout);
-            consume_vec4(qout);
-        });
-    }
-
-    /* ── Mat4 ─────────────────────────────────────────────────────────────── */
-    printf("\nmat4:\n");
-    fflush(stdout);
-    {
-        /* Build a TRS matrix: translate(1,0,0) * rotateY(45deg) * scale(2) */
-        mat4 ma, mb, mout;
-        versor q;
-        vec3 axis_y = {0.0f, 1.0f, 0.0f};
-        vec3 t      = {1.0f, 0.0f, 0.0f};
-        vec3 s      = {2.0f, 2.0f, 2.0f};
-
-        glm_quatv(q, glm_rad(45.0f), axis_y);
-        glm_mat4_identity(ma);
-        glm_translate(ma, t);
-        glm_quat_rotate(ma, q, ma);
-        glm_scale(ma, s);
-
-        vec3 t2 = {0.5f, 0.0f, 0.0f};
-        vec3 s2 = {1.5f, 1.5f, 1.5f};
-        versor q2;
-        glm_quatv(q2, glm_rad(30.0f), axis_y);
-        glm_mat4_identity(mb);
-        glm_translate(mb, t2);
-        glm_quat_rotate(mb, q2, mb);
-        glm_scale(mb, s2);
-
-        BENCH("mul/cglm", 1000000, {
-            glm_mat4_mul(ma, mb, mout);
-            consume_mat4(mout);
-        });
-
-        vec4 p_in  = {1.0f, 2.0f, 3.0f, 1.0f};
-        vec4 p_out;
-        BENCH("transform_point/cglm", 1000000, {
-            glm_mat4_mulv(ma, p_in, p_out);
-            consume_vec4(p_out);
-        });
-
-        BENCH("inverse_general/cglm", 1000000, {
-            glm_mat4_inv(ma, mout);
-            consume_mat4(mout);
-        });
-
-        /* cglm inverse_trs equivalent: glm_mat4_inv_fast is only valid for
-         * pure rotation+translation (no scale). For TRS we use glm_mat4_inv. */
-        BENCH("inverse_trs/cglm (glm_mat4_inv_fast, rot+trans only)", 1000000, {
-            /* Remove scale first for a fair comparison */
-            mat4 rot_trans;
-            glm_mat4_identity(rot_trans);
-            glm_translate(rot_trans, t);
-            glm_quat_rotate(rot_trans, q, rot_trans);
-            glm_mat4_inv_fast(rot_trans, mout);
-            consume_mat4(mout);
-        });
-    }
-
-    /* ── 100k entity bulk transform ──────────────────────────────────────── */
-    printf("\n100k entity transforms (single run, us):\n");
-    fflush(stdout);
-    {
-        const int N = 100000;
-        mat4 trs;
-        versor q;
-        vec3 axis_y = {0.0f, 1.0f, 0.0f};
-        vec3 t      = {1.0f, 0.0f, 0.0f};
-        vec3 s      = {1.0f, 1.0f, 1.0f};
-        glm_quatv(q, glm_rad(45.0f), axis_y);
-        glm_mat4_identity(trs);
-        glm_translate(trs, t);
-        glm_quat_rotate(trs, q, trs);
-        glm_scale(trs, s);
-
-        /* aligned_alloc: 32-byte alignment satisfies AVX intrinsics in cglm.
-         * Standard malloc only guarantees 16 bytes. With -march=native GCC
-         * emits AVX2 loads (_mm256_load_ps) which require 32-byte alignment.
-         * Passing a 16-byte-aligned pointer causes SIGSEGV with no error output
-         * because block-buffered stdout discards the printf buffer on crash. */
-        vec4 *positions = (vec4*)aligned_alloc(32, N * sizeof(vec4));
-        if (!positions) { fprintf(stderr, "aligned_alloc failed\n"); return 1; }
-
-        for (int i = 0; i < N; i++) {
-            positions[i][0] = i * 0.01f;
-            positions[i][1] = 0.0f;
-            positions[i][2] = 0.0f;
-            positions[i][3] = 1.0f;
-        }
-
-        long long t0 = ns_now();
-        for (int i = 0; i < N; i++) {
-            vec4 out;
-            glm_mat4_mulv(trs, positions[i], out);
-            glm_vec4_copy(out, positions[i]);
-        }
-        long long dt = ns_now() - t0;
-        printf("  %-45s %6.1f us  (%4.1f ns/entity)\n",
-               "transform_point/cglm",
-               (double)dt / 1000.0,
-               (double)dt / N);
-        fflush(stdout);
-
-        sink_f += positions[0][0];
-        free(positions);
-    }
-
-    /* ── 5k bulk inverse ─────────────────────────────────────────────────── */
-    printf("\n5k inverse_general (single run, us):\n");
-    fflush(stdout);
-    {
-        const int N = 5000;
-        /* Same aligned_alloc fix — mat4 is 64 bytes, AVX wants 32-byte
-         * alignment on the base pointer for _mm256 loads inside glm_mat4_inv. */
-        mat4 *mats = (mat4*)aligned_alloc(32, N * sizeof(mat4));
-        if (!mats) { fprintf(stderr, "aligned_alloc failed\n"); return 1; }
-        mat4 mout;
-
-        for (int i = 0; i < N; i++) {
-            versor q;
-            vec3 axis_y = {0.0f, 1.0f, 0.0f};
-            vec3 ti = {i * 0.1f, 0.0f, 0.0f};
-            vec3 si = {1.0f + i * 0.001f, 1.0f + i * 0.001f, 1.0f + i * 0.001f};
-            glm_quatv(q, glm_rad((float)i), axis_y);
-            glm_mat4_identity(mats[i]);
-            glm_translate(mats[i], ti);
-            glm_quat_rotate(mats[i], q, mats[i]);
-            glm_scale(mats[i], si);
-        }
-
-        long long t0 = ns_now();
-        for (int i = 0; i < N; i++) {
-            glm_mat4_inv(mats[i], mout);
-            consume_mat4(mout);
-        }
-        long long dt = ns_now() - t0;
-        printf("  %-45s %6.1f us  (%5.1f ns/op)\n",
-               "inverse_general/cglm",
-               (double)dt / 1000.0,
-               (double)dt / N);
-        fflush(stdout);
-
-        free(mats);
-    }
-
-    printf("\ndone. (sink=%f)\n", (float)sink_f);
+    printf("\ndone. (sink=%.6f)\n", (float)sink);
     fflush(stdout);
     return 0;
-                }
+}
