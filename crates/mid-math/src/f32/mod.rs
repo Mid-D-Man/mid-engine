@@ -1,17 +1,16 @@
 // crates/mid-math/src/f32/mod.rs
-// Fix 1: pub mod mat3 (was private)
-// Fix 2: clean up arch dispatch
-// Fix 3: add mat2
 
 pub(crate) mod math;
 
 mod vec2;
-pub mod mat2;   // ← NEW: always-scalar 2×2 matrix
-pub mod mat3;   // ← was `mod mat3` (private), must be pub
+pub mod mat2;
+pub mod mat3;
+pub mod affine3;   // ← NEW
 
 pub use vec2::Vec2;
-pub use mat2::Mat2;   // ← NEW
+pub use mat2::Mat2;
 pub use mat3::Mat3;
+pub use affine3::Affine3;  // ← NEW
 
 pub(crate) mod scalar;
 
