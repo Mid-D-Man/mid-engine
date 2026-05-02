@@ -106,15 +106,18 @@ impl Quat {
         )
     }
 
-    pub fn nlerp(self, mut rhs: Self, t: f32) -> Self {
-        if self.dot(rhs) < 0.0 { rhs = -rhs; }
-        Self::new(
-            self.x + (rhs.x - self.x)*t,
-            self.y + (rhs.y - self.y)*t,
-            self.z + (rhs.z - self.z)*t,
-            self.w + (rhs.w - self.w)*t,
-        ).normalize()
-    }
+    pub fn nlerp(self, rhs: Self, t: f32) -> Self {
+    // Branchless shortest-path: compiler emits cmovss (conditional move),
+    // not a branch instruction. No branch misprediction penalty.
+    let dot  = self.dot(rhs);
+    let sign = if dot < 0.0 { -1.0f32 } else { 1.0f32 };
+    Self::new(
+        self.x + (rhs.x * sign - self.x) * t,
+        self.y + (rhs.y * sign - self.y) * t,
+        self.z + (rhs.z * sign - self.z) * t,
+        self.w + (rhs.w * sign - self.w) * t,
+    ).normalize()
+}
 
     pub fn slerp(self, mut rhs: Self, t: f32) -> Self {
         let mut cos_theta = self.dot(rhs);
