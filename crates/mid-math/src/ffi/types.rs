@@ -1,8 +1,6 @@
 // crates/mid-math/src/ffi/types.rs
-// Fix 3: Mat3 now resolves — but CMat3 has no FFI exports yet so
-// keep the type but note it's unused until we add mat3 FFI functions.
 
-use crate::{Vec2, Vec3, Vec4, Quat, Mat3, Mat4};
+use crate::{Affine3, Mat3, Mat4, Quat, Vec2, Vec3, Vec4};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[repr(C)]
@@ -52,7 +50,6 @@ impl From<CQuat> for Quat {
 }
 
 /// C-ABI Mat3. 36 bytes, column-major.
-/// Unused in exports for now — mat3 FFI ops to be added with normal matrix support.
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[repr(C)]
 pub struct CMat3 { pub cols: [[f32; 3]; 3] }
@@ -73,4 +70,47 @@ impl From<Mat4> for CMat4 {
 }
 impl From<CMat4> for Mat4 {
     #[inline(always)] fn from(m: CMat4) -> Self { Mat4 { cols: m.cols } }
+}
+
+/// C-ABI Affine3. 64 bytes, 16-byte aligned. Four CVec3 (each 16 bytes with _pad).
+///
+/// Layout mirrors Affine3 exactly — memcpy between them is safe.
+#[derive(Debug, Clone, Copy, PartialEq)]
+#[repr(C, align(16))]
+pub struct CAffine3 {
+    pub x_axis:      CVec3,
+    pub y_axis:      CVec3,
+    pub z_axis:      CVec3,
+    pub translation: CVec3,
+}
+
+impl CAffine3 {
+    #[inline(always)]
+    pub fn new(x_axis: CVec3, y_axis: CVec3, z_axis: CVec3, translation: CVec3) -> Self {
+        Self { x_axis, y_axis, z_axis, translation }
+    }
+}
+
+impl From<Affine3> for CAffine3 {
+    #[inline(always)]
+    fn from(a: Affine3) -> Self {
+        Self {
+            x_axis:      CVec3::from(a.x_axis),
+            y_axis:      CVec3::from(a.y_axis),
+            z_axis:      CVec3::from(a.z_axis),
+            translation: CVec3::from(a.translation),
+        }
+    }
+}
+
+impl From<CAffine3> for Affine3 {
+    #[inline(always)]
+    fn from(a: CAffine3) -> Self {
+        Self {
+            x_axis:      Vec3::from(a.x_axis),
+            y_axis:      Vec3::from(a.y_axis),
+            z_axis:      Vec3::from(a.z_axis),
+            translation: Vec3::from(a.translation),
+        }
+    }
 }
