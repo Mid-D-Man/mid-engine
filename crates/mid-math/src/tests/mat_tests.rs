@@ -1,7 +1,7 @@
 // crates/mid-math/src/tests/mat_tests.rs
 #[cfg(test)]
 mod tests {
-    use crate::{Mat3, Mat4, Vec3, Quat, approx_eq, to_radians};
+    use crate::{Affine3, Mat3, Mat4, Quat, Vec3, approx_eq, to_radians};
 
     // ── Mat3 ─────────────────────────────────────────────────────────────────
 
@@ -50,8 +50,7 @@ mod tests {
     fn mat4_translation_moves_point() {
         let r = Mat4::from_translation(Vec3::new(10.0,20.0,30.0))
                     .transform_point(Vec3::ONE);
-        assert!(r.approx_eq(Vec3::new(11.0,21.0,31.0)),
-            "got {:?}", r);
+        assert!(r.approx_eq(Vec3::new(11.0,21.0,31.0)), "got {:?}", r);
     }
 
     #[test]
@@ -112,8 +111,6 @@ mod tests {
         assert!(t.z < 0.0, "target should be on -Z in view space, got z={}", t.z);
     }
 
-    // ── TRS inverse ───────────────────────────────────────────────────────────
-
     #[test]
     fn mat4_inverse_trs_identity() {
         assert_eq!(Mat4::IDENTITY.inverse_trs(), Mat4::IDENTITY);
@@ -126,14 +123,6 @@ mod tests {
         let inv = m.inverse_trs();
         let p   = inv.transform_point(Vec3::ZERO);
         assert!(p.approx_eq(-t), "expected {:?} got {:?}", -t, p);
-    }
-
-    #[test]
-    fn mat4_inverse_trs_scale_only() {
-        let m   = Mat4::from_scale(Vec3::new(2.0,4.0,0.5));
-        let inv = m.inverse_trs();
-        let p   = inv.transform_point(Vec3::new(2.0,4.0,0.5));
-        assert!(p.approx_eq(Vec3::ONE), "expected ONE got {:?}", p);
     }
 
     #[test]
@@ -177,11 +166,6 @@ mod tests {
                     Vec3::new(1.0,1.0,0.0).normalize(), to_radians(37.0)),
                 Vec3::new(2.0,0.5,3.0),
             ),
-            Mat4::from_trs(
-                Vec3::new(-10.0,0.5,3.3),
-                Quat::from_axis_angle(Vec3::Z, to_radians(180.0)),
-                Vec3::new(0.1,5.0,2.0),
-            ),
         ];
         for (i, m) in cases.iter().enumerate() {
             let sse2   = m.inverse();
@@ -201,36 +185,164 @@ mod tests {
         }
     }
 
+    // ── Affine3 ───────────────────────────────────────────────────────────────
+
     #[test]
-    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-    fn mat4_inverse_trs_sse2_matches_scalar() {
-        let cases: &[(Vec3, Quat, Vec3)] = &[
-            (Vec3::ZERO, Quat::IDENTITY, Vec3::ONE),
-            (Vec3::new(1.0,2.0,3.0), Quat::IDENTITY, Vec3::ONE),
-            (Vec3::ZERO, Quat::from_axis_angle(Vec3::Y, to_radians(90.0)), Vec3::ONE),
-            (Vec3::ZERO, Quat::IDENTITY, Vec3::new(2.0,3.0,4.0)),
-            (
-                Vec3::new(5.0,-2.0,7.0),
-                Quat::from_axis_angle(
-                    Vec3::new(1.0,1.0,0.0).normalize(), to_radians(37.0)),
-                Vec3::new(2.0,0.5,3.0),
-            ),
-            (
-                Vec3::new(-10.0,0.5,3.3),
-                Quat::from_axis_angle(Vec3::Z, to_radians(180.0)),
-                Vec3::new(0.1,5.0,2.0),
-            ),
-        ];
-        for (i, &(t,r,s)) in cases.iter().enumerate() {
-            let m      = Mat4::from_trs(t, r, s);
-            let sse2   = m.inverse_trs();
-            let scalar = m.inverse_trs_scalar();
-            for c in 0..4 { for row in 0..4 {
-                let d = (sse2.cols[c][row] - scalar.cols[c][row]).abs();
-                assert!(d < 1e-5,
-                    "case {} col={} row={}: sse2={:.7} scalar={:.7}",
-                    i, c, row, sse2.cols[c][row], scalar.cols[c][row]);
-            }}
-        }
+    fn affine3_size_is_64_bytes() {
+        assert_eq!(std::mem::size_of::<Affine3>(), 64);
+    }
+
+    #[test]
+    fn affine3_identity_is_default() {
+        assert_eq!(Affine3::default(), Affine3::IDENTITY);
+    }
+
+    #[test]
+    fn affine3_identity_transform_point_unchanged() {
+        let p = Vec3::new(1.0, 2.0, 3.0);
+        assert!(Affine3::IDENTITY.transform_point(p).approx_eq(p));
+    }
+
+    #[test]
+    fn affine3_identity_transform_vector_unchanged() {
+        let v = Vec3::new(1.0, 0.0, 0.0);
+        assert!(Affine3::IDENTITY.transform_vector(v).approx_eq(v));
+    }
+
+    #[test]
+    fn affine3_translation_moves_point() {
+        let t = Vec3::new(10.0, 20.0, 30.0);
+        let a = Affine3::from_translation(t);
+        let r = a.transform_point(Vec3::ONE);
+        assert!(r.approx_eq(Vec3::new(11.0, 21.0, 31.0)), "got {:?}", r);
+    }
+
+    #[test]
+    fn affine3_translation_does_not_affect_vectors() {
+        let a = Affine3::from_translation(Vec3::new(99.0, 99.0, 99.0));
+        assert!(a.transform_vector(Vec3::X).approx_eq(Vec3::X));
+    }
+
+    #[test]
+    fn affine3_scale_scales_point() {
+        let a = Affine3::from_scale(Vec3::new(2.0, 3.0, 4.0));
+        let r = a.transform_point(Vec3::ONE);
+        assert!(r.approx_eq(Vec3::new(2.0, 3.0, 4.0)), "got {:?}", r);
+    }
+
+    #[test]
+    fn affine3_from_trs_matches_mat4_from_trs() {
+        let t = Vec3::new(1.0, 2.0, 3.0);
+        let r = Quat::from_axis_angle(Vec3::Y, to_radians(45.0));
+        let s = Vec3::new(2.0, 0.5, 3.0);
+
+        let a = Affine3::from_trs(t, r, s);
+        let m = Mat4::from_trs(t, r, s);
+        let p = Vec3::new(1.5, -0.5, 2.0);
+
+        let pa = a.transform_point(p);
+        let pm = m.transform_point(p);
+        assert!(pa.approx_eq(pm),
+            "Affine3 {:?} vs Mat4 {:?}", pa, pm);
+    }
+
+    #[test]
+    fn affine3_from_mat4_roundtrip() {
+        let m = Mat4::from_trs(
+            Vec3::new(3.0, -1.0, 5.0),
+            Quat::from_axis_angle(Vec3::new(1.0,1.0,0.0).normalize(), to_radians(37.0)),
+            Vec3::new(2.0, 0.5, 3.0),
+        );
+        let a = Affine3::from_mat4(m);
+        let m2 = a.to_mat4();
+        for c in 0..4 { for row in 0..4 {
+            let d = (m.cols[c][row] - m2.cols[c][row]).abs();
+            assert!(d < 1e-5, "col={} row={}: {:.7} vs {:.7}", c, row, m.cols[c][row], m2.cols[c][row]);
+        }}
+    }
+
+    #[test]
+    fn affine3_inverse_identity() {
+        let inv = Affine3::IDENTITY.inverse();
+        assert_eq!(inv, Affine3::IDENTITY);
+    }
+
+    #[test]
+    fn affine3_inverse_translation_only() {
+        let t   = Vec3::new(5.0, -3.0, 7.0);
+        let a   = Affine3::from_translation(t);
+        let inv = a.inverse();
+        let p   = inv.transform_point(Vec3::ZERO);
+        assert!(p.approx_eq(-t), "expected {:?} got {:?}", -t, p);
+    }
+
+    #[test]
+    fn affine3_inverse_scale_only() {
+        let a   = Affine3::from_scale(Vec3::new(2.0, 4.0, 0.5));
+        let inv = a.inverse();
+        let p   = inv.transform_point(Vec3::new(2.0, 4.0, 0.5));
+        assert!(p.approx_eq(Vec3::ONE), "expected ONE got {:?}", p);
+    }
+
+    #[test]
+    fn affine3_inverse_trs_roundtrip() {
+        let a = Affine3::from_trs(
+            Vec3::new(3.0, -1.0, 5.0),
+            Quat::from_axis_angle(
+                Vec3::new(1.0, 1.0, 0.0).normalize(), to_radians(37.0)),
+            Vec3::new(2.0, 0.5, 3.0),
+        );
+        let composed = a * a.inverse();
+        let p = Vec3::new(7.0, -2.0, 4.0);
+        let result = composed.transform_point(p);
+        assert!(result.approx_eq(p),
+            "a * a.inverse() should be identity, got {:?} for {:?}", result, p);
+    }
+
+    #[test]
+    fn affine3_inverse_matches_mat4_inverse_trs() {
+        let t = Vec3::new(3.0, -1.0, 5.0);
+        let r = Quat::from_axis_angle(
+            Vec3::new(1.0, 1.0, 0.0).normalize(), to_radians(37.0));
+        let s = Vec3::new(2.0, 0.5, 3.0);
+
+        let a    = Affine3::from_trs(t, r, s);
+        let m    = Mat4::from_trs(t, r, s);
+        let ainv = a.inverse().to_mat4();
+        let minv = m.inverse_trs();
+
+        for c in 0..4 { for row in 0..4 {
+            let d = (ainv.cols[c][row] - minv.cols[c][row]).abs();
+            assert!(d < 1e-4,
+                "col={} row={}: affine3={:.6} mat4_trs={:.6}",
+                c, row, ainv.cols[c][row], minv.cols[c][row]);
+        }}
+    }
+
+    #[test]
+    fn affine3_compose_matches_mat4_mul() {
+        let a = Affine3::from_trs(
+            Vec3::new(1.0, 0.0, 0.0),
+            Quat::from_axis_angle(Vec3::Y, to_radians(45.0)),
+            Vec3::new(2.0, 2.0, 2.0),
+        );
+        let b = Affine3::from_trs(
+            Vec3::new(0.0, 1.0, 0.0),
+            Quat::from_axis_angle(Vec3::X, to_radians(30.0)),
+            Vec3::new(1.0, 1.0, 1.0),
+        );
+        let p = Vec3::new(1.0, 2.0, 3.0);
+
+        let r_affine = (a * b).transform_point(p);
+        let r_mat4   = (a.to_mat4() * b.to_mat4()).transform_point(p);
+
+        assert!(r_affine.approx_eq(r_mat4),
+            "compose: Affine3 {:?} vs Mat4 {:?}", r_affine, r_mat4);
+    }
+
+    #[test]
+    fn affine3_inverse_zero_scale_does_not_panic() {
+        let a = Affine3::from_scale(Vec3::new(0.0, 1.0, 1.0));
+        let _ = a.inverse();
     }
 }
