@@ -238,16 +238,33 @@ impl Quat {
     // ── Interpolation ──────────────────────────────────────────────────────────
 
     /// Normalised linear interpolation — fast, slightly non-constant velocity.
-    #[inline]
-    pub fn nlerp(self, mut rhs: Self, t: f32) -> Self {
-        // Ensure shortest path
-        if self.dot(rhs) < 0.0 { rhs = -rhs; }
-        unsafe {
-            let tt = _mm_set1_ps(t);
-            let lerped = _mm_add_ps(self.0, _mm_mul_ps(_mm_sub_ps(rhs.0, self.0), tt));
-            Self(lerped).normalize()
-        }
+///
+/// Shortest-path flip is branchless via SSE2 sign-bit extraction + XOR.
+/// If dot(self, rhs) < 0, we negate rhs in all 4 lanes without a conditional jump.
+#[inline]
+pub fn nlerp(self, rhs: Self, t: f32) -> Self {
+    unsafe {
+        // dot(self, rhs) as a scalar f32.
+        let dot_val = crate::sse2::dot4(self.0, rhs.0);
+
+        // Broadcast dot to all lanes, then AND with the sign-bit mask 0x80000000.
+        // Result: all-lanes-0x80000000 if dot was negative, all-lanes-0 if positive.
+        let sign_mask = _mm_and_ps(
+            _mm_set1_ps(dot_val),
+            _mm_set1_ps(-0.0f32),  // = 0x80000000 broadcast
+        );
+
+        // XOR each component of rhs with sign_mask:
+        //   dot >= 0 → sign_mask = 0 → rhs unchanged
+        //   dot <  0 → sign_mask = sign bit → every component flips sign → -rhs
+        let rhs_adj = _mm_xor_ps(rhs.0, sign_mask);
+
+        // SIMD lerp: self + (rhs_adj - self) * t
+        let tt     = _mm_set1_ps(t);
+        let lerped = _mm_add_ps(self.0, _mm_mul_ps(_mm_sub_ps(rhs_adj, self.0), tt));
+        Self(lerped).normalize()
     }
+}
 
     /// Spherical linear interpolation — constant angular velocity.
     pub fn slerp(self, mut rhs: Self, t: f32) -> Self {
