@@ -1,8 +1,9 @@
 // crates/mid-math/src/ffi/exports.rs
-// Fix 4: remove CMat3 from import since it has no exports yet
 
-use crate::ffi::types::{CVec2, CVec3, CVec4, CQuat, CMat4};
-use crate::{Vec2, Vec3, Vec4, Quat, Mat4};
+use crate::ffi::types::{CAffine3, CMat4, CQuat, CVec2, CVec3, CVec4};
+use crate::{Affine3, Mat4, Quat, Vec2, Vec3, Vec4};
+
+// ── Vec2 ─────────────────────────────────────────────────────────────────────
 
 #[no_mangle] pub extern "C" fn mid_vec2_new(x:f32,y:f32)->CVec2{Vec2::new(x,y).into()}
 #[no_mangle] pub extern "C" fn mid_vec2_add(a:CVec2,b:CVec2)->CVec2{(Vec2::from(a)+Vec2::from(b)).into()}
@@ -13,6 +14,8 @@ use crate::{Vec2, Vec3, Vec4, Quat, Mat4};
 #[no_mangle] pub extern "C" fn mid_vec2_normalize(v:CVec2)->CVec2{Vec2::from(v).normalize().into()}
 #[no_mangle] pub extern "C" fn mid_vec2_lerp(a:CVec2,b:CVec2,t:f32)->CVec2{Vec2::from(a).lerp(Vec2::from(b),t).into()}
 #[no_mangle] pub extern "C" fn mid_vec2_distance(a:CVec2,b:CVec2)->f32{Vec2::from(a).distance(Vec2::from(b))}
+
+// ── Vec3 ─────────────────────────────────────────────────────────────────────
 
 #[no_mangle] pub extern "C" fn mid_vec3_new(x:f32,y:f32,z:f32)->CVec3{Vec3::new(x,y,z).into()}
 #[no_mangle] pub extern "C" fn mid_vec3_add(a:CVec3,b:CVec3)->CVec3{(Vec3::from(a)+Vec3::from(b)).into()}
@@ -26,11 +29,15 @@ use crate::{Vec2, Vec3, Vec4, Quat, Mat4};
 #[no_mangle] pub extern "C" fn mid_vec3_distance(a:CVec3,b:CVec3)->f32{Vec3::from(a).distance(Vec3::from(b))}
 #[no_mangle] pub extern "C" fn mid_vec3_reflect(v:CVec3,n:CVec3)->CVec3{Vec3::from(v).reflect(Vec3::from(n)).into()}
 
+// ── Vec4 ─────────────────────────────────────────────────────────────────────
+
 #[no_mangle] pub extern "C" fn mid_vec4_new(x:f32,y:f32,z:f32,w:f32)->CVec4{Vec4::new(x,y,z,w).into()}
 #[no_mangle] pub extern "C" fn mid_vec4_add(a:CVec4,b:CVec4)->CVec4{(Vec4::from(a)+Vec4::from(b)).into()}
 #[no_mangle] pub extern "C" fn mid_vec4_dot(a:CVec4,b:CVec4)->f32{Vec4::from(a).dot(Vec4::from(b))}
 #[no_mangle] pub extern "C" fn mid_vec4_normalize(v:CVec4)->CVec4{Vec4::from(v).normalize().into()}
 #[no_mangle] pub extern "C" fn mid_vec4_lerp(a:CVec4,b:CVec4,t:f32)->CVec4{Vec4::from(a).lerp(Vec4::from(b),t).into()}
+
+// ── Quat ─────────────────────────────────────────────────────────────────────
 
 #[no_mangle] pub extern "C" fn mid_quat_identity()->CQuat{Quat::IDENTITY.into()}
 #[no_mangle] pub extern "C" fn mid_quat_new(x:f32,y:f32,z:f32,w:f32)->CQuat{Quat::new(x,y,z,w).into()}
@@ -46,6 +53,8 @@ use crate::{Vec2, Vec3, Vec4, Quat, Mat4};
 #[no_mangle] pub extern "C" fn mid_quat_rotate(q:CQuat,v:CVec3)->CVec3{Quat::from(q).rotate(Vec3::from(v)).into()}
 #[no_mangle] pub extern "C" fn mid_quat_slerp(a:CQuat,b:CQuat,t:f32)->CQuat{Quat::from(a).slerp(Quat::from(b),t).into()}
 #[no_mangle] pub extern "C" fn mid_quat_to_mat4(q:CQuat)->CMat4{Quat::from(q).to_mat4().into()}
+
+// ── Mat4 ─────────────────────────────────────────────────────────────────────
 
 #[no_mangle] pub extern "C" fn mid_mat4_identity()->CMat4{Mat4::IDENTITY.into()}
 #[no_mangle] pub extern "C" fn mid_mat4_from_translation(t:CVec3)->CMat4{Mat4::from_translation(Vec3::from(t)).into()}
@@ -69,4 +78,52 @@ use crate::{Vec2, Vec3, Vec4, Quat, Mat4};
 }
 #[no_mangle] pub extern "C" fn mid_mat4_inverse(m:CMat4)->CMat4{
     Mat4::from(m).inverse().unwrap_or(Mat4::IDENTITY).into()
+}
+
+// ── Affine3 ───────────────────────────────────────────────────────────────────
+
+#[no_mangle] pub extern "C" fn mid_affine3_identity() -> CAffine3 {
+    Affine3::IDENTITY.into()
+}
+
+#[no_mangle] pub extern "C" fn mid_affine3_from_trs(
+    t: CVec3, r: CQuat, s: CVec3,
+) -> CAffine3 {
+    Affine3::from_trs(Vec3::from(t), Quat::from(r), Vec3::from(s)).into()
+}
+
+#[no_mangle] pub extern "C" fn mid_affine3_from_translation(t: CVec3) -> CAffine3 {
+    Affine3::from_translation(Vec3::from(t)).into()
+}
+
+#[no_mangle] pub extern "C" fn mid_affine3_from_rotation(q: CQuat) -> CAffine3 {
+    Affine3::from_rotation(Quat::from(q)).into()
+}
+
+#[no_mangle] pub extern "C" fn mid_affine3_from_scale(s: CVec3) -> CAffine3 {
+    Affine3::from_scale(Vec3::from(s)).into()
+}
+
+#[no_mangle] pub extern "C" fn mid_affine3_from_mat4(m: CMat4) -> CAffine3 {
+    Affine3::from_mat4(Mat4::from(m)).into()
+}
+
+#[no_mangle] pub extern "C" fn mid_affine3_to_mat4(a: CAffine3) -> CMat4 {
+    Affine3::from(a).to_mat4().into()
+}
+
+#[no_mangle] pub extern "C" fn mid_affine3_mul(a: CAffine3, b: CAffine3) -> CAffine3 {
+    (Affine3::from(a) * Affine3::from(b)).into()
+}
+
+#[no_mangle] pub extern "C" fn mid_affine3_inverse(a: CAffine3) -> CAffine3 {
+    Affine3::from(a).inverse().into()
+}
+
+#[no_mangle] pub extern "C" fn mid_affine3_transform_point(a: CAffine3, p: CVec3) -> CVec3 {
+    Affine3::from(a).transform_point(Vec3::from(p)).into()
+}
+
+#[no_mangle] pub extern "C" fn mid_affine3_transform_vector(a: CAffine3, v: CVec3) -> CVec3 {
+    Affine3::from(a).transform_vector(Vec3::from(v)).into()
 }
