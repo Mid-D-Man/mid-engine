@@ -1,5 +1,4 @@
 // crates/mid-math/src/lib.rs
-// Fix 2: use f32::Mat3 directly (f32::mod.rs now re-exports it as pub)
 
 pub(crate) mod sse2;
 
@@ -11,8 +10,9 @@ pub mod constants;
 pub use constants::*;
 
 pub use f32::Vec2;
-pub use f32::Mat2;   // ← NEW
+pub use f32::Mat2;
 pub use f32::Mat3;
+pub use f32::Affine3;  // ← NEW
 
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 pub use f32::sse2::{Vec3, Vec4, Quat, Mat4};
