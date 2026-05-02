@@ -6,7 +6,7 @@
 
 use criterion::{black_box, criterion_group, criterion_main,
                 BatchSize, Criterion, Throughput};
-use mid_math::{to_radians, Mat4, Quat, Vec3, Vec4};
+use mid_math::{Affine3, Mat4, Quat, Vec3, Vec4, to_radians};
 
 fn mid_quat(angle_deg: f32, axis: Vec3) -> Quat {
     Quat::from_axis_angle(axis, to_radians(angle_deg))
@@ -31,6 +31,13 @@ fn glam_affine3a(tx: f32, angle_deg: f32, sx: f32) -> glam::Affine3A {
         glam::Vec3::splat(sx),
         glam_quat(angle_deg, glam::Vec3::Y),
         glam::Vec3::new(tx,0.0,0.0),
+    )
+}
+fn mid_affine3(tx: f32, angle_deg: f32, sx: f32) -> Affine3 {
+    Affine3::from_trs(
+        Vec3::new(tx, 0.0, 0.0),
+        mid_quat(angle_deg, Vec3::Y),
+        Vec3::new(sx, sx, sx),
     )
 }
 
@@ -117,6 +124,35 @@ fn bench_mat4(c: &mut Criterion) {
     g.finish();
 }
 
+// ── NEW: Affine3 vs glam Affine3A ─────────────────────────────────────────────
+fn bench_affine3(c: &mut Criterion) {
+    let mut g = c.benchmark_group("affine3");
+
+    let am  = mid_affine3(1.0, 45.0, 2.0);
+    let bm  = mid_affine3(0.5, 30.0, 1.5);
+    let pm  = Vec3::new(1.0, 2.0, 3.0);
+    let ag  = glam_affine3a(1.0, 45.0, 2.0);
+    let bg  = glam_affine3a(0.5, 30.0, 1.5);
+    let pg  = glam::Vec3::new(1.0, 2.0, 3.0);
+
+    g.bench_function("inverse/mid-math-Affine3",
+        |b| b.iter(|| black_box(am).inverse()));
+    g.bench_function("inverse/glam-Affine3A",
+        |b| b.iter(|| black_box(ag).inverse()));
+
+    g.bench_function("mul/mid-math-Affine3",
+        |b| b.iter(|| black_box(am) * black_box(bm)));
+    g.bench_function("mul/glam-Affine3A",
+        |b| b.iter(|| black_box(ag) * black_box(bg)));
+
+    g.bench_function("transform_point/mid-math-Affine3",
+        |b| b.iter(|| black_box(am).transform_point(black_box(pm))));
+    g.bench_function("transform_point/glam-Affine3A",
+        |b| b.iter(|| black_box(ag).transform_point3(black_box(pg))));
+
+    g.finish();
+}
+
 fn bench_100k_entity_transforms(c: &mut Criterion) {
     const N: usize = 100_000;
     let mut g = c.benchmark_group("100k_entity_transforms");
@@ -155,34 +191,15 @@ fn bench_5k_inverse_trs(c: &mut Criterion) {
     let mut g = c.benchmark_group("5k_inverse_trs");
     g.throughput(Throughput::Elements(N as u64));
 
-    let mats_m: Vec<Mat4> = (0..N)
-        .map(|i| mid_trs(i as f32*0.1, i as f32, 1.0+i as f32*0.001))
-        .collect();
-    let mats_aff: Vec<glam::Affine3A> = (0..N)
-        .map(|i| glam_affine3a(i as f32*0.1, i as f32, 1.0+i as f32*0.001))
-        .collect();
+    let mats_m: Vec<Mat4>       = (0..N).map(|i| mid_trs(i as f32*0.1, i as f32, 1.0+i as f32*0.001)).collect();
+    let mats_a: Vec<Affine3>    = (0..N).map(|i| mid_affine3(i as f32*0.1, i as f32, 1.0+i as f32*0.001)).collect();
+    let mats_aff: Vec<glam::Affine3A> = (0..N).map(|i| glam_affine3a(i as f32*0.1, i as f32, 1.0+i as f32*0.001)).collect();
 
-    g.bench_function("mid-math-sse2", |b| {
-        b.iter_batched(
-            || mats_m.clone(),
-            |mats| { for m in &mats { black_box(m.inverse_trs()); } black_box(mats) },
-            BatchSize::LargeInput,
-        )
-    });
-    g.bench_function("mid-math-scalar", |b| {
-        b.iter_batched(
-            || mats_m.clone(),
-            |mats| { for m in &mats { black_box(m.inverse_trs_scalar()); } black_box(mats) },
-            BatchSize::LargeInput,
-        )
-    });
-    g.bench_function("glam-Affine3A", |b| {
-        b.iter_batched(
-            || mats_aff.clone(),
-            |mats| { for m in &mats { black_box(m.inverse()); } black_box(mats) },
-            BatchSize::LargeInput,
-        )
-    });
+    g.bench_function("mid-math-Mat4-sse2",   |b| b.iter_batched(|| mats_m.clone(),   |m| { for v in &m { black_box(v.inverse_trs()); }    black_box(m) }, BatchSize::LargeInput));
+    g.bench_function("mid-math-Mat4-scalar", |b| b.iter_batched(|| mats_m.clone(),   |m| { for v in &m { black_box(v.inverse_trs_scalar()); } black_box(m) }, BatchSize::LargeInput));
+    g.bench_function("mid-math-Affine3",     |b| b.iter_batched(|| mats_a.clone(),   |m| { for v in &m { black_box(v.inverse()); }        black_box(m) }, BatchSize::LargeInput));
+    g.bench_function("glam-Affine3A",        |b| b.iter_batched(|| mats_aff.clone(), |m| { for v in &m { black_box(v.inverse()); }        black_box(m) }, BatchSize::LargeInput));
+
     g.finish();
 }
 
@@ -192,6 +209,7 @@ criterion_group!(
     bench_vec4,
     bench_quat,
     bench_mat4,
+    bench_affine3,
     bench_100k_entity_transforms,
     bench_5k_inverse_trs,
 );
