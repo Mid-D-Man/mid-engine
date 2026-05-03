@@ -1,3 +1,4 @@
+# crates/mid-log/Cargo.toml
 [package]
 name        = "mid-log"
 version     = "0.1.0"
@@ -6,17 +7,27 @@ description = "Non-blocking tiered logger for Mid Engine — FFI-ready, cross-pl
 
 [lib]
 name = "mid_log"
-# rlib       = Rust-to-Rust linking (Mid Engine, Ubel, other Rust crates)
-# cdylib     = .dylib/.so/.dll  — C, C++, Unity, Godot, Unreal, Android
-# staticlib  = .a               — iOS (App Store forbids dynamic libs)
+# rlib      = Rust-to-Rust linking
+# cdylib    = .dylib/.so/.dll  — C, C++, Unity, Godot, Unreal, Android
+# staticlib = .a               — iOS (App Store forbids dynamic libs)
 crate-type = ["rlib", "cdylib", "staticlib"]
 
 [dependencies]
-rtrb = "0.3"
+crossbeam-channel = "0.5"   # lock-free MPSC — replaces rtrb + Mutex
 
 [dev-dependencies]
-# Nothing extra needed — tests use only std
+criterion          = { version = "0.5", features = ["html_reports"] }
+log                = "0.4"
+env_logger         = "0.11"
+tracing            = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+
+[[bench]]
+name    = "vs_baseline"
+harness = false
 
 [features]
 default   = []
 backtrace = []
+# android-logcat: enables __android_log_write sink (requires NDK)
+android-logcat = []
