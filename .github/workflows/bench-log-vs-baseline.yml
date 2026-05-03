@@ -1,0 +1,121 @@
+# .github/workflows/bench-log-vs-baseline.yml
+# Run: Actions → "mid-log: bench vs baseline" → Run workflow
+# DO NOT add push/pull_request triggers — benchmarks take 5-10 minutes.
+
+name: mid-log — bench vs baseline
+
+on:
+  workflow_dispatch:
+    inputs:
+      baseline_note:
+        description: 'Why are you running this? (e.g. "post lock-free channel swap")'
+        required: false
+        default: 'manual benchmark run'
+
+permissions:
+  contents: read
+  actions:  read
+
+jobs:
+  bench:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Get Rust version
+        id: rustver
+        run: echo "ver=$(rustc --version)" >> $GITHUB_OUTPUT
+
+      - name: Cache cargo registry
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+          key: cargo-registry-bench-log-${{ hashFiles('crates/mid-log/Cargo.toml') }}
+          restore-keys: cargo-registry-
+
+      # ── Bench 1: vs_baseline (mid-log vs tracing vs env_logger) ───────────
+      - name: Run vs_baseline criterion benchmarks
+        run: |
+          echo "Running: cargo bench --bench vs_baseline -p mid-log"
+          echo "Note: ${{ inputs.baseline_note }}"
+          cargo bench --bench vs_baseline -p mid-log 2>&1 | tee bench-vs-baseline-raw.txt
+
+      # ── Publish summary ───────────────────────────────────────────────────
+      - name: Publish benchmark summary
+        run: |
+          {
+            echo "## mid-log vs baseline — Criterion Benchmarks"
+            echo ""
+            echo "**Build:** #${{ github.run_number }} &nbsp; **Rust:** \`${{ steps.rustver.outputs.ver }}\`"
+            echo ""
+            echo "**Note:** ${{ inputs.baseline_note }}"
+            echo ""
+            echo "> Lower is faster. Each group shows implementations side by side."
+            echo ""
+
+            python3 - << 'PYEOF'
+          import re, sys
+
+          RE_ANSI  = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
+          RE_RESULT = re.compile(
+              r'^(\S[^\n]+?)\s+time:\s+\[\s*([\d.]+\s+\S+)\s+([\d.]+\s+\S+)\s+([\d.]+\s+\S+)\s*\]',
+              re.MULTILINE,
+          )
+
+          def parse_bench_file(path, title):
+              try:
+                  raw = open(path, encoding='utf-8', errors='replace').read()
+              except FileNotFoundError:
+                  print(f"*({path} not found)*")
+                  return
+
+              text = RE_ANSI.sub('', raw)
+              current_group = None
+
+              print(f"\n---\n\n### {title}\n")
+
+              for m in RE_RESULT.finditer(text):
+                  name = m.group(1).strip()
+                  mean = m.group(3).strip()
+
+                  parts = name.split('/')
+                  if len(parts) >= 2:
+                      group   = '/'.join(parts[:-1])
+                      variant = parts[-1]
+                  else:
+                      group   = name
+                      variant = ''
+
+                  if group != current_group:
+                      if current_group is not None:
+                          print()
+                      print(f"#### {group}")
+                      print("| Impl/Variant | Mean |")
+                      print("|---|---|")
+                      current_group = group
+
+                  print(f"| {variant} | {mean} |")
+
+          parse_bench_file('bench-vs-baseline-raw.txt', 'vs_baseline — Direct Comparison')
+          PYEOF
+
+          } >> $GITHUB_STEP_SUMMARY
+
+      # ── Upload raw logs and criterion HTML ────────────────────────────────
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: bench-results-${{ github.run_number }}
+          path: |
+            bench-vs-baseline-raw.txt
+            target/criterion/
+          retention-days: 30
