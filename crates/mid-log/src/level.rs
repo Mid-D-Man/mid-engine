@@ -1,7 +1,10 @@
+// crates/mid-log/src/level.rs
+
 //! Log levels and tier metadata.
 
 /// Log level — ordered least to most severe.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[repr(u8)]
 pub enum LogLevel {
     /// Per-frame firehose. Transient debugging only.
     Trace = 0,
@@ -23,6 +26,18 @@ impl LogLevel {
             LogLevel::Fatal => "FATAL",
         }
     }
+
+    /// Convert from the C ABI level constant.
+    /// Clamps any value > 4 to Fatal.
+    pub fn from_u8(v: u8) -> Self {
+        match v {
+            0 => LogLevel::Trace,
+            1 => LogLevel::Info,
+            2 => LogLevel::Warn,
+            3 => LogLevel::Error,
+            _ => LogLevel::Fatal,
+        }
+    }
 }
 
 impl std::fmt::Display for LogLevel {
@@ -33,18 +48,18 @@ impl std::fmt::Display for LogLevel {
 
 /// Engine tier — every log entry is tagged so you know exactly where it came from.
 ///
-/// | Tier | C constant      | Description                        |
-/// |------|-----------------|------------------------------------|
+/// | Tier | C constant      | Description                          |
+/// |------|-----------------|--------------------------------------|
 /// | Low  | MID_TIER_LOW  0 | Engine internals — physics, net, ECS |
-/// | Mid  | MID_TIER_MID  1 | Engine-adjacent — scripting, tools |
-/// | High | MID_TIER_HIGH 2 | Gameplay logic — player, AI, events|
+/// | Mid  | MID_TIER_MID  1 | Engine-adjacent — scripting, tools   |
+/// | High | MID_TIER_HIGH 2 | Gameplay logic — player, AI, events  |
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Tier {
-    /// Engine internals. Printed as [LOW ].
+    /// Engine internals. Printed as `LOW `.
     Low,
-    /// Engine-adjacent systems. Printed as [MID ].
+    /// Engine-adjacent systems. Printed as `MID `.
     Mid,
-    /// Gameplay logic. Printed as [HIGH].
+    /// Gameplay logic. Printed as `HIGH`.
     High,
 }
 
