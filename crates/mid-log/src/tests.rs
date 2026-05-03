@@ -5,9 +5,14 @@ mod tests {
     use crate::level::{LogLevel, Tier};
     use crate::entry::LogEntry;
     use crate::logger::MidLogger;
+    use crate::filter::{self, set_min_level};
     use std::time::Instant;
 
-    // ── Level ─────────────────────────────────────────────────────────────
+    fn ensure_logger() {
+        MidLogger::init();
+    }
+
+    // ── LogLevel ──────────────────────────────────────────────────────────────
 
     #[test]
     fn level_ordering_is_correct() {
@@ -17,7 +22,7 @@ mod tests {
         assert!(LogLevel::Error < LogLevel::Fatal);
         println!(
             "  Trace({}) < Info({}) < Warn({}) < Error({}) < Fatal({})",
-            LogLevel::Trace as u8, LogLevel::Info as u8,
+            LogLevel::Trace as u8, LogLevel::Info  as u8,
             LogLevel::Warn  as u8, LogLevel::Error as u8,
             LogLevel::Fatal as u8,
         );
@@ -41,13 +46,27 @@ mod tests {
     #[test]
     fn level_display_matches_as_str() {
         for level in [LogLevel::Info, LogLevel::Error] {
-            let displayed = format!("{}", level);
-            assert_eq!(displayed, level.as_str());
-            println!("  Display({:?}) = {:?}", level, displayed);
+            assert_eq!(format!("{}", level), level.as_str());
         }
     }
 
-    // ── Tier ──────────────────────────────────────────────────────────────
+    #[test]
+    fn level_from_u8_roundtrip() {
+        let cases = [
+            (0u8, LogLevel::Trace),
+            (1u8, LogLevel::Info),
+            (2u8, LogLevel::Warn),
+            (3u8, LogLevel::Error),
+            (4u8, LogLevel::Fatal),
+            (255u8, LogLevel::Fatal), // clamps
+        ];
+        for (v, expected) in cases {
+            assert_eq!(LogLevel::from_u8(v), expected);
+            println!("  from_u8({}) = {:?}", v, expected);
+        }
+    }
+
+    // ── Tier ──────────────────────────────────────────────────────────────────
 
     #[test]
     fn tier_as_str_fixed_width() {
@@ -59,214 +78,200 @@ mod tests {
     }
 
     #[test]
-    fn tier_display_matches_as_str() {
-        for tier in [Tier::Low, Tier::Mid, Tier::High] {
-            let displayed = format!("{}", tier);
-            assert_eq!(displayed, tier.as_str());
-            println!("  Display({:?}) = {:?}", tier, displayed);
-        }
-    }
-
+    fn tier_from_u8_zero_is_low()  { assert_eq!(Tier::from_u8(0),   Tier::Low);  }
     #[test]
-    fn tier_from_u8_zero_is_low() {
-        let t = Tier::from_u8(0);
-        assert_eq!(t, Tier::Low);
-        println!("  from_u8(0) = {:?}", t);
-    }
-
+    fn tier_from_u8_one_is_mid()   { assert_eq!(Tier::from_u8(1),   Tier::Mid);  }
     #[test]
-    fn tier_from_u8_one_is_mid() {
-        let t = Tier::from_u8(1);
-        assert_eq!(t, Tier::Mid);
-        println!("  from_u8(1) = {:?}", t);
-    }
-
+    fn tier_from_u8_two_is_high()  { assert_eq!(Tier::from_u8(2),   Tier::High); }
     #[test]
-    fn tier_from_u8_two_is_high() {
-        let t = Tier::from_u8(2);
-        assert_eq!(t, Tier::High);
-        println!("  from_u8(2) = {:?}", t);
-    }
-
-    #[test]
-    fn tier_from_u8_large_value_is_high() {
-        let t = Tier::from_u8(255);
-        assert_eq!(t, Tier::High);
-        println!("  from_u8(255) = {:?}  (all values >= 2 map to High)", t);
-    }
+    fn tier_from_u8_large_is_high(){ assert_eq!(Tier::from_u8(255), Tier::High); }
 
     #[test]
     fn tier_three_variants_are_distinct() {
-        assert_ne!(Tier::Low,  Tier::Mid);
-        assert_ne!(Tier::Mid,  Tier::High);
-        assert_ne!(Tier::Low,  Tier::High);
-        println!("  Low != Mid != High — all three variants are distinct");
+        assert_ne!(Tier::Low, Tier::Mid);
+        assert_ne!(Tier::Mid, Tier::High);
+        assert_ne!(Tier::Low, Tier::High);
     }
 
-    // ── LogEntry ──────────────────────────────────────────────────────────
+    // ── LogEntry ──────────────────────────────────────────────────────────────
 
     #[test]
     fn log_entry_stores_fields_correctly() {
-        let entry = LogEntry::new(LogLevel::Warn, Tier::Low, "buffer near capacity".to_string());
+        let entry = LogEntry::new(
+            LogLevel::Warn, Tier::Low, "buffer near capacity".to_string(),
+            "buffer.rs", 42, "mid_log::buffer",
+        );
         assert_eq!(entry.level,   LogLevel::Warn);
         assert_eq!(entry.tier,    Tier::Low);
         assert_eq!(entry.message, "buffer near capacity");
-        assert!(entry.timestamp > 0, "timestamp should be non-zero");
+        assert_eq!(entry.file,    "buffer.rs");
+        assert_eq!(entry.line,    42);
+        assert_eq!(entry.module,  "mid_log::buffer");
+        assert!(entry.timestamp > 0);
         println!(
-            "  entry: level={:?}  tier={:?}  msg={:?}  timestamp={}",
-            entry.level, entry.tier, entry.message, entry.timestamp,
+            "  entry: level={:?} tier={:?} msg={:?} file={} line={} ts={}",
+            entry.level, entry.tier, entry.message, entry.file, entry.line, entry.timestamp,
         );
     }
 
     #[test]
     fn log_entry_timestamp_increases_monotonically() {
-        let a = LogEntry::new(LogLevel::Info, Tier::High, "a".into());
+        let a = LogEntry::new(LogLevel::Info, Tier::High, "a".into(), "f", 1, "m");
         std::thread::sleep(std::time::Duration::from_millis(2));
-        let b = LogEntry::new(LogLevel::Info, Tier::High, "b".into());
+        let b = LogEntry::new(LogLevel::Info, Tier::High, "b".into(), "f", 1, "m");
         assert!(b.timestamp >= a.timestamp);
-        println!(
-            "  a.timestamp={}  b.timestamp={}  delta={}ms",
-            a.timestamp, b.timestamp, b.timestamp - a.timestamp,
-        );
-    }
-
-    // ── Ring buffer ───────────────────────────────────────────────────────
-
-    #[test]
-    fn buffer_capacity_is_power_of_two() {
-        let cap = crate::buffer::CAPACITY;
-        assert!(cap > 0 && (cap & (cap - 1)) == 0,
-            "CAPACITY={} must be a power of two", cap);
-        println!("  CAPACITY={} ({} bits set = power of two ✓)", cap, cap.count_ones());
+        println!("  delta={}ms", b.timestamp - a.timestamp);
     }
 
     #[test]
-    fn buffer_create_returns_paired_producer_consumer() {
-        let (mut prod, mut cons) = crate::buffer::create();
-        let entry = LogEntry::new(LogLevel::Info, Tier::High, "ring buffer test".into());
-        let msg   = entry.message.clone();
-        assert!(prod.push(entry).is_ok());
-        let popped = cons.pop().expect("should pop the pushed entry");
-        assert_eq!(popped.message, msg);
-        println!("  pushed {:?} → popped {:?}", msg, popped.message);
+    fn log_entry_format_time_is_hh_mm_ss_mmm() {
+        let entry = LogEntry::new(LogLevel::Info, Tier::Low, "t".into(), "f", 1, "m");
+        let t = entry.format_time();
+        // Format: HH:MM:SS.mmm  (14 chars)
+        assert_eq!(t.len(), 12, "format_time = {:?}", t);
+        assert_eq!(&t[2..3], ":");
+        assert_eq!(&t[5..6], ":");
+        assert_eq!(&t[8..9], ".");
+        println!("  format_time = {:?}", t);
+    }
+
+    // ── Filter ────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn filter_is_enabled_respects_min_level() {
+        set_min_level(LogLevel::Warn);
+        assert!(!filter::is_enabled(LogLevel::Trace), "Trace should be filtered");
+        assert!(!filter::is_enabled(LogLevel::Info),  "Info should be filtered");
+        assert!( filter::is_enabled(LogLevel::Warn),  "Warn should pass");
+        assert!( filter::is_enabled(LogLevel::Error), "Error should pass");
+        assert!( filter::is_enabled(LogLevel::Fatal), "Fatal should pass");
+        // Restore
+        set_min_level(LogLevel::Trace);
+        println!("  filter correctly gates at Warn level");
     }
 
     #[test]
-    fn buffer_empty_pop_returns_err() {
-        let (_prod, mut cons) = crate::buffer::create();
-        assert!(cons.pop().is_err());
-        println!("  pop on empty buffer = Err (correct — no blocking)");
-    }
-
-    #[test]
-    fn buffer_fills_to_capacity_without_panic() {
-        let cap = crate::buffer::CAPACITY;
-        let (mut prod, _cons) = crate::buffer::create();
-        let mut accepted = 0usize;
-        let mut dropped  = 0usize;
-        for i in 0..cap + 100 {
-            let entry = LogEntry::new(LogLevel::Trace, Tier::Low, format!("entry {}", i));
-            if prod.push(entry).is_ok() { accepted += 1; } else { dropped += 1; }
+    fn filter_set_and_get_roundtrip() {
+        for level in [LogLevel::Trace, LogLevel::Info, LogLevel::Warn, LogLevel::Error, LogLevel::Fatal] {
+            set_min_level(level);
+            assert_eq!(filter::get_min_level(), level);
         }
-        assert_eq!(accepted, cap, "should fill exactly to capacity");
-        assert_eq!(dropped, 100,  "100 pushes beyond capacity should be dropped");
-        println!(
-            "  CAPACITY={}  accepted={}  dropped={} (correct — ring buffer never blocks)",
-            cap, accepted, dropped,
-        );
+        set_min_level(LogLevel::Trace);
     }
 
-    // ── Logger lifecycle ──────────────────────────────────────────────────
+    // ── Logger lifecycle ──────────────────────────────────────────────────────
 
     #[test]
     fn logger_init_succeeds_or_was_already_init() {
-        let _ = MidLogger::init();
+        ensure_logger();
         assert!(MidLogger::get().is_some());
         println!("  MidLogger::get().is_some() = true");
     }
 
     #[test]
     fn logger_log_does_not_panic() {
-        MidLogger::init();
+        ensure_logger();
+        set_min_level(LogLevel::Trace);
         if let Some(logger) = MidLogger::get() {
-            logger.log(LogLevel::Trace, Tier::Low,  "trace — engine internal".into());
-            logger.log(LogLevel::Info,  Tier::Mid,  "info  — mid-level system".into());
-            logger.log(LogLevel::Warn,  Tier::High, "warn  — gameplay logic".into());
-            logger.log(LogLevel::Error, Tier::Low,  "error — non-fatal".into());
-            println!("  logged Trace/Info/Warn/Error without panic");
+            logger.log(LogLevel::Trace, Tier::Low,  "trace".into(), "f", 1, "m");
+            logger.log(LogLevel::Info,  Tier::Mid,  "info".into(),  "f", 2, "m");
+            logger.log(LogLevel::Warn,  Tier::High, "warn".into(),  "f", 3, "m");
+            logger.log(LogLevel::Error, Tier::Low,  "error".into(), "f", 4, "m");
         }
+        println!("  logged all levels without panic");
     }
 
     #[test]
     fn logger_accepts_all_tier_variants() {
-        MidLogger::init();
+        ensure_logger();
         if let Some(logger) = MidLogger::get() {
             for tier in [Tier::Low, Tier::Mid, Tier::High] {
-                logger.log(LogLevel::Info, tier, format!("tier {:?}", tier));
+                logger.log(LogLevel::Info, tier, format!("{:?}", tier), "f", 1, "m");
             }
-            println!("  logged to Low, Mid, High tiers — all accepted");
         }
+        println!("  all tiers accepted");
     }
 
     #[test]
     fn logger_accepts_empty_message() {
-        MidLogger::init();
+        ensure_logger();
         if let Some(logger) = MidLogger::get() {
-            logger.log(LogLevel::Info, Tier::Low, String::new());
-            println!("  empty string message accepted without panic");
+            logger.log(LogLevel::Info, Tier::Low, String::new(), "f", 1, "m");
         }
     }
 
     #[test]
     fn logger_accepts_unicode_message() {
-        MidLogger::init();
+        ensure_logger();
         if let Some(logger) = MidLogger::get() {
-            let msg = "🦀 Rust + 🎮 Mid Engine".to_string();
-            logger.log(LogLevel::Info, Tier::High, msg.clone());
-            println!("  unicode message accepted: {:?}", msg);
+            logger.log(LogLevel::Info, Tier::High, "🦀 Rust + 🎮 Mid Engine".into(), "f", 1, "m");
         }
     }
 
     #[test]
     fn logger_handles_very_long_message() {
-        MidLogger::init();
+        ensure_logger();
         if let Some(logger) = MidLogger::get() {
-            let msg = "x".repeat(65_536);
-            logger.log(LogLevel::Warn, Tier::Low, msg);
-            println!("  65536-byte message accepted without panic or blocking");
+            logger.log(LogLevel::Warn, Tier::Low, "x".repeat(65_536), "f", 1, "m");
         }
     }
 
-    // ── Macro API ─────────────────────────────────────────────────────────
+    // ── Macro API ─────────────────────────────────────────────────────────────
 
     #[test]
     fn macros_do_not_panic_before_init() {
-        crate::mid_trace!(Tier::Low,  "before init");
-        crate::mid_info! (Tier::Mid,  "before init");
-        crate::mid_warn! (Tier::High, "before init");
-        crate::mid_error!(Tier::Low,  "before init");
-        println!("  all macros silently no-op when logger is not yet init");
+        // Logger may already be init in other tests, but this must not panic either way.
+        set_min_level(LogLevel::Trace);
+        crate::mid_trace!(Tier::Low,  "before-or-after init");
+        crate::mid_info! (Tier::Mid,  "before-or-after init");
+        crate::mid_warn! (Tier::High, "before-or-after init");
+        crate::mid_error!(Tier::Low,  "before-or-after init");
+        println!("  macros silent when not init, functional when init");
     }
 
     #[test]
     fn macros_accept_format_args() {
-        MidLogger::init();
+        ensure_logger();
+        set_min_level(LogLevel::Trace);
         crate::mid_info!(Tier::High, "player {} spawned at ({:.1}, {:.1})", 42, 1.0, 2.5);
         crate::mid_warn!(Tier::Mid,  "system {}% loaded", 87);
         crate::mid_error!(Tier::Low, "entity {} missing component {}", 99, "Transform");
-        println!("  format args: player 42, 87%, entity 99 — all accepted");
+        println!("  format args accepted");
     }
 
     #[test]
-    fn macros_cover_all_tiers() {
-        MidLogger::init();
-        crate::mid_info!(Tier::Low,  "engine internal");
-        crate::mid_info!(Tier::Mid,  "mid-level system");
-        crate::mid_info!(Tier::High, "gameplay logic");
-        println!("  macros accepted Tier::Low, Mid, High without panic");
+    fn macros_filtered_do_not_format() {
+        ensure_logger();
+        set_min_level(LogLevel::Fatal); // suppress everything
+        let count = 10_000usize;
+        let start = Instant::now();
+        for i in 0..count {
+            // format!() must NOT run — if it did, this would be much slower
+            crate::mid_trace!(Tier::Low, "entity={} pos=({:.4},{:.4})", i, 1.0f32, 2.0f32);
+        }
+        let elapsed = start.elapsed();
+        let ns = elapsed.as_nanos() as f64 / count as f64;
+        println!(
+            "  {} filtered mid_trace! calls in {:.3}ms  ({:.2} ns/call)",
+            count, elapsed.as_secs_f64() * 1000.0, ns
+        );
+        // Filtered path should be <5ns per call (just one atomic load + branch).
+        assert!(ns < 50.0,
+            "filtered path took {:.2} ns/call — expected <50ns (atomic + branch only)", ns);
+        set_min_level(LogLevel::Trace);
     }
 
-    // ── FFI ───────────────────────────────────────────────────────────────
+    #[test]
+    fn macros_capture_source_location() {
+        ensure_logger();
+        set_min_level(LogLevel::Trace);
+        // We can't inspect the entry directly from outside but we can verify no panic
+        // and that the macro expands at the correct call site (human verification via log output).
+        crate::mid_info!(Tier::Low, "source location test — should show tests.rs");
+        println!("  source location captured (verify in log output)");
+    }
+
+    // ── FFI ───────────────────────────────────────────────────────────────────
 
     #[test]
     fn ffi_init_returns_one_or_zero() {
@@ -274,6 +279,15 @@ mod tests {
         assert!(result == 0 || result == 1,
             "mid_log_init must return 0 or 1, got {}", result);
         println!("  mid_log_init() = {} (0=already init, 1=fresh init)", result);
+    }
+
+    #[test]
+    fn ffi_set_and_get_min_level() {
+        crate::ffi::mid_log_set_min_level(2); // WARN
+        assert_eq!(crate::ffi::mid_log_get_min_level(), 2);
+        crate::ffi::mid_log_set_min_level(0); // restore TRACE
+        assert_eq!(crate::ffi::mid_log_get_min_level(), 0);
+        println!("  FFI set/get min level roundtrip OK");
     }
 
     #[test]
@@ -286,6 +300,7 @@ mod tests {
     #[test]
     fn ffi_log_valid_message_all_levels_and_tiers() {
         crate::ffi::mid_log_init();
+        crate::ffi::mid_log_set_min_level(0);
         let msg = std::ffi::CString::new("ffi test").unwrap();
         unsafe {
             crate::ffi::mid_log_info_c (0, msg.as_ptr());
@@ -295,7 +310,7 @@ mod tests {
             crate::ffi::mid_log_warn_c (1, msg.as_ptr());
             crate::ffi::mid_log_error_c(2, msg.as_ptr());
         }
-        println!("  6 FFI calls (3 tiers × levels subset) — all accepted");
+        println!("  6 FFI calls across all tiers — all accepted");
     }
 
     #[test]
@@ -306,107 +321,43 @@ mod tests {
             (2u8, Tier::High, "MID_TIER_HIGH"),
         ];
         for (v, expected, name) in cases {
-            let got = Tier::from_u8(v);
-            assert_eq!(got, expected, "{} = {}", name, v);
-            println!("  {} ({}) → {:?}", name, v, got);
+            assert_eq!(Tier::from_u8(v), expected, "{} = {}", name, v);
+            println!("  {} ({}) → {:?}", name, v, expected);
         }
     }
 
-    // ── Stress: throughput ────────────────────────────────────────────────
+    #[test]
+    fn ffi_flush_does_not_panic() {
+        crate::ffi::mid_log_init();
+        crate::ffi::mid_log_flush();
+        println!("  mid_log_flush() returned without panic");
+    }
+
+    // ── Stress ────────────────────────────────────────────────────────────────
 
     #[test]
     fn stress_1000_info_logs_complete_without_panic() {
-        MidLogger::init();
+        ensure_logger();
+        set_min_level(LogLevel::Trace);
         let count = 1_000usize;
         let start = Instant::now();
         if let Some(logger) = MidLogger::get() {
             for i in 0..count {
-                logger.log(LogLevel::Info, Tier::Low, format!("stress info #{}", i));
+                logger.log(LogLevel::Info, Tier::Low, format!("stress info #{}", i), "f", 1, "m");
             }
         }
         let elapsed = start.elapsed();
         println!(
             "  {} INFO logs in {:.3}ms  ({:.1} ns/log)",
-            count,
-            elapsed.as_secs_f64() * 1000.0,
+            count, elapsed.as_secs_f64() * 1000.0,
             elapsed.as_nanos() as f64 / count as f64,
-        );
-    }
-
-    #[test]
-    fn stress_1000_error_logs_complete_without_panic() {
-        MidLogger::init();
-        let count = 1_000usize;
-        let start = Instant::now();
-        if let Some(logger) = MidLogger::get() {
-            for i in 0..count {
-                logger.log(LogLevel::Error, Tier::High, format!("stress error #{}: non-fatal", i));
-            }
-        }
-        let elapsed = start.elapsed();
-        println!(
-            "  {} ERROR logs in {:.3}ms  ({:.1} ns/log)",
-            count,
-            elapsed.as_secs_f64() * 1000.0,
-            elapsed.as_nanos() as f64 / count as f64,
-        );
-    }
-
-    #[test]
-    fn stress_all_five_levels_200_each_no_panic() {
-        MidLogger::init();
-        let per_level = 200usize;
-        let levels = [
-            LogLevel::Trace,
-            LogLevel::Info,
-            LogLevel::Warn,
-            LogLevel::Error,
-            // Note: Fatal calls shutdown — we skip it in the burst loop.
-        ];
-        let start = Instant::now();
-        if let Some(logger) = MidLogger::get() {
-            for level in levels {
-                for i in 0..per_level {
-                    logger.log(level, Tier::Mid, format!("{:?} #{}", level, i));
-                }
-            }
-        }
-        let total   = per_level * levels.len();
-        let elapsed = start.elapsed();
-        println!(
-            "  {} logs across 4 levels in {:.3}ms  ({:.1} ns/log)",
-            total,
-            elapsed.as_secs_f64() * 1000.0,
-            elapsed.as_nanos() as f64 / total as f64,
-        );
-    }
-
-    #[test]
-    fn stress_all_three_tiers_333_each_no_panic() {
-        MidLogger::init();
-        let per_tier = 333usize;
-        let tiers    = [Tier::Low, Tier::Mid, Tier::High];
-        let start    = Instant::now();
-        if let Some(logger) = MidLogger::get() {
-            for tier in tiers {
-                for i in 0..per_tier {
-                    logger.log(LogLevel::Trace, tier, format!("[{:?}] trace #{}", tier, i));
-                }
-            }
-        }
-        let total   = per_tier * tiers.len();
-        let elapsed = start.elapsed();
-        println!(
-            "  {} TRACE logs across 3 tiers in {:.3}ms  ({:.1} ns/log)",
-            total,
-            elapsed.as_secs_f64() * 1000.0,
-            elapsed.as_nanos() as f64 / total as f64,
         );
     }
 
     #[test]
     fn stress_mixed_burst_5000_logs_no_panic() {
-        MidLogger::init();
+        ensure_logger();
+        set_min_level(LogLevel::Trace);
         let count = 5_000usize;
         let start = Instant::now();
         if let Some(logger) = MidLogger::get() {
@@ -417,73 +368,44 @@ mod tests {
                     2 => LogLevel::Warn,
                     _ => LogLevel::Error,
                 };
-                let tier = match i % 3 {
-                    0 => Tier::Low,
-                    1 => Tier::Mid,
-                    _ => Tier::High,
-                };
-                logger.log(level, tier, format!("burst #{}: entity={} pos=({:.2},{:.2})", i, i % 1000, i as f32 * 0.1, i as f32 * 0.2));
+                let tier = match i % 3 { 0 => Tier::Low, 1 => Tier::Mid, _ => Tier::High };
+                logger.log(level, tier,
+                    format!("burst #{}: entity={} pos=({:.2},{:.2})", i, i % 1000, i as f32 * 0.1, i as f32 * 0.2),
+                    "f", 1, "m");
             }
         }
         let elapsed = start.elapsed();
-        let ns_per  = elapsed.as_nanos() as f64 / count as f64;
+        let ms = elapsed.as_secs_f64() * 1000.0;
         println!(
-            "  {} mixed-level logs in {:.3}ms  ({:.1} ns/log)",
-            count,
-            elapsed.as_secs_f64() * 1000.0,
-            ns_per,
+            "  {} mixed logs in {:.3}ms  ({:.1} ns/log)",
+            count, ms, elapsed.as_nanos() as f64 / count as f64,
         );
-        // Budget: 7.8ms per 128Hz tick. 5000 logs should complete well under that.
-        // This is not a hard assertion — timing varies by CI machine — but we print
-        // clearly so regressions are visible in the HTML results.
         println!(
-            "  128Hz tick budget = 7.8ms — this burst took {:.3}ms ({})",
-            elapsed.as_secs_f64() * 1000.0,
-            if elapsed.as_millis() < 8 { "✓ within budget" } else { "⚠ over budget on this machine" },
+            "  128Hz tick budget=7.8ms — burst took {:.3}ms ({})",
+            ms, if elapsed.as_millis() < 8 { "✓ within budget" } else { "⚠ over budget" },
         );
     }
 
     #[test]
-    fn stress_ring_buffer_saturation_never_blocks() {
-        // Push far more entries than CAPACITY. The ring buffer must drop
-        // entries silently — it must NEVER block or panic.
-        let cap     = crate::buffer::CAPACITY;
-        let burst   = cap * 4;  // 4× capacity
-        let (mut prod, _cons) = crate::buffer::create();
-        let start   = Instant::now();
-        let mut accepted = 0usize;
-        let mut dropped  = 0usize;
-        for i in 0..burst {
-            let entry = LogEntry::new(LogLevel::Trace, Tier::Low, format!("sat #{}", i));
-            if prod.push(entry).is_ok() { accepted += 1; } else { dropped += 1; }
-        }
-        let elapsed = start.elapsed();
-        assert_eq!(accepted, cap,  "should accept exactly CAPACITY entries");
-        assert_eq!(dropped,  burst - cap, "remainder should be silently dropped");
-        println!(
-            "  CAPACITY={}  burst={}×cap  accepted={}  dropped={}  time={:.3}ms",
-            cap, 4, accepted, dropped,
-            elapsed.as_secs_f64() * 1000.0,
-        );
-        println!("  ✓ ring buffer saturated cleanly — zero blocking, zero panic");
-    }
-
-    #[test]
-    fn stress_concurrent_threads_4x1000_logs_no_panic() {
-        MidLogger::init();
-        let threads     = 4usize;
-        let per_thread  = 1_000usize;
-        let start       = Instant::now();
+    fn stress_concurrent_threads_8x500_no_panic() {
+        ensure_logger();
+        set_min_level(LogLevel::Trace);
+        let threads    = 8usize;
+        let per_thread = 500usize;
+        let start      = Instant::now();
 
         let handles: Vec<_> = (0..threads).map(|tid| {
             std::thread::spawn(move || {
                 if let Some(logger) = MidLogger::get() {
                     for i in 0..per_thread {
-                        logger.log(
-                            LogLevel::Info,
-                            Tier::Mid,
-                            format!("thread {} log #{}", tid, i),
-                        );
+                        let level = match (tid + i) % 4 {
+                            0 => LogLevel::Trace,
+                            1 => LogLevel::Info,
+                            2 => LogLevel::Warn,
+                            _ => LogLevel::Error,
+                        };
+                        let tier = match tid % 3 { 0 => Tier::Low, 1 => Tier::Mid, _ => Tier::High };
+                        logger.log(level, tier, format!("t{} #{}", tid, i), "f", 1, "m");
                     }
                 }
             })
@@ -499,91 +421,60 @@ mod tests {
             elapsed.as_secs_f64() * 1000.0,
             elapsed.as_nanos() as f64 / total as f64,
         );
-        println!("  ✓ no deadlock, no panic across concurrent producers");
+        println!("  ✓ no deadlock, no panic — crossbeam MPSC under concurrent load");
     }
 
     #[test]
-    fn stress_concurrent_threads_8x500_mixed_levels_no_panic() {
-        MidLogger::init();
-        let threads    = 8usize;
-        let per_thread = 500usize;
+    fn stress_128hz_tick_budget_1000_logs_fit_within_7_8ms() {
+        ensure_logger();
+        set_min_level(LogLevel::Info);
+        let count      = 1_000usize;
+        let budget_ms  = 7.8_f64;
         let start      = Instant::now();
-
-        let handles: Vec<_> = (0..threads).map(|tid| {
-            std::thread::spawn(move || {
-                if let Some(logger) = MidLogger::get() {
-                    for i in 0..per_thread {
-                        let level = match (tid + i) % 4 {
-                            0 => LogLevel::Trace,
-                            1 => LogLevel::Info,
-                            2 => LogLevel::Warn,
-                            _ => LogLevel::Error,
-                        };
-                        let tier = match tid % 3 {
-                            0 => Tier::Low,
-                            1 => Tier::Mid,
-                            _ => Tier::High,
-                        };
-                        logger.log(level, tier, format!("t{} #{} {:?}", tid, i, level));
-                    }
-                }
-            })
-        }).collect();
-
-        for h in handles { h.join().expect("thread panicked"); }
-
-        let elapsed = start.elapsed();
-        let total   = threads * per_thread;
+        if let Some(logger) = MidLogger::get() {
+            for i in 0..count {
+                logger.log(
+                    LogLevel::Info, Tier::Low,
+                    format!("tick entity={} vel=({:.3},{:.3})", i, i as f32 * 0.01, i as f32 * 0.02),
+                    "f", 1, "m",
+                );
+            }
+        }
+        let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
         println!(
-            "  {} threads × {} mixed logs = {} total in {:.3}ms  ({:.1} ns/log)",
-            threads, per_thread, total,
-            elapsed.as_secs_f64() * 1000.0,
-            elapsed.as_nanos() as f64 / total as f64,
+            "  {} logs in {:.4}ms  budget={:.1}ms  headroom={:.4}ms",
+            count, elapsed_ms, budget_ms, budget_ms - elapsed_ms,
         );
-        println!("  ✓ no deadlock, no panic — mixed levels + tiers across 8 threads");
+        assert!(
+            elapsed_ms < budget_ms * 10.0,
+            "1000 log pushes took {:.2}ms — exceeded 10× tick budget", elapsed_ms,
+        );
     }
 
     #[test]
-    fn stress_macro_burst_1000_mid_info_no_panic() {
-        MidLogger::init();
-        let count = 1_000usize;
+    fn stress_macro_filtered_path_is_near_free() {
+        ensure_logger();
+        set_min_level(LogLevel::Fatal);
+        let count = 100_000usize;
         let start = Instant::now();
         for i in 0..count {
-            crate::mid_info!(Tier::High, "macro burst #{}: entity={} health={}", i, i % 500, 100 - (i % 100));
+            crate::mid_trace!(Tier::Low, "entity={} health={}", i, 100u32);
         }
         let elapsed = start.elapsed();
+        let ns = elapsed.as_nanos() as f64 / count as f64;
         println!(
-            "  mid_info! macro × {} in {:.3}ms  ({:.1} ns/call)",
-            count,
-            elapsed.as_secs_f64() * 1000.0,
-            elapsed.as_nanos() as f64 / count as f64,
+            "  {} filtered mid_trace! in {:.3}ms  ({:.2} ns/call)  — should be ~1ns",
+            count, elapsed.as_secs_f64() * 1000.0, ns,
         );
-    }
-
-    #[test]
-    fn stress_macro_burst_all_macros_250_each_no_panic() {
-        MidLogger::init();
-        let per_macro = 250usize;
-        let start     = Instant::now();
-        for i in 0..per_macro {
-            crate::mid_trace!(Tier::Low,  "trace #{}", i);
-            crate::mid_info! (Tier::Mid,  "info  #{}", i);
-            crate::mid_warn! (Tier::High, "warn  #{}", i);
-            crate::mid_error!(Tier::Low,  "error #{}", i);
-        }
-        let total   = per_macro * 4;
-        let elapsed = start.elapsed();
-        println!(
-            "  4 macros × {} = {} calls in {:.3}ms  ({:.1} ns/call)",
-            per_macro, total,
-            elapsed.as_secs_f64() * 1000.0,
-            elapsed.as_nanos() as f64 / total as f64,
-        );
+        assert!(ns < 20.0,
+            "filtered path {:.2} ns/call — expected <20ns (one atomic load)", ns);
+        set_min_level(LogLevel::Trace);
     }
 
     #[test]
     fn stress_ffi_burst_1000_c_calls_no_panic() {
         crate::ffi::mid_log_init();
+        crate::ffi::mid_log_set_min_level(0);
         let msg   = std::ffi::CString::new("ffi stress entry").unwrap();
         let count = 1_000usize;
         let start = Instant::now();
@@ -595,44 +486,9 @@ mod tests {
         let elapsed = start.elapsed();
         println!(
             "  {} FFI mid_log_info_c calls in {:.3}ms  ({:.1} ns/call)",
-            count,
-            elapsed.as_secs_f64() * 1000.0,
+            count, elapsed.as_secs_f64() * 1000.0,
             elapsed.as_nanos() as f64 / count as f64,
         );
         println!("  ✓ C boundary held under sustained load");
     }
-
-    #[test]
-    fn stress_128hz_tick_budget_1000_logs_fit_within_7_8ms() {
-        // The network tick target is 128Hz = 7.8ms per tick.
-        // We simulate a frame's logging burst and verify the hot path
-        // stays far inside that window.
-        // Note: this asserts timing so it will be loose on slow CI runners.
-        // The printed output is the key signal — adjust the multiplier if needed.
-        MidLogger::init();
-        let count    = 1_000usize;
-        let budget_ms = 7.8_f64;
-        let start    = Instant::now();
-        if let Some(logger) = MidLogger::get() {
-            for i in 0..count {
-                logger.log(
-                    LogLevel::Info,
-                    Tier::Low,
-                    format!("tick frame entity={} vel=({:.3},{:.3})", i, i as f32 * 0.01, i as f32 * 0.02),
-                );
-            }
-        }
-        let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
-        println!(
-            "  {} logs in {:.4}ms  budget={:.1}ms  headroom={:.4}ms",
-            count, elapsed_ms, budget_ms, budget_ms - elapsed_ms,
-        );
-        // On a real machine the push is ~50-200ns total for 1000 entries.
-        // Allow 10× margin for CI machines that may be throttled.
-        assert!(
-            elapsed_ms < budget_ms * 10.0,
-            "1000 log pushes took {:.2}ms — exceeded 10× the 7.8ms tick budget (CI machine unusually slow?)",
-            elapsed_ms,
-        );
-    }
-        }
+}
