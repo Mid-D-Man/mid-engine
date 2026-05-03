@@ -1,9 +1,9 @@
 # crates/mid-math/Cargo.toml
 [package]
 name        = "mid-math"
-version     = "0.1.0"
+version     = "0.2.0"
 edition     = "2021"
-description = "SIMD-aligned math primitives for Mid Engine — FFI-ready, cross-platform"
+description = "SIMD-aligned math primitives for Mid Engine — FFI-ready, cross-platform, f32+f64"
 
 [lib]
 name = "mid_math"
@@ -21,9 +21,12 @@ ultraviolet = { version = "0.9" }
 name    = "vs_glam"
 harness = false
 
-
 [[bench]]
 name    = "vs_all"
+harness = false
+
+[[bench]]
+name    = "vs_all_f64"
 harness = false
 
 [features]
