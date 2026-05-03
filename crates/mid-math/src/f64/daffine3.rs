@@ -200,14 +200,11 @@ impl DAffine3 {
     // ── Cast ─────────────────────────────────────────────────────────────────
 
     /// Lossy cast to single-precision `Affine3`.
+    ///
+    /// Axes are copied directly — scale is already baked into axis lengths,
+    /// matching the f32 Affine3 internal layout exactly.
     #[inline]
     pub fn as_affine3(self) -> crate::Affine3 {
-        crate::Affine3::from_trs(
-            self.translation.as_vec3(),
-            crate::Quat::IDENTITY, // rotation baked into axes already — extract below
-            crate::Vec3::ONE,
-        );
-        // Proper cast: copy axes directly (scale baked in, matching f32 Affine3 layout)
         crate::Affine3 {
             x_axis:      self.x_axis.as_vec3(),
             y_axis:      self.y_axis.as_vec3(),
