@@ -4,15 +4,18 @@ pub(crate) mod sse2;
 
 pub mod deref;
 pub mod f32;
+pub mod f64;
 pub mod ffi;
 pub mod constants;
 
 pub use constants::*;
 
+// ── f32 re-exports ────────────────────────────────────────────────────────────
+
 pub use f32::Vec2;
 pub use f32::Mat2;
 pub use f32::Mat3;
-pub use f32::Affine3;  // ← NEW
+pub use f32::Affine3;
 
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 pub use f32::sse2::{Vec3, Vec4, Quat, Mat4};
@@ -37,6 +40,11 @@ pub use f32::wasm::{Vec3, Vec4, Quat, Mat4};
 )))]
 pub use f32::scalar::{Vec3, Vec4, Quat, Mat4};
 
+// ── f64 re-exports ────────────────────────────────────────────────────────────
+
+pub use f64::{DVec2, DVec3, DVec4, DQuat, DMat2, DMat3, DMat4, DAffine3};
+pub use f64::DEPSILON;
+
 // ── Scalar utilities ──────────────────────────────────────────────────────────
 
 #[inline(always)] pub fn lerp(a: f32, b: f32, t: f32) -> f32 { a + (b - a) * t }
@@ -46,8 +54,9 @@ pub use f32::scalar::{Vec3, Vec4, Quat, Mat4};
     if d.abs() < constants::EPSILON { 0.0 } else { (v - a) / d }
 }
 
-#[inline(always)] pub fn remap(v: f32, in_min: f32, in_max: f32,
-                                out_min: f32, out_max: f32) -> f32 {
+#[inline(always)] pub fn remap(
+    v: f32, in_min: f32, in_max: f32, out_min: f32, out_max: f32,
+) -> f32 {
     lerp(out_min, out_max, inverse_lerp(in_min, in_max, v))
 }
 
