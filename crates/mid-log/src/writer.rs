@@ -3,12 +3,9 @@
 //! Background IO thread — drains the channel and writes to the active sink.
 //!
 //! The thread parks (via `recv()` blocking) when no entries are queued,
-//! consuming zero CPU during quiet periods. This replaces the previous
-//! `yield_now()` spin which wasted a CPU timeslice every quiet iteration.
+//! consuming zero CPU during quiet periods.
 //!
 //! ## Sink selection
-//!
-//! The platform sink is chosen at compile time:
 //!
 //! | Target                          | Sink                       |
 //! |---------------------------------|----------------------------|
@@ -16,14 +13,7 @@
 //! | Everything else                 | `stderr` (raw `write_all`) |
 //!
 //! The stderr sink uses `std::io::Write` directly instead of `eprintln!`
-//! to bypass Rust's fmt machinery and avoid a redundant allocation for
-//! the newline. Measured ~15% faster on the IO thread under sustained load.
-//!
-//! ## File sink
-//!
-//! Pass `Some(path)` to `LogWriter::spawn()` to tee output to a file.
-//! The file is line-buffered. If the file cannot be opened, we log the
-//! error to stderr and continue with stderr-only output.
+//! to bypass Rust's fmt machinery.
 
 use std::thread;
 use std::sync::Arc;
@@ -43,12 +33,10 @@ mod android_sink {
     use crate::level::LogLevel;
     use std::ffi::CString;
 
-    // These are available in the NDK via liblog.
     extern "C" {
         fn __android_log_write(prio: i32, tag: *const i8, text: *const i8) -> i32;
     }
 
-    // Android log priority constants (from <android/log.h>)
     const ANDROID_LOG_DEBUG:   i32 = 3;
     const ANDROID_LOG_INFO:    i32 = 4;
     const ANDROID_LOG_WARN:    i32 = 5;
@@ -64,7 +52,7 @@ mod android_sink {
             LogLevel::Error => ANDROID_LOG_ERROR,
             LogLevel::Fatal => ANDROID_LOG_FATAL,
         };
-        // Format: [TIER] message (file:line)
+        
         let text = format!(
             "[{}] {} ({}:{})",
             entry.tier.as_str(),
@@ -72,6 +60,7 @@ mod android_sink {
             entry.file,
             entry.line,
         );
+        
         if let Ok(c_text) = CString::new(text) {
             unsafe {
                 __android_log_write(prio, TAG.as_ptr() as *const i8, c_text.as_ptr());
@@ -82,27 +71,7 @@ mod android_sink {
 
 // ── Formatted output for all non-Android targets ──────────────────────────────
 
-/// Format a log entry into the provided buffer.
-/// Format: `HH:MM:SS.mmm [LEVEL][TIER] message  (module file:line)\n`
-fn format_entry(entry: &LogEntry, buf: &mut Vec<u8>) {
-    use std::fmt::Write as FmtWrite;
-
-    buf.clear();
-    // Timestamp
-    write!(buf as &mut dyn FmtWrite,
-        "{} [{}][{}] {}  ({}  {}:{})\n",
-        entry.format_time(),
-        entry.level.as_str(),
-        entry.tier.as_str(),
-        entry.message,
-        entry.module,
-        entry.file,
-        entry.line,
-    ).ok();
-}
-
-// Vec<u8> implements std::fmt::Write via a blanket impl? No — we need io::Write.
-// Use a helper that writes formatted text into a Vec<u8>.
+/// Helper to bridge std::fmt::Write (used by write!) to a Vec<u8> (io::Write).
 struct VecWriter<'a>(&'a mut Vec<u8>);
 
 impl std::fmt::Write for VecWriter<'_> {
@@ -112,9 +81,12 @@ impl std::fmt::Write for VecWriter<'_> {
     }
 }
 
-fn format_entry_real(entry: &LogEntry, buf: &mut Vec<u8>) {
+/// Format a log entry into the provided buffer.
+/// Format: `HH:MM:SS.mmm [LEVEL][TIER] message  (module file:line)\n`
+fn format_entry(entry: &LogEntry, buf: &mut Vec<u8>) {
     use std::fmt::Write;
     buf.clear();
+    
     let mut w = VecWriter(buf);
     write!(w,
         "{} [{}][{}] {}  ({}  {}:{})\n",
@@ -137,9 +109,6 @@ pub struct LogWriter {
 
 impl LogWriter {
     /// Spawn the background IO thread.
-    ///
-    /// * `receiver`  — the channel end to drain.
-    /// * `log_file`  — optional path for a file tee. `None` = stderr only.
     pub fn spawn(receiver: LogReceiver, log_file: Option<std::path::PathBuf>) -> Self {
         let shutdown       = Arc::new(AtomicBool::new(false));
         let shutdown_clone = shutdown.clone();
@@ -150,7 +119,6 @@ impl LogWriter {
                 let stderr = io::stderr();
                 let mut buf = Vec::<u8>::with_capacity(256);
 
-                // Optional file sink
                 let mut file_sink: Option<io::BufWriter<fs::File>> = log_file.and_then(|p| {
                     match fs::OpenOptions::new().create(true).append(true).open(&p) {
                         Ok(f)  => Some(io::BufWriter::new(f)),
@@ -162,34 +130,28 @@ impl LogWriter {
                 });
 
                 loop {
-                    // recv() blocks until an entry arrives or the channel is
-                    // disconnected (sender dropped = shutdown path).
                     match receiver.recv() {
                         Ok(entry) => {
                             Self::write_entry(&entry, &stderr, &mut file_sink, &mut buf);
-                            // Drain any additional entries that arrived while we
-                            // were formatting — avoids unnecessary park/unpark cycles.
+                            
+                            // Drain burst
                             while let Ok(e) = receiver.try_recv() {
                                 Self::write_entry(&e, &stderr, &mut file_sink, &mut buf);
                             }
-                            // Flush file sink after each burst
+                            
                             if let Some(ref mut f) = file_sink {
                                 f.flush().ok();
                             }
                         }
                         Err(_) => {
-                            // Channel disconnected — check shutdown flag then exit.
                             if shutdown_clone.load(Ordering::Relaxed) {
                                 break;
                             }
-                            // Spurious disconnect should not happen with crossbeam,
-                            // but break anyway to avoid a spin on a dead channel.
                             break;
                         }
                     }
                 }
 
-                // Final flush
                 if let Some(ref mut f) = file_sink {
                     f.flush().ok();
                 }
@@ -205,17 +167,15 @@ impl LogWriter {
         file_sink: &mut Option<io::BufWriter<fs::File>>,
         buf:       &mut Vec<u8>,
     ) {
-        // ── Android: delegate entirely to logcat ──────────────────────────────
         #[cfg(all(target_os = "android", feature = "android-logcat"))]
         {
             android_sink::write(entry);
             return;
         }
 
-        // ── All other targets: formatted text to stderr (+ optional file) ─────
         #[cfg(not(all(target_os = "android", feature = "android-logcat")))]
         {
-            format_entry_real(entry, buf);
+            format_entry(entry, buf);
 
             {
                 let mut err = stderr.lock();
@@ -224,12 +184,10 @@ impl LogWriter {
 
             if let Some(ref mut f) = file_sink {
                 f.write_all(buf).ok();
-                // File is flushed after the burst loop in the caller.
             }
         }
     }
 
-    /// Signal the IO thread to stop after draining remaining entries.
     pub fn signal_shutdown(&self) {
         self.shutdown.store(true, Ordering::Relaxed);
     }
@@ -242,4 +200,4 @@ impl Drop for LogWriter {
             let _ = handle.join();
         }
     }
-    }
+}
