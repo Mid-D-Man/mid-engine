@@ -108,17 +108,16 @@ impl CDVec2 { #[inline(always)] pub fn new(x: f64, y: f64) -> Self { Self { x, y
 impl From<DVec2>  for CDVec2 { #[inline(always)] fn from(v: DVec2)  -> Self { Self::new(v.x, v.y) } }
 impl From<CDVec2> for DVec2  { #[inline(always)] fn from(v: CDVec2) -> Self { DVec2::new(v.x, v.y) } }
 
-/// C-ABI DVec3. 32 bytes, align(32). Contains padding lane (matches Rust `_pad`).
+/// C-ABI DVec3. 24 bytes, align(8). No padding — matches the Rust type exactly.
 #[derive(Debug, Clone, Copy, PartialEq)]
-#[repr(C, align(32))]
-pub struct CDVec3 { pub x: f64, pub y: f64, pub z: f64, pub _pad: f64 }
+#[repr(C, align(8))]
+pub struct CDVec3 { pub x: f64, pub y: f64, pub z: f64 }
 
 impl CDVec3 {
-    #[inline(always)] pub fn new(x: f64, y: f64, z: f64) -> Self { Self { x, y, z, _pad: 0.0 } }
+    #[inline(always)] pub fn new(x: f64, y: f64, z: f64) -> Self { Self { x, y, z } }
 }
 impl From<DVec3>  for CDVec3 { #[inline(always)] fn from(v: DVec3)  -> Self { Self::new(v.x, v.y, v.z) } }
 impl From<CDVec3> for DVec3  { #[inline(always)] fn from(v: CDVec3) -> Self { DVec3::new(v.x, v.y, v.z) } }
-
 /// C-ABI DVec4. 32 bytes, align(32).
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[repr(C, align(32))]
