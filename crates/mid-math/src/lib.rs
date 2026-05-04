@@ -2,6 +2,7 @@
 
 pub(crate) mod sse2;
 
+pub mod bvec;
 pub mod deref;
 pub mod f32;
 pub mod f64;
@@ -9,6 +10,10 @@ pub mod ffi;
 pub mod constants;
 
 pub use constants::*;
+
+// ── Bool mask re-exports ──────────────────────────────────────────────────────
+
+pub use bvec::{BVec2, BVec3, BVec4};
 
 // ── f32 re-exports ────────────────────────────────────────────────────────────
 
