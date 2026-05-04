@@ -7,13 +7,10 @@ description = "Non-blocking tiered logger for Mid Engine — FFI-ready, cross-pl
 
 [lib]
 name = "mid_log"
-# rlib      = Rust-to-Rust linking
-# cdylib    = .dylib/.so/.dll  — C, C++, Unity, Godot, Unreal, Android
-# staticlib = .a               — iOS (App Store forbids dynamic libs)
 crate-type = ["rlib", "cdylib", "staticlib"]
 
 [dependencies]
-crossbeam-channel = "0.5"   # lock-free MPSC — replaces rtrb + Mutex
+crossbeam-channel = "0.5"
 
 [dev-dependencies]
 criterion          = { version = "0.5", features = ["html_reports"] }
@@ -27,7 +24,6 @@ name    = "vs_baseline"
 harness = false
 
 [features]
-default   = []
-backtrace = []
-# android-logcat: enables __android_log_write sink (requires NDK)
+default        = []
+backtrace      = []
 android-logcat = []
