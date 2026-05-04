@@ -150,17 +150,27 @@ impl DQuat {
 
     /// Normalised linear interpolation — fast, slightly non-constant velocity.
     ///
-    /// Shortest-path via dot-sign flip before lerp.
+    /// Shortest-path via dot-sign flip. Inlined normalize avoids the
+    /// method-call overhead and lets the compiler see the full dependency.
     #[inline]
     pub fn nlerp(self, rhs: Self, t: f64) -> Self {
         let dot  = self.dot(rhs);
         let sign = if dot < 0.0 { -1.0f64 } else { 1.0f64 };
-        Self::new(
-            self.x + (rhs.x * sign - self.x) * t,
-            self.y + (rhs.y * sign - self.y) * t,
-            self.z + (rhs.z * sign - self.z) * t,
-            self.w + (rhs.w * sign - self.w) * t,
-        ).normalize()
+
+        // Lerp toward the correct hemisphere.
+        let lx = self.x + (rhs.x * sign - self.x) * t;
+        let ly = self.y + (rhs.y * sign - self.y) * t;
+        let lz = self.z + (rhs.z * sign - self.z) * t;
+        let lw = self.w + (rhs.w * sign - self.w) * t;
+
+        // Inline normalize — avoid the function call overhead.
+        // length_sq is fused here so compiler sees all four components.
+        let len_sq = lx*lx + ly*ly + lz*lz + lw*lw;
+        if len_sq < DEPSILON {
+            return Self::IDENTITY;
+        }
+        let inv_len = 1.0 / len_sq.sqrt();
+        Self::new(lx * inv_len, ly * inv_len, lz * inv_len, lw * inv_len)
     }
 
     /// Spherical linear interpolation — constant angular velocity.
