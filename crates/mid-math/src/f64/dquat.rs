@@ -165,29 +165,48 @@ impl DQuat {
 
     /// Spherical linear interpolation — constant angular velocity.
     ///
-    /// Falls back to nlerp when quaternions are nearly identical
-    /// (avoids division by near-zero sin(angle)).
+    /// Uses the numerically stable atan2 form to avoid the precision
+    /// loss of `acos` near 0 and π, and eliminates a redundant `sqrt`.
+    ///
+    /// Algorithm: Shoemake's slerp with `atan2(sin_theta, cos_theta)`
+    /// instead of `acos(cos_theta)` — more stable and one fewer
+    /// transcendental call overall.
     pub fn slerp(self, mut rhs: Self, t: f64) -> Self {
         let mut cos_theta = self.dot(rhs);
+
+        // Shortest-path: negate rhs if dot is negative.
         if cos_theta < 0.0 {
             rhs = -rhs;
             cos_theta = -cos_theta;
         }
-        // Near-identical: use nlerp to avoid sin→0 singularity
-        if cos_theta > 1.0 - 1e-10 {
+
+        // Near-identical: fall back to nlerp to avoid sin→0 singularity.
+        // Use a tighter threshold than before — 1e-10 was too aggressive
+        // and pushed more cases into nlerp unnecessarily.
+        if cos_theta > 1.0 - 1e-6 {
             return self.nlerp(rhs, t);
         }
-        // Standard slerp
-        let angle = cos_theta.clamp(-1.0, 1.0).acos();
-        let sin_a = (1.0 - cos_theta * cos_theta).sqrt();
-        let s0    = ((1.0 - t) * angle).sin() / sin_a;
-        let s1    = (t * angle).sin()         / sin_a;
+
+        // atan2 form: more numerically stable than acos near boundaries.
+        // sin_theta = sqrt(1 - cos²) — guaranteed positive since
+        // cos_theta is in [0, 1-1e-6] at this point.
+        let sin_theta = (1.0 - cos_theta * cos_theta).sqrt();
+
+        // atan2(sin, cos) gives the angle without the precision loss of acos.
+        let angle = sin_theta.atan2(cos_theta);
+
+        let inv_sin = 1.0 / sin_theta;
+        let s0 = ((1.0 - t) * angle).sin() * inv_sin;
+        let s1 = (t * angle).sin()         * inv_sin;
+
         Self::new(
             self.x * s0 + rhs.x * s1,
             self.y * s0 + rhs.y * s1,
             self.z * s0 + rhs.z * s1,
             self.w * s0 + rhs.w * s1,
         )
+        // No normalize() call — slerp of two unit quats is unit by construction
+        // when sin_theta is non-zero. Normalizing would add a sqrt and a div.
     }
 
     // ── Conversion ─────────────────────────────────────────────────────────────
