@@ -98,8 +98,9 @@ mod tests {
 
     #[test]
     fn dvec3_size_align() {
-        assert_eq!(std::mem::size_of::<DVec3>(),  32);
-        assert_eq!(std::mem::align_of::<DVec3>(), 32);
+        // 24 bytes now — padding removed, AVX2 uses separate wide types
+        assert_eq!(std::mem::size_of::<DVec3>(),  24);
+        assert_eq!(std::mem::align_of::<DVec3>(),  8);
     }
 
     #[test]
@@ -455,11 +456,11 @@ mod tests {
 
     // ── DAffine3 ──────────────────────────────────────────────────────────────
 
-    #[test]
+#[test]
     fn daffine3_size_align() {
-        assert_eq!(std::mem::size_of::<DAffine3>(),  128);
-        assert_eq!(std::mem::align_of::<DAffine3>(),  32);
-    }
+        assert_eq!(std::mem::size_of::<DAffine3>(),  96);
+        assert_eq!(std::mem::align_of::<DAffine3>(),  8);
+            }
 
     #[test]
     fn daffine3_identity_is_default() {
