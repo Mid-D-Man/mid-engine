@@ -22,19 +22,15 @@ use super::dvec2::DEPSILON;
 
 /// 3D double-precision affine transform.
 ///
-/// 128 bytes, 32-byte aligned (four DVec3 fields, each 32 bytes).
-///
-/// **C interop:** use [`CDAffine3`][crate::ffi::types::CDAffine3] at the FFI boundary.
+/// 96 bytes, align(8). Four DVec3 fields (each now 24 bytes).
+/// Faster basic ops than the 32-byte padded version at the cost of
+/// AVX2 readiness — wide transforms use Vec3x4/Vec3x8 SoA types instead.
 #[derive(Clone, Copy, PartialEq)]
-#[repr(C, align(32))]
+#[repr(C, align(8))]
 pub struct DAffine3 {
-    /// First column of the 3×3 matrix (x-basis × sx, rotated).
-    pub x_axis: DVec3,
-    /// Second column of the 3×3 matrix (y-basis × sy, rotated).
-    pub y_axis: DVec3,
-    /// Third column of the 3×3 matrix (z-basis × sz, rotated).
-    pub z_axis: DVec3,
-    /// Translation component (applied after the linear transform).
+    pub x_axis:      DVec3,
+    pub y_axis:      DVec3,
+    pub z_axis:      DVec3,
     pub translation: DVec3,
 }
 
