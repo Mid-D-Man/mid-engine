@@ -4,4 +4,5 @@ mod vec_tests;
 mod quat_tests;
 mod mat_tests;
 mod stress_tests;
-mod f64_tests;      // ← NEW
+mod f64_tests;
+mod bool_tests;
