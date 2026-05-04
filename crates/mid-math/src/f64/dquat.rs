@@ -174,51 +174,47 @@ impl DQuat {
     }
 
     /// Spherical linear interpolation — constant angular velocity.
-    ///
-    /// Uses the numerically stable atan2 form to avoid the precision
-    /// loss of `acos` near 0 and π, and eliminates a redundant `sqrt`.
-    ///
-    /// Algorithm: Shoemake's slerp with `atan2(sin_theta, cos_theta)`
-    /// instead of `acos(cos_theta)` — more stable and one fewer
-    /// transcendental call overall.
-    pub fn slerp(self, mut rhs: Self, t: f64) -> Self {
-        let mut cos_theta = self.dot(rhs);
+///
+/// Uses sin_cos(t·θ) + algebraic derivation for s0 — 2 transcendental
+/// calls (atan2 + sin_cos) vs the naive 3 (atan2 + 2×sin).
+///
+/// Identity used:
+///   sin((1-t)θ) = sin(θ)cos(tθ) - cos(θ)sin(tθ)
+///   s0 = cos(tθ) - cos(θ)·sin(tθ)/sin(θ)  = cos_t - cos_theta * s1
+///
+/// No normalize() — slerp of two unit quats is unit by construction.
+pub fn slerp(self, mut rhs: Self, t: f64) -> Self {
+    let mut cos_theta = self.dot(rhs);
 
-        // Shortest-path: negate rhs if dot is negative.
-        if cos_theta < 0.0 {
-            rhs = -rhs;
-            cos_theta = -cos_theta;
-        }
-
-        // Near-identical: fall back to nlerp to avoid sin→0 singularity.
-        // Use a tighter threshold than before — 1e-10 was too aggressive
-        // and pushed more cases into nlerp unnecessarily.
-        if cos_theta > 1.0 - 1e-6 {
-            return self.nlerp(rhs, t);
-        }
-
-        // atan2 form: more numerically stable than acos near boundaries.
-        // sin_theta = sqrt(1 - cos²) — guaranteed positive since
-        // cos_theta is in [0, 1-1e-6] at this point.
-        let sin_theta = (1.0 - cos_theta * cos_theta).sqrt();
-
-        // atan2(sin, cos) gives the angle without the precision loss of acos.
-        let angle = sin_theta.atan2(cos_theta);
-
-        let inv_sin = 1.0 / sin_theta;
-        let s0 = ((1.0 - t) * angle).sin() * inv_sin;
-        let s1 = (t * angle).sin()         * inv_sin;
-
-        Self::new(
-            self.x * s0 + rhs.x * s1,
-            self.y * s0 + rhs.y * s1,
-            self.z * s0 + rhs.z * s1,
-            self.w * s0 + rhs.w * s1,
-        )
-        // No normalize() call — slerp of two unit quats is unit by construction
-        // when sin_theta is non-zero. Normalizing would add a sqrt and a div.
+    if cos_theta < 0.0 {
+        rhs = -rhs;
+        cos_theta = -cos_theta;
     }
 
+    if cos_theta > 1.0 - 1e-6 {
+        return self.nlerp(rhs, t);
+    }
+
+    // sqrt only — no transcendental
+    let sin_theta = (1.0 - cos_theta * cos_theta).sqrt();
+
+    // 1st transcendental: atan2 (more stable than acos near boundaries)
+    let angle = sin_theta.atan2(cos_theta);
+
+    // 2nd transcendental: sin_cos counts as one call on most hardware
+    let (sin_t, cos_t) = (t * angle).sin_cos();
+    let inv_sin = 1.0 / sin_theta;
+
+    let s1 = sin_t * inv_sin;
+    let s0 = cos_t - cos_theta * s1; // algebraic derivation — no 3rd transcendental
+
+    Self::new(
+        self.x * s0 + rhs.x * s1,
+        self.y * s0 + rhs.y * s1,
+        self.z * s0 + rhs.z * s1,
+        self.w * s0 + rhs.w * s1,
+    )
+            }
     // ── Conversion ─────────────────────────────────────────────────────────────
 
     /// Convert to rotation DMat4. `self` must be normalised.
