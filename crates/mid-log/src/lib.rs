@@ -2,35 +2,44 @@
 
 //! mid-log — Non-blocking, tiered logger for Mid Engine.
 //!
-//! ## Rust face (game thread / engine code)
+//! ## Quick start
 //! ```rust,no_run
 //! use mid_log::{mid_info, mid_warn, level::Tier};
+//! use mid_log::logger::{MidLogger, InitConfig};
+//! use mid_log::level::LogLevel;
+//! use mid_log::format::FormatConfig;
 //!
-//! mid_log::logger::MidLogger::init();
-//! mid_log::filter::set_min_level(mid_log::level::LogLevel::Info);
+//! MidLogger::init_full(InitConfig {
+//!     min_level: LogLevel::Info,
+//!     format: FormatConfig { show_frame: true, ..Default::default() },
+//!     ..Default::default()
+//! });
 //!
-//! # let (id, x, y) = (1u32, 1.0_f32, 2.0_f32);
-//! mid_info!(Tier::High, "Player {} spawned at ({}, {})", id, x, y);
-//! mid_warn!(Tier::Low,  "Buffer overflow prevented in UDP stream");
+//! mid_log::frame::set_frame(0);
+//! mid_info!(Tier::High, "Engine started");
+//! mid_warn!(Tier::Low, "Something looks off: {}", 42);
 //! ```
 //!
-//! ## C face (Unity / Unreal / Godot / any C host)
-//! Include `headers/mid_log.h` and link against `libmid_log.dylib`.
-//! ```c
-//! mid_log_init();
-//! mid_log_set_min_level(MID_LEVEL_INFO);
-//! mid_log_info_c(MID_TIER_HIGH, "C host: logger initialized");
-//! mid_log_flush();
-//! mid_log_shutdown();
+//! ## Inline coloring
+//! ```rust,no_run
+//! use mid_log::{mid_warn, level::Tier, color::{Color, paint}};
+//! let hp = 5u32;
+//! mid_warn!(Tier::High, "HP: {} ({})", paint(hp, Color::Red), paint("critical", Color::Bold));
 //! ```
 
 pub mod level;
 pub mod entry;
 pub mod filter;
 pub mod buffer;
+pub mod color;
+pub mod format;
+pub mod frame;
 pub mod writer;
 pub mod logger;
 pub mod macros;
+pub mod assert;
+pub mod ratelimit;
+pub mod console_buffer;
 pub mod ffi;
 
 #[cfg(test)]
