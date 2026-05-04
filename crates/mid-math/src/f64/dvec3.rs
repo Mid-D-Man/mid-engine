@@ -1,5 +1,8 @@
 // crates/mid-math/src/f64/dvec3.rs
-// Change the struct definition and all constants:
+use core::fmt;
+use core::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAssign};
+
+use super::dvec2::DEPSILON;
 
 /// 3D double-precision vector. 24 bytes, align(8). Always scalar.
 ///
