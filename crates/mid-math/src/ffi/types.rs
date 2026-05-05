@@ -3,10 +3,11 @@
 use crate::{
     Affine3, DAffine3, DMat2, DMat3, DMat4, DQuat, DVec2, DVec3, DVec4,
     Mat3, Mat4, Quat, Vec2, Vec3, Vec4,
+    IVec2, IVec3, IVec4, UVec2, UVec3, UVec4,
 };
 
 // ═══════════════════════════════════════════════════════════════════════════
-//  f32 C types (unchanged)
+//  f32 C types
 // ═══════════════════════════════════════════════════════════════════════════
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -94,9 +95,7 @@ impl From<CAffine3> for Affine3 {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-//  f64 C types  — NEW
-//  All are #[repr(C)] with explicit alignment matching the Rust types.
-//  C callers include the generated mid_math.h and use these layouts directly.
+//  f64 C types
 // ═══════════════════════════════════════════════════════════════════════════
 
 /// C-ABI DVec2. 16 bytes, align(16).
@@ -108,7 +107,7 @@ impl CDVec2 { #[inline(always)] pub fn new(x: f64, y: f64) -> Self { Self { x, y
 impl From<DVec2>  for CDVec2 { #[inline(always)] fn from(v: DVec2)  -> Self { Self::new(v.x, v.y) } }
 impl From<CDVec2> for DVec2  { #[inline(always)] fn from(v: CDVec2) -> Self { DVec2::new(v.x, v.y) } }
 
-/// C-ABI DVec3. 24 bytes, align(8). No padding — matches the Rust type exactly.
+/// C-ABI DVec3. 24 bytes, align(8). No padding — matches DVec3 exactly.
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[repr(C, align(8))]
 pub struct CDVec3 { pub x: f64, pub y: f64, pub z: f64 }
@@ -118,6 +117,7 @@ impl CDVec3 {
 }
 impl From<DVec3>  for CDVec3 { #[inline(always)] fn from(v: DVec3)  -> Self { Self::new(v.x, v.y, v.z) } }
 impl From<CDVec3> for DVec3  { #[inline(always)] fn from(v: CDVec3) -> Self { DVec3::new(v.x, v.y, v.z) } }
+
 /// C-ABI DVec4. 32 bytes, align(32).
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[repr(C, align(32))]
@@ -155,7 +155,7 @@ impl From<CDMat2> for DMat2 {
     }
 }
 
-/// C-ABI DMat3. 72 bytes (3 × [f64;3]), align(8) — no padding in the Rust type.
+/// C-ABI DMat3. 72 bytes, align(8).
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[repr(C)]
 pub struct CDMat3 { pub cols: [[f64; 3]; 3] }
@@ -171,9 +171,9 @@ pub struct CDMat4 { pub cols: [[f64; 4]; 4] }
 impl From<DMat4>  for CDMat4 { #[inline(always)] fn from(m: DMat4)  -> Self { Self { cols: m.cols } } }
 impl From<CDMat4> for DMat4  { #[inline(always)] fn from(m: CDMat4) -> Self { DMat4 { cols: m.cols } } }
 
-/// C-ABI DAffine3. 128 bytes, align(32). Four CDVec3 (each 32 bytes).
+/// C-ABI DAffine3. 96 bytes, align(8). Four CDVec3 fields (each 24 bytes).
 #[derive(Debug, Clone, Copy, PartialEq)]
-#[repr(C, align(32))]
+#[repr(C, align(8))]
 pub struct CDAffine3 {
     pub x_axis:      CDVec3,
     pub y_axis:      CDVec3,
@@ -210,3 +210,57 @@ impl From<CDAffine3> for DAffine3 {
         }
     }
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  Integer C types — i32 and u32
+//  All are #[repr(C)] with no padding (integers pack tightly unlike f32 Vec3).
+//  C callers include mid_math.h and use these layouts directly.
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// C-ABI IVec2. 8 bytes, align(4).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(C)]
+pub struct CIVec2 { pub x: i32, pub y: i32 }
+
+impl From<IVec2>  for CIVec2 { #[inline(always)] fn from(v: IVec2)  -> Self { Self { x: v.x, y: v.y } } }
+impl From<CIVec2> for IVec2  { #[inline(always)] fn from(v: CIVec2) -> Self { IVec2::new(v.x, v.y) } }
+
+/// C-ABI IVec3. 12 bytes, align(4). No padding — IVec3 has no padding either.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(C)]
+pub struct CIVec3 { pub x: i32, pub y: i32, pub z: i32 }
+
+impl From<IVec3>  for CIVec3 { #[inline(always)] fn from(v: IVec3)  -> Self { Self { x: v.x, y: v.y, z: v.z } } }
+impl From<CIVec3> for IVec3  { #[inline(always)] fn from(v: CIVec3) -> Self { IVec3::new(v.x, v.y, v.z) } }
+
+/// C-ABI IVec4. 16 bytes, align(4).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(C)]
+pub struct CIVec4 { pub x: i32, pub y: i32, pub z: i32, pub w: i32 }
+
+impl From<IVec4>  for CIVec4 { #[inline(always)] fn from(v: IVec4)  -> Self { Self { x: v.x, y: v.y, z: v.z, w: v.w } } }
+impl From<CIVec4> for IVec4  { #[inline(always)] fn from(v: CIVec4) -> Self { IVec4::new(v.x, v.y, v.z, v.w) } }
+
+/// C-ABI UVec2. 8 bytes, align(4).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(C)]
+pub struct CUVec2 { pub x: u32, pub y: u32 }
+
+impl From<UVec2>  for CUVec2 { #[inline(always)] fn from(v: UVec2)  -> Self { Self { x: v.x, y: v.y } } }
+impl From<CUVec2> for UVec2  { #[inline(always)] fn from(v: CUVec2) -> Self { UVec2::new(v.x, v.y) } }
+
+/// C-ABI UVec3. 12 bytes, align(4). No padding.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(C)]
+pub struct CUVec3 { pub x: u32, pub y: u32, pub z: u32 }
+
+impl From<UVec3>  for CUVec3 { #[inline(always)] fn from(v: UVec3)  -> Self { Self { x: v.x, y: v.y, z: v.z } } }
+impl From<CUVec3> for UVec3  { #[inline(always)] fn from(v: CUVec3) -> Self { UVec3::new(v.x, v.y, v.z) } }
+
+/// C-ABI UVec4. 16 bytes, align(4).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(C)]
+pub struct CUVec4 { pub x: u32, pub y: u32, pub z: u32, pub w: u32 }
+
+impl From<UVec4>  for CUVec4 { #[inline(always)] fn from(v: UVec4)  -> Self { Self { x: v.x, y: v.y, z: v.z, w: v.w } } }
+impl From<CUVec4> for UVec4  { #[inline(always)] fn from(v: CUVec4) -> Self { UVec4::new(v.x, v.y, v.z, v.w) } }
