@@ -84,6 +84,13 @@ fn setup_slog() -> Logger {
     Logger::root(drain, o!())
 }
 
+// A custom appender for fast_log that discards all records.
+struct FastLogDiscardAppender;
+
+impl fast_log::appender::LogAppender for FastLogDiscardAppender {
+    fn do_log(&mut self, _record: &fast_log::appender::FastLogRecord) {}
+}
+
 fn setup_fast_log() {
     // fast_log with a custom log receiver that discards output.
     // This measures the hot path (channel send) without I/O.
@@ -91,15 +98,7 @@ fn setup_fast_log() {
         fast_log::Config::new()
             .level(log::LevelFilter::Trace)
             .chan_len(Some(100_000))
-            .add_receiver(fast_log::plugin::file_split::FileSplitAppender::new(
-                // We can't easily discard with fast_log's API, so send to /dev/null.
-                // The cost difference vs a real file is negligible since fast_log
-                // always goes through its async channel.
-                "/dev/null",
-                fast_log::plugin::file_split::RollingType::All,
-                log::LevelFilter::Trace,
-                fast_log::plugin::file_split::LogPacker {},
-            ))
+            .custom(FastLogDiscardAppender)
     ).ok();
 }
 
