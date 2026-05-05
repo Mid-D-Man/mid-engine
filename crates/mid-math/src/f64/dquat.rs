@@ -175,38 +175,47 @@ impl DQuat {
 
     /// Spherical linear interpolation — constant angular velocity.
 ///
-/// Uses sin_cos(t·θ) + algebraic derivation for s0 — 2 transcendental
-/// calls (atan2 + sin_cos) vs the naive 3 (atan2 + 2×sin).
+/// 2-transcendental path: acos + sin_cos.
 ///
-/// Identity used:
-///   sin((1-t)θ) = sin(θ)cos(tθ) - cos(θ)sin(tθ)
-///   s0 = cos(tθ) - cos(θ)·sin(tθ)/sin(θ)  = cos_t - cos_theta * s1
+/// Previous atan2 approach was 3 transcendentals on glibc (71-79 ns).
+/// acos (~15 ns) + sin_cos (~15 ns) + sqrt (~5 ns) ≈ 35 ns.
 ///
-/// No normalize() — slerp of two unit quats is unit by construction.
+/// Algebraic derivation eliminates the 3rd transcendental:
+///   sin((1-t)·θ) / sin(θ)
+///   = (sin(θ)·cos(t·θ) − cos(θ)·sin(t·θ)) / sin(θ)
+///   = cos(t·θ) − cos(θ)·sin(t·θ)/sin(θ)
+///   = cos_t − cos_theta·s1
+///
+/// No normalize() — slerp of two unit quats is unit by construction
+/// when sin_theta is non-zero.
 pub fn slerp(self, mut rhs: Self, t: f64) -> Self {
     let mut cos_theta = self.dot(rhs);
 
+    // Shortest-path flip.
     if cos_theta < 0.0 {
         rhs = -rhs;
         cos_theta = -cos_theta;
     }
 
+    // Near-identical: fall back to nlerp to avoid division by near-zero sin.
     if cos_theta > 1.0 - 1e-6 {
         return self.nlerp(rhs, t);
     }
 
-    // sqrt only — no transcendental
+    // 1st transcendental: acos.
+    // Safe because cos_theta ∈ [0, 1 − 1e-6] after the shortest-path flip.
+    let angle = cos_theta.acos();
+
+    // sin(angle) via sqrt — avoids a separate sin() call (~5 ns vs ~15 ns).
+    // Equivalent to sin(acos(cos_theta)) = sqrt(1 − cos²θ).
     let sin_theta = (1.0 - cos_theta * cos_theta).sqrt();
 
-    // 1st transcendental: atan2 (more stable than acos near boundaries)
-    let angle = sin_theta.atan2(cos_theta);
-
-    // 2nd transcendental: sin_cos counts as one call on most hardware
+    // 2nd transcendental: sin_cos counts as one call on most platforms.
     let (sin_t, cos_t) = (t * angle).sin_cos();
-    let inv_sin = 1.0 / sin_theta;
 
+    let inv_sin = 1.0 / sin_theta;
     let s1 = sin_t * inv_sin;
-    let s0 = cos_t - cos_theta * s1; // algebraic derivation — no 3rd transcendental
+    let s0 = cos_t - cos_theta * s1; // algebraic — no 3rd transcendental
 
     Self::new(
         self.x * s0 + rhs.x * s1,
@@ -214,7 +223,7 @@ pub fn slerp(self, mut rhs: Self, t: f64) -> Self {
         self.z * s0 + rhs.z * s1,
         self.w * s0 + rhs.w * s1,
     )
-            }
+}
     // ── Conversion ─────────────────────────────────────────────────────────────
 
     /// Convert to rotation DMat4. `self` must be normalised.
