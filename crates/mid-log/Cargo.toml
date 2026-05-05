@@ -18,7 +18,10 @@ log                = "0.4"
 env_logger         = "0.11"
 tracing            = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
-
+slog       = "2"
+slog-async = "2"
+slog-term  = "2"
+fast_log   = "1"
 [[bench]]
 name    = "vs_baseline"
 harness = false
