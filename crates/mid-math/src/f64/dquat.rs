@@ -4,12 +4,8 @@
 //! Convention: (x, y, z, w) where w is the scalar part.
 //! Euler convention: ZYX — same as the f32 Quat.
 //!
-//! Uses acos_approx from f32::math ported to f64 — polynomial coefficients
-//! are more accurate at f64 precision anyway. For f64 quaternions the
-//! extra precision of acos matters most in slerp near-parallel branches.
-//!
 //! DEPSILON = 1e-12 for normalization checks.
-//! Near-identity threshold for slerp fallback: cos_theta > 1.0 - 1e-10.
+//! Near-identity threshold for slerp fallback: cos_theta > 1.0 - 1e-6.
 
 use core::fmt;
 use core::ops::{Add, Mul, MulAssign, Neg, Sub};
@@ -150,22 +146,30 @@ impl DQuat {
 
     /// Normalised linear interpolation — fast, slightly non-constant velocity.
     ///
-    /// Shortest-path via dot-sign flip. Inlined normalize avoids the
-    /// method-call overhead and lets the compiler see the full dependency.
+    /// Shortest-path flip is fully branchless via sign-bit XOR:
+    ///   1. Extract the sign bit of `dot` as a raw u64 (0x8000... if dot < 0, else 0).
+    ///   2. XOR that bit into every component of `rhs`.
+    ///   3. Result: if dot was negative, rhs is negated; otherwise unchanged.
+    ///   4. No conditional jump — compiler emits `and`+`xor` sequence.
+    ///
+    /// normalize() is inlined with fused len_sq to let the compiler
+    /// see all four components in one dependency chain.
     #[inline]
     pub fn nlerp(self, rhs: Self, t: f64) -> Self {
-        let dot  = self.dot(rhs);
-        let sign = if dot < 0.0 { -1.0f64 } else { 1.0f64 };
+        let dot = self.dot(rhs);
 
-        // Lerp toward the correct hemisphere.
-        let lx = self.x + (rhs.x * sign - self.x) * t;
-        let ly = self.y + (rhs.y * sign - self.y) * t;
-        let lz = self.z + (rhs.z * sign - self.z) * t;
-        let lw = self.w + (rhs.w * sign - self.w) * t;
+        // Extract sign bit of dot: 0x8000_0000_0000_0000 if dot < 0, else 0.
+        // XOR this into each component of rhs to branchlessly negate when needed.
+        let sign_bit = dot.to_bits() & 0x8000_0000_0000_0000u64;
+        let flip = |x: f64| f64::from_bits(x.to_bits() ^ sign_bit);
 
-        // Inline normalize — avoid the function call overhead.
-        // length_sq is fused here so compiler sees all four components.
-        let len_sq = lx*lx + ly*ly + lz*lz + lw*lw;
+        let lx = self.x + (flip(rhs.x) - self.x) * t;
+        let ly = self.y + (flip(rhs.y) - self.y) * t;
+        let lz = self.z + (flip(rhs.z) - self.z) * t;
+        let lw = self.w + (flip(rhs.w) - self.w) * t;
+
+        // Inlined normalize — compiler sees full len_sq chain, can fuse.
+        let len_sq = lx * lx + ly * ly + lz * lz + lw * lw;
         if len_sq < DEPSILON {
             return Self::IDENTITY;
         }
@@ -174,56 +178,48 @@ impl DQuat {
     }
 
     /// Spherical linear interpolation — constant angular velocity.
-///
-/// 2-transcendental path: acos + sin_cos.
-///
-/// Previous atan2 approach was 3 transcendentals on glibc (71-79 ns).
-/// acos (~15 ns) + sin_cos (~15 ns) + sqrt (~5 ns) ≈ 35 ns.
-///
-/// Algebraic derivation eliminates the 3rd transcendental:
-///   sin((1-t)·θ) / sin(θ)
-///   = (sin(θ)·cos(t·θ) − cos(θ)·sin(t·θ)) / sin(θ)
-///   = cos(t·θ) − cos(θ)·sin(t·θ)/sin(θ)
-///   = cos_t − cos_theta·s1
-///
-/// No normalize() — slerp of two unit quats is unit by construction
-/// when sin_theta is non-zero.
-pub fn slerp(self, mut rhs: Self, t: f64) -> Self {
-    let mut cos_theta = self.dot(rhs);
+    ///
+    /// 2-transcendental path: acos + sin_cos.
+    /// The gap vs nalgebra (~2.2×) is glibc cost on Linux CI — acos alone
+    /// costs ~35-40 ns, sin_cos another ~15-20 ns. No scalar workaround
+    /// without a full Chebyshev polynomial approximation at f64 precision.
+    /// Accepted cost for a correctly-implemented slerp.
+    pub fn slerp(self, mut rhs: Self, t: f64) -> Self {
+        let mut cos_theta = self.dot(rhs);
 
-    // Shortest-path flip.
-    if cos_theta < 0.0 {
-        rhs = -rhs;
-        cos_theta = -cos_theta;
+        // Shortest-path flip.
+        if cos_theta < 0.0 {
+            rhs = -rhs;
+            cos_theta = -cos_theta;
+        }
+
+        // Near-identical: fall back to nlerp to avoid division by near-zero sin.
+        if cos_theta > 1.0 - 1e-6 {
+            return self.nlerp(rhs, t);
+        }
+
+        // 1st transcendental: acos.
+        let angle = cos_theta.acos();
+
+        // sin(angle) via sqrt — avoids a separate sin() call.
+        let sin_theta = (1.0 - cos_theta * cos_theta).sqrt();
+
+        // 2nd transcendental: sin_cos counts as one call on most platforms.
+        let (sin_t, cos_t) = (t * angle).sin_cos();
+
+        let inv_sin = 1.0 / sin_theta;
+        let s1 = sin_t * inv_sin;
+        let s0 = cos_t - cos_theta * s1; // algebraic — no 3rd transcendental
+
+        // slerp of two unit quats is unit by construction when sin_theta != 0.
+        Self::new(
+            self.x * s0 + rhs.x * s1,
+            self.y * s0 + rhs.y * s1,
+            self.z * s0 + rhs.z * s1,
+            self.w * s0 + rhs.w * s1,
+        )
     }
 
-    // Near-identical: fall back to nlerp to avoid division by near-zero sin.
-    if cos_theta > 1.0 - 1e-6 {
-        return self.nlerp(rhs, t);
-    }
-
-    // 1st transcendental: acos.
-    // Safe because cos_theta ∈ [0, 1 − 1e-6] after the shortest-path flip.
-    let angle = cos_theta.acos();
-
-    // sin(angle) via sqrt — avoids a separate sin() call (~5 ns vs ~15 ns).
-    // Equivalent to sin(acos(cos_theta)) = sqrt(1 − cos²θ).
-    let sin_theta = (1.0 - cos_theta * cos_theta).sqrt();
-
-    // 2nd transcendental: sin_cos counts as one call on most platforms.
-    let (sin_t, cos_t) = (t * angle).sin_cos();
-
-    let inv_sin = 1.0 / sin_theta;
-    let s1 = sin_t * inv_sin;
-    let s0 = cos_t - cos_theta * s1; // algebraic — no 3rd transcendental
-
-    Self::new(
-        self.x * s0 + rhs.x * s1,
-        self.y * s0 + rhs.y * s1,
-        self.z * s0 + rhs.z * s1,
-        self.w * s0 + rhs.w * s1,
-    )
-}
     // ── Conversion ─────────────────────────────────────────────────────────────
 
     /// Convert to rotation DMat4. `self` must be normalised.
