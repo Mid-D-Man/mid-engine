@@ -74,19 +74,30 @@ impl Vec3 {
         Self(unsafe { dot3_into_m128(self.0, rhs.0) })
     }
 
-    #[inline]
-    pub fn cross(self, rhs: Self) -> Self {
-        unsafe {
-            let lhs_zxy = _mm_shuffle_ps::<0b00_00_10_01>(self.0, self.0);
-            let rhs_zxy = _mm_shuffle_ps::<0b00_00_10_01>(rhs.0,  rhs.0);
-            let a = _mm_sub_ps(
-                _mm_mul_ps(lhs_zxy, rhs.0),
-                _mm_mul_ps(self.0,  rhs_zxy),
-            );
-            Self(_mm_shuffle_ps::<0b00_00_10_01>(a, a))
-        }
+  #[inline]
+pub fn cross(self, rhs: Self) -> Self {
+    unsafe {
+        // Cross product: result = self × rhs
+        //   result.x = a.y·b.z − a.z·b.y
+        //   result.y = a.z·b.x − a.x·b.z
+        //   result.z = a.x·b.y − a.y·b.x
+        //
+        // Requires TWO different cyclic permutations — previous code used the
+        // SAME shuffle for both operands which computes -(a × b) = b × a.
+        //
+        // YZX shuffle 0b00_00_10_01: result[i] = src[(01,10,00)] → [y, z, x]
+        // ZXY shuffle 0b00_01_00_10: result[i] = src[(10,00,01)] → [z, x, y]
+        let a_yzx = _mm_shuffle_ps::<0b00_00_10_01>(self.0, self.0); // [ay, az, ax]
+        let b_zxy = _mm_shuffle_ps::<0b00_01_00_10>(rhs.0,  rhs.0); // [bz, bx, by]
+        let a_zxy = _mm_shuffle_ps::<0b00_01_00_10>(self.0, self.0); // [az, ax, ay]
+        let b_yzx = _mm_shuffle_ps::<0b00_00_10_01>(rhs.0,  rhs.0); // [by, bz, bx]
+        // [ay·bz − az·by,  az·bx − ax·bz,  ax·by − ay·bx]
+        Self(_mm_sub_ps(
+            _mm_mul_ps(a_yzx, b_zxy),
+            _mm_mul_ps(a_zxy, b_yzx),
+        ))
     }
-
+}
     #[inline] pub fn length_sq(self) -> f32 { self.dot(self) }
 
     #[inline]
