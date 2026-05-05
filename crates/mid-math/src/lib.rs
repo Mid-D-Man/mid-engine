@@ -8,12 +8,17 @@ pub mod f32;
 pub mod f64;
 pub mod ffi;
 pub mod constants;
+pub mod int32;
 
 pub use constants::*;
 
 // ── Bool mask re-exports ──────────────────────────────────────────────────────
 
 pub use bvec::{BVec2, BVec3, BVec4};
+
+// ── Integer vector re-exports ─────────────────────────────────────────────────
+
+pub use int32::{IVec2, IVec3, IVec4, UVec2, UVec3, UVec4};
 
 // ── f32 re-exports ────────────────────────────────────────────────────────────
 
