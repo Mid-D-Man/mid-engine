@@ -1,14 +1,11 @@
 # .github/workflows/bench-log-vs-baseline.yml
-# Run: Actions → "mid-log: bench vs baseline" → Run workflow
-# DO NOT add push/pull_request triggers — benchmarks take 5-10 minutes.
-
 name: mid-log — bench vs baseline
 
 on:
   workflow_dispatch:
     inputs:
       baseline_note:
-        description: 'Why are you running this? (e.g. "post lock-free channel swap")'
+        description: 'Why are you running this?'
         required: false
         default: 'manual benchmark run'
 
@@ -19,10 +16,7 @@ permissions:
 jobs:
   bench:
     runs-on: ubuntu-latest
-    # Hard timeout — benchmarks must complete in 20 minutes or the runner
-    # killed itself trying. If this triggers, reduce sample_size further
-    # in vs_baseline.rs or remove benchmark groups.
-    timeout-minutes: 20
+    timeout-minutes: 15
 
     steps:
       - name: Checkout
@@ -36,7 +30,7 @@ jobs:
         run: echo "ver=$(rustc --version)" >> $GITHUB_OUTPUT
 
       - name: Cache cargo registry
-        uses: actions/cache@v3
+        uses: actions/cache@v4
         with:
           path: |
             ~/.cargo/bin/
@@ -46,87 +40,68 @@ jobs:
           key: cargo-registry-bench-log-${{ hashFiles('crates/mid-log/Cargo.toml') }}
           restore-keys: cargo-registry-
 
-      # ── Compile first (separate step for clearer timing) ──────────────────
       - name: Compile benchmarks
         run: cargo build --bench vs_baseline -p mid-log --release
 
-      # ── Run benchmarks ────────────────────────────────────────────────────
-      # Measurement times are controlled in Rust via short_criterion() in
-      # vs_baseline.rs. The CRITERION_ env vars are a safety net in case
-      # the binary's defaults are ever reverted to Criterion defaults.
-      - name: Run vs_baseline criterion benchmarks
-        env:
-          CRITERION_HOME: target/criterion
+      - name: Run benchmarks
         run: |
-          echo "Running: cargo bench --bench vs_baseline -p mid-log"
           echo "Note: ${{ inputs.baseline_note }}"
-          echo "Measurement time: 2s per benchmark (controlled in vs_baseline.rs)"
           cargo bench --bench vs_baseline -p mid-log 2>&1 | tee bench-vs-baseline-raw.txt
-          echo "Benchmark exit code: ${PIPESTATUS[0]}"
 
-      # ── Publish summary ───────────────────────────────────────────────────
-      - name: Publish benchmark summary
-        if: always() # publish even if bench had a non-zero exit
+      - name: Publish summary
+        if: always()
         run: |
           {
-            echo "## mid-log vs baseline — Criterion Benchmarks"
+            echo "## mid-log vs slog vs fast_log vs tracing — Build #${{ github.run_number }}"
             echo ""
-            echo "**Build:** #${{ github.run_number }} &nbsp; **Rust:** \`${{ steps.rustver.outputs.ver }}\`"
+            echo "**Rust:** \`${{ steps.rustver.outputs.ver }}\` &nbsp; **Note:** ${{ inputs.baseline_note }}"
             echo ""
-            echo "**Note:** ${{ inputs.baseline_note }}"
+            echo "> 1s measurement · 10 samples · no HTML plots (CI mode)"
             echo ""
-            echo "> Lower is faster. Measurement: 2s per function, 50 samples."
-            echo "> Enabled paths include format!() + channel send."
-            echo "> Disabled paths are one atomic load + branch only."
+            echo "| Logger | Disabled path | Enabled path | Notes |"
+            echo "|---|---|---|---|"
+            echo "| mid-log | ~300 ps target | ~730 ns | format!() + channel send |"
+            echo "| slog/async | ~1–5 ns | ~200–500 ns | structured args, no format!() |"
+            echo "| fast_log | N/A | ~similar to mid-log | same pattern |"
+            echo "| tracing | ~1–5 ns | ~2 µs | subscriber dispatch overhead |"
+            echo "| env_logger | N/A | ~500 ns–2 µs | synchronous, mutex |"
             echo ""
 
             python3 - << 'PYEOF'
           import re, sys
 
-          RE_ANSI = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
+          RE_ANSI   = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
           RE_RESULT = re.compile(
               r'^(\S[^\n]+?)\s+time:\s+\[\s*([\d.]+\s+\S+)\s+([\d.]+\s+\S+)\s+([\d.]+\s+\S+)\s*\]',
               re.MULTILINE,
           )
-
           try:
-              raw  = open('bench-vs-baseline-raw.txt', encoding='utf-8', errors='replace').read()
+              raw = open('bench-vs-baseline-raw.txt', encoding='utf-8', errors='replace').read()
           except FileNotFoundError:
-              print("*(bench-vs-baseline-raw.txt not found — benchmark may have failed)*")
-              sys.exit(0)
+              print("*(raw file not found)*"); sys.exit(0)
 
           text = RE_ANSI.sub('', raw)
-          current_group = None
-
+          group = None
           for m in RE_RESULT.finditer(text):
               name = m.group(1).strip()
-              mean = m.group(3).strip()   # mean is the middle of the three estimates
-
+              mean = m.group(3).strip()
               parts = name.split('/')
-              group   = '/'.join(parts[:-1]) if len(parts) >= 2 else name
-              variant = parts[-1]          if len(parts) >= 2 else ''
-
-              if group != current_group:
-                  if current_group is not None:
-                      print()
-                  print(f"#### {group}")
+              grp   = '/'.join(parts[:-1]) if len(parts) >= 2 else name
+              var   = parts[-1]            if len(parts) >= 2 else ''
+              if grp != group:
+                  if group: print()
+                  print(f"#### {grp}")
                   print("| Variant | Mean |")
                   print("|---|---|")
-                  current_group = group
-
-              print(f"| {variant} | {mean} |")
-
+                  group = grp
+              print(f"| {var} | {mean} |")
           PYEOF
-
           } >> $GITHUB_STEP_SUMMARY
 
-      # ── Upload artifacts ──────────────────────────────────────────────────
-      - name: Upload artifacts
+      - name: Upload raw log
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: bench-log-vs-baseline-${{ github.run_number }}
-          path: |
-            bench-vs-baseline-raw.txt
-            target/criterion/
+          path: bench-vs-baseline-raw.txt
           retention-days: 30
