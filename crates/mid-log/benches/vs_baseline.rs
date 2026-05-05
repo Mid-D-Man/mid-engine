@@ -88,7 +88,7 @@ fn setup_slog() -> Logger {
 struct FastLogDiscardAppender;
 
 impl fast_log::appender::LogAppender for FastLogDiscardAppender {
-    fn do_log(&mut self, _record: &fast_log::appender::FastLogRecord) {}
+    fn do_logs(&mut self, _records: &[fast_log::appender::FastLogRecord]) {}
 }
 
 fn setup_fast_log() {
