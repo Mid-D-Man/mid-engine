@@ -2,24 +2,18 @@
 
 //! Background IO thread — drains the channel and writes to the active sink.
 //!
-//! The thread parks via `recv()` when the channel is empty — zero CPU idle.
+//! The thread parks via `recv_timeout()` when the channel is empty — zero CPU idle.
 //!
 //! ## Per-entry pipeline (in order)
 //!
-//! 1. Rate limit check (`RateLimiter::check()`).
-//! 2. Console buffer push (`console_buffer::push()`).
-//! 3. Color scheme snapshot refresh (if `COLOR_SCHEME_GEN` changed).
-//! 4. Format snapshot (`FormatSnapshot::take()`).
-//! 5. `format_entry()` → `Vec<u8>`.
-//! 6. Write to stderr (`write_all`).
-//! 7. Write to file sink if configured.
-//!
-//! ## Sinks
-//!
-//! | Target                          | Sink                        |
-//! |---------------------------------|-----------------------------|
-//! | Android + `android-logcat` feat | `__android_log_write`       |
-//! | Everything else                 | stderr + optional file tee  |
+//! 1. Coarse timestamp tick — refreshes `COARSE_TS_MS` so callers pay ~2 ns.
+//! 2. Rate limit check (`RateLimiter::check()`).
+//! 3. Console buffer push (`console_buffer::push()`).
+//! 4. Color scheme snapshot refresh (if `COLOR_SCHEME_GEN` changed).
+//! 5. Format snapshot (`FormatSnapshot::take()`).
+//! 6. `format_entry()` → `Vec<u8>`.
+//! 7. Write to stderr (`write_all`).
+//! 8. Write to file sink if configured.
 
 use std::io::{self, Write};
 use std::fs;
@@ -77,7 +71,6 @@ mod android_sink {
 
 // ── Formatting ────────────────────────────────────────────────────────────────
 
-/// Bridges `std::fmt::Write` into a `Vec<u8>`.
 struct VecWriter<'a>(&'a mut Vec<u8>);
 
 impl std::fmt::Write for VecWriter<'_> {
@@ -87,32 +80,27 @@ impl std::fmt::Write for VecWriter<'_> {
     }
 }
 
-/// Format one log entry into `buf`, applying colors and format flags.
+/// Format one log entry into `buf`.
 ///
-/// Output structure (all-fields-enabled, colors on):
+/// Output (all fields enabled, colors on):
 /// ```text
 /// HH:MM:SS.mmm [LEVEL][TIER] [T:thread] [F:12345] message body  (module  file:line)\n
 /// ```
-/// Any field with its format flag disabled is omitted.
-/// Color fields are empty strings when colors are disabled.
 fn format_entry(
-    entry:    &LogEntry,
-    fmt:      &FormatSnapshot,
-    colors:   &ResolvedScheme,
-    buf:      &mut Vec<u8>,
+    entry:  &LogEntry,
+    fmt:    &FormatSnapshot,
+    colors: &ResolvedScheme,
+    buf:    &mut Vec<u8>,
 ) {
     use std::fmt::Write;
     buf.clear();
     let mut w = VecWriter(buf);
-    let R = colors.reset; // shorthand
+    let R = colors.reset;
 
-    // ── Timestamp ────────────────────────────────────────────────────────────
     if fmt.show_timestamp {
-        let _ = write!(w, "{}{}{} ",
-            colors.timestamp, entry.format_time(), R);
+        let _ = write!(w, "{}{}{} ", colors.timestamp, entry.format_time(), R);
     }
 
-    // ── Level badge ───────────────────────────────────────────────────────────
     let level_color = match entry.level {
         LogLevel::Trace => &colors.trace,
         LogLevel::Info  => &colors.info,
@@ -120,12 +108,9 @@ fn format_entry(
         LogLevel::Error => &colors.error,
         LogLevel::Fatal => &colors.fatal,
     };
-    // FATAL gets an extra bold prefix even when the scheme color is plain.
     let bold_prefix = if entry.level == LogLevel::Fatal { colors.bold } else { "" };
-    let _ = write!(w, "{}{}[{}]{} ",
-        bold_prefix, level_color, entry.level.as_str(), R);
+    let _ = write!(w, "{}{}[{}]{} ", bold_prefix, level_color, entry.level.as_str(), R);
 
-    // ── Tier badge ────────────────────────────────────────────────────────────
     let tier_color = match entry.tier {
         Tier::Low  => &colors.tier_low,
         Tier::Mid  => &colors.tier_mid,
@@ -133,24 +118,19 @@ fn format_entry(
     };
     let _ = write!(w, "{}[{}]{} ", tier_color, entry.tier.as_str(), R);
 
-    // ── Thread badge ──────────────────────────────────────────────────────────
     if fmt.show_thread {
         let _ = write!(w, "{}[T:{}]{} ", colors.thread, entry.thread, R);
     }
-
-    // ── Frame badge ───────────────────────────────────────────────────────────
     if fmt.show_frame {
         let _ = write!(w, "{}[F:{}]{} ", colors.frame, entry.frame, R);
     }
 
-    // ── Message body ──────────────────────────────────────────────────────────
     if colors.message.is_empty() {
         let _ = write!(w, "{}", entry.message);
     } else {
         let _ = write!(w, "{}{}{}", colors.message, entry.message, R);
     }
 
-    // ── Source location ───────────────────────────────────────────────────────
     if fmt.show_source_loc {
         let _ = write!(w, "  {}", colors.source);
         if fmt.show_module && !entry.module.is_empty() {
@@ -170,11 +150,6 @@ pub struct LogWriter {
 }
 
 impl LogWriter {
-    /// Spawn the background IO thread.
-    ///
-    /// * `receiver`    — channel to drain.
-    /// * `log_file`    — optional file tee path.
-    /// * `color_scheme`— `Arc<Mutex<ColorScheme>>` from `init_colors()`.
     pub fn spawn(
         receiver:     LogReceiver,
         log_file:     Option<std::path::PathBuf>,
@@ -192,11 +167,9 @@ impl LogWriter {
                 let mut rl_config  = RateLimitConfig::default();
                 let mut rl_refresh = std::time::Instant::now();
 
-                // Local color scheme snapshot.
                 let mut colors    = ResolvedScheme::no_color();
-                let mut color_gen = u64::MAX; // force refresh on first entry
+                let mut color_gen = u64::MAX;
 
-                // Optional file sink.
                 let mut file_sink: Option<io::BufWriter<fs::File>> =
                     log_file.and_then(|p| {
                         match fs::OpenOptions::new().create(true).append(true).open(&p) {
@@ -209,12 +182,17 @@ impl LogWriter {
                     });
 
                 loop {
+                    // ── Coarse timestamp tick ─────────────────────────────────
+                    // Refreshes the global AtomicU64 so LogEntry::new() on
+                    // calling threads pays ~2 ns instead of ~20–40 ns vDSO.
+                    // One real clock call here covers all concurrent threads.
+                    crate::entry::tick_coarse_timestamp();
+
                     // ── Rate-limit config refresh (once per second) ───────────
                     if rl_refresh.elapsed() >= Duration::from_secs(1) {
                         rl_config  = crate::ratelimit::get_rate_limit_config();
                         rl_refresh = std::time::Instant::now();
 
-                        // Emit summaries for sites that went quiet.
                         for summary in rate_limit.flush_expired(&rl_config) {
                             Self::emit_entry(
                                 &summary, &FormatSnapshot::take(),
@@ -227,8 +205,6 @@ impl LogWriter {
                     let entry = match receiver.recv_timeout(Duration::from_millis(500)) {
                         Ok(e)  => e,
                         Err(_) => {
-                            // Timeout — loop again (allows rate-limit refresh
-                            // and shutdown detection even when the channel is idle).
                             if shutdown_clone.load(Ordering::Relaxed) { break; }
                             continue;
                         }
@@ -246,8 +222,6 @@ impl LogWriter {
                     // ── Rate limit check ──────────────────────────────────────
                     match rate_limit.check(&entry, &rl_config) {
                         crate::ratelimit::RateDecision::Suppress => {
-                            // Still push to console buffer so the overlay
-                            // can show "rate limited" if it wants to.
                             console_buffer::push(&entry);
                             continue;
                         }
@@ -268,7 +242,6 @@ impl LogWriter {
                     Self::emit_entry(&entry, &fmt, &colors, &stderr, &mut file_sink, &mut buf);
 
                     while let Ok(e) = receiver.try_recv() {
-                        // Re-check rate limit and console for each burst entry.
                         match rate_limit.check(&e, &rl_config) {
                             crate::ratelimit::RateDecision::Suppress => {
                                 console_buffer::push(&e);
