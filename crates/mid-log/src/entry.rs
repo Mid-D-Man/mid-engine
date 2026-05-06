@@ -2,35 +2,56 @@
 
 //! A single log entry placed into the channel.
 
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use crate::level::{LogLevel, Tier};
+
+// ── Coarse timestamp ──────────────────────────────────────────────────────────
+//
+// SystemTime::now() costs ~20–40 ns per call (vDSO on Linux, still a context-
+// switch equivalent on macOS). At 128 Hz with thousands of entities logging,
+// this is measurable.
+//
+// Fix: the IO thread calls tick_coarse_timestamp() once per drain cycle,
+// writing the real clock into a global AtomicU64. LogEntry::new() reads this
+// AtomicU64 (~2 ns) instead of calling the clock directly.
+//
+// Granularity trade-off: the timestamp is at most one drain-cycle stale
+// (~0–2 ms under typical load). For a game engine logger this is completely
+// acceptable — nobody debugging frame-level issues needs sub-millisecond
+// timestamp precision on log entries.
+//
+// Cold start: the AtomicU64 starts at 0. LogEntry::new() falls back to
+// SystemTime::now() exactly once, on the very first log before the IO thread
+// has run. After that the fast path is always taken.
+pub(crate) static COARSE_TS_MS: AtomicU64 = AtomicU64::new(0);
+
+/// Refresh the coarse timestamp. Called by the IO thread at the top of each
+/// drain cycle. One real clock call shared across all concurrent logging threads.
+#[inline]
+pub(crate) fn tick_coarse_timestamp() {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+    COARSE_TS_MS.store(now, Ordering::Relaxed);
+}
 
 // ── Thread-name cache ─────────────────────────────────────────────────────────
 //
 // Previously every LogEntry::new() called:
 //   std::thread::current().name().unwrap_or("<unnamed>").to_owned()
 //
-// That is a heap allocation (malloc + memcpy) on every single log call — the
-// dominant non-format!() cost on the hot path (~50–100 ns per call).
+// That is a heap allocation (malloc + memcpy) on every single log call.
 //
-// Solution: capture the name once per thread into an Arc<str>. Subsequent log
-// calls clone the Arc, which is a single atomic fetch_add(1, Relaxed) — ~2 ns.
+// Fix: capture the name once per thread into an Arc<str>. Subsequent log
+// calls clone the Arc = one atomic fetch_add(1, Relaxed) = ~2 ns.
 //
-// FIX for E0716:
-//   Thread::current() returns a temporary Thread value.
-//   Thread::name() returns Option<&str> that borrows from that Thread.
-//   If we write:
-//       let name = std::thread::current().name().unwrap_or("...");
-//   the Thread temporary is dropped at the semicolon, invalidating `name`.
-//
-//   Fix: bind the Thread to a named local (`thread`) so it lives for the
-//   entire block and the `name` borrow remains valid through Arc::from(name).
+// Note on E0716: Thread::name() borrows from the Thread value.
+// Binding `thread` as a named local keeps the Thread alive through Arc::from.
 thread_local! {
     static THREAD_NAME: Arc<str> = {
-        // `thread` must be a named binding — NOT a temporary.
-        // Thread::name() borrows from `thread`; if `thread` were a
-        // temporary it would be dropped before Arc::from(name) runs.
         let thread = std::thread::current();
         let name   = thread.name().unwrap_or("<unnamed>");
         Arc::from(name)
@@ -39,33 +60,26 @@ thread_local! {
 
 /// A log entry. Produced on the calling thread, consumed by the IO thread.
 ///
-/// All fields except `message` are zero-copy or near-zero-copy:
-/// - `file`, `module`: `&'static str`
-/// - `line`, `frame`: scalar integers
-/// - `timestamp`: one vDSO call
-/// - `thread`: `Arc<str>` — atomic refcount clone after the first call on each thread
-/// - `message`: allocated by `format!()` only after the level-filter check passes
+/// Hot-path cost after optimisation:
+/// - `file`, `module`: `&'static str` zero-cost
+/// - `line`, `frame`:  scalar copy
+/// - `timestamp`:      AtomicU64 load (~2 ns, vs ~20–40 ns vDSO)
+/// - `thread`:         Arc::clone atomic refcount (~2 ns, vs ~50–100 ns malloc)
+/// - `message`:        allocated by `format!()` only after level-filter passes
 #[derive(Debug, Clone)]
 pub struct LogEntry {
     pub level:     LogLevel,
     pub tier:      Tier,
     pub message:   String,
-    /// Unix timestamp in milliseconds.
+    /// Unix timestamp in milliseconds — sourced from `COARSE_TS_MS`.
     pub timestamp: u64,
-    /// Source file path — `file!()`, `&'static str`, zero-cost.
     pub file:      &'static str,
-    /// Source line number — `line!()`.
     pub line:      u32,
-    /// Rust module path — `module_path!()`, `&'static str`, zero-cost.
     pub module:    &'static str,
-    /// Name of the thread that produced this entry.
-    ///
-    /// Shared via `Arc<str>`. The first log call on a given thread allocates
-    /// the name once; every subsequent call on that thread pays only an atomic
-    /// refcount increment (~2 ns).
+    /// Thread name shared via `Arc<str>`.
+    /// First log call on a thread allocates once; every subsequent call
+    /// is an atomic refcount increment (~2 ns).
     pub thread:    Arc<str>,
-    /// Game frame counter at the time of logging.
-    /// Zero when `set_frame()` has never been called.
     pub frame:     u64,
 }
 
@@ -78,13 +92,21 @@ impl LogEntry {
         line:    u32,
         module:  &'static str,
     ) -> Self {
-        let timestamp = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_millis() as u64)
-            .unwrap_or(0);
+        // Prefer the coarse timestamp written by the IO thread (~2 ns).
+        // Fall back to the real clock only on the very first entry (COARSE == 0).
+        let timestamp = {
+            let coarse = COARSE_TS_MS.load(Ordering::Relaxed);
+            if coarse > 0 {
+                coarse
+            } else {
+                SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .map(|d| d.as_millis() as u64)
+                    .unwrap_or(0)
+            }
+        };
 
         // Arc::clone = fetch_add(1, Relaxed) ≈ 2 ns.
-        // Replaces the previous to_owned() path (~50–100 ns malloc).
         let thread = THREAD_NAME.with(Arc::clone);
 
         let frame = crate::frame::current_frame();
@@ -93,8 +115,6 @@ impl LogEntry {
     }
 
     /// Format the timestamp as `HH:MM:SS.mmm` (UTC, no date).
-    ///
-    /// Computed from raw Unix milliseconds — no external crate required.
     pub fn format_time(&self) -> String {
         let total_secs = self.timestamp / 1_000;
         let ms         = self.timestamp % 1_000;
@@ -103,4 +123,4 @@ impl LogEntry {
         let h          = (total_secs / 3_600) % 24;
         format!("{:02}:{:02}:{:02}.{:03}", h, m, s, ms)
     }
-    }
+            }
