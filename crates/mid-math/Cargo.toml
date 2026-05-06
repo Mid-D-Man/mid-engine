@@ -29,6 +29,10 @@ harness = false
 name    = "vs_all_f64"
 harness = false
 
+[[bench]]
+name    = "vs_int32"
+harness = false
+
 [features]
 default = []
 simd    = []
