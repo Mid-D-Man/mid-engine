@@ -2,15 +2,40 @@
 
 //! A single log entry placed into the channel.
 
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use crate::level::{LogLevel, Tier};
 
+// ── Thread-name cache ─────────────────────────────────────────────────────────
+//
+// Previously every LogEntry::new() called:
+//   std::thread::current().name().unwrap_or("<unnamed>").to_owned()
+//
+// That is a heap allocation (malloc + memcpy) on every single log call — the
+// dominant non-format!() cost on the hot path (~50–100 ns per call).
+//
+// Solution: capture the name once per thread into an Arc<str>. Subsequent log
+// calls clone the Arc, which is a single atomic fetch_add(1, Relaxed) — ~2 ns.
+//
+// The Arc is never dropped as long as the thread is alive; when the thread
+// exits the TLS destructor drops it, decrementing the refcount.
+thread_local! {
+    static THREAD_NAME: Arc<str> = {
+        let name = std::thread::current()
+            .name()
+            .unwrap_or("<unnamed>");
+        Arc::from(name)
+    };
+}
+
 /// A log entry. Produced on the calling thread, consumed by the IO thread.
 ///
-/// All fields except `message` are zero-copy (`&'static str`, `u32`, `u64`).
-/// `message` is heap-allocated after the level filter check, so filtered
-/// entries never allocate. `thread` is the only field that may allocate
-/// on the calling thread — and only once per unique thread name.
+/// All fields except `message` are zero-copy or near-zero-copy:
+/// - `file`, `module`: `&'static str`
+/// - `line`, `frame`: scalar integers
+/// - `timestamp`: one vDSO call
+/// - `thread`: `Arc<str>` — atomic refcount clone after the first call on each thread
+/// - `message`: allocated by `format!()` only after the level-filter check passes
 #[derive(Debug, Clone)]
 pub struct LogEntry {
     pub level:     LogLevel,
@@ -18,16 +43,18 @@ pub struct LogEntry {
     pub message:   String,
     /// Unix timestamp in milliseconds.
     pub timestamp: u64,
-    /// Source file path — from `file!()`, `&'static str`, zero-cost.
+    /// Source file path — `file!()`, `&'static str`, zero-cost.
     pub file:      &'static str,
-    /// Source line number — from `line!()`.
+    /// Source line number — `line!()`.
     pub line:      u32,
-    /// Rust module path — from `module_path!()`, `&'static str`, zero-cost.
+    /// Rust module path — `module_path!()`, `&'static str`, zero-cost.
     pub module:    &'static str,
     /// Name of the thread that produced this entry.
-    /// Captured via `std::thread::current().name()` at construction time.
-    /// `<unnamed>` for threads without an explicit name.
-    pub thread:    String,
+    ///
+    /// Shared via `Arc<str>`. The first log call on a given thread allocates the
+    /// name once; every subsequent call on that thread pays only an atomic
+    /// refcount increment (~2 ns).
+    pub thread:    Arc<str>,
     /// Game frame counter at the time of logging.
     /// Zero when `set_frame()` has never been called.
     pub frame:     u64,
@@ -47,14 +74,9 @@ impl LogEntry {
             .map(|d| d.as_millis() as u64)
             .unwrap_or(0);
 
-        // Thread name: captured once per entry. For hot-path threads
-        // (e.g. the physics thread logging every frame), the thread name
-        // is fetched from the OS handle — a single atomic read on most
-        // platforms since pthread stores the name in the thread struct.
-        let thread = std::thread::current()
-            .name()
-            .unwrap_or("<unnamed>")
-            .to_owned();
+        // Arc::clone = fetch_add(1, Relaxed) ≈ 2 ns.
+        // Replaces the previous to_owned() path (~50–100 ns malloc).
+        let thread = THREAD_NAME.with(Arc::clone);
 
         let frame = crate::frame::current_frame();
 
@@ -72,4 +94,4 @@ impl LogEntry {
         let h          = (total_secs / 3_600) % 24;
         format!("{:02}:{:02}:{:02}.{:03}", h, m, s, ms)
     }
-}
+    }
