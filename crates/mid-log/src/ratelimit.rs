@@ -13,15 +13,6 @@
 //! the calling thread. The IO thread owns a `RateLimiter` in its local
 //! state and calls `check()` before formatting each entry.
 //!
-//! The `RateLimiter` maintains a `HashMap<SiteKey, SiteState>` keyed on
-//! `(file, line)`. Each site tracks:
-//! - The first message seen in the current window.
-//! - The count of suppressed duplicates.
-//! - The timestamp of the window start.
-//!
-//! When a site's window expires, the suppression summary is emitted and
-//! the site resets.
-//!
 //! ## Configuration
 //!
 //! ```rust,no_run
@@ -31,19 +22,13 @@
 //! set_rate_limit_config(RateLimitConfig {
 //!     enabled:        true,
 //!     window:         Duration::from_secs(1),
-//!     max_per_window: 5,   // allow up to 5 identical logs per second
+//!     max_per_window: 5,
 //! });
-//! ```
-//!
-//! Disable entirely:
-//! ```rust,no_run
-//! use mid_log::ratelimit::{set_rate_limit_config, RateLimitConfig};
-//! set_rate_limit_config(RateLimitConfig { enabled: false, ..Default::default() });
 //! ```
 
 use std::collections::HashMap;
-use std::sync::{Mutex, OnceLock};
-use std::time::{Duration, Instant};
+use std::sync::{Arc, Mutex, OnceLock};
+use std::time::{Duration, Instant, SystemTime};
 
 use crate::entry::LogEntry;
 use crate::level::{LogLevel, Tier};
@@ -79,8 +64,6 @@ fn get_config_store() -> &'static Mutex<RateLimitConfig> {
 }
 
 /// Replace the rate limit configuration.
-///
-/// The IO thread picks up the change on its next `check()` call.
 pub fn set_rate_limit_config(config: RateLimitConfig) {
     if let Ok(mut g) = get_config_store().lock() {
         *g = config;
@@ -103,35 +86,22 @@ struct SiteKey {
 }
 
 struct SiteState {
-    /// The first message in the current window (kept for the summary).
     first_message:    String,
-    /// Number of times this site fired in the current window (including #1).
     count:            u32,
-    /// Number of entries that were fully suppressed (count > max_per_window).
     suppressed_count: u32,
-    /// When this window started.
     window_start:     Instant,
 }
 
-// ── RateLimiter — IO thread local ─────────────────────────────────────────────
+// ── RateLimiter ───────────────────────────────────────────────────────────────
 
-/// State owned by the IO thread. Not `Send` — lives entirely on the IO thread
-/// and is therefore safe to use without locking.
 pub(crate) struct RateLimiter {
     sites: HashMap<SiteKey, SiteState>,
 }
 
-/// Decision returned by `RateLimiter::check()`.
 pub(crate) enum RateDecision {
-    /// Emit this entry normally.
     Allow,
-    /// Suppress this entry — it is a duplicate within the window.
     Suppress,
-    /// This entry is a duplicate, but the window just expired.
-    /// Emit a summary of the previous window and then emit this entry.
-    WindowExpired {
-        summary: LogEntry,
-    },
+    WindowExpired { summary: LogEntry },
 }
 
 impl RateLimiter {
@@ -139,10 +109,6 @@ impl RateLimiter {
         Self { sites: HashMap::new() }
     }
 
-    /// Check whether `entry` should be emitted, suppressed, or preceded
-    /// by a suppression summary.
-    ///
-    /// Must be called on the IO thread only.
     pub(crate) fn check(
         &mut self,
         entry:  &LogEntry,
@@ -159,13 +125,11 @@ impl RateLimiter {
             let window_age = now.duration_since(state.window_start);
 
             if window_age >= config.window {
-                // Window expired — emit summary then reset.
                 let summary_entry = if state.suppressed_count > 0 {
                     Some(Self::make_summary(entry, state))
                 } else {
                     None
                 };
-                // Reset the site for the new window.
                 *state = SiteState {
                     first_message:    entry.message.clone(),
                     count:            1,
@@ -178,7 +142,6 @@ impl RateLimiter {
                 };
             }
 
-            // Within the same window.
             state.count += 1;
             if state.count > config.max_per_window {
                 state.suppressed_count += 1;
@@ -186,7 +149,6 @@ impl RateLimiter {
             }
             RateDecision::Allow
         } else {
-            // First time we've seen this site.
             self.sites.insert(key, SiteState {
                 first_message:    entry.message.clone(),
                 count:            1,
@@ -197,10 +159,6 @@ impl RateLimiter {
         }
     }
 
-    /// Flush any active suppression windows that have expired since the
-    /// last call to `check()`. Called periodically by the IO thread
-    /// (e.g. on every drain cycle) to ensure summaries are emitted even
-    /// when a site goes quiet after a burst.
     pub(crate) fn flush_expired(
         &mut self,
         config: &RateLimitConfig,
@@ -217,9 +175,9 @@ impl RateLimiter {
                 && state.suppressed_count > 0
             {
                 summaries.push(Self::make_summary_static(state));
-                false // remove the site — window is done
+                false
             } else {
-                true  // keep — window still active
+                true
             }
         });
 
@@ -240,13 +198,13 @@ impl RateLimiter {
             file:      entry.file,
             line:      entry.line,
             module:    entry.module,
-            thread:    entry.thread.clone(),
+            // Arc::clone — just an atomic refcount increment, not a String copy.
+            thread:    Arc::clone(&entry.thread),
             frame:     entry.frame,
         }
     }
 
     fn make_summary_static(state: &SiteState) -> LogEntry {
-        // We don't have the original entry here — use a generic summary.
         LogEntry {
             level:   LogLevel::Warn,
             tier:    Tier::Low,
@@ -261,10 +219,9 @@ impl RateLimiter {
             file:   "<rate-limiter>",
             line:   0,
             module: "<rate-limiter>",
-            thread: String::from("<io-thread>"),
+            // Arc::from(&str) — one small allocation for this rare summary entry.
+            thread: Arc::from("<io-thread>"),
             frame:  crate::frame::current_frame(),
         }
     }
 }
-
-use std::time::SystemTime;
