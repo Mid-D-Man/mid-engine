@@ -1,0 +1,29 @@
+[package]
+name        = "mid-trace"
+version     = "0.1.0"
+edition     = "2021"
+description = "Frame profiler and scope tracer for Mid Engine — FFI-ready, zero-cost when disabled"
+
+[lib]
+name       = "mid_trace"
+crate-type = ["rlib", "cdylib", "staticlib"]
+
+[features]
+default = []
+
+# Enable profiling machinery: scope timing, frame accumulator, span records.
+# Without this flag every macro and function is a compile-time no-op.
+profile = []
+
+# Tracy profiler integration. Requires the Tracy server to be running.
+# https://github.com/wolfpld/tracy
+# Implies `profile`.
+tracy = ["profile", "dep:tracy-client"]
+
+# Linux perf_event_open hardware counters: CPU cycles, cache misses,
+# branch mispredictions. The closest Rust equivalent to ftrace for userspace.
+# Implies `profile`. Linux x86_64 only.
+perf = ["profile"]
+
+[dependencies]
+tracy-client = { version = "0.17", optional = true }
