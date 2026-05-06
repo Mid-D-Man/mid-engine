@@ -17,13 +17,22 @@ use crate::level::{LogLevel, Tier};
 // Solution: capture the name once per thread into an Arc<str>. Subsequent log
 // calls clone the Arc, which is a single atomic fetch_add(1, Relaxed) — ~2 ns.
 //
-// The Arc is never dropped as long as the thread is alive; when the thread
-// exits the TLS destructor drops it, decrementing the refcount.
+// FIX for E0716:
+//   Thread::current() returns a temporary Thread value.
+//   Thread::name() returns Option<&str> that borrows from that Thread.
+//   If we write:
+//       let name = std::thread::current().name().unwrap_or("...");
+//   the Thread temporary is dropped at the semicolon, invalidating `name`.
+//
+//   Fix: bind the Thread to a named local (`thread`) so it lives for the
+//   entire block and the `name` borrow remains valid through Arc::from(name).
 thread_local! {
     static THREAD_NAME: Arc<str> = {
-        let name = std::thread::current()
-            .name()
-            .unwrap_or("<unnamed>");
+        // `thread` must be a named binding — NOT a temporary.
+        // Thread::name() borrows from `thread`; if `thread` were a
+        // temporary it would be dropped before Arc::from(name) runs.
+        let thread = std::thread::current();
+        let name   = thread.name().unwrap_or("<unnamed>");
         Arc::from(name)
     };
 }
@@ -51,8 +60,8 @@ pub struct LogEntry {
     pub module:    &'static str,
     /// Name of the thread that produced this entry.
     ///
-    /// Shared via `Arc<str>`. The first log call on a given thread allocates the
-    /// name once; every subsequent call on that thread pays only an atomic
+    /// Shared via `Arc<str>`. The first log call on a given thread allocates
+    /// the name once; every subsequent call on that thread pays only an atomic
     /// refcount increment (~2 ns).
     pub thread:    Arc<str>,
     /// Game frame counter at the time of logging.
