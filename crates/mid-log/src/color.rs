@@ -33,7 +33,18 @@
 //! The IO thread maintains a local `ResolvedScheme` (pre-rendered ANSI strings)
 //! and refreshes it only when `COLOR_SCHEME_GEN` increments. The common path
 //! pays one `AtomicU64::load` per entry — zero lock overhead.
+//!
+//! ## paint() allocation strategy
+//!
+//! `paint(text, color)` returns a `Painted<T>` where `T: Display`. The value
+//! is moved in (no eager `to_string()`) and formatted lazily when `format!()`
+//! calls `Display::fmt`. The ANSI prefix uses `Cow<'static, str>`:
+//!
+//! - Standard colors (Red, Bold, Cyan, …): `Borrowed(&'static str)` — zero allocation.
+//! - Rgb / Custom colors: `Owned(String)` — one allocation.
+//! - Colors disabled: `Borrowed("")` — zero allocation, zero formatting overhead.
 
+use std::borrow::Cow;
 use std::fmt;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -82,21 +93,15 @@ pub(crate) fn detect_colors() -> bool {
     if std::env::var_os("FORCE_COLOR").is_some() {
         return true;
     }
-    // std::io::IsTerminal is stable since Rust 1.70.
     use std::io::IsTerminal;
     std::io::stderr().is_terminal()
 }
 
 /// Initialize the global color system. Called once from `MidLogger::init*()`.
-///
-/// Returns an `Arc<Mutex<ColorScheme>>` that is shared between `MidLogger`
-/// (for public access) and the IO thread (for snapshot refresh).
 pub(crate) fn init_colors(scheme: ColorScheme) -> Arc<Mutex<ColorScheme>> {
     let detected = detect_colors();
     COLORS_ENABLED.store(detected, Ordering::Relaxed);
     let arc = Arc::new(Mutex::new(scheme));
-    // If init is called twice (second call is a no-op from OnceLock),
-    // the second Arc is dropped — the original scheme is preserved.
     let _ = COLOR_SCHEME.set(arc.clone());
     arc
 }
@@ -112,7 +117,7 @@ pub(crate) fn init_colors(scheme: ColorScheme) -> Arc<Mutex<ColorScheme>> {
 /// update_color_scheme(|s| {
 ///     s.warn    = Color::BrightYellow;
 ///     s.error   = Color::Rgb(255, 80, 80);
-///     s.message = Color::None; // no tint on message body
+///     s.message = Color::None;
 /// });
 /// ```
 pub fn update_color_scheme(f: impl FnOnce(&mut ColorScheme)) {
@@ -130,10 +135,6 @@ pub fn update_color_scheme(f: impl FnOnce(&mut ColorScheme)) {
 ///
 /// Used in [`ColorScheme`] for per-field defaults and in [`paint()`] for
 /// inline coloring of values inside log messages.
-///
-/// All variants except `Rgb` and `Custom` are `Clone`-friendly and have
-/// no runtime allocation until `to_ansi_prefix()` is called (which happens
-/// only when colors are enabled and only on the IO thread).
 #[derive(Debug, Clone, PartialEq)]
 pub enum Color {
     // ── Standard foreground (30–37) ───────────────────────────────────────────
@@ -146,7 +147,7 @@ pub enum Color {
     Cyan,
     White,
     // ── Bright foreground (90–97) ─────────────────────────────────────────────
-    BrightBlack,    // "dark grey" on most terminals
+    BrightBlack,
     BrightRed,
     BrightGreen,
     BrightYellow,
@@ -160,14 +161,9 @@ pub enum Color {
     Italic,
     Underline,
     // ── True color ────────────────────────────────────────────────────────────
-    /// 24-bit RGB foreground. Supported by most modern terminals (not Windows 7).
+    /// 24-bit RGB foreground. Supported by most modern terminals.
     Rgb(u8, u8, u8),
     /// Raw ANSI parameter string placed between `\x1b[` and `m`.
-    ///
-    /// Examples:
-    /// - `"38;5;208"` — xterm-256 orange foreground
-    /// - `"1;31"`     — bold red
-    /// - `"48;2;0;0;255"` — blue background (RGB)
     Custom(String),
     /// No color. Leaves the terminal in its current state.
     None,
@@ -204,11 +200,12 @@ impl Color {
     }
 
     /// Convenience: `to_ansi_prefix()` with empty string for `Color::None`.
+    /// Used by `ResolvedScheme` on the IO thread — allocation is acceptable there.
     pub(crate) fn to_ansi_string(&self) -> String {
         self.to_ansi_prefix().unwrap_or_default()
     }
 
-    /// ANSI background equivalent. Used by `paint_bg()`.
+    /// ANSI background equivalent. Used by the IO thread's `ResolvedScheme`.
     pub(crate) fn to_bg_ansi_string(&self) -> String {
         match self {
             Color::Black         => "\x1b[40m".to_owned(),
@@ -229,8 +226,73 @@ impl Color {
             Color::BrightWhite   => "\x1b[107m".to_owned(),
             Color::Rgb(r, g, b)  => format!("\x1b[48;2;{};{};{}m", r, g, b),
             Color::Custom(s)     => format!("\x1b[{}m", s),
-            // Styles and None have no background equivalent
             _ => String::new(),
+        }
+    }
+
+    // ── Zero-allocation paths for the hot-path paint() ───────────────────────
+
+    /// Returns the foreground ANSI prefix as a `Cow<'static, str>`.
+    ///
+    /// Standard variants (all except `Rgb` and `Custom`) return `Borrowed`,
+    /// which is a fat pointer into a static string — **zero heap allocation**.
+    /// `Rgb` and `Custom` return `Owned` (one allocation, unavoidable).
+    /// `None` returns `Borrowed("")`.
+    ///
+    /// Used only by `paint()` on the logging hot path.
+    #[inline]
+    pub(crate) fn to_ansi_cow(&self) -> Cow<'static, str> {
+        match self {
+            Color::None          => Cow::Borrowed(""),
+            Color::Black         => Cow::Borrowed("\x1b[30m"),
+            Color::Red           => Cow::Borrowed("\x1b[31m"),
+            Color::Green         => Cow::Borrowed("\x1b[32m"),
+            Color::Yellow        => Cow::Borrowed("\x1b[33m"),
+            Color::Blue          => Cow::Borrowed("\x1b[34m"),
+            Color::Magenta       => Cow::Borrowed("\x1b[35m"),
+            Color::Cyan          => Cow::Borrowed("\x1b[36m"),
+            Color::White         => Cow::Borrowed("\x1b[37m"),
+            Color::BrightBlack   => Cow::Borrowed("\x1b[90m"),
+            Color::BrightRed     => Cow::Borrowed("\x1b[91m"),
+            Color::BrightGreen   => Cow::Borrowed("\x1b[92m"),
+            Color::BrightYellow  => Cow::Borrowed("\x1b[93m"),
+            Color::BrightBlue    => Cow::Borrowed("\x1b[94m"),
+            Color::BrightMagenta => Cow::Borrowed("\x1b[95m"),
+            Color::BrightCyan    => Cow::Borrowed("\x1b[96m"),
+            Color::BrightWhite   => Cow::Borrowed("\x1b[97m"),
+            Color::Bold          => Cow::Borrowed("\x1b[1m"),
+            Color::Dim           => Cow::Borrowed("\x1b[2m"),
+            Color::Italic        => Cow::Borrowed("\x1b[3m"),
+            Color::Underline     => Cow::Borrowed("\x1b[4m"),
+            Color::Rgb(r, g, b)  => Cow::Owned(format!("\x1b[38;2;{};{};{}m", r, g, b)),
+            Color::Custom(s)     => Cow::Owned(format!("\x1b[{}m", s)),
+        }
+    }
+
+    /// Returns the background ANSI prefix as a `Cow<'static, str>`.
+    /// Same zero-allocation guarantee as `to_ansi_cow()` for standard variants.
+    #[inline]
+    pub(crate) fn to_bg_ansi_cow(&self) -> Cow<'static, str> {
+        match self {
+            Color::Black         => Cow::Borrowed("\x1b[40m"),
+            Color::Red           => Cow::Borrowed("\x1b[41m"),
+            Color::Green         => Cow::Borrowed("\x1b[42m"),
+            Color::Yellow        => Cow::Borrowed("\x1b[43m"),
+            Color::Blue          => Cow::Borrowed("\x1b[44m"),
+            Color::Magenta       => Cow::Borrowed("\x1b[45m"),
+            Color::Cyan          => Cow::Borrowed("\x1b[46m"),
+            Color::White         => Cow::Borrowed("\x1b[47m"),
+            Color::BrightBlack   => Cow::Borrowed("\x1b[100m"),
+            Color::BrightRed     => Cow::Borrowed("\x1b[101m"),
+            Color::BrightGreen   => Cow::Borrowed("\x1b[102m"),
+            Color::BrightYellow  => Cow::Borrowed("\x1b[103m"),
+            Color::BrightBlue    => Cow::Borrowed("\x1b[104m"),
+            Color::BrightMagenta => Cow::Borrowed("\x1b[105m"),
+            Color::BrightCyan    => Cow::Borrowed("\x1b[106m"),
+            Color::BrightWhite   => Cow::Borrowed("\x1b[107m"),
+            Color::Rgb(r, g, b)  => Cow::Owned(format!("\x1b[48;2;{};{};{}m", r, g, b)),
+            Color::Custom(s)     => Cow::Owned(format!("\x1b[{}m", s)),
+            _ => Cow::Borrowed(""), // styles and None have no background
         }
     }
 }
@@ -307,11 +369,7 @@ impl Default for ColorScheme {
 /// Pre-rendered ANSI strings for every color slot.
 ///
 /// Rebuilt from `ColorScheme` whenever `COLOR_SCHEME_GEN` increments.
-/// The IO thread pays zero lock overhead on the common path — it checks a
-/// single `AtomicU64` and re-locks the scheme only when the value changes.
-///
-/// Fields are plain `String`s: empty when colors are disabled, ANSI otherwise.
-/// `reset` / `bold` are `&'static str` to avoid allocation.
+/// Lives entirely on the IO thread — no locking on the common path.
 #[derive(Debug, Clone)]
 pub(crate) struct ResolvedScheme {
     pub trace:     String,
@@ -328,9 +386,7 @@ pub(crate) struct ResolvedScheme {
     pub thread:    String,
     pub frame:     String,
     pub message:   String,
-    /// `"\x1b[0m"` when colors enabled, `""` otherwise.
     pub reset: &'static str,
-    /// `"\x1b[1m"` when colors enabled, `""` otherwise. Prepended to Fatal.
     pub bold:  &'static str,
 }
 
@@ -376,29 +432,47 @@ impl ResolvedScheme {
 // ── paint() — inline coloring ─────────────────────────────────────────────────
 
 /// A colored or plain value for use inside `format!()` strings.
+///
 /// Created by [`paint()`] or [`paint_bg()`]. Implements `Display`.
-pub struct Painted {
-    text: String,
-    /// Pre-rendered ANSI prefix. Empty string when colors are disabled.
-    ansi: String,
+///
+/// ## Allocation behaviour
+///
+/// | Situation                   | Allocations |
+/// |-----------------------------|-------------|
+/// | Colors disabled             | 0           |
+/// | Colors enabled, std color   | 0 (Cow::Borrowed static str) |
+/// | Colors enabled, Rgb/Custom  | 1 (ANSI prefix String only)  |
+///
+/// `T` is never converted to `String` eagerly — it is formatted lazily
+/// by the `Display` impl when `format!()` calls `.fmt()`.
+pub struct Painted<T: fmt::Display> {
+    text:   T,
+    /// ANSI escape prefix. Empty string = no color, no reset emitted.
+    /// `Borrowed` for all standard Color variants — zero allocation.
+    /// `Owned` only for `Color::Rgb` and `Color::Custom`.
+    prefix: Cow<'static, str>,
 }
 
-impl fmt::Display for Painted {
+impl<T: fmt::Display> fmt::Display for Painted<T> {
+    #[inline]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if self.ansi.is_empty() {
-            f.write_str(&self.text)
+        if self.prefix.is_empty() {
+            // Colors off or Color::None — pure passthrough, no escape codes.
+            fmt::Display::fmt(&self.text, f)
         } else {
-            // Write: <ansi_prefix><text><reset>
-            write!(f, "{}{}\x1b[0m", self.ansi, self.text)
+            write!(f, "{}{}\x1b[0m", self.prefix, self.text)
         }
     }
 }
 
 /// Apply a foreground color (or style) to a value inside a log message.
 ///
-/// Respects the global `COLORS_ENABLED` flag. When colors are disabled this
-/// is a pure pass-through — no ANSI codes, no allocation beyond the
-/// `Display` formatting of `text`.
+/// The value is **not** converted to `String` eagerly. It is moved into
+/// `Painted<T>` and formatted lazily when `format!()` renders the message.
+/// Standard ANSI colors use zero-allocation `Cow::Borrowed` static strings.
+///
+/// When colors are disabled this is a true zero-cost passthrough — no ANSI
+/// codes, no allocation beyond the stack struct.
 ///
 /// # Example
 /// ```rust,no_run
@@ -414,25 +488,33 @@ impl fmt::Display for Painted {
 ///     paint("critical", Color::Bold),
 /// );
 /// ```
-pub fn paint(text: impl fmt::Display, fg: Color) -> Painted {
+#[inline]
+pub fn paint<T: fmt::Display>(text: T, fg: Color) -> Painted<T> {
     Painted {
-        text: text.to_string(),
-        ansi: if is_colors_enabled() { fg.to_ansi_string() } else { String::new() },
+        text,
+        prefix: if is_colors_enabled() {
+            fg.to_ansi_cow()
+        } else {
+            Cow::Borrowed("")
+        },
     }
 }
 
 /// Apply a foreground and background color to a value inside a log message.
 ///
+/// When colors are disabled: zero-cost passthrough.
+/// When colors are enabled: one allocation to combine fg + bg escape codes.
+///
 /// ```rust,no_run
 /// use mid_log::{mid_error, level::Tier, color::{Color, paint_bg}};
 /// mid_error!(Tier::High, "{}", paint_bg("CRITICAL", Color::White, Color::Red));
 /// ```
-pub fn paint_bg(text: impl fmt::Display, fg: Color, bg: Color) -> Painted {
+#[inline]
+pub fn paint_bg<T: fmt::Display>(text: T, fg: Color, bg: Color) -> Painted<T> {
     if !is_colors_enabled() {
-        return Painted { text: text.to_string(), ansi: String::new() };
+        return Painted { text, prefix: Cow::Borrowed("") };
     }
-    Painted {
-        text: text.to_string(),
-        ansi: format!("{}{}", fg.to_ansi_string(), bg.to_bg_ansi_string()),
-    }
+    // Combining two codes always requires one allocation.
+    let combined = format!("{}{}", fg.to_ansi_cow(), bg.to_bg_ansi_cow());
+    Painted { text, prefix: Cow::Owned(combined) }
 }
