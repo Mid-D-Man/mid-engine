@@ -5,6 +5,7 @@ members = [
     "crates/mid-ecs",
     "crates/mid-math",
     "crates/mid-common",
+    "crates/mid-trace",
     "tools/mdix-compiler",
     "examples/headless-server",
 ]
