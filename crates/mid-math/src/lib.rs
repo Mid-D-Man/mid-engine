@@ -9,6 +9,7 @@ pub mod f64;
 pub mod ffi;
 pub mod constants;
 pub mod int32;
+pub mod int64;
 
 pub use constants::*;
 
@@ -16,9 +17,13 @@ pub use constants::*;
 
 pub use bvec::{BVec2, BVec3, BVec4};
 
-// ── Integer vector re-exports ─────────────────────────────────────────────────
+// ── Integer vector re-exports (i32 / u32) ────────────────────────────────────
 
 pub use int32::{IVec2, IVec3, IVec4, UVec2, UVec3, UVec4};
+
+// ── Integer vector re-exports (i64 / u64) ────────────────────────────────────
+
+pub use int64::{I64Vec2, I64Vec3, I64Vec4, U64Vec2, U64Vec3, U64Vec4};
 
 // ── f32 re-exports ────────────────────────────────────────────────────────────
 
