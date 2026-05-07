@@ -2,18 +2,14 @@
 
 //! Background IO thread — drains the channel and writes to the active sink.
 //!
-//! The thread parks via `recv_timeout()` when the channel is empty — zero CPU idle.
+//! ## KV rendering
 //!
-//! ## Per-entry pipeline (in order)
-//!
-//! 1. Coarse timestamp tick — refreshes `COARSE_TS_MS` so callers pay ~2 ns.
-//! 2. Rate limit check (`RateLimiter::check()`).
-//! 3. Console buffer push (`console_buffer::push()`).
-//! 4. Color scheme snapshot refresh (if `COLOR_SCHEME_GEN` changed).
-//! 5. Format snapshot (`FormatSnapshot::take()`).
-//! 6. `format_entry()` → `Vec<u8>`.
-//! 7. Write to stderr (`write_all`).
-//! 8. Write to file sink if configured.
+//! Structured entries (produced by `mid_kvinfo!` etc.) render as:
+//! ```text
+//! HH:MM:SS.mmm [INFO ][HIGH] player spawned  id=1  x=1.000  y=2.000  (src:42)
+//! ```
+//! The IO thread pays the formatting cost for KV entries, which is the whole
+//! point — the calling thread (game loop) does no `format!()` at all.
 
 use std::io::{self, Write};
 use std::fs;
@@ -84,7 +80,8 @@ impl std::fmt::Write for VecWriter<'_> {
 ///
 /// Output (all fields enabled, colors on):
 /// ```text
-/// HH:MM:SS.mmm [LEVEL][TIER] [T:thread] [F:12345] message body  (module  file:line)\n
+/// Printf:     HH:MM:SS.mmm [LEVEL][TIER] [T:t] [F:n] message  (module  file:line)
+/// Structured: HH:MM:SS.mmm [LEVEL][TIER] [T:t] [F:n] message  key=val  key=val  (file:line)
 /// ```
 fn format_entry(
     entry:  &LogEntry,
@@ -97,10 +94,12 @@ fn format_entry(
     let mut w = VecWriter(buf);
     let R = colors.reset;
 
+    // ── Timestamp ─────────────────────────────────────────────────────────────
     if fmt.show_timestamp {
         let _ = write!(w, "{}{}{} ", colors.timestamp, entry.format_time(), R);
     }
 
+    // ── Level badge ───────────────────────────────────────────────────────────
     let level_color = match entry.level {
         LogLevel::Trace => &colors.trace,
         LogLevel::Info  => &colors.info,
@@ -111,6 +110,7 @@ fn format_entry(
     let bold_prefix = if entry.level == LogLevel::Fatal { colors.bold } else { "" };
     let _ = write!(w, "{}{}[{}]{} ", bold_prefix, level_color, entry.level.as_str(), R);
 
+    // ── Tier badge ────────────────────────────────────────────────────────────
     let tier_color = match entry.tier {
         Tier::Low  => &colors.tier_low,
         Tier::Mid  => &colors.tier_mid,
@@ -118,6 +118,7 @@ fn format_entry(
     };
     let _ = write!(w, "{}[{}]{} ", tier_color, entry.tier.as_str(), R);
 
+    // ── Thread / frame badges ─────────────────────────────────────────────────
     if fmt.show_thread {
         let _ = write!(w, "{}[T:{}]{} ", colors.thread, entry.thread, R);
     }
@@ -125,12 +126,21 @@ fn format_entry(
         let _ = write!(w, "{}[F:{}]{} ", colors.frame, entry.frame, R);
     }
 
+    // ── Message body ──────────────────────────────────────────────────────────
     if colors.message.is_empty() {
         let _ = write!(w, "{}", entry.message);
     } else {
         let _ = write!(w, "{}{}{}", colors.message, entry.message, R);
     }
 
+    // ── KV pairs (structured entries only) ────────────────────────────────────
+    // IO thread pays the formatting cost here — the calling thread paid nothing.
+    // Format: `  key=value` per pair, dim-colored to visually separate from message.
+    for (key, val) in &entry.kvs {
+        let _ = write!(w, "  {}{}={}{}", colors.source, key, val, R);
+    }
+
+    // ── Source location ───────────────────────────────────────────────────────
     if fmt.show_source_loc {
         let _ = write!(w, "  {}", colors.source);
         if fmt.show_module && !entry.module.is_empty() {
@@ -183,9 +193,9 @@ impl LogWriter {
 
                 loop {
                     // ── Coarse timestamp tick ─────────────────────────────────
-                    // Refreshes the global AtomicU64 so LogEntry::new() on
-                    // calling threads pays ~2 ns instead of ~20–40 ns vDSO.
-                    // One real clock call here covers all concurrent threads.
+                    // All calling threads read COARSE_TS_MS (~2 ns) instead of
+                    // calling SystemTime::now() (~20–40 ns). We pay the real
+                    // clock cost exactly once per loop cycle here.
                     crate::entry::tick_coarse_timestamp();
 
                     // ── Rate-limit config refresh (once per second) ───────────
@@ -234,7 +244,6 @@ impl LogWriter {
                         crate::ratelimit::RateDecision::Allow => {}
                     }
 
-                    // ── Console buffer ────────────────────────────────────────
                     console_buffer::push(&entry);
 
                     // ── Drain burst ───────────────────────────────────────────
