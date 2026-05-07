@@ -17,7 +17,7 @@
 //!
 //! ```rust,no_run
 //! # use mid_log::{mid_info, level::Tier};
-//! mid_info!(Tier::High, "entity {} pos ({:.2}, {:.2})", id, x, y);
+//! mid_info!(Tier::High, "entity {} at ({:.2}, {:.2})", id, x, y);
 //! ```
 //!
 //! ## KV API
@@ -34,10 +34,8 @@
 //! mid_kvinfo!(Tier::High, "physics tick complete");
 //! ```
 
-use std::borrow::Cow;
-
 // ═══════════════════════════════════════════════════════════════════════════
-//  Printf API — existing macros, unchanged behaviour
+//  Printf API
 // ═══════════════════════════════════════════════════════════════════════════
 
 /// Log at TRACE level (printf style).
@@ -127,21 +125,6 @@ macro_rules! mid_fatal {
 // ═══════════════════════════════════════════════════════════════════════════
 //  KV API — structured logging, no format!() on the calling thread
 // ═══════════════════════════════════════════════════════════════════════════
-//
-// Syntax:
-//   mid_kvinfo!(Tier::High, "static message");
-//   mid_kvinfo!(Tier::High, "static message"; "key1" => val1, "key2" => val2);
-//
-// Keys must be string literals. Values can be any type implementing IntoKvValue
-// (bool, i8–i64, u8–u64, f32, f64, &'static str).
-//
-// The calling thread pays:
-//   - 1 filter check (AtomicU8 load)
-//   - 1 OnceLock probe (AtomicUsize load)
-//   - 1 Vec allocation for the KV pairs (zero allocation if no KVs)
-//   - N pair constructions (tag + scalar copy per KV)
-//   - 1 channel send
-// No format!(), no float-to-string conversion.
 
 /// Log a structured KV entry at TRACE level.
 ///
@@ -239,4 +222,4 @@ macro_rules! mid_kverror {
             }
         }
     }};
-}
+            }
