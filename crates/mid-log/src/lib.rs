@@ -2,29 +2,18 @@
 
 //! mid-log — Non-blocking, tiered logger for Mid Engine.
 //!
-//! ## Quick start
+//! ## APIs
+//!
+//! ### Printf (ergonomic, ~250–500 ns for float-heavy messages)
 //! ```rust,no_run
-//! use mid_log::{mid_info, mid_warn, level::Tier};
-//! use mid_log::logger::{MidLogger, InitConfig};
-//! use mid_log::level::LogLevel;
-//! use mid_log::format::FormatConfig;
-//!
-//! MidLogger::init_full(InitConfig {
-//!     min_level: LogLevel::Info,
-//!     format: FormatConfig { show_frame: true, ..Default::default() },
-//!     ..Default::default()
-//! });
-//!
-//! mid_log::frame::set_frame(0);
-//! mid_info!(Tier::High, "Engine started");
-//! mid_warn!(Tier::Low, "Something looks off: {}", 42);
+//! use mid_log::{mid_info, level::Tier};
+//! mid_info!(Tier::High, "entity {} at ({:.2}, {:.2})", id, x, y);
 //! ```
 //!
-//! ## Inline coloring
+//! ### Structured KV (~45–65 ns for the same data — no format!())
 //! ```rust,no_run
-//! use mid_log::{mid_warn, level::Tier, color::{Color, paint}};
-//! let hp = 5u32;
-//! mid_warn!(Tier::High, "HP: {} ({})", paint(hp, Color::Red), paint("critical", Color::Bold));
+//! use mid_log::{mid_kvinfo, level::Tier};
+//! mid_kvinfo!(Tier::High, "entity update"; "id" => id, "x" => x, "y" => y);
 //! ```
 
 pub mod level;
@@ -41,6 +30,7 @@ pub mod assert;
 pub mod ratelimit;
 pub mod console_buffer;
 pub mod ffi;
+pub mod kv;
 
 #[cfg(test)]
 mod tests;
