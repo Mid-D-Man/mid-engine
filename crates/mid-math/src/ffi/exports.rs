@@ -5,10 +5,13 @@ use crate::ffi::types::{
     CDAffine3, CDMat2, CDMat3, CDMat4, CDQuat, CDVec2, CDVec3, CDVec4,
     CIVec2, CIVec3, CIVec4,
     CUVec2, CUVec3, CUVec4,
+    CI64Vec2, CI64Vec3, CI64Vec4,
+    CU64Vec2, CU64Vec3, CU64Vec4,
 };
 use crate::{Affine3, Mat4, Quat, Vec2, Vec3, Vec4};
 use crate::{DAffine3, DMat2, DMat3, DMat4, DQuat, DVec2, DVec3, DVec4};
 use crate::{IVec2, IVec3, IVec4, UVec2, UVec3, UVec4};
+use crate::{I64Vec2, I64Vec3, I64Vec4, U64Vec2, U64Vec3, U64Vec4};
 
 // ═══════════════════════════════════════════════════════════════════════════
 //  f32 exports
@@ -383,3 +386,134 @@ use crate::{IVec2, IVec3, IVec4, UVec2, UVec3, UVec4};
 #[no_mangle] pub extern "C" fn mid_uvec4_wrapping_sub(a:CUVec4,b:CUVec4)->CUVec4{UVec4::from(a).wrapping_sub(UVec4::from(b)).into()}
 #[no_mangle] pub extern "C" fn mid_uvec4_saturating_add(a:CUVec4,b:CUVec4)->CUVec4{UVec4::from(a).saturating_add(UVec4::from(b)).into()}
 #[no_mangle] pub extern "C" fn mid_uvec4_saturating_sub(a:CUVec4,b:CUVec4)->CUVec4{UVec4::from(a).saturating_sub(UVec4::from(b)).into()}
+// ═══════════════════════════════════════════════════════════════════════════
+//  i64 integer vector exports
+//  Naming: mid_i64vec2_*, mid_i64vec3_*, mid_i64vec4_*
+// ═══════════════════════════════════════════════════════════════════════════
+
+// ── I64Vec2 ──────────────────────────────────────────────────────────────────
+#[no_mangle] pub extern "C" fn mid_i64vec2_new(x:i64,y:i64)->CI64Vec2{I64Vec2::new(x,y).into()}
+#[no_mangle] pub extern "C" fn mid_i64vec2_add(a:CI64Vec2,b:CI64Vec2)->CI64Vec2{(I64Vec2::from(a)+I64Vec2::from(b)).into()}
+#[no_mangle] pub extern "C" fn mid_i64vec2_sub(a:CI64Vec2,b:CI64Vec2)->CI64Vec2{(I64Vec2::from(a)-I64Vec2::from(b)).into()}
+#[no_mangle] pub extern "C" fn mid_i64vec2_mul(a:CI64Vec2,b:CI64Vec2)->CI64Vec2{(I64Vec2::from(a)*I64Vec2::from(b)).into()}
+#[no_mangle] pub extern "C" fn mid_i64vec2_scale(v:CI64Vec2,s:i64)->CI64Vec2{(I64Vec2::from(v)*s).into()}
+#[no_mangle] pub extern "C" fn mid_i64vec2_dot(a:CI64Vec2,b:CI64Vec2)->i64{I64Vec2::from(a).dot(I64Vec2::from(b))}
+#[no_mangle] pub extern "C" fn mid_i64vec2_min(a:CI64Vec2,b:CI64Vec2)->CI64Vec2{I64Vec2::from(a).min(I64Vec2::from(b)).into()}
+#[no_mangle] pub extern "C" fn mid_i64vec2_max(a:CI64Vec2,b:CI64Vec2)->CI64Vec2{I64Vec2::from(a).max(I64Vec2::from(b)).into()}
+#[no_mangle] pub extern "C" fn mid_i64vec2_clamp(v:CI64Vec2,lo:CI64Vec2,hi:CI64Vec2)->CI64Vec2{I64Vec2::from(v).clamp(I64Vec2::from(lo),I64Vec2::from(hi)).into()}
+#[no_mangle] pub extern "C" fn mid_i64vec2_abs(v:CI64Vec2)->CI64Vec2{I64Vec2::from(v).abs().into()}
+#[no_mangle] pub extern "C" fn mid_i64vec2_neg(v:CI64Vec2)->CI64Vec2{(-I64Vec2::from(v)).into()}
+#[no_mangle] pub extern "C" fn mid_i64vec2_length_sq(v:CI64Vec2)->i64{I64Vec2::from(v).length_sq()}
+#[no_mangle] pub extern "C" fn mid_i64vec2_min_element(v:CI64Vec2)->i64{I64Vec2::from(v).min_element()}
+#[no_mangle] pub extern "C" fn mid_i64vec2_max_element(v:CI64Vec2)->i64{I64Vec2::from(v).max_element()}
+#[no_mangle] pub extern "C" fn mid_i64vec2_element_sum(v:CI64Vec2)->i64{I64Vec2::from(v).element_sum()}
+#[no_mangle] pub extern "C" fn mid_i64vec2_wrapping_add(a:CI64Vec2,b:CI64Vec2)->CI64Vec2{I64Vec2::from(a).wrapping_add(I64Vec2::from(b)).into()}
+#[no_mangle] pub extern "C" fn mid_i64vec2_wrapping_sub(a:CI64Vec2,b:CI64Vec2)->CI64Vec2{I64Vec2::from(a).wrapping_sub(I64Vec2::from(b)).into()}
+#[no_mangle] pub extern "C" fn mid_i64vec2_saturating_add(a:CI64Vec2,b:CI64Vec2)->CI64Vec2{I64Vec2::from(a).saturating_add(I64Vec2::from(b)).into()}
+#[no_mangle] pub extern "C" fn mid_i64vec2_saturating_sub(a:CI64Vec2,b:CI64Vec2)->CI64Vec2{I64Vec2::from(a).saturating_sub(I64Vec2::from(b)).into()}
+
+// ── I64Vec3 ──────────────────────────────────────────────────────────────────
+#[no_mangle] pub extern "C" fn mid_i64vec3_new(x:i64,y:i64,z:i64)->CI64Vec3{I64Vec3::new(x,y,z).into()}
+#[no_mangle] pub extern "C" fn mid_i64vec3_add(a:CI64Vec3,b:CI64Vec3)->CI64Vec3{(I64Vec3::from(a)+I64Vec3::from(b)).into()}
+#[no_mangle] pub extern "C" fn mid_i64vec3_sub(a:CI64Vec3,b:CI64Vec3)->CI64Vec3{(I64Vec3::from(a)-I64Vec3::from(b)).into()}
+#[no_mangle] pub extern "C" fn mid_i64vec3_mul(a:CI64Vec3,b:CI64Vec3)->CI64Vec3{(I64Vec3::from(a)*I64Vec3::from(b)).into()}
+#[no_mangle] pub extern "C" fn mid_i64vec3_scale(v:CI64Vec3,s:i64)->CI64Vec3{(I64Vec3::from(v)*s).into()}
+#[no_mangle] pub extern "C" fn mid_i64vec3_dot(a:CI64Vec3,b:CI64Vec3)->i64{I64Vec3::from(a).dot(I64Vec3::from(b))}
+#[no_mangle] pub extern "C" fn mid_i64vec3_cross(a:CI64Vec3,b:CI64Vec3)->CI64Vec3{I64Vec3::from(a).cross(I64Vec3::from(b)).into()}
+#[no_mangle] pub extern "C" fn mid_i64vec3_min(a:CI64Vec3,b:CI64Vec3)->CI64Vec3{I64Vec3::from(a).min(I64Vec3::from(b)).into()}
+#[no_mangle] pub extern "C" fn mid_i64vec3_max(a:CI64Vec3,b:CI64Vec3)->CI64Vec3{I64Vec3::from(a).max(I64Vec3::from(b)).into()}
+#[no_mangle] pub extern "C" fn mid_i64vec3_clamp(v:CI64Vec3,lo:CI64Vec3,hi:CI64Vec3)->CI64Vec3{I64Vec3::from(v).clamp(I64Vec3::from(lo),I64Vec3::from(hi)).into()}
+#[no_mangle] pub extern "C" fn mid_i64vec3_abs(v:CI64Vec3)->CI64Vec3{I64Vec3::from(v).abs().into()}
+#[no_mangle] pub extern "C" fn mid_i64vec3_neg(v:CI64Vec3)->CI64Vec3{(-I64Vec3::from(v)).into()}
+#[no_mangle] pub extern "C" fn mid_i64vec3_length_sq(v:CI64Vec3)->i64{I64Vec3::from(v).length_sq()}
+#[no_mangle] pub extern "C" fn mid_i64vec3_min_element(v:CI64Vec3)->i64{I64Vec3::from(v).min_element()}
+#[no_mangle] pub extern "C" fn mid_i64vec3_max_element(v:CI64Vec3)->i64{I64Vec3::from(v).max_element()}
+#[no_mangle] pub extern "C" fn mid_i64vec3_element_sum(v:CI64Vec3)->i64{I64Vec3::from(v).element_sum()}
+#[no_mangle] pub extern "C" fn mid_i64vec3_wrapping_add(a:CI64Vec3,b:CI64Vec3)->CI64Vec3{I64Vec3::from(a).wrapping_add(I64Vec3::from(b)).into()}
+#[no_mangle] pub extern "C" fn mid_i64vec3_wrapping_sub(a:CI64Vec3,b:CI64Vec3)->CI64Vec3{I64Vec3::from(a).wrapping_sub(I64Vec3::from(b)).into()}
+#[no_mangle] pub extern "C" fn mid_i64vec3_saturating_add(a:CI64Vec3,b:CI64Vec3)->CI64Vec3{I64Vec3::from(a).saturating_add(I64Vec3::from(b)).into()}
+#[no_mangle] pub extern "C" fn mid_i64vec3_saturating_sub(a:CI64Vec3,b:CI64Vec3)->CI64Vec3{I64Vec3::from(a).saturating_sub(I64Vec3::from(b)).into()}
+
+// ── I64Vec4 ──────────────────────────────────────────────────────────────────
+#[no_mangle] pub extern "C" fn mid_i64vec4_new(x:i64,y:i64,z:i64,w:i64)->CI64Vec4{I64Vec4::new(x,y,z,w).into()}
+#[no_mangle] pub extern "C" fn mid_i64vec4_add(a:CI64Vec4,b:CI64Vec4)->CI64Vec4{(I64Vec4::from(a)+I64Vec4::from(b)).into()}
+#[no_mangle] pub extern "C" fn mid_i64vec4_sub(a:CI64Vec4,b:CI64Vec4)->CI64Vec4{(I64Vec4::from(a)-I64Vec4::from(b)).into()}
+#[no_mangle] pub extern "C" fn mid_i64vec4_mul(a:CI64Vec4,b:CI64Vec4)->CI64Vec4{(I64Vec4::from(a)*I64Vec4::from(b)).into()}
+#[no_mangle] pub extern "C" fn mid_i64vec4_scale(v:CI64Vec4,s:i64)->CI64Vec4{(I64Vec4::from(v)*s).into()}
+#[no_mangle] pub extern "C" fn mid_i64vec4_dot(a:CI64Vec4,b:CI64Vec4)->i64{I64Vec4::from(a).dot(I64Vec4::from(b))}
+#[no_mangle] pub extern "C" fn mid_i64vec4_min(a:CI64Vec4,b:CI64Vec4)->CI64Vec4{I64Vec4::from(a).min(I64Vec4::from(b)).into()}
+#[no_mangle] pub extern "C" fn mid_i64vec4_max(a:CI64Vec4,b:CI64Vec4)->CI64Vec4{I64Vec4::from(a).max(I64Vec4::from(b)).into()}
+#[no_mangle] pub extern "C" fn mid_i64vec4_clamp(v:CI64Vec4,lo:CI64Vec4,hi:CI64Vec4)->CI64Vec4{I64Vec4::from(v).clamp(I64Vec4::from(lo),I64Vec4::from(hi)).into()}
+#[no_mangle] pub extern "C" fn mid_i64vec4_abs(v:CI64Vec4)->CI64Vec4{I64Vec4::from(v).abs().into()}
+#[no_mangle] pub extern "C" fn mid_i64vec4_neg(v:CI64Vec4)->CI64Vec4{(-I64Vec4::from(v)).into()}
+#[no_mangle] pub extern "C" fn mid_i64vec4_length_sq(v:CI64Vec4)->i64{I64Vec4::from(v).length_sq()}
+#[no_mangle] pub extern "C" fn mid_i64vec4_min_element(v:CI64Vec4)->i64{I64Vec4::from(v).min_element()}
+#[no_mangle] pub extern "C" fn mid_i64vec4_max_element(v:CI64Vec4)->i64{I64Vec4::from(v).max_element()}
+#[no_mangle] pub extern "C" fn mid_i64vec4_element_sum(v:CI64Vec4)->i64{I64Vec4::from(v).element_sum()}
+#[no_mangle] pub extern "C" fn mid_i64vec4_wrapping_add(a:CI64Vec4,b:CI64Vec4)->CI64Vec4{I64Vec4::from(a).wrapping_add(I64Vec4::from(b)).into()}
+#[no_mangle] pub extern "C" fn mid_i64vec4_wrapping_sub(a:CI64Vec4,b:CI64Vec4)->CI64Vec4{I64Vec4::from(a).wrapping_sub(I64Vec4::from(b)).into()}
+#[no_mangle] pub extern "C" fn mid_i64vec4_saturating_add(a:CI64Vec4,b:CI64Vec4)->CI64Vec4{I64Vec4::from(a).saturating_add(I64Vec4::from(b)).into()}
+#[no_mangle] pub extern "C" fn mid_i64vec4_saturating_sub(a:CI64Vec4,b:CI64Vec4)->CI64Vec4{I64Vec4::from(a).saturating_sub(I64Vec4::from(b)).into()}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  u64 integer vector exports
+//  Naming: mid_u64vec2_*, mid_u64vec3_*, mid_u64vec4_*
+// ═══════════════════════════════════════════════════════════════════════════
+
+// ── U64Vec2 ──────────────────────────────────────────────────────────────────
+#[no_mangle] pub extern "C" fn mid_u64vec2_new(x:u64,y:u64)->CU64Vec2{U64Vec2::new(x,y).into()}
+#[no_mangle] pub extern "C" fn mid_u64vec2_add(a:CU64Vec2,b:CU64Vec2)->CU64Vec2{(U64Vec2::from(a)+U64Vec2::from(b)).into()}
+#[no_mangle] pub extern "C" fn mid_u64vec2_sub(a:CU64Vec2,b:CU64Vec2)->CU64Vec2{(U64Vec2::from(a)-U64Vec2::from(b)).into()}
+#[no_mangle] pub extern "C" fn mid_u64vec2_mul(a:CU64Vec2,b:CU64Vec2)->CU64Vec2{(U64Vec2::from(a)*U64Vec2::from(b)).into()}
+#[no_mangle] pub extern "C" fn mid_u64vec2_scale(v:CU64Vec2,s:u64)->CU64Vec2{(U64Vec2::from(v)*s).into()}
+#[no_mangle] pub extern "C" fn mid_u64vec2_dot(a:CU64Vec2,b:CU64Vec2)->u64{U64Vec2::from(a).dot(U64Vec2::from(b))}
+#[no_mangle] pub extern "C" fn mid_u64vec2_min(a:CU64Vec2,b:CU64Vec2)->CU64Vec2{U64Vec2::from(a).min(U64Vec2::from(b)).into()}
+#[no_mangle] pub extern "C" fn mid_u64vec2_max(a:CU64Vec2,b:CU64Vec2)->CU64Vec2{U64Vec2::from(a).max(U64Vec2::from(b)).into()}
+#[no_mangle] pub extern "C" fn mid_u64vec2_clamp(v:CU64Vec2,lo:CU64Vec2,hi:CU64Vec2)->CU64Vec2{U64Vec2::from(v).clamp(U64Vec2::from(lo),U64Vec2::from(hi)).into()}
+#[no_mangle] pub extern "C" fn mid_u64vec2_length_sq(v:CU64Vec2)->u64{U64Vec2::from(v).length_sq()}
+#[no_mangle] pub extern "C" fn mid_u64vec2_min_element(v:CU64Vec2)->u64{U64Vec2::from(v).min_element()}
+#[no_mangle] pub extern "C" fn mid_u64vec2_max_element(v:CU64Vec2)->u64{U64Vec2::from(v).max_element()}
+#[no_mangle] pub extern "C" fn mid_u64vec2_element_sum(v:CU64Vec2)->u64{U64Vec2::from(v).element_sum()}
+#[no_mangle] pub extern "C" fn mid_u64vec2_wrapping_add(a:CU64Vec2,b:CU64Vec2)->CU64Vec2{U64Vec2::from(a).wrapping_add(U64Vec2::from(b)).into()}
+#[no_mangle] pub extern "C" fn mid_u64vec2_wrapping_sub(a:CU64Vec2,b:CU64Vec2)->CU64Vec2{U64Vec2::from(a).wrapping_sub(U64Vec2::from(b)).into()}
+#[no_mangle] pub extern "C" fn mid_u64vec2_saturating_add(a:CU64Vec2,b:CU64Vec2)->CU64Vec2{U64Vec2::from(a).saturating_add(U64Vec2::from(b)).into()}
+#[no_mangle] pub extern "C" fn mid_u64vec2_saturating_sub(a:CU64Vec2,b:CU64Vec2)->CU64Vec2{U64Vec2::from(a).saturating_sub(U64Vec2::from(b)).into()}
+
+// ── U64Vec3 ──────────────────────────────────────────────────────────────────
+#[no_mangle] pub extern "C" fn mid_u64vec3_new(x:u64,y:u64,z:u64)->CU64Vec3{U64Vec3::new(x,y,z).into()}
+#[no_mangle] pub extern "C" fn mid_u64vec3_add(a:CU64Vec3,b:CU64Vec3)->CU64Vec3{(U64Vec3::from(a)+U64Vec3::from(b)).into()}
+#[no_mangle] pub extern "C" fn mid_u64vec3_sub(a:CU64Vec3,b:CU64Vec3)->CU64Vec3{(U64Vec3::from(a)-U64Vec3::from(b)).into()}
+#[no_mangle] pub extern "C" fn mid_u64vec3_mul(a:CU64Vec3,b:CU64Vec3)->CU64Vec3{(U64Vec3::from(a)*U64Vec3::from(b)).into()}
+#[no_mangle] pub extern "C" fn mid_u64vec3_scale(v:CU64Vec3,s:u64)->CU64Vec3{(U64Vec3::from(v)*s).into()}
+#[no_mangle] pub extern "C" fn mid_u64vec3_dot(a:CU64Vec3,b:CU64Vec3)->u64{U64Vec3::from(a).dot(U64Vec3::from(b))}
+#[no_mangle] pub extern "C" fn mid_u64vec3_cross(a:CU64Vec3,b:CU64Vec3)->CU64Vec3{U64Vec3::from(a).cross(U64Vec3::from(b)).into()}
+#[no_mangle] pub extern "C" fn mid_u64vec3_min(a:CU64Vec3,b:CU64Vec3)->CU64Vec3{U64Vec3::from(a).min(U64Vec3::from(b)).into()}
+#[no_mangle] pub extern "C" fn mid_u64vec3_max(a:CU64Vec3,b:CU64Vec3)->CU64Vec3{U64Vec3::from(a).max(U64Vec3::from(b)).into()}
+#[no_mangle] pub extern "C" fn mid_u64vec3_clamp(v:CU64Vec3,lo:CU64Vec3,hi:CU64Vec3)->CU64Vec3{U64Vec3::from(v).clamp(U64Vec3::from(lo),U64Vec3::from(hi)).into()}
+#[no_mangle] pub extern "C" fn mid_u64vec3_length_sq(v:CU64Vec3)->u64{U64Vec3::from(v).length_sq()}
+#[no_mangle] pub extern "C" fn mid_u64vec3_min_element(v:CU64Vec3)->u64{U64Vec3::from(v).min_element()}
+#[no_mangle] pub extern "C" fn mid_u64vec3_max_element(v:CU64Vec3)->u64{U64Vec3::from(v).max_element()}
+#[no_mangle] pub extern "C" fn mid_u64vec3_element_sum(v:CU64Vec3)->u64{U64Vec3::from(v).element_sum()}
+#[no_mangle] pub extern "C" fn mid_u64vec3_wrapping_add(a:CU64Vec3,b:CU64Vec3)->CU64Vec3{U64Vec3::from(a).wrapping_add(U64Vec3::from(b)).into()}
+#[no_mangle] pub extern "C" fn mid_u64vec3_wrapping_sub(a:CU64Vec3,b:CU64Vec3)->CU64Vec3{U64Vec3::from(a).wrapping_sub(U64Vec3::from(b)).into()}
+#[no_mangle] pub extern "C" fn mid_u64vec3_saturating_add(a:CU64Vec3,b:CU64Vec3)->CU64Vec3{U64Vec3::from(a).saturating_add(U64Vec3::from(b)).into()}
+#[no_mangle] pub extern "C" fn mid_u64vec3_saturating_sub(a:CU64Vec3,b:CU64Vec3)->CU64Vec3{U64Vec3::from(a).saturating_sub(U64Vec3::from(b)).into()}
+
+// ── U64Vec4 ──────────────────────────────────────────────────────────────────
+#[no_mangle] pub extern "C" fn mid_u64vec4_new(x:u64,y:u64,z:u64,w:u64)->CU64Vec4{U64Vec4::new(x,y,z,w).into()}
+#[no_mangle] pub extern "C" fn mid_u64vec4_add(a:CU64Vec4,b:CU64Vec4)->CU64Vec4{(U64Vec4::from(a)+U64Vec4::from(b)).into()}
+#[no_mangle] pub extern "C" fn mid_u64vec4_sub(a:CU64Vec4,b:CU64Vec4)->CU64Vec4{(U64Vec4::from(a)-U64Vec4::from(b)).into()}
+#[no_mangle] pub extern "C" fn mid_u64vec4_mul(a:CU64Vec4,b:CU64Vec4)->CU64Vec4{(U64Vec4::from(a)*U64Vec4::from(b)).into()}
+#[no_mangle] pub extern "C" fn mid_u64vec4_scale(v:CU64Vec4,s:u64)->CU64Vec4{(U64Vec4::from(v)*s).into()}
+#[no_mangle] pub extern "C" fn mid_u64vec4_dot(a:CU64Vec4,b:CU64Vec4)->u64{U64Vec4::from(a).dot(U64Vec4::from(b))}
+#[no_mangle] pub extern "C" fn mid_u64vec4_min(a:CU64Vec4,b:CU64Vec4)->CU64Vec4{U64Vec4::from(a).min(U64Vec4::from(b)).into()}
+#[no_mangle] pub extern "C" fn mid_u64vec4_max(a:CU64Vec4,b:CU64Vec4)->CU64Vec4{U64Vec4::from(a).max(U64Vec4::from(b)).into()}
+#[no_mangle] pub extern "C" fn mid_u64vec4_clamp(v:CU64Vec4,lo:CU64Vec4,hi:CU64Vec4)->CU64Vec4{U64Vec4::from(v).clamp(U64Vec4::from(lo),U64Vec4::from(hi)).into()}
+#[no_mangle] pub extern "C" fn mid_u64vec4_length_sq(v:CU64Vec4)->u64{U64Vec4::from(v).length_sq()}
+#[no_mangle] pub extern "C" fn mid_u64vec4_min_element(v:CU64Vec4)->u64{U64Vec4::from(v).min_element()}
+#[no_mangle] pub extern "C" fn mid_u64vec4_max_element(v:CU64Vec4)->u64{U64Vec4::from(v).max_element()}
+#[no_mangle] pub extern "C" fn mid_u64vec4_element_sum(v:CU64Vec4)->u64{U64Vec4::from(v).element_sum()}
+#[no_mangle] pub extern "C" fn mid_u64vec4_wrapping_add(a:CU64Vec4,b:CU64Vec4)->CU64Vec4{U64Vec4::from(a).wrapping_add(U64Vec4::from(b)).into()}
+#[no_mangle] pub extern "C" fn mid_u64vec4_wrapping_sub(a:CU64Vec4,b:CU64Vec4)->CU64Vec4{U64Vec4::from(a).wrapping_sub(U64Vec4::from(b)).into()}
+#[no_mangle] pub extern "C" fn mid_u64vec4_saturating_add(a:CU64Vec4,b:CU64Vec4)->CU64Vec4{U64Vec4::from(a).saturating_add(U64Vec4::from(b)).into()}
+#[no_mangle] pub extern "C" fn mid_u64vec4_saturating_sub(a:CU64Vec4,b:CU64Vec4)->CU64Vec4{U64Vec4::from(a).saturating_sub(U64Vec4::from(b)).into()}
