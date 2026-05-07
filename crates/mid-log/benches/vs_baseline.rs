@@ -1,28 +1,20 @@
 // crates/mid-log/benches/vs_baseline.rs
 
-//! mid-log vs slog vs fast_log vs tracing vs env_logger
+//! mid-log benchmarks — printf vs KV vs external loggers
 //!
-//! ## Architecture comparison
+//! ## Build #12 targets
 //!
-//! | Logger     | Hot path                        | IO thread     |
-//! |------------|---------------------------------|---------------|
-//! | mid-log    | format!() + channel send        | recv() drain  |
-//! | slog       | structured args + channel send  | drain trait   |
-//! | fast_log   | format!() + channel send        | recv() drain  |
-//! | tracing    | callsite check + subscriber     | in-subscriber |
-//! | env_logger | format!() + mutex + write       | none (sync)   |
+//! | Path                   | Expected     | Notes                              |
+//! |------------------------|--------------|------------------------------------|
+//! | mid_log disabled       | ~300 ps      | Single atomic load                 |
+//! | mid_log printf enabled | ~650 ns      | format!() + channel send           |
+//! | mid_log KV enabled     | ~100–150 ns  | No format!(), Vec alloc + send     |
+//! | slog/async enabled     | ~340 ns      | Structured args + channel send     |
 //!
-//! ## What to look for
+//! ## Measurement config
 //!
-//! - Disabled path: should be ~1ns for all loggers (filter check only)
-//! - Enabled path: dominated by format!() cost (~200–800ns)
-//! - slog with async: closest architectural peer to mid-log
-//! - fast_log: same pattern as mid-log, useful sanity check
-//!
-//! ## CI note
-//!
-//! without_plots() is active unless CRITERION_PLOTS=1 is set.
-//! 1s measurement, 10 samples. Suite completes in ~7 minutes.
+//! 20 samples × 2s measurement = 100ms/sample. Doubles run time vs Build #11
+//! (~14 min total) but gives enough data to trust the variance figures.
 
 use std::time::Duration;
 
@@ -33,6 +25,7 @@ use criterion::{
 
 use mid_log::{
     mid_debug_assert, mid_info, mid_soft_assert, mid_trace,
+    mid_kvinfo, mid_kvtrace,
     color::{Color, paint, set_colors_enabled},
     filter::set_min_level,
     format::FormatConfig,
@@ -48,9 +41,9 @@ use slog::{o, Logger, Drain, info as slog_info};
 
 fn make_criterion() -> Criterion {
     let c = Criterion::default()
-        .warm_up_time(Duration::from_millis(500))
-        .measurement_time(Duration::from_secs(1))
-        .sample_size(10);
+        .warm_up_time(Duration::from_secs(1))
+        .measurement_time(Duration::from_secs(2))
+        .sample_size(20);    // was 10 — 20 samples × 2s = 100ms/sample, same density
 
     if std::env::var("CRITERION_PLOTS").is_err() {
         c.without_plots()
@@ -74,17 +67,12 @@ fn setup_mid_log() {
 }
 
 fn setup_slog() -> Logger {
-    // Async drain — slog's equivalent of mid-log's background IO thread.
-    // Discard output to isolate channel-send cost from I/O cost.
-    let drain = slog_async::Async::new(
-        slog::Discard
-    )
-    .build()
-    .fuse();
+    let drain = slog_async::Async::new(slog::Discard)
+        .build()
+        .fuse();
     Logger::root(drain, o!())
 }
 
-// A custom appender for fast_log that discards all records.
 struct FastLogDiscardAppender;
 
 impl fast_log::appender::LogAppender for FastLogDiscardAppender {
@@ -92,8 +80,6 @@ impl fast_log::appender::LogAppender for FastLogDiscardAppender {
 }
 
 fn setup_fast_log() {
-    // fast_log with a custom log receiver that discards output.
-    // This measures the hot path (channel send) without I/O.
     fast_log::init(
         fast_log::Config::new()
             .level(log::LevelFilter::Trace)
@@ -102,9 +88,9 @@ fn setup_fast_log() {
     ).ok();
 }
 
-// ═════════════════════════════════════════════════════════════════════════════
-//  Group 1: hot_path — the core comparison across all loggers
-// ═════════════════════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════════════════
+//  Group 1: hot_path — printf API vs external loggers
+// ═══════════════════════════════════════════════════════════════════════════
 
 fn bench_hot_path(c: &mut Criterion) {
     setup_mid_log();
@@ -113,7 +99,7 @@ fn bench_hot_path(c: &mut Criterion) {
     let mut g = c.benchmark_group("hot_path");
     g.throughput(Throughput::Elements(1));
 
-    // ── mid-log: disabled ─────────────────────────────────────────────────────
+    // mid-log: disabled
     set_min_level(LogLevel::Fatal);
     g.bench_function("mid_log/disabled", |b| b.iter(|| {
         mid_trace!(
@@ -123,7 +109,7 @@ fn bench_hot_path(c: &mut Criterion) {
         );
     }));
 
-    // ── mid-log: enabled ──────────────────────────────────────────────────────
+    // mid-log: printf enabled
     set_min_level(LogLevel::Trace);
     g.bench_function("mid_log/enabled", |b| b.iter(|| {
         mid_info!(
@@ -133,11 +119,8 @@ fn bench_hot_path(c: &mut Criterion) {
         );
     }));
 
-    // ── slog: disabled (below drain level) ───────────────────────────────────
-    // slog's disabled path is a static level check.
+    // slog: disabled
     g.bench_function("slog/disabled", |b| b.iter(|| {
-        // slog::trace! — filtered by the async drain's min level.
-        // We set drain to Discard at Info level, so trace is filtered.
         slog::trace!(slog_logger, "entity pos";
             "entity" => black_box(42u32),
             "x" => black_box(1.0f32),
@@ -145,7 +128,7 @@ fn bench_hot_path(c: &mut Criterion) {
         );
     }));
 
-    // ── slog: enabled (async drain, discards output) ──────────────────────────
+    // slog: enabled
     g.bench_function("slog/enabled", |b| b.iter(|| {
         slog_info!(slog_logger, "player spawned";
             "id" => black_box(1u32),
@@ -154,7 +137,7 @@ fn bench_hot_path(c: &mut Criterion) {
         );
     }));
 
-    // ── fast_log: enabled ─────────────────────────────────────────────────────
+    // fast_log: enabled
     setup_fast_log();
     g.bench_function("fast_log/enabled", |b| b.iter(|| {
         log::info!(
@@ -163,11 +146,10 @@ fn bench_hot_path(c: &mut Criterion) {
         );
     }));
 
-    // ── tracing: enabled (sink, no I/O) ──────────────────────────────────────
+    // tracing: enabled
     let _ = tracing_subscriber::fmt()
         .with_writer(std::io::sink)
         .try_init();
-
     g.bench_function("tracing/enabled", |b| b.iter(|| {
         tracing::info!(
             id = black_box(1u32),
@@ -177,12 +159,11 @@ fn bench_hot_path(c: &mut Criterion) {
         );
     }));
 
-    // ── env_logger: enabled (sync, sink) ─────────────────────────────────────
+    // env_logger: enabled
     let _ = env_logger::Builder::new()
         .filter_level(log::LevelFilter::Info)
         .target(env_logger::Target::Pipe(Box::new(std::io::sink())))
         .try_init();
-
     g.bench_function("env_logger/enabled", |b| b.iter(|| {
         log::info!(
             "player {} spawned at ({:.2}, {:.2})",
@@ -193,9 +174,65 @@ fn bench_hot_path(c: &mut Criterion) {
     g.finish();
 }
 
-// ═════════════════════════════════════════════════════════════════════════════
-//  Group 2: mid_log/paint
-// ═════════════════════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════════════════
+//  Group 2: kv_vs_printf — the core question
+//
+//  Both encode the same logical data: a player spawn with id, x, y.
+//  Printf calls format!() with floats. KV sends raw typed scalars.
+//  Expected: KV should be ~4–6× faster for this pattern.
+// ═══════════════════════════════════════════════════════════════════════════
+
+fn bench_kv(c: &mut Criterion) {
+    setup_mid_log();
+    set_min_level(LogLevel::Trace);
+
+    let mut g = c.benchmark_group("mid_log/kv_vs_printf");
+    g.throughput(Throughput::Elements(1));
+
+    // Printf — same message, float args
+    g.bench_function("printf/enabled", |b| b.iter(|| {
+        mid_info!(
+            Tier::High,
+            "player {} spawned at ({:.2}, {:.2})",
+            black_box(1u32), black_box(1.0f32), black_box(2.0f32),
+        );
+    }));
+
+    // KV — same data, no format!()
+    g.bench_function("kv/enabled", |b| b.iter(|| {
+        mid_kvinfo!(
+            Tier::High,
+            "player spawned";
+            "id" => black_box(1u32),
+            "x"  => black_box(1.0f32),
+            "y"  => black_box(2.0f32),
+        );
+    }));
+
+    // KV — static message only, zero allocation
+    g.bench_function("kv/static_msg_only", |b| b.iter(|| {
+        mid_kvinfo!(Tier::Mid, "frame tick complete");
+    }));
+
+    // KV — disabled path
+    set_min_level(LogLevel::Fatal);
+    g.bench_function("kv/disabled", |b| b.iter(|| {
+        mid_kvtrace!(
+            Tier::Low,
+            "entity pos";
+            "id" => black_box(42u32),
+            "x"  => black_box(1.0f32),
+            "y"  => black_box(2.5f32),
+        );
+    }));
+    set_min_level(LogLevel::Trace);
+
+    g.finish();
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  Group 3: paint
+// ═══════════════════════════════════════════════════════════════════════════
 
 fn bench_paint(c: &mut Criterion) {
     setup_mid_log();
@@ -229,9 +266,9 @@ fn bench_paint(c: &mut Criterion) {
     g.finish();
 }
 
-// ═════════════════════════════════════════════════════════════════════════════
-//  Group 3: mid_log/asserts
-// ═════════════════════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════════════════
+//  Group 4: asserts
+// ═══════════════════════════════════════════════════════════════════════════
 
 fn bench_asserts(c: &mut Criterion) {
     setup_mid_log();
@@ -255,26 +292,38 @@ fn bench_asserts(c: &mut Criterion) {
     g.finish();
 }
 
-// ═════════════════════════════════════════════════════════════════════════════
-//  Group 4: mid_log/bulk
-// ═════════════════════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════════════════
+//  Group 5: bulk
+// ═══════════════════════════════════════════════════════════════════════════
 
 fn bench_bulk(c: &mut Criterion) {
     setup_mid_log();
 
     let mut g = c.benchmark_group("mid_log/bulk");
-    g.sample_size(10);
+    g.sample_size(10); // keep bulk at 10 — it's slow by design
 
     const N: u64 = 1_000;
     g.throughput(Throughput::Elements(N));
 
+    // Printf bulk
     set_min_level(LogLevel::Trace);
-    g.bench_function("1k_info_enabled", |b| b.iter(|| {
+    g.bench_function("1k_printf_enabled", |b| b.iter(|| {
         for i in 0..N {
             mid_info!(Tier::Mid, "entity={} health={}", black_box(i), black_box(100u32));
         }
     }));
 
+    // KV bulk — expect ~4× faster
+    g.bench_function("1k_kv_enabled", |b| b.iter(|| {
+        for i in 0..N {
+            mid_kvinfo!(Tier::Mid, "entity update";
+                "id"     => black_box(i),
+                "health" => black_box(100u32),
+            );
+        }
+    }));
+
+    // Filtered bulk — both should be ~1 ns/entry
     set_min_level(LogLevel::Info);
     g.bench_function("1k_trace_filtered", |b| b.iter(|| {
         for i in 0..N {
@@ -287,13 +336,14 @@ fn bench_bulk(c: &mut Criterion) {
     g.finish();
 }
 
-// ═════════════════════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════════════════
 
 criterion_group! {
     name    = benches;
     config  = make_criterion();
     targets =
         bench_hot_path,
+        bench_kv,
         bench_paint,
         bench_asserts,
         bench_bulk,
