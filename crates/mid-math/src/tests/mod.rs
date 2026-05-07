@@ -6,3 +6,4 @@ mod mat_tests;
 mod stress_tests;
 mod f64_tests;
 mod bool_tests;
+mod int64_tests;
