@@ -1,0 +1,108 @@
+# .github/workflows/bench-vs-int64.yml
+# Integer vector benchmark: mid-math I64Vec/U64Vec vs glam I64Vec/U64Vec.
+# Both libraries are scalar i64/u64 — gaps show implementation overhead only.
+# Run: Actions → "mid-math: bench int64" → Run workflow
+# DO NOT add push/pull_request triggers.
+
+name: mid-math — bench int64
+
+on:
+  workflow_dispatch:
+    inputs:
+      baseline_note:
+        description: 'Context for this run (e.g. "baseline I64Vec/U64Vec scalar")'
+        required: false
+        default: 'manual int64 benchmark run'
+
+permissions:
+  contents: read
+  actions:  read
+
+jobs:
+  bench:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Get Rust version
+        id: rustver
+        run: echo "ver=$(rustc --version)" >> $GITHUB_OUTPUT
+
+      - name: Cache cargo registry
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+          key: cargo-registry-bench-int64-${{ hashFiles('crates/mid-math/Cargo.toml') }}
+          restore-keys: cargo-registry-
+
+      - name: Run int64 criterion benchmarks
+        run: |
+          echo "Running: cargo bench --bench vs_int64 -p mid-math"
+          echo "Note: ${{ inputs.baseline_note }}"
+          cargo bench --bench vs_int64 -p mid-math 2>&1 | tee bench-int64-raw.txt
+
+      - name: Publish summary
+        run: |
+          {
+            echo "## mid-math int64 vs glam — Criterion Benchmarks"
+            echo ""
+            echo "**Build:** #${{ github.run_number }} &nbsp; **Rust:** \`${{ steps.rustver.outputs.ver }}\`"
+            echo ""
+            echo "**Note:** ${{ inputs.baseline_note }}"
+            echo ""
+            echo "> Lower is faster. Both sides are scalar i64/u64 — gaps show implementation overhead."
+            echo "> mid-math extras (wrapping_add, saturating_add) have no glam equivalent — regression only."
+            echo ""
+
+            python3 - << 'PYEOF'
+          import re, sys
+
+          RE_ANSI   = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
+          RE_RESULT = re.compile(
+              r'^(\S[^\n]+?)\s+time:\s+\[\s*([\d.]+\s+\S+)\s+([\d.]+\s+\S+)\s+([\d.]+\s+\S+)\s*\]',
+              re.MULTILINE,
+          )
+
+          try:
+              raw = open('bench-int64-raw.txt', encoding='utf-8', errors='replace').read()
+          except FileNotFoundError:
+              print("*(bench-int64-raw.txt not found)*")
+              sys.exit(0)
+
+          text = RE_ANSI.sub('', raw)
+          current_group = None
+
+          for m in RE_RESULT.finditer(text):
+              name = m.group(1).strip()
+              mean = m.group(3).strip()
+              parts = name.split('/')
+              group   = '/'.join(parts[:-1]) if len(parts) >= 2 else name
+              variant = parts[-1] if len(parts) >= 2 else ''
+              if group != current_group:
+                  if current_group is not None:
+                      print()
+                  print(f"#### {group}")
+                  print("| Impl | Mean |")
+                  print("|---|---|")
+                  current_group = group
+              print(f"| {variant} | {mean} |")
+          PYEOF
+
+          } >> $GITHUB_STEP_SUMMARY
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: bench-int64-${{ github.run_number }}
+          path: |
+            bench-int64-raw.txt
+            target/criterion/
+          retention-days: 30
