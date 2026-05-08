@@ -32,9 +32,12 @@ harness = false
 [[bench]]
 name    = "vs_int32"
 harness = false
+
 [[bench]]
 name    = "vs_int64"
 harness = false
+
 [features]
 default = []
 simd    = []
+avx2    = []
