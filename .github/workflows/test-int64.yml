@@ -1,0 +1,136 @@
+# .github/workflows/test-int64.yml
+# Runs the full mid-math test suite with verbose output so failing i64
+# tests are visible in the job log and summary.
+# Run: Actions → "mid-math: test int64" → Run workflow
+
+name: mid-math — test int64
+
+on:
+  workflow_dispatch:
+    inputs:
+      filter:
+        description: 'Test filter (leave blank for all mid-math tests)'
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+  actions:  read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Get Rust version
+        id: rustver
+        run: echo "ver=$(rustc --version)" >> $GITHUB_OUTPUT
+
+      - name: Cache cargo registry
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+          key: cargo-registry-test-${{ hashFiles('crates/mid-math/Cargo.toml') }}
+          restore-keys: cargo-registry-
+
+      - name: Run mid-math tests (verbose)
+        run: |
+          FILTER="${{ inputs.filter }}"
+          if [ -z "$FILTER" ]; then
+            echo "Running all mid-math tests with --nocapture"
+            cargo test -p mid-math -- --nocapture 2>&1 | tee test-output.txt
+          else
+            echo "Running mid-math tests matching: $FILTER"
+            cargo test -p mid-math "$FILTER" -- --nocapture 2>&1 | tee test-output.txt
+          fi
+          # Preserve exit code — tee swallows it
+          exit "${PIPESTATUS[0]}"
+
+      - name: Parse and publish test summary
+        if: always()
+        run: |
+          {
+            echo "## mid-math Test Results"
+            echo ""
+            echo "**Build:** #${{ github.run_number }} &nbsp; **Rust:** \`${{ steps.rustver.outputs.ver }}\`"
+            echo ""
+            echo "**Filter:** \`${{ inputs.filter || '(all tests)' }}\`"
+            echo ""
+
+            python3 - << 'PYEOF'
+          import re, sys
+
+          try:
+              raw = open('test-output.txt', encoding='utf-8', errors='replace').read()
+          except FileNotFoundError:
+              print("*(test-output.txt not found)*")
+              sys.exit(0)
+
+          # Count results
+          passed  = len(re.findall(r'\btest .+ \.\.\. ok\b',      raw))
+          failed  = len(re.findall(r'\btest .+ \.\.\. FAILED\b',  raw))
+          ignored = len(re.findall(r'\btest .+ \.\.\. ignored\b', raw))
+
+          print(f"| Result | Count |")
+          print(f"|---|---|")
+          print(f"| ✅ Passed  | {passed}  |")
+          print(f"| ❌ Failed  | {failed}  |")
+          print(f"| ⏭ Ignored | {ignored} |")
+          print()
+
+          # Show all failures with context
+          if failed > 0:
+              print("### ❌ Failed Tests")
+              print()
+              print("```text")
+              in_failure = False
+              for line in raw.splitlines():
+                  if 'FAILED' in line or 'thread' in line and 'panicked' in line:
+                      in_failure = True
+                  if in_failure:
+                      print(line)
+                  if line.strip().startswith('test result:'):
+                      in_failure = False
+              print("```")
+              print()
+
+          # Show full test result line
+          for line in raw.splitlines():
+              if line.strip().startswith('test result:'):
+                  print(f"**{line.strip()}**")
+
+          # Show any compilation errors
+          if 'error[' in raw or 'error:' in raw:
+              print()
+              print("### 🔴 Compilation Errors")
+              print("```text")
+              in_err = False
+              for line in raw.splitlines():
+                  if re.match(r'^error(\[E\d+\])?:', line):
+                      in_err = True
+                  if in_err:
+                      print(line)
+                  if in_err and line.strip() == '':
+                      in_err = False
+              print("```")
+          PYEOF
+
+          } >> $GITHUB_STEP_SUMMARY
+
+      - name: Upload test log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-output-${{ github.run_number }}
+          path: test-output.txt
+          retention-days: 14
