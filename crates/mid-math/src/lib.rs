@@ -10,6 +10,7 @@ pub mod ffi;
 pub mod constants;
 pub mod int32;
 pub mod int64;
+pub mod wide;            // ← Phase 3C
 
 pub use constants::*;
 
@@ -59,6 +60,10 @@ pub use f32::scalar::{Vec3, Vec4, Quat, Mat4};
 
 pub use f64::{DVec2, DVec3, DVec4, DQuat, DMat2, DMat3, DMat4, DAffine3};
 pub use f64::DEPSILON;
+
+// ── Wide SIMD re-exports ──────────────────────────────────────────────────────
+
+pub use wide::int::{IMask4, i32x4, u32x4};
 
 // ── Scalar utilities ──────────────────────────────────────────────────────────
 
