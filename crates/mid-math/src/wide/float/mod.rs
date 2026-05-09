@@ -1,14 +1,11 @@
 // crates/mid-math/src/wide/float/mod.rs
-//! Float wide types — Phase 3C Batch 3–5.
-//!
-//! Planned types (not yet implemented):
-//!   Mask4    — 4-lane float comparison mask  (batch 3)
-//!   f32x4    — 4-lane f32 scalar             (batch 3)
-//!   Vec3x4   — 4 × Vec3 SoA, 3 × __m128      (batch 4)
-//!   QuatX4   — 4 × Quat SoA, 4 × __m128      (batch 5)
-//!
-//! AVX2 variants (feature-gated):
-//!   Mask8, f32x8, Vec3x8
-//!
-//! This module stub exists so `wide/mod.rs` compiles.
-//! Populate after integer batch is stable.
+pub(crate) mod scalar;
+
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+pub(crate) mod sse2;
+
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+pub use sse2::{Mask4, f32x4, Vec3x4};
+
+#[cfg(not(any(target_arch = "x86", target_arch = "x86_64")))]
+pub use scalar::{Mask4, f32x4, Vec3x4};
