@@ -63,8 +63,10 @@ pub use f64::DEPSILON;
 
 // ── Wide SIMD re-exports ──────────────────────────────────────────────────────
 
-pub use wide::int::{IMask4, i32x4, u32x4};
+pub use wide::int::{IMask4, IMask8, IMask16};
 
+#[allow(non_camel_case_types)]
+pub use wide::int::{i32x4, u32x4, i16x8, u16x8, i8x16, u8x16};
 // ── Scalar utilities ──────────────────────────────────────────────────────────
 
 #[inline(always)] pub fn lerp(a: f32, b: f32, t: f32) -> f32 { a + (b - a) * t }
