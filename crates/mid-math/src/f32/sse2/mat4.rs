@@ -210,6 +210,110 @@ impl Mat4 {
         let itz = -(ic0[2]*tx+ic1[2]*ty+ic2[2]*tz);
         Self::from_cols(ic0, ic1, ic2, [itx,ity,itz,1.0])
     }
+
+// ── Wide transform ────────────────────────────────────────────────────────────
+
+    /// Transform 4 points (w = 1.0) simultaneously using a single Mat4.
+    ///
+    /// All 4 points are transformed in the same number of instructions as
+    /// one scalar transform. Use for bulk entity transform, particle systems,
+    /// and any loop over positions that currently calls `transform_point` per item.
+    ///
+    /// Layout: `v.x[i]`, `v.y[i]`, `v.z[i]` is point i in SoA form.
+    ///
+    /// The computation for each output component across all 4 lanes is:
+    ///   rx[i] = col0.x * v.x[i]  +  col1.x * v.y[i]  +  col2.x * v.z[i]  + col3.x
+    ///   ry[i] = col0.y * v.x[i]  +  col1.y * v.y[i]  +  col2.y * v.z[i]  + col3.y
+    ///   rz[i] = col0.z * v.x[i]  +  col1.z * v.y[i]  +  col2.z * v.z[i]  + col3.z
+    pub fn transform_vec3x4(
+        self,
+        v: crate::wide::float::sse2::vec3x4::Vec3x4,
+    ) -> crate::wide::float::sse2::vec3x4::Vec3x4 {
+        use crate::wide::float::sse2::vec3x4::Vec3x4;
+        unsafe {
+            // Broadcast each relevant matrix element to all 4 SIMD lanes.
+            // Column-major: cols[c][r] = row r of column c.
+            let c0x = _mm_set1_ps(self.cols[0][0]);
+            let c0y = _mm_set1_ps(self.cols[0][1]);
+            let c0z = _mm_set1_ps(self.cols[0][2]);
+
+            let c1x = _mm_set1_ps(self.cols[1][0]);
+            let c1y = _mm_set1_ps(self.cols[1][1]);
+            let c1z = _mm_set1_ps(self.cols[1][2]);
+
+            let c2x = _mm_set1_ps(self.cols[2][0]);
+            let c2y = _mm_set1_ps(self.cols[2][1]);
+            let c2z = _mm_set1_ps(self.cols[2][2]);
+
+            // Translation column (col3) applied as constant offset.
+            let c3x = _mm_set1_ps(self.cols[3][0]);
+            let c3y = _mm_set1_ps(self.cols[3][1]);
+            let c3z = _mm_set1_ps(self.cols[3][2]);
+
+            // result_x = col0.x * vx  +  col1.x * vy  +  col2.x * vz  +  col3.x
+            // LLVM fuses mul+add to vfmadd231ps on FMA3 CPUs automatically.
+            let rx = _mm_add_ps(
+                _mm_add_ps(
+                    _mm_mul_ps(c0x, v.x),
+                    _mm_mul_ps(c1x, v.y),
+                ),
+                _mm_add_ps(
+                    _mm_mul_ps(c2x, v.z),
+                    c3x,
+                ),
+            );
+            let ry = _mm_add_ps(
+                _mm_add_ps(
+                    _mm_mul_ps(c0y, v.x),
+                    _mm_mul_ps(c1y, v.y),
+                ),
+                _mm_add_ps(
+                    _mm_mul_ps(c2y, v.z),
+                    c3y,
+                ),
+            );
+            let rz = _mm_add_ps(
+                _mm_add_ps(
+                    _mm_mul_ps(c0z, v.x),
+                    _mm_mul_ps(c1z, v.y),
+                ),
+                _mm_add_ps(
+                    _mm_mul_ps(c2z, v.z),
+                    c3z,
+                ),
+            );
+
+            Vec3x4 { x: rx, y: ry, z: rz }
+        }
+    }
+
+    /// Transform 4 direction vectors (w = 0.0) simultaneously.
+    ///
+    /// Identical to `transform_vec3x4` but without the translation column.
+    /// Use for normals, velocities, and any vector that should not be translated.
+    pub fn transform_vec3x4_dir(
+        self,
+        v: crate::wide::float::sse2::vec3x4::Vec3x4,
+    ) -> crate::wide::float::sse2::vec3x4::Vec3x4 {
+        use crate::wide::float::sse2::vec3x4::Vec3x4;
+        unsafe {
+            let c0x = _mm_set1_ps(self.cols[0][0]);
+            let c0y = _mm_set1_ps(self.cols[0][1]);
+            let c0z = _mm_set1_ps(self.cols[0][2]);
+            let c1x = _mm_set1_ps(self.cols[1][0]);
+            let c1y = _mm_set1_ps(self.cols[1][1]);
+            let c1z = _mm_set1_ps(self.cols[1][2]);
+            let c2x = _mm_set1_ps(self.cols[2][0]);
+            let c2y = _mm_set1_ps(self.cols[2][1]);
+            let c2z = _mm_set1_ps(self.cols[2][2]);
+
+            let rx = _mm_add_ps(_mm_mul_ps(c0x, v.x), _mm_add_ps(_mm_mul_ps(c1x, v.y), _mm_mul_ps(c2x, v.z)));
+            let ry = _mm_add_ps(_mm_mul_ps(c0y, v.x), _mm_add_ps(_mm_mul_ps(c1y, v.y), _mm_mul_ps(c2y, v.z)));
+            let rz = _mm_add_ps(_mm_mul_ps(c0z, v.x), _mm_add_ps(_mm_mul_ps(c1z, v.y), _mm_mul_ps(c2z, v.z)));
+
+            Vec3x4 { x: rx, y: ry, z: rz }
+        }
+        }
 }
 
 // ── Mul<Mat4> — glam delegation pattern ──────────────────────────────────────
