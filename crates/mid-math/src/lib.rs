@@ -67,6 +67,13 @@ pub use wide::int::{IMask4, IMask8, IMask16};
 
 #[allow(non_camel_case_types)]
 pub use wide::int::{i32x4, u32x4, i16x8, u16x8, i8x16, u8x16};
+
+pub use wide::float::Mask4;
+
+#[allow(non_camel_case_types)]
+pub use wide::float::f32x4;
+
+pub use wide::float::Vec3x4;
 // ── Scalar utilities ──────────────────────────────────────────────────────────
 
 #[inline(always)] pub fn lerp(a: f32, b: f32, t: f32) -> f32 { a + (b - a) * t }
