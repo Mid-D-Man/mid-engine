@@ -10,7 +10,8 @@ pub mod ffi;
 pub mod constants;
 pub mod int32;
 pub mod int64;
-pub mod wide;            // ← Phase 3C
+pub mod wide;
+pub mod geometry;    // Phase 4A geometry primitives
 
 pub use constants::*;
 
@@ -74,6 +75,18 @@ pub use wide::float::Mask4;
 pub use wide::float::f32x4;
 
 pub use wide::float::Vec3x4;
+pub use wide::float::QuatX4;
+
+#[cfg(all(
+    any(target_arch = "x86", target_arch = "x86_64"),
+    target_feature = "avx2",
+))]
+pub use wide::float::Vec3x8;
+
+// ── Geometry re-exports ───────────────────────────────────────────────────────
+
+pub use geometry::{Transform, AABB, Sphere, Plane, Ray3, Frustum};
+
 // ── Scalar utilities ──────────────────────────────────────────────────────────
 
 #[inline(always)] pub fn lerp(a: f32, b: f32, t: f32) -> f32 { a + (b - a) * t }
