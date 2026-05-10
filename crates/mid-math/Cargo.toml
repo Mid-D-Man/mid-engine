@@ -37,6 +37,14 @@ harness = false
 name    = "vs_int64"
 harness = false
 
+[[bench]]
+name    = "vs_wide_float"
+harness = false
+
+[[bench]]
+name    = "vs_wide_int"
+harness = false
+
 [features]
 default = []
 simd    = []
