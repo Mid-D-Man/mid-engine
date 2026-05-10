@@ -1,0 +1,109 @@
+# .github/workflows/bench-vs-wide-int.yml
+# Wide integer benchmark: i32x4/u32x4/i16x8/u8x16 SSE2 vs scalar loops.
+# Validates throughput for ECS ID scanning, byte processing, entity flag ops.
+# Run: Actions → "mid-math: bench wide int" → Run workflow
+# DO NOT add push/pull_request triggers.
+
+name: mid-math — bench wide int
+
+on:
+  workflow_dispatch:
+    inputs:
+      baseline_note:
+        description: 'Context for this run (e.g. "baseline i32x4 SSE2")'
+        required: false
+        default: 'manual wide int benchmark run'
+
+permissions:
+  contents: read
+  actions:  read
+
+jobs:
+  bench:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Get Rust version
+        id: rustver
+        run: echo "ver=$(rustc --version)" >> $GITHUB_OUTPUT
+
+      - name: Cache cargo registry
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+          key: cargo-registry-bench-wide-int-${{ hashFiles('crates/mid-math/Cargo.toml') }}
+          restore-keys: cargo-registry-
+
+      - name: Run wide int criterion benchmarks
+        run: |
+          echo "Running: cargo bench --bench vs_wide_int -p mid-math"
+          echo "Note: ${{ inputs.baseline_note }}"
+          cargo bench --bench vs_wide_int -p mid-math 2>&1 | tee bench-wide-int-raw.txt
+
+      - name: Publish summary
+        run: |
+          {
+            echo "## mid-math wide int — Criterion Benchmarks"
+            echo ""
+            echo "**Build:** #${{ github.run_number }} &nbsp; **Rust:** \`${{ steps.rustver.outputs.ver }}\`"
+            echo ""
+            echo "**Note:** ${{ inputs.baseline_note }}"
+            echo ""
+            echo "> Lower is faster. Integer ALU runs independently from FPU — wide int ops"
+            echo "> are 'free' throughput when FPU is busy with physics/transforms."
+            echo "> bulk_entity_id_scan shows the ECS hot path: 4 comparisons per instruction."
+            echo ""
+
+            python3 - << 'PYEOF'
+          import re, sys
+
+          RE_ANSI   = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
+          RE_RESULT = re.compile(
+              r'^(\S[^\n]+?)\s+time:\s+\[\s*([\d.]+\s+\S+)\s+([\d.]+\s+\S+)\s+([\d.]+\s+\S+)\s*\]',
+              re.MULTILINE,
+          )
+
+          try:
+              raw = open('bench-wide-int-raw.txt', encoding='utf-8', errors='replace').read()
+          except FileNotFoundError:
+              print("*(bench-wide-int-raw.txt not found)*")
+              sys.exit(0)
+
+          text = RE_ANSI.sub('', raw)
+          current_group = None
+
+          for m in RE_RESULT.finditer(text):
+              name = m.group(1).strip()
+              mean = m.group(3).strip()
+              parts = name.split('/')
+              group   = '/'.join(parts[:-1]) if len(parts) >= 2 else name
+              variant = parts[-1] if len(parts) >= 2 else ''
+              if group != current_group:
+                  if current_group is not None:
+                      print()
+                  print(f"#### {group}")
+                  print("| Impl | Mean |")
+                  print("|---|---|")
+                  current_group = group
+              print(f"| {variant} | {mean} |")
+          PYEOF
+
+          } >> $GITHUB_STEP_SUMMARY
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: bench-wide-int-${{ github.run_number }}
+          path: |
+            bench-wide-int-raw.txt
+            target/criterion/
+          retention-days: 30
