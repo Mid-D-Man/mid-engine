@@ -1,0 +1,1345 @@
+   Compiling proc-macro2 v1.0.106
+   Compiling quote v1.0.45
+   Compiling autocfg v1.5.0
+   Compiling unicode-ident v1.0.24
+   Compiling crossbeam-utils v0.8.21
+   Compiling serde_core v1.0.228
+   Compiling zerocopy v0.8.48
+   Compiling num-traits v0.2.19
+   Compiling syn v2.0.117
+   Compiling zmij v1.0.21
+   Compiling serde v1.0.228
+   Compiling bytemuck v1.25.0
+   Compiling crossbeam-epoch v0.9.18
+   Compiling safe_arch v0.7.4
+   Compiling serde_json v1.0.149
+   Compiling cfg-if v1.0.4
+   Compiling paste v1.0.15
+   Compiling libc v0.2.186
+   Compiling rayon-core v1.13.0
+   Compiling either v1.15.0
+   Compiling wide v0.7.33
+   Compiling crossbeam-deque v0.8.6
+   Compiling matrixmultiply v0.3.10
+   Compiling regex-syntax v0.8.10
+   Compiling memchr v2.8.0
+   Compiling ciborium-io v0.2.2
+   Compiling anstyle v1.0.14
+   Compiling clap_lex v1.1.0
+   Compiling plotters-backend v0.3.7
+   Compiling itoa v1.0.18
+   Compiling plotters-svg v0.3.7
+   Compiling clap_builder v4.6.0
+   Compiling zerocopy-derive v0.8.48
+   Compiling serde_derive v1.0.228
+   Compiling regex-automata v0.4.14
+   Compiling itertools v0.10.5
+   Compiling half v2.7.1
+   Compiling ciborium-ll v0.2.2
+   Compiling num-complex v0.4.6
+   Compiling num-integer v0.1.46
+   Compiling approx v0.5.1
+   Compiling same-file v1.0.6
+   Compiling rawpointer v0.2.1
+   Compiling cast v0.3.0
+   Compiling is-terminal v0.4.17
+   Compiling walkdir v2.5.0
+   Compiling simba v0.9.1
+   Compiling criterion-plot v0.5.0
+   Compiling num-rational v0.4.2
+   Compiling ciborium v0.2.2
+   Compiling rayon v1.12.0
+   Compiling tinytemplate v1.2.1
+   Compiling regex v1.12.3
+   Compiling clap v4.6.1
+   Compiling nalgebra-macros v0.2.2
+   Compiling plotters v0.3.7
+   Compiling once_cell v1.21.4
+   Compiling oorandom v11.1.5
+   Compiling typenum v1.20.0
+   Compiling anes v0.1.6
+   Compiling ultraviolet v0.9.2
+   Compiling glam v0.28.0
+   Compiling criterion v0.5.1
+   Compiling nalgebra v0.33.3
+   Compiling mid-math v0.2.0 (/home/runner/work/mid-engine/mid-engine/crates/mid-math)
+warning: unused imports: `Frustum` and `Transform2D`
+ --> crates/mid-math/src/ffi/geometry.rs:9:28
+  |
+9 |     AABB, Capsule, Circle, Frustum, Plane, Ray2, Ray3, Rect, Sphere, Transform, Transform2D,
+  |                            ^^^^^^^                                              ^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `RemAssign`
+ --> crates/mid-math/src/int32/uvec3.rs:8:10
+  |
+8 |     Rem, RemAssign, Shl, ShlAssign, Shr, ShrAssign, Sub, SubAssign,
+  |          ^^^^^^^^^
+
+warning: unused import: `RemAssign`
+ --> crates/mid-math/src/int32/uvec4.rs:8:10
+  |
+8 |     Rem, RemAssign, Shl, ShlAssign, Shr, ShrAssign, Sub, SubAssign,
+  |          ^^^^^^^^^
+
+warning: unused import: `mask4::Mask4`
+ --> crates/mid-math/src/wide/float/scalar/mod.rs:7:9
+  |
+7 | pub use mask4::Mask4;
+  |         ^^^^^^^^^^^^
+
+warning: unused import: `vec3x4::Vec3x4`
+  --> crates/mid-math/src/wide/float/scalar/mod.rs:11:9
+   |
+11 | pub use vec3x4::Vec3x4;
+   |         ^^^^^^^^^^^^^^
+
+warning: unused import: `quatx4::QuatX4`
+  --> crates/mid-math/src/wide/float/scalar/mod.rs:12:9
+   |
+12 | pub use quatx4::QuatX4;
+   |         ^^^^^^^^^^^^^^
+
+warning: unused import: `imask4::IMask4`
+  --> crates/mid-math/src/wide/int/scalar/mod.rs:20:9
+   |
+20 | pub use imask4::IMask4;
+   |         ^^^^^^^^^^^^^^
+
+warning: unused import: `imask8::IMask8`
+  --> crates/mid-math/src/wide/int/scalar/mod.rs:21:9
+   |
+21 | pub use imask8::IMask8;
+   |         ^^^^^^^^^^^^^^
+
+warning: unused import: `imask16::IMask16`
+  --> crates/mid-math/src/wide/int/scalar/mod.rs:22:9
+   |
+22 | pub use imask16::IMask16;
+   |         ^^^^^^^^^^^^^^^^
+
+warning: unused import: `EPSILON`
+ --> crates/mid-math/src/geometry/d2/shapes/rect.rs:4:19
+  |
+4 | use crate::{Vec2, EPSILON};
+  |                   ^^^^^^^
+
+warning: unused import: `EPSILON`
+ --> crates/mid-math/src/geometry/d3/planes/frustum.rs:4:25
+  |
+4 | use crate::{Mat4, Vec3, EPSILON};
+  |                         ^^^^^^^
+
+warning: unused import: `RemAssign`
+ --> crates/mid-math/src/int32/ivec4.rs:8:10
+  |
+8 |     Rem, RemAssign, Shl, ShlAssign, Shr, ShrAssign, Sub, SubAssign,
+  |          ^^^^^^^^^
+
+warning: unused variable: `wy`
+  --> crates/mid-math/src/f32/affine3.rs:82:18
+   |
+82 |         let (wx, wy, wz) = (w * x2, w * y * 2.0, w * z2);
+   |                  ^^ help: if this is intentional, prefix it with an underscore: `_wy`
+   |
+   = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `indices`
+  --> crates/mid-math/src/wide/int/scalar/i8x16.rs:62:42
+   |
+62 |     #[inline] pub fn shuffle_bytes(self, indices: Self) -> Self {
+   |                                          ^^^^^^^ help: if this is intentional, prefix it with an underscore: `_indices`
+
+warning: function `m128_floor` is never used
+   --> crates/mid-math/src/sse2.rs:101:22
+    |
+101 | pub(crate) unsafe fn m128_floor(v: __m128) -> __m128 {
+    |                      ^^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: function `m128_ceil` is never used
+   --> crates/mid-math/src/sse2.rs:112:22
+    |
+112 | pub(crate) unsafe fn m128_ceil(v: __m128) -> __m128 {
+    |                      ^^^^^^^^^
+
+warning: function `m128_trunc` is never used
+   --> crates/mid-math/src/sse2.rs:123:22
+    |
+123 | pub(crate) unsafe fn m128_trunc(v: __m128) -> __m128 {
+    |                      ^^^^^^^^^^
+
+warning: function `m128_round` is never used
+   --> crates/mid-math/src/sse2.rs:129:22
+    |
+129 | pub(crate) unsafe fn m128_round(v: __m128) -> __m128 {
+    |                      ^^^^^^^^^^
+
+warning: function `sin` is never used
+  --> crates/mid-math/src/f32/math.rs:15:33
+   |
+15 | #[inline(always)] pub(crate) fn sin(v: f32) -> f32 { v.sin() }
+   |                                 ^^^
+
+warning: function `cos` is never used
+  --> crates/mid-math/src/f32/math.rs:16:33
+   |
+16 | #[inline(always)] pub(crate) fn cos(v: f32) -> f32 { v.cos() }
+   |                                 ^^^
+
+warning: function `tan` is never used
+  --> crates/mid-math/src/f32/math.rs:17:33
+   |
+17 | #[inline(always)] pub(crate) fn tan(v: f32) -> f32 { v.tan() }
+   |                                 ^^^
+
+warning: function `abs` is never used
+  --> crates/mid-math/src/f32/math.rs:19:33
+   |
+19 | #[inline(always)] pub(crate) fn abs(v: f32) -> f32 { v.abs() }
+   |                                 ^^^
+
+warning: function `signum` is never used
+  --> crates/mid-math/src/f32/math.rs:20:33
+   |
+20 | #[inline(always)] pub(crate) fn signum(v: f32) -> f32 { v.signum() }
+   |                                 ^^^^^^
+
+warning: function `atan2` is never used
+  --> crates/mid-math/src/f32/math.rs:21:33
+   |
+21 | #[inline(always)] pub(crate) fn atan2(y: f32, x: f32) -> f32 { y.atan2(x) }
+   |                                 ^^^^^
+
+warning: function `exp` is never used
+  --> crates/mid-math/src/f32/math.rs:22:33
+   |
+22 | #[inline(always)] pub(crate) fn exp(v: f32) -> f32 { v.exp() }
+   |                                 ^^^
+
+warning: function `exp2` is never used
+  --> crates/mid-math/src/f32/math.rs:23:33
+   |
+23 | #[inline(always)] pub(crate) fn exp2(v: f32) -> f32 { v.exp2() }
+   |                                 ^^^^
+
+warning: function `ln` is never used
+  --> crates/mid-math/src/f32/math.rs:24:33
+   |
+24 | #[inline(always)] pub(crate) fn ln(v: f32) -> f32 { v.ln() }
+   |                                 ^^
+
+warning: function `log2` is never used
+  --> crates/mid-math/src/f32/math.rs:25:33
+   |
+25 | #[inline(always)] pub(crate) fn log2(v: f32) -> f32 { v.log2() }
+   |                                 ^^^^
+
+warning: function `powf` is never used
+  --> crates/mid-math/src/f32/math.rs:26:33
+   |
+26 | #[inline(always)] pub(crate) fn powf(v: f32, n: f32) -> f32 { v.powf(n) }
+   |                                 ^^^^
+
+warning: function `div_euclid` is never used
+  --> crates/mid-math/src/f32/math.rs:27:33
+   |
+27 | #[inline(always)] pub(crate) fn div_euclid(a: f32, b: f32) -> f32 { a.div_euclid(b) }
+   |                                 ^^^^^^^^^^
+
+warning: function `rem_euclid` is never used
+  --> crates/mid-math/src/f32/math.rs:28:33
+   |
+28 | #[inline(always)] pub(crate) fn rem_euclid(a: f32, b: f32) -> f32 { a.rem_euclid(b) }
+   |                                 ^^^^^^^^^^
+
+warning: function `mul_add` is never used
+  --> crates/mid-math/src/f32/math.rs:38:15
+   |
+38 | pub(crate) fn mul_add(a: f32, b: f32, c: f32) -> f32 {
+   |               ^^^^^^^
+
+warning: struct `Quat` is never constructed
+  --> crates/mid-math/src/f32/scalar/quat.rs:14:12
+   |
+14 | pub struct Quat {
+   |            ^^^^
+
+warning: multiple associated items are never used
+   --> crates/mid-math/src/f32/scalar/quat.rs:22:15
+    |
+ 21 | impl Quat {
+    | --------- associated items in this implementation
+ 22 |     pub const IDENTITY: Self = Self { x:0.0, y:0.0, z:0.0, w:1.0 };
+    |               ^^^^^^^^
+ 23 |     const ZERO: Self         = Self { x:0.0, y:0.0, z:0.0, w:0.0 };
+    |           ^^^^
+...
+ 26 |     pub fn new(x:f32, y:f32, z:f32, w:f32) -> Self { Self{x,y,z,w} }
+    |            ^^^
+...
+ 29 |     pub fn from_xyzw(x:f32, y:f32, z:f32, w:f32) -> Self { Self::new(x,y,z,w) }
+    |            ^^^^^^^^^
+ 30 |
+ 31 |     pub fn from_axis_angle(axis: Vec3, angle_rad: f32) -> Self {
+    |            ^^^^^^^^^^^^^^^
+...
+ 37 |     pub fn from_euler(roll: f32, pitch: f32, yaw: f32) -> Self {
+    |            ^^^^^^^^^^
+...
+ 49 |     pub fn to_euler(self) -> (f32, f32, f32) {
+    |            ^^^^^^^^
+...
+ 64 |     pub fn dot(self, r: Self) -> f32 {
+    |            ^^^
+...
+ 68 |     #[inline] pub fn length_sq(self) -> f32 { self.dot(self) }
+    |                      ^^^^^^^^^
+ 69 |     #[inline] pub fn length(self)    -> f32 { self.length_sq().sqrt() }
+    |                      ^^^^^^
+...
+ 72 |     pub fn normalize(self) -> Self {
+    |            ^^^^^^^^^
+...
+ 79 |     pub fn conjugate(self) -> Self {
+    |            ^^^^^^^^^
+...
+ 84 |     pub fn inverse(self) -> Self {
+    |            ^^^^^^^
+...
+ 93 |     pub fn rotate(self, v: Vec3) -> Vec3 {
+    |            ^^^^^^
+...
+100 |     pub fn mul_quat(self, r: Self) -> Self {
+    |            ^^^^^^^^
+...
+109 |     pub fn nlerp(self, rhs: Self, t: f32) -> Self {
+    |            ^^^^^
+...
+122 |     pub fn slerp(self, mut rhs: Self, t: f32) -> Self {
+    |            ^^^^^
+...
+140 |     pub fn to_mat4(self) -> Mat4 {
+    |            ^^^^^^^
+...
+156 |     pub fn is_normalized(self) -> bool { (self.length_sq() - 1.0).abs() <= 2e-4 }
+    |            ^^^^^^^^^^^^^
+...
+159 |     pub fn is_finite(self) -> bool {
+    |            ^^^^^^^^^
+
+warning: struct `Mat4` is never constructed
+  --> crates/mid-math/src/f32/scalar/mat4.rs:15:12
+   |
+15 | pub struct Mat4 {
+   |            ^^^^
+
+warning: multiple associated items are never used
+   --> crates/mid-math/src/f32/scalar/mat4.rs:20:15
+    |
+ 19 | impl Mat4 {
+    | --------- associated items in this implementation
+ 20 |     pub const ZERO: Self = Self { cols: [[0.0;4];4] };
+    |               ^^^^
+ 21 |     pub const IDENTITY: Self = Self { cols: [
+    |               ^^^^^^^^
+...
+ 29 |     pub fn from_cols(c0:[f32;4], c1:[f32;4], c2:[f32;4], c3:[f32;4]) -> Self {
+    |            ^^^^^^^^^
+...
+ 34 |     pub fn from_translation(t: Vec3) -> Self {
+    |            ^^^^^^^^^^^^^^^^
+...
+ 41 |     pub fn from_scale(s: Vec3) -> Self {
+    |            ^^^^^^^^^^
+...
+ 51 |     pub fn from_rotation(q: Quat) -> Self { q.to_mat4() }
+    |            ^^^^^^^^^^^^^
+...
+ 54 |     pub fn from_trs(t: Vec3, r: Quat, s: Vec3) -> Self {
+    |            ^^^^^^^^
+...
+ 69 |     pub fn look_at_rh(eye: Vec3, center: Vec3, up: Vec3) -> Self {
+    |            ^^^^^^^^^^
+...
+ 81 |     pub fn perspective_rh(fov_y:f32, aspect:f32, near:f32, far:f32) -> Self {
+    |            ^^^^^^^^^^^^^^
+...
+ 92 |     pub fn ortho_rh(left:f32,right:f32,bottom:f32,top:f32,near:f32,far:f32)->Self{
+    |            ^^^^^^^^
+...
+102 |     pub fn transpose(self) -> Self {
+    |            ^^^^^^^^^
+...
+112 |     pub fn transform_point(self, p: Vec3) -> Vec3 {
+    |            ^^^^^^^^^^^^^^^
+...
+116 |     pub fn transform_vector(self, v: Vec3) -> Vec3 {
+    |            ^^^^^^^^^^^^^^^^
+...
+120 |     pub fn inverse(self) -> Option<Self> {
+    |            ^^^^^^^
+...
+124 |     pub fn inverse_scalar(self) -> Option<Self> {
+    |            ^^^^^^^^^^^^^^
+...
+160 |     pub fn inverse_trs(self) -> Self { self.inverse_trs_scalar() }
+    |            ^^^^^^^^^^^
+161 |
+162 |     pub fn inverse_trs_scalar(self) -> Self {
+    |            ^^^^^^^^^^^^^^^^^^
+
+warning: associated constant `ZERO` is never used
+  --> crates/mid-math/src/f32/sse2/quat.rs:62:11
+   |
+57 | impl Quat {
+   | --------- associated constant in this implementation
+...
+62 |     const ZERO: Self         = unsafe { UnionCast { f: [0.0; 4] }.v };
+   |           ^^^^
+
+warning: associated constant `ZERO` is never used
+  --> crates/mid-math/src/f64/dquat.rs:33:11
+   |
+30 | impl DQuat {
+   | ---------- associated constant in this implementation
+...
+33 |     const ZERO: Self         = Self { x: 0.0, y: 0.0, z: 0.0, w: 0.0 };
+   |           ^^^^
+
+warning: associated function `from_bools` is never used
+  --> crates/mid-math/src/wide/float/scalar/mask4.rs:29:19
+   |
+13 | impl Mask4 {
+   | ---------- associated function in this implementation
+...
+29 |     pub(crate) fn from_bools(a: bool, b: bool, c: bool, d: bool) -> Self {
+   |                   ^^^^^^^^^^
+
+warning: associated function `from_m128` is never used
+  --> crates/mid-math/src/wide/float/sse2/mask4.rs:41:19
+   |
+23 | impl Mask4 {
+   | ---------- associated function in this implementation
+...
+41 |     pub(crate) fn from_m128(m: __m128) -> Self { Mask4(m) }
+   |                   ^^^^^^^^^
+
+warning: `mid-math` (lib) generated 40 warnings (run `cargo fix --lib -p mid-math` to apply 13 suggestions)
+warning: unused import: `EPSILON`
+ --> crates/mid-math/src/tests/vec_tests.rs:4:46
+  |
+4 |     use crate::{Vec2, Vec3, Vec4, approx_eq, EPSILON};
+  |                                              ^^^^^^^
+
+warning: unused imports: `EPSILON` and `Mat4`
+ --> crates/mid-math/src/tests/quat_tests.rs:4:29
+  |
+4 |     use crate::{Quat, Vec3, Mat4, approx_eq, to_radians, EPSILON};
+  |                             ^^^^                         ^^^^^^^
+
+warning: unused imports: `Vec4` and `approx_eq`
+ --> crates/mid-math/src/tests/stress_tests.rs:5:23
+  |
+5 |     use crate::{Vec3, Vec4, Quat, Mat4, to_radians, lerp, smoothstep, approx_eq, EPSILON};
+  |                       ^^^^                                            ^^^^^^^^^
+
+warning: unused import: `DEPSILON`
+  --> crates/mid-math/src/tests/f64_tests.rs:10:68
+   |
+10 |         DAffine3, DMat2, DMat3, DMat4, DQuat, DVec2, DVec3, DVec4, DEPSILON,
+   |                                                                    ^^^^^^^^
+
+warning: unused imports: `IMask16` and `IMask8`
+  --> crates/mid-math/src/tests/wide_tests.rs:12:17
+   |
+12 |         IMask4, IMask8, IMask16,
+   |                 ^^^^^^  ^^^^^^^
+
+warning: unused imports: `EPSILON` and `approx_eq`
+  --> crates/mid-math/src/tests/wide_tests.rs:22:21
+   |
+22 |         to_radians, approx_eq, EPSILON,
+   |                     ^^^^^^^^^  ^^^^^^^
+
+warning: function `mat4_approx_loose` is never used
+  --> crates/mid-math/src/tests/f64_tests.rs:32:8
+   |
+32 |     fn mat4_approx_loose(a: DMat4, b: DMat4) -> bool {
+   |        ^^^^^^^^^^^^^^^^^
+
+warning: `mid-math` (lib test) generated 47 warnings (40 duplicates) (run `cargo fix --lib -p mid-math --tests` to apply 6 suggestions)
+    Finished `release` profile [optimized] target(s) in 35.12s
+     Running unittests src/lib.rs (target/release/deps/mid_math-a10c5b841fd22fbd)
+
+running 370 tests
+test tests::bool_tests::tests::bvec2_any_all ... ok
+test tests::bool_tests::tests::bvec2_assign_ops ... ok
+test tests::bool_tests::tests::bvec2_bitmask ... ok
+test tests::bool_tests::tests::bvec2_bitops ... ok
+test tests::bool_tests::tests::bvec2_constants ... ok
+test tests::bool_tests::tests::bvec2_from_array_roundtrip ... ok
+test tests::bool_tests::tests::bvec2_splat ... ok
+test tests::bool_tests::tests::bvec2_from_tuple_roundtrip ... ok
+test tests::bool_tests::tests::bvec2_size_align ... ok
+test tests::bool_tests::tests::bvec2_test_indexed ... ok
+test tests::bool_tests::tests::bvec3_bitmask ... ok
+test tests::bool_tests::tests::bvec3_bitops ... ok
+test tests::bool_tests::tests::bvec2_test_oob_panics - should panic ... ok
+test tests::bool_tests::tests::bvec3_any_all ... ok
+test tests::bool_tests::tests::bvec3_from_array_roundtrip ... ok
+test tests::bool_tests::tests::bvec4_any_all ... ok
+test tests::bool_tests::tests::bvec3_size_align ... ok
+test tests::bool_tests::tests::bvec3_test_indexed ... ok
+test tests::bool_tests::tests::bvec3_test_oob_panics - should panic ... ok
+test tests::bool_tests::tests::bvec4_from_array_roundtrip ... ok
+test tests::bool_tests::tests::bvec4_assign_ops ... ok
+test tests::bool_tests::tests::bvec4_bitmask ... ok
+test tests::bool_tests::tests::bvec4_bitops ... ok
+test tests::bool_tests::tests::bvec4_size_align ... ok
+test tests::bool_tests::tests::bvec4_splat ... ok
+test tests::bool_tests::tests::bvec4_test_indexed ... ok
+test tests::bool_tests::tests::bvec4_test_oob_panics - should panic ... ok
+test tests::f64_tests::tests::daffine3_compose_matches_dmat4_mul ... ok
+test tests::f64_tests::tests::daffine3_from_mat4_roundtrip ... ok
+test tests::f64_tests::tests::daffine3_from_trs_matches_dmat4_from_trs ... ok
+test tests::f64_tests::tests::daffine3_identity_is_default ... ok
+test tests::f64_tests::tests::daffine3_identity_transform_point_unchanged ... ok
+test tests::f64_tests::tests::daffine3_inverse_identity ... ok
+test tests::f64_tests::tests::daffine3_inverse_matches_dmat4_inverse_trs ... ok
+test tests::f64_tests::tests::daffine3_inverse_scale_only ... ok
+test tests::f64_tests::tests::daffine3_inverse_translation_only ... ok
+test tests::f64_tests::tests::daffine3_inverse_trs_roundtrip ... ok
+test tests::f64_tests::tests::daffine3_inverse_zero_scale_does_not_panic ... ok
+test tests::f64_tests::tests::daffine3_scale_scales_point ... ok
+test tests::f64_tests::tests::daffine3_translation_moves_point ... ok
+test tests::f64_tests::tests::dmat2_identity_times_vec_is_vec ... ok
+test tests::f64_tests::tests::daffine3_size_align ... ok
+test tests::f64_tests::tests::dmat2_rotation_inverse_roundtrip ... ok
+test tests::f64_tests::tests::daffine3_translation_does_not_affect_vectors ... ok
+test tests::f64_tests::tests::dmat2_inverse_identity_is_identity ... ok
+test tests::f64_tests::tests::dmat2_singular_inverse_returns_none ... ok
+test tests::f64_tests::tests::dmat3_identity_times_vec_is_vec ... ok
+test tests::f64_tests::tests::dmat4_identity_transform_point_unchanged ... ok
+test tests::f64_tests::tests::dmat3_inverse_roundtrip ... ok
+test tests::f64_tests::tests::dmat4_inverse_of_identity_is_identity ... ok
+test tests::f64_tests::tests::dmat3_singular_inverse_returns_none ... ok
+test tests::f64_tests::tests::dmat4_inverse_trs_translation_only ... ok
+test tests::f64_tests::tests::dmat4_inverse_roundtrip ... ok
+test tests::f64_tests::tests::dmat4_inverse_trs_identity ... ok
+test tests::f64_tests::tests::dmat4_inverse_trs_roundtrip_matches_general_inverse ... ok
+test tests::f64_tests::tests::dmat4_look_at_target_on_neg_z ... ok
+test tests::f64_tests::tests::dmat4_scale_scales_point ... ok
+test tests::f64_tests::tests::dmat4_multiply_identity_is_identity ... ok
+test tests::f64_tests::tests::dmat4_perspective_has_neg_one_at_col2_row3 ... ok
+test tests::f64_tests::tests::dmat4_translation_does_not_affect_vectors ... ok
+test tests::f64_tests::tests::dmat4_singular_inverse_returns_none ... ok
+test tests::f64_tests::tests::dmat4_size_align ... ok
+test tests::f64_tests::tests::dmat4_translation_moves_point ... ok
+test tests::f64_tests::tests::dquat_180deg_y_rotates_x_to_neg_x ... ok
+test tests::f64_tests::tests::dquat_90deg_y_rotates_x_to_neg_z ... ok
+test tests::f64_tests::tests::dquat_euler_roundtrip ... ok
+test tests::f64_tests::tests::dquat_compose_90deg_twice_is_180deg ... ok
+test tests::f64_tests::tests::dquat_identity_does_not_rotate ... ok
+test tests::f64_tests::tests::dquat_conjugate_inverse_for_unit ... ok
+test tests::f64_tests::tests::dquat_to_mat4_identity_roundtrip ... ok
+test tests::f64_tests::tests::dquat_mul_matches_scalar_reference ... ok
+test tests::f64_tests::tests::dquat_nlerp_stays_normalized ... ok
+test tests::f64_tests::tests::dquat_slerp_midpoint_in_first_quadrant ... ok
+test tests::f64_tests::tests::dvec2_add_sub ... ok
+test tests::f64_tests::tests::dvec2_lerp_midpoint ... ok
+test tests::f64_tests::tests::dvec2_angle_roundtrip ... ok
+test tests::f64_tests::tests::dvec2_dot ... ok
+test tests::f64_tests::tests::dvec2_size_align ... ok
+test tests::f64_tests::tests::dvec2_normalize_unit_length ... ok
+test tests::f64_tests::tests::dvec2_perp_is_orthogonal ... ok
+test tests::f64_tests::tests::dvec2_zero_normalize_returns_zero ... ok
+test tests::f64_tests::tests::dvec3_cross_basis ... ok
+test tests::f64_tests::tests::dvec3_angle_between_orthogonal ... ok
+test tests::f64_tests::tests::dvec3_angle_between_parallel ... ok
+test tests::f64_tests::tests::dvec3_cross_anticommutative ... ok
+test tests::f64_tests::tests::dvec3_reflect ... ok
+test tests::f64_tests::tests::dvec3_equality_ignores_pad ... ok
+test tests::f64_tests::tests::dvec3_extend_truncate_roundtrip ... ok
+test tests::f64_tests::tests::dvec3_normalize_unit_length ... ok
+test tests::f64_tests::tests::dvec4_normalize_unit_length ... ok
+test tests::f64_tests::tests::dvec3_size_align ... ok
+test tests::f64_tests::tests::dvec4_dot_with_self_is_length_sq ... ok
+test tests::f64_tests::tests::dvec4_size_align ... ok
+test tests::f64_tests::tests::ffi_daffine3_roundtrip ... ok
+test tests::f64_tests::tests::ffi_dvec3_roundtrip ... ok
+test tests::f64_tests::tests::ffi_dmat4_roundtrip ... ok
+test tests::f64_tests::tests::ffi_dquat_roundtrip ... ok
+test tests::int64_tests::tests::ffi_ci64vec2_roundtrip_and_layout ... ok
+test tests::int64_tests::tests::ffi_cu64vec2_roundtrip_and_layout ... ok
+test tests::int64_tests::tests::ffi_ci64vec3_roundtrip_and_layout ... ok
+test tests::int64_tests::tests::ffi_ci64vec4_roundtrip_and_layout ... ok
+test tests::int64_tests::tests::i64vec2_abs ... ok
+test tests::int64_tests::tests::ffi_cu64vec3_roundtrip_and_layout ... ok
+test tests::int64_tests::tests::ffi_cu64vec4_roundtrip_and_layout ... ok
+test tests::int64_tests::tests::i64vec2_add_sub ... ok
+test tests::int64_tests::tests::i64vec2_cmp_ops ... ok
+test tests::int64_tests::tests::i64vec2_casts ... ok
+test tests::int64_tests::tests::i64vec2_checked ... ok
+test tests::int64_tests::tests::i64vec2_checked_manhattan_overflow ... ok
+test tests::int64_tests::tests::i64vec2_element_ops ... ok
+test tests::int64_tests::tests::i64vec2_constants ... ok
+test tests::int64_tests::tests::i64vec2_distance_sq ... ok
+test tests::int64_tests::tests::i64vec2_dot ... ok
+test tests::int64_tests::tests::i64vec2_extend ... ok
+test tests::int64_tests::tests::i64vec2_from_array_roundtrip ... ok
+test tests::int64_tests::tests::i64vec2_index ... ok
+test tests::int64_tests::tests::i64vec2_manhattan_distance ... ok
+test tests::int64_tests::tests::i64vec2_index_oob_panics - should panic ... ok
+test tests::int64_tests::tests::i64vec2_length_sq ... ok
+test tests::int64_tests::tests::i64vec2_min_max_clamp ... ok
+test tests::int64_tests::tests::i64vec2_saturating ... ok
+test tests::int64_tests::tests::i64vec2_mul_scale ... ok
+test tests::int64_tests::tests::i64vec2_neg ... ok
+test tests::int64_tests::tests::i64vec2_perp_and_perp_dot ... ok
+test tests::int64_tests::tests::i64vec2_select ... ok
+test tests::int64_tests::tests::i64vec2_wrapping ... ok
+test tests::int64_tests::tests::i64vec2_signum ... ok
+test tests::int64_tests::tests::i64vec2_size_align ... ok
+test tests::int64_tests::tests::i64vec3_casts ... ok
+test tests::int64_tests::tests::i64vec3_add_sub_neg ... ok
+test tests::int64_tests::tests::i64vec3_abs ... ok
+test tests::int64_tests::tests::i64vec3_cmp_ops ... ok
+test tests::int64_tests::tests::i64vec3_constants ... ok
+test tests::int64_tests::tests::i64vec3_element_ops ... ok
+test tests::int64_tests::tests::i64vec3_cross_anticommutative ... ok
+test tests::int64_tests::tests::i64vec3_cross_basis ... ok
+test tests::int64_tests::tests::i64vec3_dot ... ok
+test tests::int64_tests::tests::i64vec3_extend_truncate ... ok
+test tests::int64_tests::tests::i64vec3_index ... ok
+test tests::int64_tests::tests::i64vec3_index_oob_panics - should panic ... ok
+test tests::int64_tests::tests::i64vec3_length_sq ... ok
+test tests::int64_tests::tests::i64vec3_manhattan_distance ... ok
+test tests::int64_tests::tests::i64vec3_min_max_clamp ... ok
+test tests::int64_tests::tests::i64vec4_abs ... ok
+test tests::int64_tests::tests::i64vec3_select ... ok
+test tests::int64_tests::tests::i64vec3_size_align ... ok
+test tests::int64_tests::tests::i64vec3_wrapping_saturating ... ok
+test tests::int64_tests::tests::i64vec4_add_sub_neg ... ok
+test tests::int64_tests::tests::i64vec4_casts ... ok
+test tests::int64_tests::tests::i64vec4_cmp_ops ... ok
+test tests::int64_tests::tests::i64vec4_dot ... ok
+test tests::int64_tests::tests::i64vec4_element_ops ... ok
+test tests::int64_tests::tests::i64vec4_index ... ok
+test tests::int64_tests::tests::i64vec4_index_oob_panics - should panic ... ok
+test tests::int64_tests::tests::i64vec4_length_sq ... ok
+test tests::int64_tests::tests::i64vec4_manhattan_distance ... ok
+test tests::int64_tests::tests::i64vec4_select ... ok
+test tests::int64_tests::tests::i64vec4_min_max_clamp ... ok
+test tests::int64_tests::tests::i64vec4_size_align ... ok
+test tests::int64_tests::tests::i64vec4_truncate_and_xy ... ok
+test tests::int64_tests::tests::u64vec2_add_sub_mul ... ok
+test tests::int64_tests::tests::u64vec2_cmp_ops ... ok
+test tests::int64_tests::tests::i64vec4_wrapping_saturating ... ok
+test tests::int64_tests::tests::u64vec2_casts ... ok
+test tests::int64_tests::tests::u64vec2_dot ... ok
+test tests::int64_tests::tests::u64vec2_min_max_clamp ... ok
+test tests::int64_tests::tests::u64vec2_extend ... ok
+test tests::int64_tests::tests::u64vec2_element_ops ... ok
+test tests::int64_tests::tests::u64vec2_length_sq ... ok
+test tests::int64_tests::tests::u64vec2_select ... ok
+test tests::int64_tests::tests::u64vec2_saturating ... ok
+test tests::int64_tests::tests::u64vec3_casts ... ok
+test tests::int64_tests::tests::u64vec2_size_align ... ok
+test tests::int64_tests::tests::u64vec2_wrapping ... ok
+test tests::int64_tests::tests::u64vec3_cmp_ops ... ok
+test tests::int64_tests::tests::u64vec3_element_ops ... ok
+test tests::int64_tests::tests::u64vec3_cross_basis ... ok
+test tests::int64_tests::tests::u64vec3_dot ... ok
+test tests::int64_tests::tests::u64vec3_extend_truncate ... ok
+test tests::int64_tests::tests::u64vec3_length_sq ... ok
+test tests::int64_tests::tests::u64vec3_index ... ok
+test tests::int64_tests::tests::u64vec3_index_oob_panics - should panic ... ok
+test tests::int64_tests::tests::u64vec3_min_max_clamp ... ok
+test tests::int64_tests::tests::u64vec3_size_align ... ok
+test tests::int64_tests::tests::u64vec3_wrapping_saturating ... ok
+test tests::int64_tests::tests::u64vec4_add_mul_scale ... ok
+test tests::int64_tests::tests::u64vec4_casts ... ok
+test tests::int64_tests::tests::u64vec4_element_ops ... ok
+test tests::int64_tests::tests::u64vec4_cmp_ops ... ok
+test tests::int64_tests::tests::u64vec4_dot ... ok
+test tests::int64_tests::tests::u64vec4_index ... ok
+test tests::int64_tests::tests::u64vec4_min_max_clamp ... ok
+test tests::int64_tests::tests::u64vec4_index_oob_panics - should panic ... ok
+test tests::int64_tests::tests::u64vec4_length_sq ... ok
+test tests::int64_tests::tests::u64vec4_select ... ok
+test tests::int64_tests::tests::u64vec4_truncate_and_xy ... ok
+test tests::mat_tests::tests::affine3_compose_matches_mat4_mul ... ok
+test tests::int64_tests::tests::u64vec4_size_align ... ok
+test tests::mat_tests::tests::affine3_from_trs_matches_mat4_from_trs ... ok
+test tests::int64_tests::tests::u64vec4_wrapping_saturating ... ok
+test tests::mat_tests::tests::affine3_from_mat4_roundtrip ... ok
+test tests::mat_tests::tests::affine3_inverse_identity ... ok
+test tests::mat_tests::tests::affine3_identity_is_default ... ok
+test tests::mat_tests::tests::affine3_identity_transform_point_unchanged ... ok
+test tests::mat_tests::tests::affine3_inverse_matches_mat4_inverse_trs ... ok
+test tests::mat_tests::tests::affine3_identity_transform_vector_unchanged ... ok
+test tests::mat_tests::tests::affine3_inverse_trs_roundtrip ... ok
+test tests::mat_tests::tests::affine3_inverse_scale_only ... ok
+test tests::mat_tests::tests::affine3_inverse_translation_only ... ok
+test tests::mat_tests::tests::affine3_inverse_zero_scale_does_not_panic ... ok
+test tests::mat_tests::tests::affine3_scale_scales_point ... ok
+test tests::mat_tests::tests::affine3_size_is_64_bytes ... ok
+test tests::mat_tests::tests::mat3_inverse_of_identity_is_identity ... ok
+test tests::mat_tests::tests::affine3_translation_does_not_affect_vectors ... ok
+test tests::mat_tests::tests::affine3_translation_moves_point ... ok
+test tests::mat_tests::tests::mat3_identity_times_vec_is_vec ... ok
+test tests::mat_tests::tests::mat4_identity_transform_point_unchanged ... ok
+test tests::mat_tests::tests::mat3_inverse_roundtrip ... ok
+test tests::mat_tests::tests::mat4_inverse_of_identity_is_identity ... ok
+test tests::mat_tests::tests::mat3_multiply_identity_is_identity ... ok
+test tests::mat_tests::tests::mat4_inverse_general_sse2_matches_scalar ... ok
+test tests::mat_tests::tests::mat4_inverse_roundtrip ... ok
+test tests::mat_tests::tests::mat4_inverse_trs_identity ... ok
+test tests::mat_tests::tests::mat4_inverse_trs_zero_scale_does_not_panic ... ok
+test tests::mat_tests::tests::mat4_look_at_z_axis_points_toward_target ... ok
+test tests::mat_tests::tests::mat4_multiply_identity_is_identity ... ok
+test tests::mat_tests::tests::mat4_inverse_trs_roundtrip_matches_general_inverse ... ok
+test tests::mat_tests::tests::mat4_inverse_trs_translation_only ... ok
+test tests::mat_tests::tests::mat4_perspective_has_negative_one_at_col3_row2 ... ok
+test tests::mat_tests::tests::mat4_scale_scales_point ... ok
+test tests::mat_tests::tests::mat4_translation_moves_point ... ok
+test tests::mat_tests::tests::mat4_singular_inverse_returns_none ... ok
+test tests::mat_tests::tests::mat4_size_is_64_bytes ... ok
+test tests::mat_tests::tests::mat4_translation_does_not_affect_vectors ... ok
+test tests::quat_tests::tests::quat_90deg_around_y_rotates_x_to_neg_z ... ok
+test tests::quat_tests::tests::quat_conjugate_is_inverse_for_unit ... ok
+test tests::quat_tests::tests::quat_inverse_undoes_rotation ... ok
+test tests::quat_tests::tests::quat_multiply_composes_rotations ... ok
+test tests::quat_tests::tests::quat_euler_round_trip ... ok
+test tests::quat_tests::tests::quat_identity_does_not_rotate_vector ... ok
+test tests::quat_tests::tests::quat_mul_matches_scalar_reference ... ok
+test tests::quat_tests::tests::quat_slerp_midpoint_in_first_quadrant ... ok
+test tests::stress_tests::tests::smoothstep_clamps_outside_range ... ok
+test tests::quat_tests::tests::quat_nlerp_stays_normalized ... ok
+test tests::quat_tests::tests::quat_to_mat4_identity_roundtrip ... ok
+test tests::stress_tests::tests::lerp_scalar_midpoint ... ok
+test tests::stress_tests::tests::smoothstep_midpoint_is_half ... ok
+test tests::stress_tests::tests::stress_100k_quat_rotate ... ok
+test tests::stress_tests::tests::stress_100k_vec3_add ... ok
+test tests::stress_tests::tests::stress_100k_entity_transform_simulation ... ok
+test tests::stress_tests::tests::stress_100k_quat_mul ... ok
+test tests::stress_tests::tests::stress_100k_vec3_dot ... ok
+test tests::stress_tests::tests::stress_100k_vec3_cross ... ok
+test tests::stress_tests::tests::stress_100k_vec3_lerp ... ok
+test tests::stress_tests::tests::stress_10k_mat4_mul ... ok
+test tests::stress_tests::tests::stress_10k_mat4_transform_point ... ok
+test tests::stress_tests::tests::stress_100k_vec3_normalize ... ok
+test tests::stress_tests::tests::stress_5k_mat4_inverse ... ok
+test tests::stress_tests::tests::stress_mixed_math_1k_frames_simulation ... ok
+test tests::vec_tests::tests::vec2_addition ... ok
+test tests::stress_tests::tests::stress_5k_mat4_inverse_trs ... ok
+test tests::vec_tests::tests::vec2_dot_product ... ok
+test tests::vec_tests::tests::vec2_lerp_midpoint ... ok
+test tests::vec_tests::tests::vec2_normalize_unit_length ... ok
+test tests::vec_tests::tests::vec2_perpendicular_is_orthogonal ... ok
+test tests::vec_tests::tests::vec2_zero_normalize_returns_zero ... ok
+test tests::vec_tests::tests::vec3_align_is_16 ... ok
+test tests::vec_tests::tests::vec3_cross_anticommutative ... ok
+test tests::vec_tests::tests::vec3_cross_product_basis ... ok
+test tests::vec_tests::tests::vec3_distance ... ok
+test tests::vec_tests::tests::vec3_equality_ignores_padding_lane ... ok
+test tests::vec_tests::tests::vec3_extend_and_truncate_roundtrip ... ok
+test tests::vec_tests::tests::vec3_normalize_unit_length ... ok
+test tests::vec_tests::tests::vec3_reflect ... ok
+test tests::vec_tests::tests::vec3_size_is_16_bytes ... ok
+test tests::vec_tests::tests::vec4_dot_with_self_is_length_sq ... ok
+test tests::vec_tests::tests::vec4_normalize_unit_length ... ok
+test tests::vec_tests::tests::vec4_size_is_16_bytes ... ok
+test tests::wide_tests::tests::f32x4_arithmetic ... ok
+test tests::wide_tests::tests::f32x4_blend_branchless ... ok
+test tests::wide_tests::tests::f32x4_is_finite ... ok
+test tests::wide_tests::tests::f32x4_min_max_abs ... ok
+test tests::wide_tests::tests::f32x4_new_and_array_roundtrip ... ok
+test tests::wide_tests::tests::f32x4_recip_accuracy ... ok
+test tests::wide_tests::tests::f32x4_recip_sqrt_accuracy ... ok
+test tests::wide_tests::tests::f32x4_size_align ... ok
+test tests::wide_tests::tests::f32x4_splat_and_get ... ok
+test tests::wide_tests::tests::f32x4_sqrt ... ok
+test tests::wide_tests::tests::i16x8_add_sub ... ok
+test tests::wide_tests::tests::i16x8_cmpeq_bitmask ... ok
+test tests::wide_tests::tests::i16x8_element_sum ... ok
+test tests::wide_tests::tests::i16x8_min_max ... ok
+test tests::wide_tests::tests::i16x8_mul_lo ... ok
+test tests::stress_tests::tests::stress_50k_quat_slerp ... ok
+test tests::wide_tests::tests::i16x8_saturating_add ... ok
+test tests::wide_tests::tests::i16x8_saturating_sub ... ok
+test tests::wide_tests::tests::i16x8_splat_and_to_array ... ok
+test tests::wide_tests::tests::i32x4_abs ... ok
+test tests::wide_tests::tests::i16x8_size_align ... ok
+test tests::wide_tests::tests::i16x8_widen_roundtrip ... ok
+test tests::wide_tests::tests::i32x4_add ... ok
+test tests::wide_tests::tests::i32x4_bitwise ... ok
+test tests::wide_tests::tests::i32x4_clamp ... ok
+test tests::wide_tests::tests::i32x4_element_sum ... ok
+test tests::wide_tests::tests::i32x4_cmp_and_blend ... ok
+test tests::wide_tests::tests::i32x4_get_oob_panics - should panic ... ok
+test tests::wide_tests::tests::i32x4_from_array_roundtrip ... ok
+test tests::wide_tests::tests::i32x4_min_max_element ... ok
+test tests::wide_tests::tests::i32x4_min_max ... ok
+test tests::wide_tests::tests::i32x4_mul ... ok
+test tests::wide_tests::tests::i32x4_new_roundtrip ... ok
+test tests::wide_tests::tests::i32x4_neg ... ok
+test tests::wide_tests::tests::i32x4_shifts ... ok
+test tests::wide_tests::tests::i32x4_saturating ... ok
+test tests::wide_tests::tests::i32x4_size_align ... ok
+test tests::wide_tests::tests::i32x4_sub ... ok
+test tests::wide_tests::tests::i32x4_splat_and_get ... ok
+test tests::wide_tests::tests::i32x4_wrapping ... ok
+test tests::wide_tests::tests::i8x16_abs ... ok
+test tests::wide_tests::tests::i8x16_saturating ... ok
+test tests::wide_tests::tests::i8x16_cmpeq_and_count ... ok
+test tests::wide_tests::tests::i8x16_size_align ... ok
+test tests::wide_tests::tests::i8x16_splat_and_to_array ... ok
+test tests::wide_tests::tests::imask16_from_i8x16_cmpeq ... ok
+test tests::wide_tests::tests::imask4_bitops ... ok
+test tests::wide_tests::tests::imask4_true_all_set ... ok
+test tests::wide_tests::tests::imask4_false_all_zero ... ok
+test tests::wide_tests::tests::mask4_bitops ... FAILED
+test tests::wide_tests::tests::imask8_from_i16x8_cmpeq ... ok
+test tests::wide_tests::tests::mask4_false_true_constants ... ok
+test tests::wide_tests::tests::mask4_from_f32x4_comparison ... ok
+test tests::wide_tests::tests::quatx4_4_different_rotations_simultaneously ... ok
+test tests::wide_tests::tests::quatx4_conjugate_is_inverse_for_unit ... ok
+test tests::wide_tests::tests::quatx4_aos_soa_roundtrip ... ok
+test tests::wide_tests::tests::quatx4_identity_default ... ok
+test tests::wide_tests::tests::quatx4_mul_matches_scalar ... ok
+test tests::wide_tests::tests::quatx4_dot_self_is_one_for_unit_quats ... ok
+test tests::wide_tests::tests::quatx4_nlerp_stays_normalised ... ok
+test tests::wide_tests::tests::quatx4_rotate_matches_scalar ... ok
+test tests::wide_tests::tests::quatx4_rotate_x_by_90y_is_neg_z ... ok
+test tests::wide_tests::tests::quatx4_normalize_unit_length ... ok
+test tests::wide_tests::tests::quatx4_size_align ... ok
+test tests::wide_tests::tests::u16x8_saturating_sub ... ok
+test tests::wide_tests::tests::u16x8_unsigned_min_max ... ok
+test tests::wide_tests::tests::u16x8_saturating_add ... ok
+test tests::wide_tests::tests::u32x4_min_max ... ok
+test tests::wide_tests::tests::u32x4_saturating_add_no_overflow ... ok
+test tests::wide_tests::tests::u32x4_unsigned_comparison ... ok
+test tests::wide_tests::tests::u32x4_saturating_sub_no_underflow ... ok
+test tests::wide_tests::tests::u8x16_element_sum_correct ... ok
+test tests::stress_tests::tests::stress_50k_euler_from_to_roundtrip ... ok
+test tests::wide_tests::tests::u8x16_min_max_unsigned ... ok
+test tests::wide_tests::tests::u8x16_contains_and_count ... ok
+test tests::wide_tests::tests::u8x16_saturating_add ... ok
+test tests::wide_tests::tests::u8x16_saturating_sub ... ok
+test tests::wide_tests::tests::vec3x4_add ... ok
+test tests::wide_tests::tests::vec3x4_aos_soa_roundtrip ... ok
+test tests::wide_tests::tests::vec3x4_cross_anticommutative ... ok
+test tests::wide_tests::tests::vec3x4_cross_basis ... ok
+test tests::wide_tests::tests::vec3x4_dot_4_simultaneous ... ok
+test tests::wide_tests::tests::vec3x4_lerp_midpoint ... ok
+test tests::wide_tests::tests::vec3x4_lerp_per_lane_t ... ok
+test tests::wide_tests::tests::vec3x4_mat4_transform_matches_scalar ... ok
+test tests::wide_tests::tests::vec3x4_matches_scalar_transform ... ok
+test tests::wide_tests::tests::vec3x4_normalize_degenerate_lane_safe ... ok
+test tests::wide_tests::tests::vec3x4_normalize_unit_length ... ok
+test tests::wide_tests::tests::vec3x4_select_branchless ... ok
+test tests::wide_tests::tests::vec3x4_size_align ... ok
+test tests::wide_tests::tests::vec3x4_splat ... ok
+test tests::wide_tests::tests::vec3x4_sub ... ok
+
+successes:
+
+---- tests::bool_tests::tests::bvec2_test_oob_panics stdout ----
+
+thread 'tests::bool_tests::tests::bvec2_test_oob_panics' (4941) panicked at crates/mid-math/src/bvec/bvec2.rs:55:18:
+BVec2::test — index 2 out of bounds (max 1)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- tests::bool_tests::tests::bvec3_test_oob_panics stdout ----
+
+thread 'tests::bool_tests::tests::bvec3_test_oob_panics' (4948) panicked at crates/mid-math/src/bvec/bvec3.rs:53:18:
+BVec3::test — index 3 out of bounds (max 2)
+
+---- tests::bool_tests::tests::bvec4_test_oob_panics stdout ----
+
+thread 'tests::bool_tests::tests::bvec4_test_oob_panics' (4957) panicked at crates/mid-math/src/bvec/bvec4.rs:58:18:
+BVec4::test — index 4 out of bounds (max 3)
+
+---- tests::int64_tests::tests::i64vec2_index_oob_panics stdout ----
+
+thread 'tests::int64_tests::tests::i64vec2_index_oob_panics' (5047) panicked at crates/mid-math/src/tests/int64_tests.rs:195:18:
+I64Vec2 index 2 out of bounds
+
+---- tests::int64_tests::tests::i64vec3_index_oob_panics stdout ----
+
+thread 'tests::int64_tests::tests::i64vec3_index_oob_panics' (5070) panicked at crates/mid-math/src/tests/int64_tests.rs:345:30:
+I64Vec3 index 3 out of bounds
+
+---- tests::int64_tests::tests::i64vec4_index_oob_panics stdout ----
+
+thread 'tests::int64_tests::tests::i64vec4_index_oob_panics' (5084) panicked at crates/mid-math/src/tests/int64_tests.rs:458:30:
+I64Vec4 index 4 out of bounds
+
+---- tests::int64_tests::tests::u64vec3_index_oob_panics stdout ----
+
+thread 'tests::int64_tests::tests::u64vec3_index_oob_panics' (5111) panicked at crates/mid-math/src/tests/int64_tests.rs:647:30:
+U64Vec3 index 3 out of bounds
+
+---- tests::int64_tests::tests::u64vec4_index_oob_panics stdout ----
+
+thread 'tests::int64_tests::tests::u64vec4_index_oob_panics' (5122) panicked at crates/mid-math/src/tests/int64_tests.rs:746:30:
+U64Vec4 index 4 out of bounds
+
+---- tests::stress_tests::tests::stress_100k_quat_rotate stdout ----
+  100000 Quat rotations in 0.093ms  (0.9 ns/op)  [RELEASE]
+  ECS 60Hz budget=16.6ms — 100k rotations took 0.093ms (✓ within budget)
+
+---- tests::stress_tests::tests::stress_100k_vec3_add stdout ----
+  200000 Vec3 adds in 0.185ms  (0.9 ns/op)  final_x=110101  [RELEASE]
+
+---- tests::stress_tests::tests::stress_100k_entity_transform_simulation stdout ----
+  100k entity transforms in 0.480ms  (4.8 ns/entity)  [RELEASE]
+  ECS 60Hz budget=16.6ms — (✓ within budget)
+
+---- tests::stress_tests::tests::stress_100k_quat_mul stdout ----
+  200000 Quat mul in 1.072ms  (5.4 ns/op)  [RELEASE]
+
+---- tests::stress_tests::tests::stress_100k_vec3_dot stdout ----
+  100000 Vec3 dot products in 0.093ms  (0.9 ns/op)  [RELEASE]
+
+---- tests::stress_tests::tests::stress_100k_vec3_cross stdout ----
+  100000 Vec3 cross in 0.094ms  (0.9 ns/op)  [RELEASE]
+
+---- tests::stress_tests::tests::stress_100k_vec3_lerp stdout ----
+  100000 Vec3 lerp in 0.165ms  (1.7 ns/op)  [RELEASE]
+
+---- tests::stress_tests::tests::stress_10k_mat4_mul stdout ----
+  20000 Mat4 mul in 0.111ms  (5.5 ns/op)  [RELEASE]
+
+---- tests::stress_tests::tests::stress_10k_mat4_transform_point stdout ----
+  10000 Mat4 transform_point in 0.016ms  (1.6 ns/op)  [RELEASE]
+
+---- tests::stress_tests::tests::stress_100k_vec3_normalize stdout ----
+  100000 Vec3 normalize in 0.523ms  (5.2 ns/op)  [RELEASE]
+
+---- tests::stress_tests::tests::stress_5k_mat4_inverse stdout ----
+  5000 Mat4 general inverse in 0.279ms  (55.8 ns/op)  [RELEASE]
+  Scalar baseline 117.1 ns/op — speedup: 2.1×
+
+---- tests::stress_tests::tests::stress_mixed_math_1k_frames_simulation stdout ----
+  1000 ticks × (TRS + 10 transforms + 10 lerps) in 0.078ms  (0.1 µs/tick)  [RELEASE]
+
+---- tests::stress_tests::tests::stress_5k_mat4_inverse_trs stdout ----
+  5000 Mat4 inverse_trs in 0.262ms  (52.3 ns/op)  [RELEASE]
+  Scalar baseline 81.8 ns/op — speedup: 1.6×
+
+---- tests::stress_tests::tests::stress_50k_quat_slerp stdout ----
+  50000 Quat slerp in 1.656ms  (33.1 ns/op)  [RELEASE]
+
+---- tests::wide_tests::tests::i32x4_get_oob_panics stdout ----
+
+thread 'tests::wide_tests::tests::i32x4_get_oob_panics' (5238) panicked at crates/mid-math/src/wide/int/sse2/i32x4.rs:57:9:
+i32x4::get — lane 4 out of bounds (max 3)
+
+---- tests::stress_tests::tests::stress_50k_euler_from_to_roundtrip stdout ----
+  50000 euler round-trips in 5.648ms  (113.0 ns/op)  [RELEASE]
+
+
+successes:
+    tests::bool_tests::tests::bvec2_any_all
+    tests::bool_tests::tests::bvec2_assign_ops
+    tests::bool_tests::tests::bvec2_bitmask
+    tests::bool_tests::tests::bvec2_bitops
+    tests::bool_tests::tests::bvec2_constants
+    tests::bool_tests::tests::bvec2_from_array_roundtrip
+    tests::bool_tests::tests::bvec2_from_tuple_roundtrip
+    tests::bool_tests::tests::bvec2_size_align
+    tests::bool_tests::tests::bvec2_splat
+    tests::bool_tests::tests::bvec2_test_indexed
+    tests::bool_tests::tests::bvec2_test_oob_panics
+    tests::bool_tests::tests::bvec3_any_all
+    tests::bool_tests::tests::bvec3_bitmask
+    tests::bool_tests::tests::bvec3_bitops
+    tests::bool_tests::tests::bvec3_from_array_roundtrip
+    tests::bool_tests::tests::bvec3_size_align
+    tests::bool_tests::tests::bvec3_test_indexed
+    tests::bool_tests::tests::bvec3_test_oob_panics
+    tests::bool_tests::tests::bvec4_any_all
+    tests::bool_tests::tests::bvec4_assign_ops
+    tests::bool_tests::tests::bvec4_bitmask
+    tests::bool_tests::tests::bvec4_bitops
+    tests::bool_tests::tests::bvec4_from_array_roundtrip
+    tests::bool_tests::tests::bvec4_size_align
+    tests::bool_tests::tests::bvec4_splat
+    tests::bool_tests::tests::bvec4_test_indexed
+    tests::bool_tests::tests::bvec4_test_oob_panics
+    tests::f64_tests::tests::daffine3_compose_matches_dmat4_mul
+    tests::f64_tests::tests::daffine3_from_mat4_roundtrip
+    tests::f64_tests::tests::daffine3_from_trs_matches_dmat4_from_trs
+    tests::f64_tests::tests::daffine3_identity_is_default
+    tests::f64_tests::tests::daffine3_identity_transform_point_unchanged
+    tests::f64_tests::tests::daffine3_inverse_identity
+    tests::f64_tests::tests::daffine3_inverse_matches_dmat4_inverse_trs
+    tests::f64_tests::tests::daffine3_inverse_scale_only
+    tests::f64_tests::tests::daffine3_inverse_translation_only
+    tests::f64_tests::tests::daffine3_inverse_trs_roundtrip
+    tests::f64_tests::tests::daffine3_inverse_zero_scale_does_not_panic
+    tests::f64_tests::tests::daffine3_scale_scales_point
+    tests::f64_tests::tests::daffine3_size_align
+    tests::f64_tests::tests::daffine3_translation_does_not_affect_vectors
+    tests::f64_tests::tests::daffine3_translation_moves_point
+    tests::f64_tests::tests::dmat2_identity_times_vec_is_vec
+    tests::f64_tests::tests::dmat2_inverse_identity_is_identity
+    tests::f64_tests::tests::dmat2_rotation_inverse_roundtrip
+    tests::f64_tests::tests::dmat2_singular_inverse_returns_none
+    tests::f64_tests::tests::dmat3_identity_times_vec_is_vec
+    tests::f64_tests::tests::dmat3_inverse_roundtrip
+    tests::f64_tests::tests::dmat3_singular_inverse_returns_none
+    tests::f64_tests::tests::dmat4_identity_transform_point_unchanged
+    tests::f64_tests::tests::dmat4_inverse_of_identity_is_identity
+    tests::f64_tests::tests::dmat4_inverse_roundtrip
+    tests::f64_tests::tests::dmat4_inverse_trs_identity
+    tests::f64_tests::tests::dmat4_inverse_trs_roundtrip_matches_general_inverse
+    tests::f64_tests::tests::dmat4_inverse_trs_translation_only
+    tests::f64_tests::tests::dmat4_look_at_target_on_neg_z
+    tests::f64_tests::tests::dmat4_multiply_identity_is_identity
+    tests::f64_tests::tests::dmat4_perspective_has_neg_one_at_col2_row3
+    tests::f64_tests::tests::dmat4_scale_scales_point
+    tests::f64_tests::tests::dmat4_singular_inverse_returns_none
+    tests::f64_tests::tests::dmat4_size_align
+    tests::f64_tests::tests::dmat4_translation_does_not_affect_vectors
+    tests::f64_tests::tests::dmat4_translation_moves_point
+    tests::f64_tests::tests::dquat_180deg_y_rotates_x_to_neg_x
+    tests::f64_tests::tests::dquat_90deg_y_rotates_x_to_neg_z
+    tests::f64_tests::tests::dquat_compose_90deg_twice_is_180deg
+    tests::f64_tests::tests::dquat_conjugate_inverse_for_unit
+    tests::f64_tests::tests::dquat_euler_roundtrip
+    tests::f64_tests::tests::dquat_identity_does_not_rotate
+    tests::f64_tests::tests::dquat_mul_matches_scalar_reference
+    tests::f64_tests::tests::dquat_nlerp_stays_normalized
+    tests::f64_tests::tests::dquat_slerp_midpoint_in_first_quadrant
+    tests::f64_tests::tests::dquat_to_mat4_identity_roundtrip
+    tests::f64_tests::tests::dvec2_add_sub
+    tests::f64_tests::tests::dvec2_angle_roundtrip
+    tests::f64_tests::tests::dvec2_dot
+    tests::f64_tests::tests::dvec2_lerp_midpoint
+    tests::f64_tests::tests::dvec2_normalize_unit_length
+    tests::f64_tests::tests::dvec2_perp_is_orthogonal
+    tests::f64_tests::tests::dvec2_size_align
+    tests::f64_tests::tests::dvec2_zero_normalize_returns_zero
+    tests::f64_tests::tests::dvec3_angle_between_orthogonal
+    tests::f64_tests::tests::dvec3_angle_between_parallel
+    tests::f64_tests::tests::dvec3_cross_anticommutative
+    tests::f64_tests::tests::dvec3_cross_basis
+    tests::f64_tests::tests::dvec3_equality_ignores_pad
+    tests::f64_tests::tests::dvec3_extend_truncate_roundtrip
+    tests::f64_tests::tests::dvec3_normalize_unit_length
+    tests::f64_tests::tests::dvec3_reflect
+    tests::f64_tests::tests::dvec3_size_align
+    tests::f64_tests::tests::dvec4_dot_with_self_is_length_sq
+    tests::f64_tests::tests::dvec4_normalize_unit_length
+    tests::f64_tests::tests::dvec4_size_align
+    tests::f64_tests::tests::ffi_daffine3_roundtrip
+    tests::f64_tests::tests::ffi_dmat4_roundtrip
+    tests::f64_tests::tests::ffi_dquat_roundtrip
+    tests::f64_tests::tests::ffi_dvec3_roundtrip
+    tests::int64_tests::tests::ffi_ci64vec2_roundtrip_and_layout
+    tests::int64_tests::tests::ffi_ci64vec3_roundtrip_and_layout
+    tests::int64_tests::tests::ffi_ci64vec4_roundtrip_and_layout
+    tests::int64_tests::tests::ffi_cu64vec2_roundtrip_and_layout
+    tests::int64_tests::tests::ffi_cu64vec3_roundtrip_and_layout
+    tests::int64_tests::tests::ffi_cu64vec4_roundtrip_and_layout
+    tests::int64_tests::tests::i64vec2_abs
+    tests::int64_tests::tests::i64vec2_add_sub
+    tests::int64_tests::tests::i64vec2_casts
+    tests::int64_tests::tests::i64vec2_checked
+    tests::int64_tests::tests::i64vec2_checked_manhattan_overflow
+    tests::int64_tests::tests::i64vec2_cmp_ops
+    tests::int64_tests::tests::i64vec2_constants
+    tests::int64_tests::tests::i64vec2_distance_sq
+    tests::int64_tests::tests::i64vec2_dot
+    tests::int64_tests::tests::i64vec2_element_ops
+    tests::int64_tests::tests::i64vec2_extend
+    tests::int64_tests::tests::i64vec2_from_array_roundtrip
+    tests::int64_tests::tests::i64vec2_index
+    tests::int64_tests::tests::i64vec2_index_oob_panics
+    tests::int64_tests::tests::i64vec2_length_sq
+    tests::int64_tests::tests::i64vec2_manhattan_distance
+    tests::int64_tests::tests::i64vec2_min_max_clamp
+    tests::int64_tests::tests::i64vec2_mul_scale
+    tests::int64_tests::tests::i64vec2_neg
+    tests::int64_tests::tests::i64vec2_perp_and_perp_dot
+    tests::int64_tests::tests::i64vec2_saturating
+    tests::int64_tests::tests::i64vec2_select
+    tests::int64_tests::tests::i64vec2_signum
+    tests::int64_tests::tests::i64vec2_size_align
+    tests::int64_tests::tests::i64vec2_wrapping
+    tests::int64_tests::tests::i64vec3_abs
+    tests::int64_tests::tests::i64vec3_add_sub_neg
+    tests::int64_tests::tests::i64vec3_casts
+    tests::int64_tests::tests::i64vec3_cmp_ops
+    tests::int64_tests::tests::i64vec3_constants
+    tests::int64_tests::tests::i64vec3_cross_anticommutative
+    tests::int64_tests::tests::i64vec3_cross_basis
+    tests::int64_tests::tests::i64vec3_dot
+    tests::int64_tests::tests::i64vec3_element_ops
+    tests::int64_tests::tests::i64vec3_extend_truncate
+    tests::int64_tests::tests::i64vec3_index
+    tests::int64_tests::tests::i64vec3_index_oob_panics
+    tests::int64_tests::tests::i64vec3_length_sq
+    tests::int64_tests::tests::i64vec3_manhattan_distance
+    tests::int64_tests::tests::i64vec3_min_max_clamp
+    tests::int64_tests::tests::i64vec3_select
+    tests::int64_tests::tests::i64vec3_size_align
+    tests::int64_tests::tests::i64vec3_wrapping_saturating
+    tests::int64_tests::tests::i64vec4_abs
+    tests::int64_tests::tests::i64vec4_add_sub_neg
+    tests::int64_tests::tests::i64vec4_casts
+    tests::int64_tests::tests::i64vec4_cmp_ops
+    tests::int64_tests::tests::i64vec4_dot
+    tests::int64_tests::tests::i64vec4_element_ops
+    tests::int64_tests::tests::i64vec4_index
+    tests::int64_tests::tests::i64vec4_index_oob_panics
+    tests::int64_tests::tests::i64vec4_length_sq
+    tests::int64_tests::tests::i64vec4_manhattan_distance
+    tests::int64_tests::tests::i64vec4_min_max_clamp
+    tests::int64_tests::tests::i64vec4_select
+    tests::int64_tests::tests::i64vec4_size_align
+    tests::int64_tests::tests::i64vec4_truncate_and_xy
+    tests::int64_tests::tests::i64vec4_wrapping_saturating
+    tests::int64_tests::tests::u64vec2_add_sub_mul
+    tests::int64_tests::tests::u64vec2_casts
+    tests::int64_tests::tests::u64vec2_cmp_ops
+    tests::int64_tests::tests::u64vec2_dot
+    tests::int64_tests::tests::u64vec2_element_ops
+    tests::int64_tests::tests::u64vec2_extend
+    tests::int64_tests::tests::u64vec2_length_sq
+    tests::int64_tests::tests::u64vec2_min_max_clamp
+    tests::int64_tests::tests::u64vec2_saturating
+    tests::int64_tests::tests::u64vec2_select
+    tests::int64_tests::tests::u64vec2_size_align
+    tests::int64_tests::tests::u64vec2_wrapping
+    tests::int64_tests::tests::u64vec3_casts
+    tests::int64_tests::tests::u64vec3_cmp_ops
+    tests::int64_tests::tests::u64vec3_cross_basis
+    tests::int64_tests::tests::u64vec3_dot
+    tests::int64_tests::tests::u64vec3_element_ops
+    tests::int64_tests::tests::u64vec3_extend_truncate
+    tests::int64_tests::tests::u64vec3_index
+    tests::int64_tests::tests::u64vec3_index_oob_panics
+    tests::int64_tests::tests::u64vec3_length_sq
+    tests::int64_tests::tests::u64vec3_min_max_clamp
+    tests::int64_tests::tests::u64vec3_size_align
+    tests::int64_tests::tests::u64vec3_wrapping_saturating
+    tests::int64_tests::tests::u64vec4_add_mul_scale
+    tests::int64_tests::tests::u64vec4_casts
+    tests::int64_tests::tests::u64vec4_cmp_ops
+    tests::int64_tests::tests::u64vec4_dot
+    tests::int64_tests::tests::u64vec4_element_ops
+    tests::int64_tests::tests::u64vec4_index
+    tests::int64_tests::tests::u64vec4_index_oob_panics
+    tests::int64_tests::tests::u64vec4_length_sq
+    tests::int64_tests::tests::u64vec4_min_max_clamp
+    tests::int64_tests::tests::u64vec4_select
+    tests::int64_tests::tests::u64vec4_size_align
+    tests::int64_tests::tests::u64vec4_truncate_and_xy
+    tests::int64_tests::tests::u64vec4_wrapping_saturating
+    tests::mat_tests::tests::affine3_compose_matches_mat4_mul
+    tests::mat_tests::tests::affine3_from_mat4_roundtrip
+    tests::mat_tests::tests::affine3_from_trs_matches_mat4_from_trs
+    tests::mat_tests::tests::affine3_identity_is_default
+    tests::mat_tests::tests::affine3_identity_transform_point_unchanged
+    tests::mat_tests::tests::affine3_identity_transform_vector_unchanged
+    tests::mat_tests::tests::affine3_inverse_identity
+    tests::mat_tests::tests::affine3_inverse_matches_mat4_inverse_trs
+    tests::mat_tests::tests::affine3_inverse_scale_only
+    tests::mat_tests::tests::affine3_inverse_translation_only
+    tests::mat_tests::tests::affine3_inverse_trs_roundtrip
+    tests::mat_tests::tests::affine3_inverse_zero_scale_does_not_panic
+    tests::mat_tests::tests::affine3_scale_scales_point
+    tests::mat_tests::tests::affine3_size_is_64_bytes
+    tests::mat_tests::tests::affine3_translation_does_not_affect_vectors
+    tests::mat_tests::tests::affine3_translation_moves_point
+    tests::mat_tests::tests::mat3_identity_times_vec_is_vec
+    tests::mat_tests::tests::mat3_inverse_of_identity_is_identity
+    tests::mat_tests::tests::mat3_inverse_roundtrip
+    tests::mat_tests::tests::mat3_multiply_identity_is_identity
+    tests::mat_tests::tests::mat4_identity_transform_point_unchanged
+    tests::mat_tests::tests::mat4_inverse_general_sse2_matches_scalar
+    tests::mat_tests::tests::mat4_inverse_of_identity_is_identity
+    tests::mat_tests::tests::mat4_inverse_roundtrip
+    tests::mat_tests::tests::mat4_inverse_trs_identity
+    tests::mat_tests::tests::mat4_inverse_trs_roundtrip_matches_general_inverse
+    tests::mat_tests::tests::mat4_inverse_trs_translation_only
+    tests::mat_tests::tests::mat4_inverse_trs_zero_scale_does_not_panic
+    tests::mat_tests::tests::mat4_look_at_z_axis_points_toward_target
+    tests::mat_tests::tests::mat4_multiply_identity_is_identity
+    tests::mat_tests::tests::mat4_perspective_has_negative_one_at_col3_row2
+    tests::mat_tests::tests::mat4_scale_scales_point
+    tests::mat_tests::tests::mat4_singular_inverse_returns_none
+    tests::mat_tests::tests::mat4_size_is_64_bytes
+    tests::mat_tests::tests::mat4_translation_does_not_affect_vectors
+    tests::mat_tests::tests::mat4_translation_moves_point
+    tests::quat_tests::tests::quat_90deg_around_y_rotates_x_to_neg_z
+    tests::quat_tests::tests::quat_conjugate_is_inverse_for_unit
+    tests::quat_tests::tests::quat_euler_round_trip
+    tests::quat_tests::tests::quat_identity_does_not_rotate_vector
+    tests::quat_tests::tests::quat_inverse_undoes_rotation
+    tests::quat_tests::tests::quat_mul_matches_scalar_reference
+    tests::quat_tests::tests::quat_multiply_composes_rotations
+    tests::quat_tests::tests::quat_nlerp_stays_normalized
+    tests::quat_tests::tests::quat_slerp_midpoint_in_first_quadrant
+    tests::quat_tests::tests::quat_to_mat4_identity_roundtrip
+    tests::stress_tests::tests::lerp_scalar_midpoint
+    tests::stress_tests::tests::smoothstep_clamps_outside_range
+    tests::stress_tests::tests::smoothstep_midpoint_is_half
+    tests::stress_tests::tests::stress_100k_entity_transform_simulation
+    tests::stress_tests::tests::stress_100k_quat_mul
+    tests::stress_tests::tests::stress_100k_quat_rotate
+    tests::stress_tests::tests::stress_100k_vec3_add
+    tests::stress_tests::tests::stress_100k_vec3_cross
+    tests::stress_tests::tests::stress_100k_vec3_dot
+    tests::stress_tests::tests::stress_100k_vec3_lerp
+    tests::stress_tests::tests::stress_100k_vec3_normalize
+    tests::stress_tests::tests::stress_10k_mat4_mul
+    tests::stress_tests::tests::stress_10k_mat4_transform_point
+    tests::stress_tests::tests::stress_50k_euler_from_to_roundtrip
+    tests::stress_tests::tests::stress_50k_quat_slerp
+    tests::stress_tests::tests::stress_5k_mat4_inverse
+    tests::stress_tests::tests::stress_5k_mat4_inverse_trs
+    tests::stress_tests::tests::stress_mixed_math_1k_frames_simulation
+    tests::vec_tests::tests::vec2_addition
+    tests::vec_tests::tests::vec2_dot_product
+    tests::vec_tests::tests::vec2_lerp_midpoint
+    tests::vec_tests::tests::vec2_normalize_unit_length
+    tests::vec_tests::tests::vec2_perpendicular_is_orthogonal
+    tests::vec_tests::tests::vec2_zero_normalize_returns_zero
+    tests::vec_tests::tests::vec3_align_is_16
+    tests::vec_tests::tests::vec3_cross_anticommutative
+    tests::vec_tests::tests::vec3_cross_product_basis
+    tests::vec_tests::tests::vec3_distance
+    tests::vec_tests::tests::vec3_equality_ignores_padding_lane
+    tests::vec_tests::tests::vec3_extend_and_truncate_roundtrip
+    tests::vec_tests::tests::vec3_normalize_unit_length
+    tests::vec_tests::tests::vec3_reflect
+    tests::vec_tests::tests::vec3_size_is_16_bytes
+    tests::vec_tests::tests::vec4_dot_with_self_is_length_sq
+    tests::vec_tests::tests::vec4_normalize_unit_length
+    tests::vec_tests::tests::vec4_size_is_16_bytes
+    tests::wide_tests::tests::f32x4_arithmetic
+    tests::wide_tests::tests::f32x4_blend_branchless
+    tests::wide_tests::tests::f32x4_is_finite
+    tests::wide_tests::tests::f32x4_min_max_abs
+    tests::wide_tests::tests::f32x4_new_and_array_roundtrip
+    tests::wide_tests::tests::f32x4_recip_accuracy
+    tests::wide_tests::tests::f32x4_recip_sqrt_accuracy
+    tests::wide_tests::tests::f32x4_size_align
+    tests::wide_tests::tests::f32x4_splat_and_get
+    tests::wide_tests::tests::f32x4_sqrt
+    tests::wide_tests::tests::i16x8_add_sub
+    tests::wide_tests::tests::i16x8_cmpeq_bitmask
+    tests::wide_tests::tests::i16x8_element_sum
+    tests::wide_tests::tests::i16x8_min_max
+    tests::wide_tests::tests::i16x8_mul_lo
+    tests::wide_tests::tests::i16x8_saturating_add
+    tests::wide_tests::tests::i16x8_saturating_sub
+    tests::wide_tests::tests::i16x8_size_align
+    tests::wide_tests::tests::i16x8_splat_and_to_array
+    tests::wide_tests::tests::i16x8_widen_roundtrip
+    tests::wide_tests::tests::i32x4_abs
+    tests::wide_tests::tests::i32x4_add
+    tests::wide_tests::tests::i32x4_bitwise
+    tests::wide_tests::tests::i32x4_clamp
+    tests::wide_tests::tests::i32x4_cmp_and_blend
+    tests::wide_tests::tests::i32x4_element_sum
+    tests::wide_tests::tests::i32x4_from_array_roundtrip
+    tests::wide_tests::tests::i32x4_get_oob_panics
+    tests::wide_tests::tests::i32x4_min_max
+    tests::wide_tests::tests::i32x4_min_max_element
+    tests::wide_tests::tests::i32x4_mul
+    tests::wide_tests::tests::i32x4_neg
+    tests::wide_tests::tests::i32x4_new_roundtrip
+    tests::wide_tests::tests::i32x4_saturating
+    tests::wide_tests::tests::i32x4_shifts
+    tests::wide_tests::tests::i32x4_size_align
+    tests::wide_tests::tests::i32x4_splat_and_get
+    tests::wide_tests::tests::i32x4_sub
+    tests::wide_tests::tests::i32x4_wrapping
+    tests::wide_tests::tests::i8x16_abs
+    tests::wide_tests::tests::i8x16_cmpeq_and_count
+    tests::wide_tests::tests::i8x16_saturating
+    tests::wide_tests::tests::i8x16_size_align
+    tests::wide_tests::tests::i8x16_splat_and_to_array
+    tests::wide_tests::tests::imask16_from_i8x16_cmpeq
+    tests::wide_tests::tests::imask4_bitops
+    tests::wide_tests::tests::imask4_false_all_zero
+    tests::wide_tests::tests::imask4_true_all_set
+    tests::wide_tests::tests::imask8_from_i16x8_cmpeq
+    tests::wide_tests::tests::mask4_false_true_constants
+    tests::wide_tests::tests::mask4_from_f32x4_comparison
+    tests::wide_tests::tests::quatx4_4_different_rotations_simultaneously
+    tests::wide_tests::tests::quatx4_aos_soa_roundtrip
+    tests::wide_tests::tests::quatx4_conjugate_is_inverse_for_unit
+    tests::wide_tests::tests::quatx4_dot_self_is_one_for_unit_quats
+    tests::wide_tests::tests::quatx4_identity_default
+    tests::wide_tests::tests::quatx4_mul_matches_scalar
+    tests::wide_tests::tests::quatx4_nlerp_stays_normalised
+    tests::wide_tests::tests::quatx4_normalize_unit_length
+    tests::wide_tests::tests::quatx4_rotate_matches_scalar
+    tests::wide_tests::tests::quatx4_rotate_x_by_90y_is_neg_z
+    tests::wide_tests::tests::quatx4_size_align
+    tests::wide_tests::tests::u16x8_saturating_add
+    tests::wide_tests::tests::u16x8_saturating_sub
+    tests::wide_tests::tests::u16x8_unsigned_min_max
+    tests::wide_tests::tests::u32x4_min_max
+    tests::wide_tests::tests::u32x4_saturating_add_no_overflow
+    tests::wide_tests::tests::u32x4_saturating_sub_no_underflow
+    tests::wide_tests::tests::u32x4_unsigned_comparison
+    tests::wide_tests::tests::u8x16_contains_and_count
+    tests::wide_tests::tests::u8x16_element_sum_correct
+    tests::wide_tests::tests::u8x16_min_max_unsigned
+    tests::wide_tests::tests::u8x16_saturating_add
+    tests::wide_tests::tests::u8x16_saturating_sub
+    tests::wide_tests::tests::vec3x4_add
+    tests::wide_tests::tests::vec3x4_aos_soa_roundtrip
+    tests::wide_tests::tests::vec3x4_cross_anticommutative
+    tests::wide_tests::tests::vec3x4_cross_basis
+    tests::wide_tests::tests::vec3x4_dot_4_simultaneous
+    tests::wide_tests::tests::vec3x4_lerp_midpoint
+    tests::wide_tests::tests::vec3x4_lerp_per_lane_t
+    tests::wide_tests::tests::vec3x4_mat4_transform_matches_scalar
+    tests::wide_tests::tests::vec3x4_matches_scalar_transform
+    tests::wide_tests::tests::vec3x4_normalize_degenerate_lane_safe
+    tests::wide_tests::tests::vec3x4_normalize_unit_length
+    tests::wide_tests::tests::vec3x4_select_branchless
+    tests::wide_tests::tests::vec3x4_size_align
+    tests::wide_tests::tests::vec3x4_splat
+    tests::wide_tests::tests::vec3x4_sub
+
+failures:
+
+---- tests::wide_tests::tests::mask4_bitops stdout ----
+
+thread 'tests::wide_tests::tests::mask4_bitops' (5260) panicked at crates/mid-math/src/tests/wide_tests.rs:517:9:
+assertion `left == right` failed
+  left: 15
+ right: 10
+
+
+failures:
+    tests::wide_tests::tests::mask4_bitops
+
+test result: FAILED. 369 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+error: test failed, to rerun pass `-p mid-math --lib`
+   Doc-tests mid_math
+
+running 0 tests
+
+successes:
+
+successes:
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+error: 1 target failed:
+    `-p mid-math --lib`
