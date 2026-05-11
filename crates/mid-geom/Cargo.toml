@@ -1,0 +1,12 @@
+[package]
+name        = "mid-geom"
+version     = "0.1.0"
+edition     = "2021"
+description = "Geometry primitives for Mid Engine — shapes, raycasts, planes, spatial queries, transforms"
+
+[lib]
+name = "mid_geom"
+crate-type = ["rlib", "cdylib", "staticlib"]
+
+[dependencies]
+mid-math = { path = "../mid-math", version = "0.2" }
