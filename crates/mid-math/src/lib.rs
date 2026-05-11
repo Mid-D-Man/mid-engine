@@ -1,4 +1,8 @@
-// crates/mid-math/src/lib.rs  (updated — adds geometry + QuatX4 + Vec3x8)
+// crates/mid-math/src/lib.rs
+//! SIMD-optimised math primitives for Mid Engine.
+//!
+//! Geometry primitives (AABB, Sphere, Ray3, etc.) have moved to `mid-geom`.
+//! Add `mid-geom = { path = "../mid-geom" }` to your Cargo.toml if you need them.
 
 pub(crate) mod sse2;
 
@@ -11,7 +15,6 @@ pub mod constants;
 pub mod int32;
 pub mod int64;
 pub mod wide;
-pub mod geometry;
 
 pub use constants::*;
 
@@ -75,17 +78,6 @@ pub use wide::float::QuatX4;
     target_feature = "avx2",
 ))]
 pub use wide::float::Vec3x8;
-
-// ── Geometry ──────────────────────────────────────────────────────────────────
-// 2D
-pub use geometry::d2::shapes::{Circle, Rect};
-pub use geometry::d2::raycast::Ray2;
-pub use geometry::d2::transform::Transform2D;
-// 3D
-pub use geometry::d3::shapes::{AABB, Capsule, Sphere};
-pub use geometry::d3::planes::{Frustum, Plane};
-pub use geometry::d3::raycast::Ray3;
-pub use geometry::d3::transform::Transform;
 
 // ── Scalar utilities ──────────────────────────────────────────────────────────
 #[inline(always)] pub fn lerp(a: f32, b: f32, t: f32) -> f32 { a + (b - a) * t }
