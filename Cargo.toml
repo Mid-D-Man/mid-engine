@@ -4,6 +4,7 @@ members = [
     "crates/mid-net",
     "crates/mid-ecs",
     "crates/mid-math",
+    "crates/mid-geom",
     "crates/mid-common",
     "crates/mid-trace",
     "tools/mdix-compiler",
