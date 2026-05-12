@@ -1,8 +1,4 @@
 // crates/mid-math/src/lib.rs
-//! SIMD-optimised math primitives for Mid Engine.
-//!
-//! Geometry primitives (AABB, Sphere, Ray3, etc.) have moved to `mid-geom`.
-//! Add `mid-geom = { path = "../mid-geom" }` to your Cargo.toml if you need them.
 
 pub(crate) mod sse2;
 
@@ -15,6 +11,8 @@ pub mod constants;
 pub mod int32;
 pub mod int64;
 pub mod wide;
+pub mod fixed;    // ← NEW
+pub mod curves;   // ← NEW
 
 pub use constants::*;
 
@@ -32,6 +30,7 @@ pub use f32::Vec2;
 pub use f32::Mat2;
 pub use f32::Mat3;
 pub use f32::Affine3;
+pub use f32::AxisAngle;   // ← NEW
 
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 pub use f32::sse2::{Vec3, Vec4, Quat, Mat4};
@@ -72,12 +71,25 @@ pub use wide::float::f32x4;
 pub use wide::float::Vec3x4;
 pub use wide::float::QuatX4;
 
-// Vec3x8 — only when AVX2 is active
 #[cfg(all(
     any(target_arch = "x86", target_arch = "x86_64"),
     target_feature = "avx2",
 ))]
 pub use wide::float::Vec3x8;
+
+// ── Fixed-point ───────────────────────────────────────────────────────────────
+pub use fixed::{Fixed, Fixed8, Fixed12, Fixed16, FixedVec2, FixedVec3};  // ← NEW
+
+// ── Curves ────────────────────────────────────────────────────────────────────
+pub use curves::{                                                          // ← NEW
+    Interpolate,
+    QuadraticBezier, CubicBezier,
+    CatmullRom, CatmullRomAlpha,
+    HermiteSpline, HermiteKey,
+    KochanekBartels, TcbKey,
+    CardinalSpline,
+    BSpline,
+};
 
 // ── Scalar utilities ──────────────────────────────────────────────────────────
 #[inline(always)] pub fn lerp(a: f32, b: f32, t: f32) -> f32 { a + (b - a) * t }
