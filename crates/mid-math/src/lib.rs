@@ -85,15 +85,15 @@ pub use wide::float::Vec3x8;
 // pub use fixed::{Fixed, Fixed8, Fixed12, Fixed16, FixedVec2, FixedVec3}; // Commented out with the module
 
 // ── Curves ────────────────────────────────────────────────────────────────────
-pub use curves::{
-    Interpolate,
-    QuadraticBezier, CubicBezier,
-    CatmullRom, CatmullRomAlpha,
-    HermiteSpline, HermiteKey,
-    KochanekBartels, TcbKey,
-    CardinalSpline,
-    BSpline,
-};
+pub use curves::Interpolate;
+pub use curves::catmull_rom::{CatmullRom, CatmullRomAlpha};
+pub use curves::hermite::HermiteSpline;
+pub use curves::hermite::HermiteKey;
+pub use curves::kochanek_bartels::{KochanekBartels, TcbKey};
+pub use curves::quadratic_bezier::QuadraticBezier;
+pub use curves::cubic_bezier::CubicBezier;
+pub use curves::cardinal::CardinalSpline;
+pub use curves::bspline::BSpline;
 
 // ── Scalar utilities ──────────────────────────────────────────────────────────
 #[inline(always)] pub fn lerp(a: f32, b: f32, t: f32) -> f32 { a + (b - a) * t }
