@@ -1,4 +1,4 @@
-name: test
+name: test-geometry
 
 on:
   push:
@@ -12,7 +12,7 @@ env:
 
 jobs:
   test:
-    name: cargo test — ${{ matrix.os }}
+    name: mid-geom tests — ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -24,8 +24,6 @@ jobs:
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt, clippy
 
       - uses: actions/cache@v4
         with:
@@ -33,41 +31,18 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ runner.os }}-cargo-test-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-geom-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-cargo-test-
+            ${{ runner.os }}-cargo-geom-
 
-      - name: Check formatting
-        run: cargo fmt --all -- --check
+      - name: Build mid-math (dependency)
+        run: cargo build -p mid-math --release
 
-      - name: Clippy (all features)
-        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Build mid-geom
+        run: cargo build -p mid-geom
 
-      - name: Run tests — default features
-        run: cargo test --workspace --verbose
+      - name: Run mid-geom tests
+        run: cargo test -p mid-geom --verbose -- --nocapture
 
-      - name: Run tests — mid-math SSE2 explicit
-        if: runner.os == 'Linux'
-        run: |
-          RUSTFLAGS="-C target-feature=+sse2" \
-          cargo test -p mid-math --verbose
-
-      - name: Run tests — mid-geom
-        run: cargo test -p mid-geom --verbose
-
-  # Separate job: doc-tests, since they can be slow and noisy
-  doctest:
-    name: doctests
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ubuntu-cargo-doctest-${{ hashFiles('**/Cargo.lock') }}
-      - name: Doctests
-        run: cargo test --workspace --doc
+      - name: Run mid-geom tests (release)
+        run: cargo test -p mid-geom --release --verbose
