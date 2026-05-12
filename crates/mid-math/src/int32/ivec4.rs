@@ -1,11 +1,11 @@
-// crates/mid-math/src/int/ivec4.rs
+// crates/mid-math/src/int32/ivec4.rs
 //! 4D signed-integer vector. 16 bytes, align 4. Always scalar.
 
 use core::fmt;
 use core::ops::{
     Add, AddAssign, BitAnd, BitAndAssign, BitOr, BitOrAssign, BitXor, BitXorAssign,
     Div, DivAssign, Index, IndexMut, Mul, MulAssign, Neg, Not,
-    Rem, RemAssign, Shl, ShlAssign, Shr, ShrAssign, Sub, SubAssign,
+    Rem, Shl, ShlAssign, Shr, ShrAssign, Sub, SubAssign,
 };
 use crate::{BVec4, IVec2, IVec3, UVec4, Vec4};
 
