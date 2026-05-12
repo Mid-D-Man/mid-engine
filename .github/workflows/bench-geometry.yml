@@ -4,11 +4,6 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
-    inputs:
-      baseline:
-        description: "Baseline ref to compare against (e.g. HEAD~1)"
-        required: false
-        default: ""
 
 env:
   CARGO_TERM_COLOR: always
@@ -34,47 +29,23 @@ jobs:
           restore-keys: |
             ubuntu-cargo-bench-geom-
 
-      # Warm up — first run discards timing (LLVM JIT artifacts)
-      - name: Warm-up compile
+      - name: Build release
         run: cargo build --release -p mid-geom
 
-      # Baseline run (if baseline ref provided)
-      - name: Benchmark baseline
-        if: ${{ github.event.inputs.baseline != '' }}
-        run: |
-          git stash
-          git checkout ${{ github.event.inputs.baseline }}
-          cargo bench -p mid-geom -- --save-baseline baseline
-          git checkout -
-          git stash pop
-
-      # Main benchmark run
       - name: Run geometry benchmarks
         run: |
-          cargo bench -p mid-geom -- \
-            --output-format bencher \
-            2>&1 | tee bench-output.txt
+          cargo bench -p mid-geom 2>&1 | tee bench-output.txt
 
-      # Compare against baseline if it was saved
-      - name: Compare to baseline
-        if: ${{ github.event.inputs.baseline != '' }}
+      - name: Print summary
         run: |
-          cargo bench -p mid-geom -- \
-            --baseline baseline \
-            2>&1 | tee bench-compare.txt
+          echo "=== GEOMETRY BENCHMARK SUMMARY ==="
+          grep -E "(micro|bulk|ray|ns|µs|ms|time:)" bench-output.txt | head -100 || true
 
-      - name: Upload benchmark results
-        uses: actions/upload-artifact@v5
+      - name: Upload results
+        uses: actions/upload-artifact@v4
         with:
           name: bench-geometry-${{ github.sha }}
           path: |
             bench-output.txt
-            bench-compare.txt
             target/criterion/
           retention-days: 30
-
-      # Print summary to job log so it's readable without downloading artifact
-      - name: Print summary
-        run: |
-          echo "=== GEOMETRY BENCHMARK SUMMARY ==="
-          grep -E "(micro|bulk|ray|ns|µs|ms)" bench-output.txt | head -80 || true
