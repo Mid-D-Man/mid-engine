@@ -15,7 +15,7 @@ pub mod constants;
 pub mod int32;
 pub mod int64;
 pub mod wide;
-pub mod fixed;
+// pub mod fixed; // Commented out as this module has not been started yet
 pub mod curves;
 
 pub use constants::*;
@@ -34,7 +34,7 @@ pub use f32::Vec2;
 pub use f32::Mat2;
 pub use f32::Mat3;
 pub use f32::Affine3;
-pub use f32::AxisAngle;
+// pub use f32::AxisAngle; // Commented out, unresolved import in `f32`
 
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 pub use f32::sse2::{Vec3, Vec4, Quat, Mat4};
@@ -82,7 +82,7 @@ pub use wide::float::QuatX4;
 pub use wide::float::Vec3x8;
 
 // ── Fixed-point ───────────────────────────────────────────────────────────────
-pub use fixed::{Fixed, Fixed8, Fixed12, Fixed16, FixedVec2, FixedVec3};
+// pub use fixed::{Fixed, Fixed8, Fixed12, Fixed16, FixedVec2, FixedVec3}; // Commented out with the module
 
 // ── Curves ────────────────────────────────────────────────────────────────────
 pub use curves::{
