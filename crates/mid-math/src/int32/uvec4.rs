@@ -1,11 +1,11 @@
-// crates/mid-math/src/int/uvec4.rs
+// crates/mid-math/src/int32/uvec4.rs
 //! 4D unsigned-integer vector. 16 bytes, align 4. Always scalar.
 
 use core::fmt;
 use core::ops::{
     Add, AddAssign, BitAnd, BitAndAssign, BitOr, BitOrAssign, BitXor, BitXorAssign,
     Div, DivAssign, Index, IndexMut, Mul, MulAssign, Not,
-    Rem, RemAssign, Shl, ShlAssign, Shr, ShrAssign, Sub, SubAssign,
+    Rem, Shl, ShlAssign, Shr, ShrAssign, Sub, SubAssign,
 };
 use crate::{BVec4, IVec4, UVec2, UVec3, Vec4};
 
@@ -135,4 +135,4 @@ impl fmt::Debug for UVec4 {
 }
 impl fmt::Display for UVec4 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result { write!(f, "[{}, {}, {}, {}]", self.x, self.y, self.z, self.w) }
-      }
+}
