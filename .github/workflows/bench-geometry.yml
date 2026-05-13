@@ -35,10 +35,52 @@ jobs:
         run: |
           cargo bench -p mid-geom 2>&1 | tee bench-output.txt
 
-      - name: Print summary
+      - name: Publish summary
         run: |
-          echo "=== GEOMETRY BENCHMARK SUMMARY ==="
-          grep -E "(micro|bulk|ray|ns|µs|ms|time:)" bench-output.txt | head -100 || true
+          {
+            echo "## mid-geom Geometry Benchmarks"
+            echo ""
+            echo "**Build:** #${{ github.run_number }} &nbsp; **Commit:** \`${GITHUB_SHA:0:8}\`"
+            echo ""
+
+            python3 - << 'PYEOF'
+          import re, sys
+
+          RE_ANSI   = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
+          RE_RESULT = re.compile(
+              r'^(\S[^\n]+?)\s+time:\s+\[\s*([\d.]+\s+\S+)\s+([\d.]+\s+\S+)\s+([\d.]+\s+\S+)\s*\]',
+              re.MULTILINE,
+          )
+
+          try:
+              raw  = open('bench-output.txt', encoding='utf-8', errors='replace').read()
+          except FileNotFoundError:
+              print("*(bench-output.txt not found)*")
+              sys.exit(0)
+
+          text = RE_ANSI.sub('', raw)
+          results = RE_RESULT.findall(text)
+
+          if not results:
+              print("*(No benchmark results found — check bench-output.txt artifact)*")
+              sys.exit(0)
+
+          current_group = None
+          for name, lo, mean, hi in results:
+              parts = name.strip().split('/')
+              group   = '/'.join(parts[:-1]) if len(parts) >= 2 else name.strip()
+              variant = parts[-1]            if len(parts) >= 2 else ''
+              if group != current_group:
+                  if current_group is not None:
+                      print()
+                  print(f"#### {group}")
+                  print("| Benchmark | Low | Mean | High |")
+                  print("|---|---|---|---|")
+                  current_group = group
+              print(f"| {variant} | {lo} | {mean} | {hi} |")
+          PYEOF
+
+          } >> $GITHUB_STEP_SUMMARY
 
       - name: Upload results
         uses: actions/upload-artifact@v4
