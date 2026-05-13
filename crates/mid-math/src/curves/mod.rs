@@ -16,6 +16,7 @@
 //! | `BSpline`          | C²         | No (approximating)   | Smooth paths, local control   |
 //! | `CardinalSpline`   | C¹         | Yes                  | Tension-controlled paths      |
 
+
 pub mod interpolate;
 pub mod bezier;
 pub mod catmull_rom;
@@ -26,8 +27,8 @@ pub mod cardinal;
 
 pub use interpolate::Interpolate;
 pub use bezier::{QuadraticBezier, CubicBezier};
-pub use catmull_rom::CatmullRom;
-pub use hermite::HermiteSpline;
-pub use kochanek_bartels::KochanekBartels;
+pub use catmull_rom::{CatmullRom, CatmullRomAlpha};
+pub use hermite::{HermiteSpline, HermiteKey};
+pub use kochanek_bartels::{KochanekBartels, TcbKey};
 pub use bspline::BSpline;
 pub use cardinal::CardinalSpline;
