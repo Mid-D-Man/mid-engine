@@ -2,21 +2,20 @@
 //! C-ABI boundary layer for mid-math.
 //!
 //! Split by numeric domain — no ABI change, same #[no_mangle] symbols,
-//! same #[repr(C)] layouts. Each domain file contains both its types
-//! and its export functions.
-//!
-//! Geometry C types and exports have moved to mid-geom::ffi.
+//! same #[repr(C)] layouts.
 //!
 //! Domain files:
 //!   float32.rs  — CVec2, CVec3, CVec4, CQuat, CMat3, CMat4, CAffine3
 //!   float64.rs  — CDVec2..4, CDQuat, CDMat2..4, CDAffine3
 //!   int32.rs    — CIVec2..4, CUVec2..4
 //!   int64.rs    — CI64Vec2..4, CU64Vec2..4
+//!   curves.rs   — stateless curve evaluation (Bezier, CatmullRom, Hermite, BSpline, Cardinal)
 
 pub mod float32;
 pub mod float64;
 pub mod int32;
 pub mod int64;
+pub mod curves;
 
 // ── Flat re-exports ───────────────────────────────────────────────────────────
 
