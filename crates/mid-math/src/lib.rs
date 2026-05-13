@@ -1,8 +1,5 @@
 // crates/mid-math/src/lib.rs
 
-// Gate the sse2 helper module — only exists on x86/x86_64.
-// All callers (f32/sse2/*) are themselves gated behind the same cfg,
-// so this is safe and eliminates the "not found in scope" errors.
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 pub(crate) mod sse2;
 
@@ -15,7 +12,6 @@ pub mod constants;
 pub mod int32;
 pub mod int64;
 pub mod wide;
-// pub mod fixed; // Commented out as this module has not been started yet
 pub mod curves;
 
 pub use constants::*;
@@ -34,7 +30,6 @@ pub use f32::Vec2;
 pub use f32::Mat2;
 pub use f32::Mat3;
 pub use f32::Affine3;
-// pub use f32::AxisAngle; // Commented out, unresolved import in `f32`
 
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 pub use f32::sse2::{Vec3, Vec4, Quat, Mat4};
@@ -81,19 +76,21 @@ pub use wide::float::QuatX4;
 ))]
 pub use wide::float::Vec3x8;
 
-// ── Fixed-point ───────────────────────────────────────────────────────────────
-// pub use fixed::{Fixed, Fixed8, Fixed12, Fixed16, FixedVec2, FixedVec3}; // Commented out with the module
-
 // ── Curves ────────────────────────────────────────────────────────────────────
-pub use curves::Interpolate;
-pub use curves::catmull_rom::{CatmullRom, CatmullRomAlpha};
-pub use curves::hermite::HermiteSpline;
-pub use curves::hermite::HermiteKey;
-pub use curves::kochanek_bartels::{KochanekBartels, TcbKey};
-pub use curves::quadratic_bezier::QuadraticBezier;
-pub use curves::cubic_bezier::CubicBezier;
-pub use curves::cardinal::CardinalSpline;
-pub use curves::bspline::BSpline;
+// All re-exported from curves/mod.rs — use the top-level re-export, NOT sub-modules.
+pub use curves::{
+    Interpolate,
+    QuadraticBezier,
+    CubicBezier,
+    CatmullRom,
+    CatmullRomAlpha,
+    HermiteSpline,
+    HermiteKey,
+    KochanekBartels,
+    TcbKey,
+    CardinalSpline,
+    BSpline,
+};
 
 // ── Scalar utilities ──────────────────────────────────────────────────────────
 #[inline(always)] pub fn lerp(a: f32, b: f32, t: f32) -> f32 { a + (b - a) * t }
