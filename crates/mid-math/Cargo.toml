@@ -45,6 +45,10 @@ harness = false
 name    = "vs_wide_int"
 harness = false
 
+[[bench]]
+name    = "vs_curves"
+harness = false
+
 [features]
 default = []
 simd    = []
