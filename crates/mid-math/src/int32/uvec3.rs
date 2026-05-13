@@ -1,11 +1,11 @@
-// crates/mid-math/src/int/uvec3.rs
+// crates/mid-math/src/int32/uvec3.rs
 //! 3D unsigned-integer vector. 12 bytes, align 4. Always scalar.
 
 use core::fmt;
 use core::ops::{
     Add, AddAssign, BitAnd, BitAndAssign, BitOr, BitOrAssign, BitXor, BitXorAssign,
     Div, DivAssign, Index, IndexMut, Mul, MulAssign, Not,
-    Rem, RemAssign, Shl, ShlAssign, Shr, ShrAssign, Sub, SubAssign,
+    Rem, Shl, ShlAssign, Shr, ShrAssign, Sub, SubAssign,
 };
 use crate::{BVec3, IVec3, UVec2, UVec4, Vec3};
 
@@ -38,7 +38,7 @@ impl UVec3 {
     #[inline(always)] pub const fn truncate(self) -> UVec2 { UVec2::new(self.x, self.y) }
 
     #[inline]
-    pub fn select(mask: BVec3, if_true: Self, if_false: Self) -> Self {
+    pub fn select(mask: crate::BVec3, if_true: Self, if_false: Self) -> Self {
         Self::new(
             if mask.x { if_true.x } else { if_false.x },
             if mask.y { if_true.y } else { if_false.y },
@@ -139,4 +139,4 @@ impl fmt::Debug for UVec3 {
 }
 impl fmt::Display for UVec3 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result { write!(f, "[{}, {}, {}]", self.x, self.y, self.z) }
-                                                                      }
+}
