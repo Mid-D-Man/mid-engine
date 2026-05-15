@@ -13,6 +13,10 @@ pub mod int32;
 pub mod int64;
 pub mod wide;
 pub mod curves;
+pub mod string_id;
+pub mod prng;
+pub mod fixed;
+pub mod color;
 
 pub use constants::*;
 
@@ -77,20 +81,25 @@ pub use wide::float::QuatX4;
 pub use wide::float::Vec3x8;
 
 // ── Curves ────────────────────────────────────────────────────────────────────
-// All re-exported from curves/mod.rs — use the top-level re-export, NOT sub-modules.
 pub use curves::{
-    Interpolate,
-    QuadraticBezier,
-    CubicBezier,
-    CatmullRom,
-    CatmullRomAlpha,
-    HermiteSpline,
-    HermiteKey,
-    KochanekBartels,
-    TcbKey,
-    CardinalSpline,
-    BSpline,
+    Interpolate, QuadraticBezier, CubicBezier, CatmullRom, CatmullRomAlpha,
+    HermiteSpline, HermiteKey, KochanekBartels, TcbKey, CardinalSpline, BSpline,
 };
+
+// ── Utilities ─────────────────────────────────────────────────────────────────
+pub use string_id::StringId;
+pub use prng::Xorshift64;
+
+// ── Fixed-point ───────────────────────────────────────────────────────────────
+pub use fixed::{
+    Fixed, FixedVec2, FixedVec3,
+    Fixed8, Fixed12, Fixed16,
+    Fixed8Vec2, Fixed12Vec2, Fixed16Vec2,
+    Fixed8Vec3, Fixed12Vec3, Fixed16Vec3,
+};
+
+// ── Color ─────────────────────────────────────────────────────────────────────
+pub use color::{Rgb, Rgba, Color32};
 
 // ── Scalar utilities ──────────────────────────────────────────────────────────
 #[inline(always)] pub fn lerp(a: f32, b: f32, t: f32) -> f32 { a + (b - a) * t }
