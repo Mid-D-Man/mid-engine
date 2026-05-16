@@ -16,56 +16,44 @@
 //! Reference: O'Neill (2014) "PCG: A Family of Simple Fast Space-Efficient
 //!            Statistically Good Algorithms for Random Number Generation"
 
+// crates/mid-math/src/ran_gen/pcg.rs
+//! PCG32 — Permuted Congruential Generator.
+
 use core::fmt;
 
 /// PCG32 generator. Two u64 state values: `state` (position) and `inc` (stream selector).
-///
-/// Different `seq` values produce independent, non-overlapping sequences.
-/// Same `seed` + `seq` always produces identical output on all platforms.
 #[derive(Clone)]
 pub struct Pcg32 {
-    state: u64,
-    inc:   u64,   // Must always be odd. inc = (seq << 1) | 1.
+    pub state: u64,
+    pub inc:   u64,
 }
 
 impl Pcg32 {
     // ── Construction ─────────────────────────────────────────────────────────
 
-    /// Create a new generator.
-    ///
-    /// `seed`  — initial state. Any value is valid.
-    /// `seq`   — stream selector (0..2^63). Different values = independent streams.
     pub fn new(seed: u64, seq: u64) -> Self {
         let inc = (seq << 1) | 1;
         let mut rng = Self { state: 0, inc };
-        // Warmup: advance once before seeding to avoid trivially weak first output
         rng.state = rng.state.wrapping_add(seed);
-        rng.next_u32(); // mix seed into state
+        rng.next_u32();
         rng
     }
 
-    /// Convenience: single-stream generator. Equivalent to `new(seed, 1)`.
     #[inline] pub fn new_single_stream(seed: u64) -> Self { Self::new(seed, 1) }
 
     // ── Core generation ───────────────────────────────────────────────────────
 
-    /// Generate next u32. PCG-XSH-RR output permutation.
-    ///
-    /// One multiply + XOR-shift + rotate. ~1 ns/call.
     #[inline]
     pub fn next_u32(&mut self) -> u32 {
         let old_state = self.state;
-        // LCG advance
         self.state = old_state
             .wrapping_mul(6_364_136_223_846_793_005)
             .wrapping_add(self.inc);
-        // XSH-RR output permutation
         let xsh = (((old_state >> 18) ^ old_state) >> 27) as u32;
         let rot = (old_state >> 59) as u32;
         xsh.rotate_right(rot)
     }
 
-    /// Generate u64 from two u32 outputs.
     #[inline]
     pub fn next_u64(&mut self) -> u64 {
         let lo = self.next_u32() as u64;
@@ -75,13 +63,11 @@ impl Pcg32 {
 
     // ── Float generation ──────────────────────────────────────────────────────
 
-    /// Uniform f32 in `[0, 1)`. Uses top 24 bits (full f32 mantissa precision).
     #[inline]
     pub fn f32(&mut self) -> f32 {
         (self.next_u32() >> 8) as f32 * (1.0 / 16_777_216.0)
     }
 
-    /// Uniform f64 in `[0, 1)`. Uses two u32s for 53-bit mantissa precision.
     #[inline]
     pub fn f64(&mut self) -> f64 {
         let v = ((self.next_u32() as u64) << 21) | (self.next_u32() as u64 >> 11);
@@ -90,15 +76,9 @@ impl Pcg32 {
 
     // ── Range functions ───────────────────────────────────────────────────────
 
-    /// Uniform f32 in `[lo, hi)`.
     #[inline] pub fn range_f32(&mut self, lo: f32, hi: f32) -> f32 { lo + self.f32() * (hi - lo) }
-
-    /// Uniform f64 in `[lo, hi)`.
     #[inline] pub fn range_f64(&mut self, lo: f64, hi: f64) -> f64 { lo + self.f64() * (hi - lo) }
 
-    /// Uniform u32 in `[lo, hi)`. Uses Lemire's fast bounded algorithm — no modulo bias.
-    ///
-    /// Panics if `lo >= hi`.
     pub fn range_u32(&mut self, lo: u32, hi: u32) -> u32 {
         assert!(lo < hi, "Pcg32::range_u32: lo must be < hi");
         let range = (hi - lo) as u64;
@@ -112,14 +92,12 @@ impl Pcg32 {
         lo + (r >> 32) as u32
     }
 
-    /// Uniform u64 in `[lo, hi)`. Panics if `lo >= hi`.
     #[inline]
     pub fn range_u64(&mut self, lo: u64, hi: u64) -> u64 {
         assert!(lo < hi, "Pcg32::range_u64: lo must be < hi");
         lo + self.next_u64() % (hi - lo)
     }
 
-    /// True with probability `p` (clamped to [0, 1]).
     #[inline] pub fn bool_p(&mut self, p: f32) -> bool { self.f32() < p.clamp(0.0, 1.0) }
 
     // ── State management ─────────────────────────────────────────────────────
@@ -134,7 +112,7 @@ impl Pcg32 {
         self.inc   = inc;
     }
 
-    /// Advance the generator by `delta` steps in O(log n). Useful for parallelism.
+    /// Advance the generator by `delta` steps in O(log n).
     pub fn advance(&mut self, delta: u64) {
         let mut acc_mul = 1u64;
         let mut acc_add = 0u64;
@@ -158,4 +136,4 @@ impl fmt::Debug for Pcg32 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "Pcg32(state={:#018x}, inc={:#018x})", self.state, self.inc)
     }
-                   }
+                     }
