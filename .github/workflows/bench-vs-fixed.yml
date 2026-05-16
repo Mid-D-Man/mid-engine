@@ -1,0 +1,104 @@
+# .github/workflows/bench-vs-fixed.yml
+name: mid-math — bench fixed-point
+
+on:
+  workflow_dispatch:
+    inputs:
+      baseline_note:
+        description: 'Context (e.g. "baseline Fixed16 scalar and vec ops")'
+        required: false
+        default: 'manual fixed-point benchmark run'
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  bench:
+    runs-on: ubuntu-latest
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Get Rust version
+        id: rustver
+        run: echo "ver=$(rustc --version)" >> $GITHUB_OUTPUT
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+          key: cargo-bench-fixed-${{ hashFiles('crates/mid-math/Cargo.toml') }}
+          restore-keys: cargo-bench-fixed-
+
+      - name: Run fixed-point benchmarks
+        run: |
+          echo "Note: ${{ inputs.baseline_note }}"
+          cargo bench --bench vs_fixed -p mid-math 2>&1 | tee bench-fixed-raw.txt
+
+      - name: Publish summary
+        run: |
+          {
+            echo "## mid-math Fixed-Point Benchmarks — Criterion"
+            echo ""
+            echo "**Build:** #${{ github.run_number }} &nbsp; **Rust:** \`${{ steps.rustver.outputs.ver }}\`"
+            echo ""
+            echo "**Note:** ${{ inputs.baseline_note }}"
+            echo ""
+            echo "> Fixed16 = i64 with 16 fractional bits. mul/div use i128 intermediate (deterministic)."
+            echo "> f32\_baseline entries show the floating-point equivalent — expect fixed to be 2–5x slower."
+            echo "> bulk\_100k sample\_size=20; measures integration throughput across 100k entities."
+            echo ""
+            python3 - << 'PYEOF'
+          import re, sys
+
+          RE_ANSI   = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
+          RE_RESULT = re.compile(
+              r'^(\S[^\n]+?)\s+time:\s+\[\s*([\d.]+\s+\S+)\s+([\d.]+\s+\S+)\s+([\d.]+\s+\S+)\s*\]',
+              re.MULTILINE,
+          )
+
+          try:
+              raw = open('bench-fixed-raw.txt', encoding='utf-8', errors='replace').read()
+          except FileNotFoundError:
+              print("*(bench-fixed-raw.txt not found)*")
+              sys.exit(0)
+
+          text = RE_ANSI.sub('', raw)
+          current_group = None
+
+          for m in RE_RESULT.finditer(text):
+              name    = m.group(1).strip()
+              lo      = m.group(2).strip()
+              mean    = m.group(3).strip()
+              hi      = m.group(4).strip()
+              parts   = name.split('/')
+              group   = '/'.join(parts[:-1]) if len(parts) >= 2 else name
+              variant = parts[-1]            if len(parts) >= 2 else ''
+              if group != current_group:
+                  if current_group is not None:
+                      print()
+                  print(f"#### {group}")
+                  print("| Variant | Low | Mean | High |")
+                  print("|---|---|---|---|")
+                  current_group = group
+              print(f"| {variant} | {lo} | {mean} | {hi} |")
+          PYEOF
+
+          } >> $GITHUB_STEP_SUMMARY
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bench-fixed-${{ github.run_number }}
+          path: |
+            bench-fixed-raw.txt
+            target/criterion/
+          retention-days: 30
