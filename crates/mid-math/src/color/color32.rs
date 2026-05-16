@@ -1,18 +1,9 @@
 // crates/mid-math/src/color/color32.rs
 //! Packed sRGB u8 color — 4 bytes, the standard GPU upload format.
-//!
-//! `Color32` stores **sRGB-encoded** u8 values (the same encoding used by
-//! PNG files, CSS hex colors, and virtually every texture file format).
-//!
-//! Layout: r=byte0, g=byte1, b=byte2, a=byte3.
-//! This matches the Vulkan `VK_FORMAT_R8G8B8A8_SRGB` / DX11 `DXGI_FORMAT_R8G8B8A8_UNORM_SRGB` layout.
 
 use core::fmt;
 
 /// Packed 8-bit RGBA color in **sRGB** space. 4 bytes, align 1.
-///
-/// Always sRGB-encoded on disk, in GPU uploads, and in network packets.
-/// Convert to linear `Rgba` before any mathematical operations (lerp, blend, tone map).
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Default)]
 #[repr(C)]
 pub struct Color32 {
@@ -33,8 +24,6 @@ impl Color32 {
     pub const CYAN:        Self = Self { r: 0,   g: 255, b: 255, a: 255 };
     pub const MAGENTA:     Self = Self { r: 255, g: 0,   b: 255, a: 255 };
 
-    // ── Constructors ──────────────────────────────────────────────────────────
-
     #[inline(always)]
     pub const fn new(r: u8, g: u8, b: u8, a: u8) -> Self { Self { r, g, b, a } }
 
@@ -47,19 +36,16 @@ impl Color32 {
     #[inline(always)]
     pub const fn to_array(self) -> [u8; 4] { [self.r, self.g, self.b, self.a] }
 
-    /// Pack as `u32` in RGBA byte order: `r << 24 | g << 16 | b << 8 | a`.
     #[inline(always)]
     pub const fn to_u32_rgba(self) -> u32 {
         (self.r as u32) << 24 | (self.g as u32) << 16 | (self.b as u32) << 8 | self.a as u32
     }
 
-    /// Pack as `u32` in ARGB byte order (Windows/D3D9 legacy): `a << 24 | r << 16 | g << 8 | b`.
     #[inline(always)]
     pub const fn to_u32_argb(self) -> u32 {
         (self.a as u32) << 24 | (self.r as u32) << 16 | (self.g as u32) << 8 | self.b as u32
     }
 
-    /// Unpack from `u32` RGBA byte order.
     #[inline(always)]
     pub const fn from_u32_rgba(v: u32) -> Self {
         Self {
@@ -70,10 +56,6 @@ impl Color32 {
         }
     }
 
-    // ── Hex parsing ───────────────────────────────────────────────────────────
-
-    /// Parse from `"#RRGGBB"` or `"#RRGGBBAA"`.
-    /// Values are **not** gamma-decoded — stored as raw sRGB u8.
     pub fn from_hex(s: &str) -> Option<Self> {
         let s = s.strip_prefix('#')?;
         match s.len() {
@@ -95,22 +77,15 @@ impl Color32 {
     }
 
     /// Format as `"#RRGGBB"` (ignores alpha).
-    #[cfg(feature = "std")]
     pub fn to_hex_rgb(self) -> String {
         format!("#{:02X}{:02X}{:02X}", self.r, self.g, self.b)
     }
 
     /// Format as `"#RRGGBBAA"`.
-    #[cfg(feature = "std")]
     pub fn to_hex_rgba(self) -> String {
         format!("#{:02X}{:02X}{:02X}{:02X}", self.r, self.g, self.b, self.a)
     }
 
-    // ── Operations ────────────────────────────────────────────────────────────
-
-    /// Alpha-compositing: `src` over `self` (Porter-Duff) in integer arithmetic.
-    ///
-    /// Operates in sRGB space — approximate but fast for UI blending.
     #[inline]
     pub fn blend_over(self, src: Self) -> Self {
         if src.a == 255 { return src; }
@@ -125,13 +100,11 @@ impl Color32 {
         }
     }
 
-    /// Alpha scaled: `color.rgb * factor / 255` — useful for fade effects.
     #[inline]
     pub fn scale_alpha(self, factor: u8) -> Self {
         Self { a: ((self.a as u16 * factor as u16) / 255) as u8, ..self }
     }
 
-    /// Premultiply alpha in sRGB (approximate — use Rgba::premultiply_alpha for accuracy).
     #[inline]
     pub fn premultiply(self) -> Self {
         let a = self.a as u32;
@@ -164,4 +137,4 @@ impl From<[u8; 4]> for Color32 { #[inline] fn from(a: [u8; 4]) -> Self { Self::f
 impl From<Color32> for [u8; 4] { #[inline] fn from(c: Color32) -> Self { c.to_array() } }
 impl From<(u8, u8, u8, u8)> for Color32 {
     #[inline] fn from((r,g,b,a): (u8,u8,u8,u8)) -> Self { Self::new(r,g,b,a) }
-  }
+}
