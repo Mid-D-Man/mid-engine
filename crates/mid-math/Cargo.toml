@@ -49,6 +49,22 @@ harness = false
 name    = "vs_curves"
 harness = false
 
+[[bench]]
+name    = "vs_color"
+harness = false
+
+[[bench]]
+name    = "vs_fixed"
+harness = false
+
+[[bench]]
+name    = "vs_helpers"
+harness = false
+
+[[bench]]
+name    = "vs_rng"
+harness = false
+
 [features]
 default = []
 simd    = []
