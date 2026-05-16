@@ -3,6 +3,7 @@
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 pub(crate) mod sse2;
 
+// ── Core math ─────────────────────────────────────────────────────────────────
 pub mod bvec;
 pub mod deref;
 pub mod f32;
@@ -13,10 +14,13 @@ pub mod int32;
 pub mod int64;
 pub mod wide;
 pub mod curves;
-pub mod string_id;
-pub mod prng;
 pub mod fixed;
+
+// ── Supplementary systems ─────────────────────────────────────────────────────
 pub mod color;
+pub mod helpers;
+pub mod ran_gen;
+pub mod string_id;
 
 pub use constants::*;
 
@@ -51,10 +55,7 @@ pub use f32::wasm::{Vec3, Vec4, Quat, Mat4};
     target_arch = "x86",
     target_arch = "x86_64",
     target_arch = "aarch64",
-    all(
-        any(target_arch = "wasm32", target_arch = "wasm64"),
-        target_feature = "simd128",
-    ),
+    all(any(target_arch = "wasm32", target_arch = "wasm64"), target_feature = "simd128"),
 )))]
 pub use f32::scalar::{Vec3, Vec4, Quat, Mat4};
 
@@ -74,10 +75,7 @@ pub use wide::float::f32x4;
 pub use wide::float::Vec3x4;
 pub use wide::float::QuatX4;
 
-#[cfg(all(
-    any(target_arch = "x86", target_arch = "x86_64"),
-    target_feature = "avx2",
-))]
+#[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), target_feature = "avx2"))]
 pub use wide::float::Vec3x8;
 
 // ── Curves ────────────────────────────────────────────────────────────────────
@@ -86,34 +84,60 @@ pub use curves::{
     HermiteSpline, HermiteKey, KochanekBartels, TcbKey, CardinalSpline, BSpline,
 };
 
-// ── Utilities ─────────────────────────────────────────────────────────────────
-pub use string_id::StringId;
-pub use prng::Xorshift64;
-
 // ── Fixed-point ───────────────────────────────────────────────────────────────
 pub use fixed::{
     Fixed, FixedVec2, FixedVec3,
-    Fixed8, Fixed12, Fixed16,
-    Fixed8Vec2, Fixed12Vec2, Fixed16Vec2,
-    Fixed8Vec3, Fixed12Vec3, Fixed16Vec3,
+    Fixed8,  Fixed12,  Fixed16,
+    Fixed8Vec2,  Fixed12Vec2,  Fixed16Vec2,
+    Fixed8Vec3,  Fixed12Vec3,  Fixed16Vec3,
+    // ergonomic underscore aliases
+    FixedVec2_8,  FixedVec2_12,  FixedVec2_16,
+    FixedVec3_8,  FixedVec3_12,  FixedVec3_16,
 };
 
 // ── Color ─────────────────────────────────────────────────────────────────────
-pub use color::{Rgb, Rgba, Color32};
+pub use color::{
+    Color32, Rgb, Rgba,
+    Hsv, Hsl,
+    Rgbe, LogLuv32,
+    YCbCr, YCbCrStandard,
+};
+
+// ── Helpers: angles, animation, physics, shading, algebra ────────────────────
+pub use helpers::angle::{Radians, Degrees};
+pub use helpers::dual_quat::DualQuat;
+pub use helpers::rotor::Rotor3;
+pub use helpers::spatial::{SpatialVelocity, SpatialForce, SpatialInertia};
+pub use helpers::tangent::{TangentFrame, PackedTangent};
+
+// ── Random number generators ──────────────────────────────────────────────────
+pub use ran_gen::prng::Xorshift64;
+pub use ran_gen::pcg::Pcg32;
+
+// ── String hashing ────────────────────────────────────────────────────────────
+pub use string_id::StringId;
 
 // ── Scalar utilities ──────────────────────────────────────────────────────────
-#[inline(always)] pub fn lerp(a: f32, b: f32, t: f32) -> f32 { a + (b - a) * t }
-#[inline(always)] pub fn inverse_lerp(a: f32, b: f32, v: f32) -> f32 {
+#[inline(always)]
+pub fn lerp(a: f32, b: f32, t: f32) -> f32 { a + (b - a) * t }
+
+#[inline(always)]
+pub fn inverse_lerp(a: f32, b: f32, v: f32) -> f32 {
     let d = b - a;
     if d.abs() < constants::EPSILON { 0.0 } else { (v - a) / d }
 }
-#[inline(always)] pub fn remap(v: f32, in_min: f32, in_max: f32, out_min: f32, out_max: f32) -> f32 {
+
+#[inline(always)]
+pub fn remap(v: f32, in_min: f32, in_max: f32, out_min: f32, out_max: f32) -> f32 {
     lerp(out_min, out_max, inverse_lerp(in_min, in_max, v))
 }
-#[inline(always)] pub fn smoothstep(edge0: f32, edge1: f32, x: f32) -> f32 {
+
+#[inline(always)]
+pub fn smoothstep(edge0: f32, edge1: f32, x: f32) -> f32 {
     let t = ((x - edge0) / (edge1 - edge0)).clamp(0.0, 1.0);
     t * t * (3.0 - 2.0 * t)
 }
+
 #[inline(always)] pub fn clamp(v: f32, min: f32, max: f32) -> f32 { v.clamp(min, max) }
 #[inline(always)] pub fn saturate(v: f32) -> f32 { v.clamp(0.0, 1.0) }
 #[inline(always)] pub fn to_radians(deg: f32) -> f32 { deg * constants::DEG2RAD }
