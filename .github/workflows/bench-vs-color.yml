@@ -1,0 +1,103 @@
+# .github/workflows/bench-vs-color.yml
+name: mid-math — bench color
+
+on:
+  workflow_dispatch:
+    inputs:
+      baseline_note:
+        description: 'Context (e.g. "baseline HSV/LogLuv color ops")'
+        required: false
+        default: 'manual color benchmark run'
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  bench:
+    runs-on: ubuntu-latest
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Get Rust version
+        id: rustver
+        run: echo "ver=$(rustc --version)" >> $GITHUB_OUTPUT
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+          key: cargo-bench-color-${{ hashFiles('crates/mid-math/Cargo.toml') }}
+          restore-keys: cargo-bench-color-
+
+      - name: Run color benchmarks
+        run: |
+          echo "Note: ${{ inputs.baseline_note }}"
+          cargo bench --bench vs_color -p mid-math 2>&1 | tee bench-color-raw.txt
+
+      - name: Publish summary
+        run: |
+          {
+            echo "## mid-math Color Benchmarks — Criterion"
+            echo ""
+            echo "**Build:** #${{ github.run_number }} &nbsp; **Rust:** \`${{ steps.rustver.outputs.ver }}\`"
+            echo ""
+            echo "**Note:** ${{ inputs.baseline_note }}"
+            echo ""
+            echo "> sRGB↔linear: IEC 61966-2-1 (powf 2.4). LogLuv32/RGBE use transcendentals — expect 10–50 ns."
+            echo "> bulk\_100k column is throughput; sample\_size=20 for stability."
+            echo ""
+            python3 - << 'PYEOF'
+          import re, sys
+
+          RE_ANSI   = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
+          RE_RESULT = re.compile(
+              r'^(\S[^\n]+?)\s+time:\s+\[\s*([\d.]+\s+\S+)\s+([\d.]+\s+\S+)\s+([\d.]+\s+\S+)\s*\]',
+              re.MULTILINE,
+          )
+
+          try:
+              raw = open('bench-color-raw.txt', encoding='utf-8', errors='replace').read()
+          except FileNotFoundError:
+              print("*(bench-color-raw.txt not found)*")
+              sys.exit(0)
+
+          text = RE_ANSI.sub('', raw)
+          current_group = None
+
+          for m in RE_RESULT.finditer(text):
+              name    = m.group(1).strip()
+              lo      = m.group(2).strip()
+              mean    = m.group(3).strip()
+              hi      = m.group(4).strip()
+              parts   = name.split('/')
+              group   = '/'.join(parts[:-1]) if len(parts) >= 2 else name
+              variant = parts[-1]            if len(parts) >= 2 else ''
+              if group != current_group:
+                  if current_group is not None:
+                      print()
+                  print(f"#### {group}")
+                  print("| Variant | Low | Mean | High |")
+                  print("|---|---|---|---|")
+                  current_group = group
+              print(f"| {variant} | {lo} | {mean} | {hi} |")
+          PYEOF
+
+          } >> $GITHUB_STEP_SUMMARY
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bench-color-${{ github.run_number }}
+          path: |
+            bench-color-raw.txt
+            target/criterion/
+          retention-days: 30
