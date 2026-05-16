@@ -17,7 +17,10 @@
 //! let render_pos = new_pos.to_vec3();
 //! ```
 
-mod fixed;
+// crates/mid-math/src/fixed/mod.rs
+//! Deterministic fixed-point math for network-synchronised simulation.
+
+pub mod fixed;
 mod vec2;
 mod vec3;
 
@@ -28,15 +31,12 @@ pub use vec3::FixedVec3;
 // ── Type aliases ──────────────────────────────────────────────────────────────
 
 /// 8 fractional bits — 1/256 resolution, range ≈ ±36 billion units.
-/// Good for: large world coordinates where sub-unit precision is enough.
 pub type Fixed8 = Fixed<8>;
 
 /// 12 fractional bits — 1/4096 resolution, range ≈ ±2.25 billion units.
-/// Good for: physics velocities, angular values.
 pub type Fixed12 = Fixed<12>;
 
 /// 16 fractional bits — 1/65536 resolution, range ≈ ±140 thousand units.
-/// Good for: sub-millimetre precision in bounded worlds.
 pub type Fixed16 = Fixed<16>;
 
 /// 2D fixed-point vector, 8 fractional bits.
