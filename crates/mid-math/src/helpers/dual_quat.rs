@@ -1,18 +1,5 @@
-// crates/mid-math/src/dual_quat.rs
+// crates/mid-math/src/helpers/dual_quat.rs
 //! Dual quaternions — the industry standard for skeletal skinning.
-//!
-//! A dual quaternion DQ = q_r + ε·q_d (where ε² = 0) encodes rigid-body
-//! transformation (rotation + translation) in a single structure.
-//!
-//! Compared to Mat4 for skinning:
-//!   - No candy-wrapper artifact under large rotations (key advantage over LBS)
-//!   - Volume-preserving under blending
-//!   - ~30% fewer operations than Mat4 for transform_point
-//!
-//! Algorithm: Dual Linear Blending (DLB) — blend dual quats linearly,
-//! normalize, then transform. Correct for small influence counts (≤ 4 bones).
-//!
-//! Reference: Kavan et al. 2007 "Skinning with Dual Quaternions"
 
 use core::fmt;
 use core::ops::Mul;
@@ -21,13 +8,10 @@ use crate::{Quat, Vec3, EPSILON};
 /// Dual quaternion. 32 bytes, 16-byte aligned.
 ///
 /// `real` encodes rotation. `dual` encodes translation as `0.5 * t * real`.
-/// For a valid rigid transform: `real` must be unit, `real.dot(dual) ≈ 0`.
 #[derive(Clone, Copy)]
 #[repr(C, align(16))]
 pub struct DualQuat {
-    /// Rotation quaternion (unit).
     pub real: Quat,
-    /// Translation-encoding quaternion. dual = 0.5 * pure_t * real.
     pub dual: Quat,
 }
 
@@ -35,18 +19,15 @@ impl DualQuat {
     /// Identity: no rotation, no translation.
     pub const IDENTITY: Self = Self {
         real: Quat::IDENTITY,
-        dual: Quat { x: 0.0, y: 0.0, z: 0.0, w: 0.0 },
+        dual: Quat::ZERO,  // was: Quat { x: 0.0, y: 0.0, z: 0.0, w: 0.0 } — broken on SSE2
     };
 
     // ── Constructors ──────────────────────────────────────────────────────────
 
     /// Build from rotation + translation.
-    ///
-    /// `rotation` is normalised internally.
     #[inline]
     pub fn from_rotation_translation(rotation: Quat, translation: Vec3) -> Self {
         let r = rotation.normalize();
-        // dual = 0.5 * t_pure * r  where t_pure = Quat(tx,ty,tz,0)
         let t = Quat::new(translation.x, translation.y, translation.z, 0.0);
         let dual = Quat::new(
             0.5 * ( t.w * r.x + t.x * r.w + t.y * r.z - t.z * r.y),
@@ -57,13 +38,11 @@ impl DualQuat {
         Self { real: r, dual }
     }
 
-    /// Build from rotation only (no translation).
     #[inline]
     pub fn from_rotation(rotation: Quat) -> Self {
-        Self { real: rotation.normalize(), dual: Quat::new(0.0, 0.0, 0.0, 0.0) }
+        Self { real: rotation.normalize(), dual: Quat::ZERO }
     }
 
-    /// Build from translation only (no rotation).
     #[inline]
     pub fn from_translation(translation: Vec3) -> Self {
         Self::from_rotation_translation(Quat::IDENTITY, translation)
@@ -71,16 +50,12 @@ impl DualQuat {
 
     // ── Decomposition ─────────────────────────────────────────────────────────
 
-    /// Extract the rotation component.
     #[inline] pub fn rotation(self) -> Quat { self.real.normalize() }
 
-    /// Extract the translation component.
     #[inline]
     pub fn translation(self) -> Vec3 {
-        // t = 2 * dual * conjugate(real)
         let r = self.real;
         let d = self.dual;
-        // (a + bi + cj + dk) * (w - xi - yj - zk) for quat conjugate
         let tx = 2.0 * (-d.w * r.x + d.x * r.w - d.y * r.z + d.z * r.y);
         let ty = 2.0 * (-d.w * r.y + d.x * r.z + d.y * r.w - d.z * r.x);
         let tz = 2.0 * (-d.w * r.z - d.x * r.y + d.y * r.x + d.z * r.w);
@@ -89,13 +64,11 @@ impl DualQuat {
 
     // ── Transform ────────────────────────────────────────────────────────────
 
-    /// Transform a point (applies rotation then translation).
     #[inline]
     pub fn transform_point(self, p: Vec3) -> Vec3 {
         self.real.rotate(p) + self.translation()
     }
 
-    /// Transform a direction vector (rotation only, no translation).
     #[inline]
     pub fn transform_vector(self, v: Vec3) -> Vec3 {
         self.real.rotate(v)
@@ -103,9 +76,6 @@ impl DualQuat {
 
     // ── Normalisation ─────────────────────────────────────────────────────────
 
-    /// Normalise to maintain unit dual quaternion constraint.
-    ///
-    /// Required after linear blending: `dq = Σ wᵢ·dqᵢ` followed by `normalize()`.
     #[inline]
     pub fn normalize(self) -> Self {
         let mag = (self.real.x * self.real.x
@@ -122,7 +92,6 @@ impl DualQuat {
 
     // ── Blending (DLB) ────────────────────────────────────────────────────────
 
-    /// Scale all components by `w` — used as building block for weighted blend.
     #[inline]
     pub fn scale(self, w: f32) -> Self {
         Self {
@@ -131,7 +100,6 @@ impl DualQuat {
         }
     }
 
-    /// Add another dual quaternion component-wise. Used in weighted blending.
     #[inline]
     pub fn add(self, rhs: Self) -> Self {
         Self {
@@ -142,27 +110,20 @@ impl DualQuat {
         }
     }
 
-    /// Dual Linear Blend of two dual quaternions with weights `w0 + w1 = 1`.
-    ///
-    /// Ensures shortest-path interpolation by negating `dq1` if needed.
     pub fn blend2(dq0: Self, w0: f32, dq1: Self, w1: f32) -> Self {
-        // Shortest path: negate dq1 if dot(real0, real1) < 0
         let dot = dq0.real.x * dq1.real.x + dq0.real.y * dq1.real.y
                 + dq0.real.z * dq1.real.z + dq0.real.w * dq1.real.w;
         let dq1 = if dot < 0.0 { dq1.scale(-1.0) } else { dq1 };
         dq0.scale(w0).add(dq1.scale(w1)).normalize()
     }
 
-    /// Blend 4 dual quaternions with given weights. Normalises the result.
-    ///
-    /// Weights should sum to 1.0 but do not need to — normalise handles it.
     pub fn blend4(influences: [(Self, f32); 4]) -> Self {
         let pivot_dot = |a: &Self, b: &Self| -> f32 {
             a.real.x * b.real.x + a.real.y * b.real.y
           + a.real.z * b.real.z + a.real.w * b.real.w
         };
         let (ref_dq, _) = influences[0];
-        let mut acc = Self::IDENTITY.scale(0.0); // zero dual quat
+        let mut acc = Self::IDENTITY.scale(0.0);
         for (dq, w) in &influences {
             let sign = if pivot_dot(&ref_dq, dq) < 0.0 { -1.0 } else { 1.0 };
             acc = acc.add(dq.scale(w * sign));
@@ -172,7 +133,6 @@ impl DualQuat {
 
     // ── Composition ───────────────────────────────────────────────────────────
 
-    /// Multiply (compose): `self * rhs` applies rhs first, then self.
     pub fn mul_dual_quat(self, rhs: Self) -> Self {
         Self {
             real: Quat::new(
