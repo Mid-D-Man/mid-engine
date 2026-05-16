@@ -20,7 +20,7 @@ pub mod fixed;
 pub mod color;
 pub mod helpers;
 pub mod ran_gen;
-pub mod string_id;
+pub mod string;   // was: pub mod string_id
 
 pub use constants::*;
 
@@ -90,7 +90,6 @@ pub use fixed::{
     Fixed8,  Fixed12,  Fixed16,
     Fixed8Vec2,  Fixed12Vec2,  Fixed16Vec2,
     Fixed8Vec3,  Fixed12Vec3,  Fixed16Vec3,
-    // ergonomic underscore aliases
     FixedVec2_8,  FixedVec2_12,  FixedVec2_16,
     FixedVec3_8,  FixedVec3_12,  FixedVec3_16,
 };
@@ -115,7 +114,7 @@ pub use ran_gen::prng::Xorshift64;
 pub use ran_gen::pcg::Pcg32;
 
 // ── String hashing ────────────────────────────────────────────────────────────
-pub use string_id::StringId;
+pub use string::StringId;   // was: pub use string_id::StringId
 
 // ── Scalar utilities ──────────────────────────────────────────────────────────
 #[inline(always)]
