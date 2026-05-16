@@ -20,7 +20,8 @@ pub struct Quat {
 
 impl Quat {
     pub const IDENTITY: Self = Self { x:0.0, y:0.0, z:0.0, w:1.0 };
-    const ZERO: Self         = Self { x:0.0, y:0.0, z:0.0, w:0.0 };
+    /// Zero quaternion — not a valid rotation, used for DualQuat dual part.
+    pub const ZERO: Self     = Self { x:0.0, y:0.0, z:0.0, w:0.0 };
 
     #[inline(always)]
     pub fn new(x:f32, y:f32, z:f32, w:f32) -> Self { Self{x,y,z,w} }
@@ -88,7 +89,6 @@ impl Quat {
         Self::new(-self.x*r, -self.y*r, -self.z*r, self.w*r)
     }
 
-    /// Rotate a Vec3 via sandwich product q v q*.
     #[inline]
     pub fn rotate(self, v: Vec3) -> Vec3 {
         let qv = Vec3::new(self.x, self.y, self.z);
@@ -107,17 +107,15 @@ impl Quat {
     }
 
     pub fn nlerp(self, rhs: Self, t: f32) -> Self {
-    // Branchless shortest-path: compiler emits cmovss (conditional move),
-    // not a branch instruction. No branch misprediction penalty.
-    let dot  = self.dot(rhs);
-    let sign = if dot < 0.0 { -1.0f32 } else { 1.0f32 };
-    Self::new(
-        self.x + (rhs.x * sign - self.x) * t,
-        self.y + (rhs.y * sign - self.y) * t,
-        self.z + (rhs.z * sign - self.z) * t,
-        self.w + (rhs.w * sign - self.w) * t,
-    ).normalize()
-}
+        let dot  = self.dot(rhs);
+        let sign = if dot < 0.0 { -1.0f32 } else { 1.0f32 };
+        Self::new(
+            self.x + (rhs.x * sign - self.x) * t,
+            self.y + (rhs.y * sign - self.y) * t,
+            self.z + (rhs.z * sign - self.z) * t,
+            self.w + (rhs.w * sign - self.w) * t,
+        ).normalize()
+    }
 
     pub fn slerp(self, mut rhs: Self, t: f32) -> Self {
         let mut cos_theta = self.dot(rhs);
@@ -197,4 +195,4 @@ impl fmt::Display for Quat {
     fn fmt(&self, f:&mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "Quat({:.4}, {:.4}, {:.4}, {:.4})", self.x, self.y, self.z, self.w)
     }
-  }
+}
