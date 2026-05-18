@@ -117,7 +117,41 @@ pub use ran_gen::pcg::Pcg32;
 
 // ── String hashing ────────────────────────────────────────────────────────────
 pub use string::StringId;   // was: pub use string_id::StringId
+// ── Noise re-exports (add to the re-export section) ──────────────────────────
+pub use noise::{
+    Perlin, Simplex, Value, Worley,
+    Fbm, DomainWarp,
+    NoiseSource2d, NoiseSource3d, NoiseSource4d,
+    worley::{DistanceMode, DistanceMetric},
+};
 
+// ── Camera re-exports ─────────────────────────────────────────────────────────
+pub use camera::frustum::{
+    Frustum, Visibility,
+    FRUSTUM_LEFT, FRUSTUM_RIGHT, FRUSTUM_BOTTOM,
+    FRUSTUM_TOP,  FRUSTUM_NEAR,  FRUSTUM_FAR,
+};
+pub use camera::projection::{
+    PerspectiveParams,
+    unproject,
+    unproject_separate,
+    picking_ray,
+    perspective_infinite_rh,
+    perspective_reversed_z_rh,
+    perspective_decompose,
+    perspective_resize,
+    csm_split_depths,
+    sub_frustum_corners,
+};
+
+// ── Geometry re-exports ───────────────────────────────────────────────────────
+pub use geom::barycentric::{
+    BarycentricCoords,
+    Triangle2,
+    Triangle3,
+    signed_area_2d,
+    triangle_area_3d,
+};
 // ── Scalar utilities ──────────────────────────────────────────────────────────
 #[inline(always)]
 pub fn lerp(a: f32, b: f32, t: f32) -> f32 { a + (b - a) * t }
