@@ -21,7 +21,9 @@ pub mod color;
 pub mod helpers;
 pub mod ran_gen;
 pub mod string;   // was: pub mod string_id
-
+pub mod noise;
+pub mod camera;
+pub mod geom;
 pub use constants::*;
 
 // ── Bool masks ────────────────────────────────────────────────────────────────
