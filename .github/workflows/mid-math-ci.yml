@@ -1,26 +1,14 @@
 # .github/workflows/mid-math-ci.yml
-# Mid Engine — mid-math CI
-#
-# Triggers: push / PR to main or any mid-math/** path.
-# Jobs:
-#   test-debug   — cargo test (debug, all targets, all features)
-#   test-release — cargo test --release  (performance regression guard)
-#   bench        — cargo bench (release, criterion HTML artifact)
-#   lint         — clippy + rustfmt
-
+# Mid Engine — mid-math CI  (manual only — no auto triggers)
 name: mid-math CI
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - "crates/mid-math/**"
-      - ".github/workflows/mid-math-ci.yml"
-  pull_request:
-    branches: [main]
-    paths:
-      - "crates/mid-math/**"
-      - ".github/workflows/mid-math-ci.yml"
+  workflow_dispatch:
+    inputs:
+      reason:
+        description: 'Why are you running this?'
+        required: false
+        default: 'manual CI run'
 
 env:
   CARGO_TERM_COLOR: always
@@ -57,6 +45,7 @@ jobs:
         run: |
           echo "## mid-math Debug Tests — Build #${{ github.run_number }}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Reason:** ${{ inputs.reason }}" >> $GITHUB_STEP_SUMMARY
           echo "Branch: \`${{ github.ref_name }}\`  Commit: \`${GITHUB_SHA:0:8}\`" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
@@ -102,6 +91,7 @@ jobs:
         run: |
           echo "## mid-math Release Tests — Build #${{ github.run_number }}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Reason:** ${{ inputs.reason }}" >> $GITHUB_STEP_SUMMARY
           echo "Branch: \`${{ github.ref_name }}\`  Commit: \`${GITHUB_SHA:0:8}\`" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
@@ -123,8 +113,6 @@ jobs:
   bench:
     name: Benchmark (release)
     runs-on: ubuntu-latest
-    # Only run benchmarks on push to main — not on every PR.
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     steps:
       - uses: actions/checkout@v4
 
@@ -140,8 +128,6 @@ jobs:
             target
           key: ${{ runner.os }}-mid-math-bench-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: ${{ runner.os }}-mid-math-bench-
-
-      # ── Run all benchmarks ─────────────────────────────────────────────────
 
       - name: Run noise benches
         run: |
@@ -168,14 +154,13 @@ jobs:
           cargo bench --bench vs_wide_int -p mid-math -- --output-format bencher 2>&1 \
             | tee mid-math-bench-wide-int.txt
 
-      # ── Publish performance summary ────────────────────────────────────────
-
       - name: Publish benchmark Step Summary
         if: always()
         run: |
           RUST_VER=$(rustc --version)
           echo "## mid-math Benchmark Results — Build #${{ github.run_number }}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Reason:** ${{ inputs.reason }}" >> $GITHUB_STEP_SUMMARY
           echo "Branch: \`${{ github.ref_name }}\`  Commit: \`${GITHUB_SHA:0:8}\`" >> $GITHUB_STEP_SUMMARY
           echo "Rust: \`${RUST_VER}\`  RUSTFLAGS: \`${RUSTFLAGS}\`" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
@@ -190,7 +175,7 @@ jobs:
           grep "^test " mid-math-bench-camera.txt | head -30 >> $GITHUB_STEP_SUMMARY || true
           echo '```' >> $GITHUB_STEP_SUMMARY
 
-          echo "### Geometry (Barycentric / Triangle)" >> $GITHUB_STEP_SUMMARY
+          echo "### Geometry" >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
           grep "^test " mid-math-bench-geom.txt | head -30 >> $GITHUB_STEP_SUMMARY || true
           echo '```' >> $GITHUB_STEP_SUMMARY
