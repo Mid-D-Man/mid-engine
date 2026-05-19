@@ -1,23 +1,14 @@
 # .github/workflows/workspace-ci.yml
-# Mid Engine — full workspace CI
-#
-# Runs on push/PR to main for any non-crate-specific path change.
-# Individual crate workflows (mid-math-ci.yml etc.) fire for their own paths.
-# This workflow catches cross-crate breakage and workspace-level checks.
-
+# Mid Engine — full workspace CI  (manual only — no auto triggers)
 name: Workspace CI
 
 on:
-  push:
-    branches: [main]
-    paths-ignore:
-      - "docs/**"
-      - "*.md"
-  pull_request:
-    branches: [main]
-    paths-ignore:
-      - "docs/**"
-      - "*.md"
+  workflow_dispatch:
+    inputs:
+      reason:
+        description: 'Why are you running this?'
+        required: false
+        default: 'manual workspace CI'
 
 env:
   CARGO_TERM_COLOR: always
@@ -54,6 +45,7 @@ jobs:
         run: |
           echo "## Workspace Debug Build — #${{ github.run_number }}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Reason:** ${{ inputs.reason }}" >> $GITHUB_STEP_SUMMARY
           echo "Commit: \`${GITHUB_SHA:0:8}\`  Branch: \`${{ github.ref_name }}\`" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
@@ -74,7 +66,6 @@ jobs:
   build-release:
     name: Build all (release)
     runs-on: ubuntu-latest
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     steps:
       - uses: actions/checkout@v4
 
@@ -102,6 +93,7 @@ jobs:
         run: |
           echo "## Workspace Release Build — #${{ github.run_number }}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Reason:** ${{ inputs.reason }}" >> $GITHUB_STEP_SUMMARY
           echo "Commit: \`${GITHUB_SHA:0:8}\`" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
