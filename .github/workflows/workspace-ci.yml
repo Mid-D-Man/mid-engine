@@ -1,0 +1,150 @@
+# .github/workflows/workspace-ci.yml
+# Mid Engine — full workspace CI
+#
+# Runs on push/PR to main for any non-crate-specific path change.
+# Individual crate workflows (mid-math-ci.yml etc.) fire for their own paths.
+# This workflow catches cross-crate breakage and workspace-level checks.
+
+name: Workspace CI
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - "docs/**"
+      - "*.md"
+  pull_request:
+    branches: [main]
+    paths-ignore:
+      - "docs/**"
+      - "*.md"
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # ───────────────────────────────────────────────────────────────────────────
+  build-debug:
+    name: Build all (debug)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install stable Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-workspace-debug-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-workspace-debug-
+
+      - name: cargo build (debug, all)
+        run: cargo build --workspace 2>&1 | tee workspace-build-debug.txt
+
+      - name: cargo test (debug, all)
+        run: cargo test --workspace 2>&1 | tee workspace-test-debug.txt
+
+      - name: Summarise
+        if: always()
+        run: |
+          echo "## Workspace Debug Build — #${{ github.run_number }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Commit: \`${GITHUB_SHA:0:8}\`  Branch: \`${{ github.ref_name }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          grep -E "^(error|warning\[|test result)" workspace-test-debug.txt | tail -30 >> $GITHUB_STEP_SUMMARY || true
+          echo '```' >> $GITHUB_STEP_SUMMARY
+
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: workspace-debug-${{ github.run_number }}
+          path: |
+            workspace-build-debug.txt
+            workspace-test-debug.txt
+          retention-days: 14
+
+  # ───────────────────────────────────────────────────────────────────────────
+  build-release:
+    name: Build all (release)
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install stable Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-workspace-release-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-workspace-release-
+
+      - name: cargo build --release
+        run: cargo build --workspace --release 2>&1 | tee workspace-build-release.txt
+
+      - name: cargo test --release
+        run: cargo test --workspace --release 2>&1 | tee workspace-test-release.txt
+
+      - name: Publish summary
+        if: always()
+        run: |
+          echo "## Workspace Release Build — #${{ github.run_number }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Commit: \`${GITHUB_SHA:0:8}\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          grep "^test result" workspace-test-release.txt >> $GITHUB_STEP_SUMMARY || true
+          echo '```' >> $GITHUB_STEP_SUMMARY
+
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: workspace-release-${{ github.run_number }}
+          path: |
+            workspace-build-release.txt
+            workspace-test-release.txt
+          retention-days: 30
+
+  # ───────────────────────────────────────────────────────────────────────────
+  clippy-workspace:
+    name: Clippy (workspace)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install stable Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-workspace-clippy-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-workspace-clippy-
+
+      - name: clippy --workspace
+        run: |
+          cargo clippy --workspace --all-targets -- \
+            -D warnings \
+            -A clippy::excessive_precision \
+            -A clippy::approx_constant \
+            -A clippy::float_cmp \
+            -A clippy::too_many_arguments
