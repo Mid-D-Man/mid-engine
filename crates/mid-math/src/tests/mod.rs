@@ -8,3 +8,7 @@ mod f64_tests;
 mod bool_tests;
 mod int64_tests;
 mod wide_tests;
+mod fixed;
+mod noise;
+mod camera;
+mod geom;
