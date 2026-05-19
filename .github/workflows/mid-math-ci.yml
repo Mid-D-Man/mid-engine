@@ -1,0 +1,260 @@
+# .github/workflows/mid-math-ci.yml
+# Mid Engine — mid-math CI
+#
+# Triggers: push / PR to main or any mid-math/** path.
+# Jobs:
+#   test-debug   — cargo test (debug, all targets, all features)
+#   test-release — cargo test --release  (performance regression guard)
+#   bench        — cargo bench (release, criterion HTML artifact)
+#   lint         — clippy + rustfmt
+
+name: mid-math CI
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "crates/mid-math/**"
+      - ".github/workflows/mid-math-ci.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "crates/mid-math/**"
+      - ".github/workflows/mid-math-ci.yml"
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: "-C target-cpu=native"
+
+jobs:
+  # ───────────────────────────────────────────────────────────────────────────
+  test-debug:
+    name: Test (debug)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install stable Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-mid-math-debug-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-mid-math-debug-
+
+      - name: cargo test (debug)
+        run: cargo test -p mid-math --all-targets 2>&1 | tee mid-math-test-debug.txt
+
+      - name: Summarise debug test results
+        if: always()
+        run: |
+          echo "## mid-math Debug Tests — Build #${{ github.run_number }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Branch: \`${{ github.ref_name }}\`  Commit: \`${GITHUB_SHA:0:8}\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          grep -E "^test .+ \.\.\. (ok|FAILED|ignored)" mid-math-test-debug.txt \
+            | tail -60 >> $GITHUB_STEP_SUMMARY || true
+          echo "" >> $GITHUB_STEP_SUMMARY
+          grep -E "^test result" mid-math-test-debug.txt >> $GITHUB_STEP_SUMMARY || true
+          echo '```' >> $GITHUB_STEP_SUMMARY
+
+      - name: Upload debug test log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mid-math-test-debug-${{ github.run_number }}
+          path: mid-math-test-debug.txt
+          retention-days: 14
+
+  # ───────────────────────────────────────────────────────────────────────────
+  test-release:
+    name: Test (release)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install stable Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-mid-math-release-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-mid-math-release-
+
+      - name: cargo test --release
+        run: cargo test -p mid-math --release --all-targets 2>&1 | tee mid-math-test-release.txt
+
+      - name: Publish release test summary
+        if: always()
+        run: |
+          echo "## mid-math Release Tests — Build #${{ github.run_number }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Branch: \`${{ github.ref_name }}\`  Commit: \`${GITHUB_SHA:0:8}\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          grep -E "^test .+ \.\.\. (ok|FAILED|ignored)" mid-math-test-release.txt \
+            | tail -60 >> $GITHUB_STEP_SUMMARY || true
+          echo "" >> $GITHUB_STEP_SUMMARY
+          grep -E "^test result" mid-math-test-release.txt >> $GITHUB_STEP_SUMMARY || true
+          echo '```' >> $GITHUB_STEP_SUMMARY
+
+      - name: Upload release test log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mid-math-test-release-${{ github.run_number }}
+          path: mid-math-test-release.txt
+          retention-days: 30
+
+  # ───────────────────────────────────────────────────────────────────────────
+  bench:
+    name: Benchmark (release)
+    runs-on: ubuntu-latest
+    # Only run benchmarks on push to main — not on every PR.
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install stable Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-mid-math-bench-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-mid-math-bench-
+
+      # ── Run all benchmarks ─────────────────────────────────────────────────
+
+      - name: Run noise benches
+        run: |
+          cargo bench --bench noise -p mid-math -- --output-format bencher 2>&1 \
+            | tee mid-math-bench-noise.txt
+
+      - name: Run camera benches
+        run: |
+          cargo bench --bench camera -p mid-math -- --output-format bencher 2>&1 \
+            | tee mid-math-bench-camera.txt
+
+      - name: Run geom benches
+        run: |
+          cargo bench --bench geom -p mid-math -- --output-format bencher 2>&1 \
+            | tee mid-math-bench-geom.txt
+
+      - name: Run vs_all benches (f32 math)
+        run: |
+          cargo bench --bench vs_all -p mid-math -- --output-format bencher 2>&1 \
+            | tee mid-math-bench-vs-all.txt
+
+      - name: Run vs_wide_int benches
+        run: |
+          cargo bench --bench vs_wide_int -p mid-math -- --output-format bencher 2>&1 \
+            | tee mid-math-bench-wide-int.txt
+
+      # ── Publish performance summary ────────────────────────────────────────
+
+      - name: Publish benchmark Step Summary
+        if: always()
+        run: |
+          RUST_VER=$(rustc --version)
+          echo "## mid-math Benchmark Results — Build #${{ github.run_number }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Branch: \`${{ github.ref_name }}\`  Commit: \`${GITHUB_SHA:0:8}\`" >> $GITHUB_STEP_SUMMARY
+          echo "Rust: \`${RUST_VER}\`  RUSTFLAGS: \`${RUSTFLAGS}\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          echo "### Noise" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          grep "^test " mid-math-bench-noise.txt | head -40 >> $GITHUB_STEP_SUMMARY || true
+          echo '```' >> $GITHUB_STEP_SUMMARY
+
+          echo "### Camera" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          grep "^test " mid-math-bench-camera.txt | head -30 >> $GITHUB_STEP_SUMMARY || true
+          echo '```' >> $GITHUB_STEP_SUMMARY
+
+          echo "### Geometry (Barycentric / Triangle)" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          grep "^test " mid-math-bench-geom.txt | head -30 >> $GITHUB_STEP_SUMMARY || true
+          echo '```' >> $GITHUB_STEP_SUMMARY
+
+          echo "### f32 Math (vs glam / nalgebra / ultraviolet)" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          grep "^test " mid-math-bench-vs-all.txt | head -40 >> $GITHUB_STEP_SUMMARY || true
+          echo '```' >> $GITHUB_STEP_SUMMARY
+
+          echo "### Wide Integer SIMD" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          grep "^test " mid-math-bench-wide-int.txt | head -20 >> $GITHUB_STEP_SUMMARY || true
+          echo '```' >> $GITHUB_STEP_SUMMARY
+
+      - name: Upload all bench logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mid-math-bench-${{ github.run_number }}
+          path: |
+            mid-math-bench-noise.txt
+            mid-math-bench-camera.txt
+            mid-math-bench-geom.txt
+            mid-math-bench-vs-all.txt
+            mid-math-bench-wide-int.txt
+          retention-days: 60
+
+      - name: Upload criterion HTML report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mid-math-criterion-html-${{ github.run_number }}
+          path: target/criterion
+          retention-days: 60
+
+  # ───────────────────────────────────────────────────────────────────────────
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install stable Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-mid-math-lint-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-mid-math-lint-
+
+      - name: rustfmt check
+        run: cargo fmt --package mid-math -- --check
+
+      - name: clippy
+        run: |
+          cargo clippy -p mid-math --all-targets -- \
+            -D warnings \
+            -A clippy::excessive_precision \
+            -A clippy::approx_constant \
+            -A clippy::float_cmp
