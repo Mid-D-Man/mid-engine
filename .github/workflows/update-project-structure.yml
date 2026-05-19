@@ -1,0 +1,35 @@
+# .github/workflows/update-project-structure.yml
+# Calls the reusable workflow in mdix-scaffold — no scripts needed here.
+# Trigger manually or include [snapshot] in commit message.
+#
+# Usage:
+#   git commit -m "add new crate [snapshot]"
+#   git push
+# OR: Actions → "Update project structure snapshot" → Run workflow
+name: Update project structure snapshot
+
+on:
+  workflow_dispatch:
+    inputs:
+      output_file:
+        description: 'Output path for the snapshot'
+        required: false
+        default: 'others/ProjectStructure.mdix'
+  push:
+    branches: [ main, master, develop ]
+    paths-ignore:
+      - 'others/ProjectStructure.mdix'
+
+jobs:
+  update-structure:
+    # On push: only proceed when commit message contains [snapshot]
+    # On manual: always proceed
+    if: |
+      github.event_name == 'workflow_dispatch' ||
+      contains(github.event.head_commit.message, '[snapshot]')
+
+    uses: Mid-D-Man/mdix-scaffold/.github/workflows/update-project-structure.yml@main
+    permissions:
+      contents: write
+    with:
+      output_file: ${{ inputs.output_file || 'others/ProjectStructure.mdix' }}
