@@ -1,15 +1,29 @@
 // crates/mid-math/src/f32/wasm/mod.rs
-//! WASM SIMD implementations — wasm32 / wasm64 with simd128.
+//! WASM SIMD128 implementations — wasm32/wasm64 with simd128 target feature.
 //!
-//! TODO: Replace with v128-backed Vec3/Vec4/Quat and WASM Mat4 ops.
-//!       Requires: RUSTFLAGS="-C target-feature=+simd128"
-//!       Reference: glam/src/f32/wasm/ for the proven patterns.
-//!       Note: WASM scalar is ~5-10x slower than native — this is non-negotiable
-//!       for any 3D web context.
+//! Status:
+//!   Vec3   v128, full SIMD
+//!   Vec4   v128, full SIMD
+//!   Quat   v128, full SIMD mul_quat + slerp
+//!   Mat4   SIMD Mul<Vec4> + Mul<Mat4> + cofactor inverse
 //!
-//! For now, delegate to scalar so wasm32 targets compile and are correct.
+//! Build with:
+//!   RUSTFLAGS="-C target-feature=+simd128" cargo build --target wasm32-unknown-unknown
+//!
+//! Test with wasm-pack:
+//!   RUSTFLAGS="-C target-feature=+simd128" \
+//!   wasm-pack test --node -- -p mid-math
+//!
+//! Cross-compile check from x86_64 dev:
+//!   cargo check --target wasm32-unknown-unknown \
+//!     --config 'build.rustflags=["-C","target-feature=+simd128"]'
 
-pub use crate::f32::scalar::vec3::Vec3;
-pub use crate::f32::scalar::vec4::Vec4;
-pub use crate::f32::scalar::quat::Quat;
-pub use crate::f32::scalar::mat4::Mat4;
+pub mod vec3;
+pub mod vec4;
+pub mod quat;
+pub mod mat4;
+
+pub use vec3::Vec3;
+pub use vec4::Vec4;
+pub use quat::Quat;
+pub use mat4::Mat4;
