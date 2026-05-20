@@ -64,25 +64,19 @@ harness = false
 [[bench]]
 name    = "vs_rng"
 harness = false
+
 [[bench]]
-name = "vs_all"
+name    = "noise"
 harness = false
 
 [[bench]]
-name = "vs_wide_int"
+name    = "camera"
 harness = false
 
 [[bench]]
-name = "noise"
+name    = "geom"
 harness = false
 
-[[bench]]
-name = "camera"
-harness = false
-
-[[bench]]
-name = "geom"
-harness = false
 [features]
 default = []
 simd    = []
