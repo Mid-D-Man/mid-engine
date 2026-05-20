@@ -1,7 +1,15 @@
 // crates/mid-math/src/lib.rs
+// Updated: add pub(crate) mod wasm for shared WASM helpers
 
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 pub(crate) mod sse2;
+
+// Shared WASM SIMD128 helper primitives (dot products, const constructors)
+#[cfg(all(
+    any(target_arch = "wasm32", target_arch = "wasm64"),
+    target_feature = "simd128",
+))]
+pub(crate) mod wasm;
 
 // ── Core math ─────────────────────────────────────────────────────────────────
 pub mod bvec;
@@ -20,7 +28,7 @@ pub mod fixed;
 pub mod color;
 pub mod helpers;
 pub mod ran_gen;
-pub mod string;   // was: pub mod string_id
+pub mod string;
 pub mod noise;
 pub mod camera;
 pub mod geom;
@@ -98,26 +106,24 @@ pub use fixed::{
 
 // ── Color ─────────────────────────────────────────────────────────────────────
 pub use color::{
-    Color32, Rgb, Rgba,
-    Hsv, Hsl,
-    Rgbe, LogLuv32,
-    YCbCr, YCbCrStandard,
+    Color32, Rgb, Rgba, Hsv, Hsl, Rgbe, LogLuv32, YCbCr, YCbCrStandard,
 };
 
-// ── Helpers: angles, animation, physics, shading, algebra ────────────────────
+// ── Helpers ───────────────────────────────────────────────────────────────────
 pub use helpers::angle::{Radians, Degrees};
 pub use helpers::dual_quat::DualQuat;
 pub use helpers::rotor::Rotor3;
 pub use helpers::spatial::{SpatialVelocity, SpatialForce, SpatialInertia};
 pub use helpers::tangent::{TangentFrame, PackedTangent};
 
-// ── Random number generators ──────────────────────────────────────────────────
+// ── RNG ───────────────────────────────────────────────────────────────────────
 pub use ran_gen::prng::Xorshift64;
 pub use ran_gen::pcg::Pcg32;
 
 // ── String hashing ────────────────────────────────────────────────────────────
-pub use string::StringId;   // was: pub use string_id::StringId
-// ── Noise re-exports (add to the re-export section) ──────────────────────────
+pub use string::StringId;
+
+// ── Noise ─────────────────────────────────────────────────────────────────────
 pub use noise::{
     Perlin, Simplex, Value, Worley,
     Fbm, DomainWarp,
@@ -125,33 +131,25 @@ pub use noise::{
     worley::{DistanceMode, DistanceMetric},
 };
 
-// ── Camera re-exports ─────────────────────────────────────────────────────────
+// ── Camera ────────────────────────────────────────────────────────────────────
 pub use camera::frustum::{
     Frustum, Visibility,
     FRUSTUM_LEFT, FRUSTUM_RIGHT, FRUSTUM_BOTTOM,
     FRUSTUM_TOP,  FRUSTUM_NEAR,  FRUSTUM_FAR,
 };
 pub use camera::projection::{
-    PerspectiveParams,
-    unproject,
-    unproject_separate,
-    picking_ray,
-    perspective_infinite_rh,
-    perspective_reversed_z_rh,
-    perspective_decompose,
-    perspective_resize,
-    csm_split_depths,
-    sub_frustum_corners,
+    PerspectiveParams, unproject, unproject_separate, picking_ray,
+    perspective_infinite_rh, perspective_reversed_z_rh,
+    perspective_decompose, perspective_resize,
+    csm_split_depths, sub_frustum_corners,
 };
 
-// ── Geometry re-exports ───────────────────────────────────────────────────────
+// ── Geometry ──────────────────────────────────────────────────────────────────
 pub use geom::barycentric::{
-    BarycentricCoords,
-    Triangle2,
-    Triangle3,
-    signed_area_2d,
-    triangle_area_3d,
+    BarycentricCoords, Triangle2, Triangle3,
+    signed_area_2d, triangle_area_3d,
 };
+
 // ── Scalar utilities ──────────────────────────────────────────────────────────
 #[inline(always)]
 pub fn lerp(a: f32, b: f32, t: f32) -> f32 { a + (b - a) * t }
