@@ -78,6 +78,11 @@ name    = "geom"
 harness = false
 
 [features]
-default = []
-simd    = []
-avx2    = []
+default  = []
+simd     = []
+avx2     = []
+# Rust portable SIMD backend — single implementation covering any target
+# (RISC-V, LoongArch, etc.). Requires nightly unless portable_simd is stable.
+# Usage: cargo build --features coresimd
+# Nightly: RUSTFLAGS="" cargo +nightly build --features coresimd
+coresimd = []
