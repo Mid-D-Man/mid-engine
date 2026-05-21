@@ -1,10 +1,8 @@
 // crates/mid-math/src/lib.rs
-// Updated: add pub(crate) mod wasm for shared WASM helpers
 
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 pub(crate) mod sse2;
 
-// Shared WASM SIMD128 helper primitives (dot products, const constructors)
 #[cfg(all(
     any(target_arch = "wasm32", target_arch = "wasm64"),
     target_feature = "simd128",
@@ -32,6 +30,7 @@ pub mod string;
 pub mod noise;
 pub mod camera;
 pub mod geom;
+
 pub use constants::*;
 
 // ── Bool masks ────────────────────────────────────────────────────────────────
@@ -112,6 +111,7 @@ pub use color::{
 // ── Helpers ───────────────────────────────────────────────────────────────────
 pub use helpers::angle::{Radians, Degrees};
 pub use helpers::dual_quat::DualQuat;
+pub use helpers::euler::{EulerRot, QuatExt};   // ← NEW: full Euler support
 pub use helpers::rotor::Rotor3;
 pub use helpers::spatial::{SpatialVelocity, SpatialForce, SpatialInertia};
 pub use helpers::tangent::{TangentFrame, PackedTangent};
