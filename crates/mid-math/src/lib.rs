@@ -1,7 +1,14 @@
 // crates/mid-math/src/lib.rs
+// Enable portable_simd feature when the coresimd backend is requested.
+// On nightly: required. On a future stable Rust where portable_simd is
+// stabilized, this cfg_attr becomes a no-op and can be removed.
+#![cfg_attr(feature = "coresimd", feature(portable_simd))]
 
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 pub(crate) mod sse2;
+
+#[cfg(target_arch = "aarch64")]
+pub(crate) mod neon;
 
 #[cfg(all(
     any(target_arch = "wasm32", target_arch = "wasm64"),
@@ -48,6 +55,7 @@ pub use f32::Mat2;
 pub use f32::Mat3;
 pub use f32::Affine3;
 
+// Platform dispatch: SSE2 → NEON → WASM → coresimd → scalar
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 pub use f32::sse2::{Vec3, Vec4, Quat, Mat4};
 
@@ -60,11 +68,27 @@ pub use f32::neon::{Vec3, Vec4, Quat, Mat4};
 ))]
 pub use f32::wasm::{Vec3, Vec4, Quat, Mat4};
 
+// coresimd: used on platforms not covered above (RISC-V, LoongArch, etc.)
+// Also usable on SSE2/NEON/WASM if explicitly desired via the feature flag,
+// but platform-specific backends take priority above.
+#[cfg(all(
+    feature = "coresimd",
+    not(any(
+        target_arch = "x86",
+        target_arch = "x86_64",
+        target_arch = "aarch64",
+        all(any(target_arch = "wasm32", target_arch = "wasm64"), target_feature = "simd128"),
+    )),
+))]
+pub use f32::coresimd::{Vec3, Vec4, Quat, Mat4};
+
+// Scalar fallback: no SIMD available and coresimd not enabled
 #[cfg(not(any(
     target_arch = "x86",
     target_arch = "x86_64",
     target_arch = "aarch64",
     all(any(target_arch = "wasm32", target_arch = "wasm64"), target_feature = "simd128"),
+    feature = "coresimd",
 )))]
 pub use f32::scalar::{Vec3, Vec4, Quat, Mat4};
 
@@ -111,7 +135,7 @@ pub use color::{
 // ── Helpers ───────────────────────────────────────────────────────────────────
 pub use helpers::angle::{Radians, Degrees};
 pub use helpers::dual_quat::DualQuat;
-pub use helpers::euler::{EulerRot, QuatExt};   // ← NEW: full Euler support
+pub use helpers::euler::{EulerRot, QuatExt};
 pub use helpers::rotor::Rotor3;
 pub use helpers::spatial::{SpatialVelocity, SpatialForce, SpatialInertia};
 pub use helpers::tangent::{TangentFrame, PackedTangent};
