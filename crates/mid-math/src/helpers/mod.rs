@@ -1,17 +1,17 @@
 // crates/mid-math/src/helpers/mod.rs
-//! High-level math helpers — animation, physics, shading, algebra.
-//!
-//! Grouped here to keep lib.rs clean. All types are re-exported at the
-//! crate root via `pub use helpers::*`-style exports in lib.rs.
+//! Supplementary math helpers built on top of the core types.
 
 pub mod angle;
 pub mod dual_quat;
+pub mod euler;
 pub mod rotor;
 pub mod spatial;
 pub mod tangent;
 
-pub use angle::{Degrees, Radians};
+// Re-export everything callers need from each sub-module.
+pub use angle::{Radians, Degrees};
 pub use dual_quat::DualQuat;
+pub use euler::{EulerRot, QuatExt};
 pub use rotor::Rotor3;
-pub use spatial::{SpatialForce, SpatialInertia, SpatialVelocity};
-pub use tangent::{PackedTangent, TangentFrame};
+pub use spatial::{SpatialVelocity, SpatialForce, SpatialInertia};
+pub use tangent::{TangentFrame, PackedTangent};
