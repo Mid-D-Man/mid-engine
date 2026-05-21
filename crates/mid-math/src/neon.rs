@@ -1,0 +1,66 @@
+// crates/mid-math/src/neon.rs
+//! Shared AArch64 NEON helper primitives.
+//!
+//! The f32 type files (vec3, vec4, quat, mat4) use intrinsics directly — NEON
+//! has richer primitives (vaddvq_f32, mandatory FMA, direct vabsq_f32) that
+//! need no abstraction shims unlike SSE2.
+//!
+//! This module exists for f64 NEON (float64x2_t), where a few centralized
+//! helpers avoid copy-paste across dvec2/dvec4/dquat:
+//!   - Const init helper (float64x2_t cannot be built in const context)
+//!   - 4-lane dot product from two (lo, hi) float64x2_t pairs
+//!   - 2-lane dot product
+//!
+//! All functions are `pub(crate) unsafe`.
+
+use core::arch::aarch64::*;
+
+// ── Compile-time constant helper ──────────────────────────────────────────────
+
+/// Build a `float64x2_t` from `[f64; 2]` at compile time via transmute.
+///
+/// `float64x2_t` has no const constructor. Both types are 16 bytes, align 16
+/// on AArch64. Lane 0 = a[0], lane 1 = a[1].
+#[inline(always)]
+pub(crate) const fn f64x2_from_f64x2(a: [f64; 2]) -> float64x2_t {
+    unsafe { core::mem::transmute(a) }
+}
+
+// ── Dot products ──────────────────────────────────────────────────────────────
+
+/// 2-lane f64 dot product using `vaddvq_f64` (AArch64 ADDP.2D instruction).
+///
+/// `vaddvq_f64(vmulq_f64(a, b))` = a[0]*b[0] + a[1]*b[1]
+/// No shuffle tricks needed — NEON handles horizontal add natively.
+#[inline(always)]
+pub(crate) unsafe fn dot2d_neon(a: float64x2_t, b: float64x2_t) -> f64 {
+    vaddvq_f64(vmulq_f64(a, b))
+}
+
+/// Broadcast 2-lane f64 dot to all lanes.
+#[inline(always)]
+pub(crate) unsafe fn dot2d_neon_into_f64x2(a: float64x2_t, b: float64x2_t) -> float64x2_t {
+    vdupq_n_f64(vaddvq_f64(vmulq_f64(a, b)))
+}
+
+/// 4-lane f64 dot product from two `(lo, hi)` float64x2_t pairs.
+///
+/// Computes `lo_a·lo_b + hi_a·hi_b` using two `vaddvq_f64` calls.
+/// This is optimal on AArch64 — no shuffle needed, both partial sums
+/// are scalar adds to get the final result.
+#[inline(always)]
+pub(crate) unsafe fn dot4d_neon(
+    lo_a: float64x2_t, hi_a: float64x2_t,
+    lo_b: float64x2_t, hi_b: float64x2_t,
+) -> f64 {
+    vaddvq_f64(vmulq_f64(lo_a, lo_b)) + vaddvq_f64(vmulq_f64(hi_a, hi_b))
+}
+
+/// Broadcast 4-lane f64 dot to a float64x2_t (both lanes = dot).
+#[inline(always)]
+pub(crate) unsafe fn dot4d_neon_into_f64x2(
+    lo_a: float64x2_t, hi_a: float64x2_t,
+    lo_b: float64x2_t, hi_b: float64x2_t,
+) -> float64x2_t {
+    vdupq_n_f64(dot4d_neon(lo_a, hi_a, lo_b, hi_b))
+  }
