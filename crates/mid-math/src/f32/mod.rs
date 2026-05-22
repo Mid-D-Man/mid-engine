@@ -23,13 +23,6 @@ pub(crate) mod sse2;
 pub use sse2::{Vec3, Vec4, Quat, Mat4};
 
 // ── AVX2 — x86 / x86_64 with target_feature = "avx2" ────────────────────────
-//
-// Compiled in addition to sse2, not instead of it. The sse2 module defines
-// the Mat4 type; this module will supply AVX2-specific trait impls (Mul) once
-// OPT-7 is implemented. Until then it is an empty stub.
-//
-// To activate during development:
-//   RUSTFLAGS="-C target-feature=+avx2,+fma" cargo bench --bench vs_all -p mid-math
 
 #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), target_feature = "avx2"))]
 pub(crate) mod avx2;
@@ -56,15 +49,42 @@ pub(crate) mod wasm;
 ))]
 pub use wasm::{Vec3, Vec4, Quat, Mat4};
 
+// ── Portable SIMD (coresimd) ──────────────────────────────────────────────────
+//
+// Used on platforms not covered by SSE2 / NEON / WASM (RISC-V, LoongArch, …).
+// Enabled via `--features coresimd`. Requires nightly unless portable_simd
+// has been stabilized.
+//
+// Module is always declared when the feature is active so the submodules
+// compile; the `pub use` is gated to non-SIMD platforms in lib.rs.
+
+#[cfg(feature = "coresimd")]
+pub(crate) mod coresimd;
+
+#[cfg(all(
+    feature = "coresimd",
+    not(any(
+        target_arch = "x86",
+        target_arch = "x86_64",
+        target_arch = "aarch64",
+        all(any(target_arch = "wasm32", target_arch = "wasm64"), target_feature = "simd128"),
+    )),
+))]
+pub use coresimd::{Vec3, Vec4, Quat, Mat4};
+
 // ── Scalar fallback ───────────────────────────────────────────────────────────
+//
+// Active only when no SIMD backend applies:
+//   - Not x86/x86_64
+//   - Not aarch64
+//   - Not wasm32/wasm64 + simd128
+//   - coresimd feature not enabled
 
 #[cfg(not(any(
     target_arch = "x86",
     target_arch = "x86_64",
     target_arch = "aarch64",
-    all(
-        any(target_arch = "wasm32", target_arch = "wasm64"),
-        target_feature = "simd128",
-    ),
+    all(any(target_arch = "wasm32", target_arch = "wasm64"), target_feature = "simd128"),
+    feature = "coresimd",
 )))]
 pub use scalar::{Vec3, Vec4, Quat, Mat4};
