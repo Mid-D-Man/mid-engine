@@ -170,7 +170,7 @@ impl u8x16 {
 
 impl Add for u8x16 {
     type Output = Self;
-    #[inline(always)] fn add(self, r: Self) -> Self { Self(unsafe { vaddq_u8(self.0, r.8) }) }
+    #[inline(always)] fn add(self, r: Self) -> Self { Self(unsafe { vaddq_u8(self.0, r.0) }) }
 }
 impl AddAssign for u8x16 { #[inline(always)] fn add_assign(&mut self, r: Self) { *self = *self + r; } }
 impl Sub for u8x16 {
