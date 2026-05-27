@@ -32,14 +32,11 @@ pub use wasm::{DVec2, DVec4, DQuat};
     target_arch = "x86", target_arch = "x86_64", target_arch = "aarch64",
     all(any(target_arch = "wasm32", target_arch = "wasm64"), target_feature = "simd128"),
 )))]
-pub use self::{dvec2::DVec2, dvec4::DVec4, dquat::DQuat};
-
-pub use dvec3::DVec3;
-pub use dmat2::DMat2;
-pub use dmat3::DMat3;
-pub use dmat4::DMat4;
-pub use daffine2::DAffine2;
-pub use daffine3::DAffine3;
-pub use ddual_quat::DDualQuat;
-
-pub const DEPSILON: f64 = dvec2::DEPSILON;
+// ── f64 types ─────────────────────────────────────────────────────────────────
+pub use f64::{
+    DVec2, DVec3, DVec4, DQuat,
+    DMat2, DMat3, DMat4,
+    DAffine2, DAffine3,
+    DDualQuat,
+    DEPSILON,
+};
