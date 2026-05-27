@@ -1,4 +1,4 @@
-// crates/mid-math/src/f64/mod.rs  — full replacement
+// crates/mid-math/src/f64/mod.rs
 pub mod dvec2;
 pub mod dvec3;
 pub mod dvec4;
@@ -6,7 +6,7 @@ pub mod dquat;
 pub mod dmat2;
 pub mod dmat3;
 pub mod dmat4;
-pub mod daffine2;    // ← new
+pub mod daffine2;
 pub mod daffine3;
 pub mod ddual_quat;
 
@@ -38,7 +38,7 @@ pub use dvec3::DVec3;
 pub use dmat2::DMat2;
 pub use dmat3::DMat3;
 pub use dmat4::DMat4;
-pub use daffine2::DAffine2;    // ← new
+pub use daffine2::DAffine2;
 pub use daffine3::DAffine3;
 pub use ddual_quat::DDualQuat;
 
