@@ -1,7 +1,4 @@
 // crates/mid-math/src/lib.rs
-// Enable portable_simd feature when the coresimd backend is requested.
-// On nightly: required. On a future stable Rust where portable_simd is
-// stabilized, this cfg_attr becomes a no-op and can be removed.
 #![cfg_attr(feature = "coresimd", feature(portable_simd))]
 
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
@@ -23,6 +20,8 @@ pub mod f32;
 pub mod f64;
 pub mod ffi;
 pub mod constants;
+pub mod int8;      // ← new
+pub mod int16;     // ← new
 pub mod int32;
 pub mod int64;
 pub mod wide;
@@ -43,6 +42,12 @@ pub use constants::*;
 // ── Bool masks ────────────────────────────────────────────────────────────────
 pub use bvec::{BVec2, BVec3, BVec4};
 
+// ── Integer vectors (i8 / u8) — new ──────────────────────────────────────────
+pub use int8::{I8Vec2, I8Vec3, I8Vec4, U8Vec2, U8Vec3, U8Vec4};
+
+// ── Integer vectors (i16 / u16) — new ────────────────────────────────────────
+pub use int16::{I16Vec2, I16Vec3, I16Vec4, U16Vec2, U16Vec3, U16Vec4};
+
 // ── Integer vectors (i32 / u32) ───────────────────────────────────────────────
 pub use int32::{IVec2, IVec3, IVec4, UVec2, UVec3, UVec4};
 
@@ -54,6 +59,7 @@ pub use f32::Vec2;
 pub use f32::Mat2;
 pub use f32::Mat3;
 pub use f32::Affine3;
+pub use f32::DualQuat;                // ← moved from helpers, now in f32/
 
 // Platform dispatch: SSE2 → NEON → WASM → coresimd → scalar
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
@@ -68,9 +74,6 @@ pub use f32::neon::{Vec3, Vec4, Quat, Mat4};
 ))]
 pub use f32::wasm::{Vec3, Vec4, Quat, Mat4};
 
-// coresimd: used on platforms not covered above (RISC-V, LoongArch, etc.)
-// Also usable on SSE2/NEON/WASM if explicitly desired via the feature flag,
-// but platform-specific backends take priority above.
 #[cfg(all(
     feature = "coresimd",
     not(any(
@@ -82,7 +85,6 @@ pub use f32::wasm::{Vec3, Vec4, Quat, Mat4};
 ))]
 pub use f32::coresimd::{Vec3, Vec4, Quat, Mat4};
 
-// Scalar fallback: no SIMD available and coresimd not enabled
 #[cfg(not(any(
     target_arch = "x86",
     target_arch = "x86_64",
@@ -93,7 +95,7 @@ pub use f32::coresimd::{Vec3, Vec4, Quat, Mat4};
 pub use f32::scalar::{Vec3, Vec4, Quat, Mat4};
 
 // ── f64 types ─────────────────────────────────────────────────────────────────
-pub use f64::{DVec2, DVec3, DVec4, DQuat, DMat2, DMat3, DMat4, DAffine3};
+pub use f64::{DVec2, DVec3, DVec4, DQuat, DMat2, DMat3, DMat4, DAffine3, DDualQuat}; // ← DDualQuat added
 pub use f64::DEPSILON;
 
 // ── Wide SIMD — integer ───────────────────────────────────────────────────────
@@ -134,7 +136,8 @@ pub use color::{
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 pub use helpers::angle::{Radians, Degrees};
-pub use helpers::dual_quat::DualQuat;
+// DualQuat re-exported from helpers for convenience — canonical source is f32::DualQuat
+pub use helpers::dual_quat_reexport::*;  // not needed — use direct paths below
 pub use helpers::euler::{EulerRot, QuatExt};
 pub use helpers::rotor::Rotor3;
 pub use helpers::spatial::{SpatialVelocity, SpatialForce, SpatialInertia};
