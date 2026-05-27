@@ -56,6 +56,27 @@ impl Color32 {
         }
     }
 
+    /// Build from a packed `0xRRGGBBAA` hex literal — same as `from_u32_rgba`.
+    ///
+    /// ```rust
+    /// let red = Color32::from_hex_u32(0xFF0000FF);
+    /// assert_eq!(red, Color32::RED);
+    /// ```
+    #[inline(always)]
+    pub const fn from_hex_u32(hex: u32) -> Self {
+        Self::from_u32_rgba(hex)
+    }
+
+    /// Pack to a `0xRRGGBBAA` u32. Same as `to_u32_rgba`.
+    #[inline(always)]
+    pub const fn to_hex_u32(self) -> u32 {
+        self.to_u32_rgba()
+    }
+
+    /// Parse from a CSS-style hex string: `"#RRGGBB"` or `"#RRGGBBAA"`.
+    ///
+    /// Returns `None` if the string is not a valid 7- or 9-character hex color.
+    /// Alpha defaults to `255` for 6-digit forms.
     pub fn from_hex(s: &str) -> Option<Self> {
         let s = s.strip_prefix('#')?;
         match s.len() {
