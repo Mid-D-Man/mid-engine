@@ -20,8 +20,8 @@ pub mod f32;
 pub mod f64;
 pub mod ffi;
 pub mod constants;
-pub mod int8;      // ← new
-pub mod int16;     // ← new
+pub mod int8;
+pub mod int16;
 pub mod int32;
 pub mod int64;
 pub mod wide;
@@ -42,10 +42,10 @@ pub use constants::*;
 // ── Bool masks ────────────────────────────────────────────────────────────────
 pub use bvec::{BVec2, BVec3, BVec4};
 
-// ── Integer vectors (i8 / u8) — new ──────────────────────────────────────────
+// ── Integer vectors (i8 / u8) ─────────────────────────────────────────────────
 pub use int8::{I8Vec2, I8Vec3, I8Vec4, U8Vec2, U8Vec3, U8Vec4};
 
-// ── Integer vectors (i16 / u16) — new ────────────────────────────────────────
+// ── Integer vectors (i16 / u16) ───────────────────────────────────────────────
 pub use int16::{I16Vec2, I16Vec3, I16Vec4, U16Vec2, U16Vec3, U16Vec4};
 
 // ── Integer vectors (i32 / u32) ───────────────────────────────────────────────
@@ -58,8 +58,9 @@ pub use int64::{I64Vec2, I64Vec3, I64Vec4, U64Vec2, U64Vec3, U64Vec4};
 pub use f32::Vec2;
 pub use f32::Mat2;
 pub use f32::Mat3;
+pub use f32::Affine2;
 pub use f32::Affine3;
-pub use f32::DualQuat;                // ← moved from helpers, now in f32/
+pub use f32::DualQuat;
 
 // Platform dispatch: SSE2 → NEON → WASM → coresimd → scalar
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
@@ -95,8 +96,16 @@ pub use f32::coresimd::{Vec3, Vec4, Quat, Mat4};
 pub use f32::scalar::{Vec3, Vec4, Quat, Mat4};
 
 // ── f64 types ─────────────────────────────────────────────────────────────────
-pub use f64::{DVec2, DVec3, DVec4, DQuat, DMat2, DMat3, DMat4, DAffine3, DDualQuat}; // ← DDualQuat added
-pub use f64::DEPSILON;
+pub use f64::{
+    DVec2, DVec3, DVec4, DQuat,
+    DMat2, DMat3, DMat4,
+    DAffine2, DAffine3,
+    DualQuat as DDualQuat,
+    DEPSILON,
+};
+
+// Re-export DDualQuat under its own name from the dedicated module too
+pub use f64::ddual_quat::DDualQuat;
 
 // ── Wide SIMD — integer ───────────────────────────────────────────────────────
 pub use wide::int::{IMask4, IMask8, IMask16};
@@ -132,12 +141,11 @@ pub use fixed::{
 // ── Color ─────────────────────────────────────────────────────────────────────
 pub use color::{
     Color32, Rgb, Rgba, Hsv, Hsl, Rgbe, LogLuv32, YCbCr, YCbCrStandard,
+    srgb_to_linear, linear_to_srgb,
 };
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 pub use helpers::angle::{Radians, Degrees};
-// DualQuat re-exported from helpers for convenience — canonical source is f32::DualQuat
-pub use helpers::dual_quat_reexport::*;  // not needed — use direct paths below
 pub use helpers::euler::{EulerRot, QuatExt};
 pub use helpers::rotor::Rotor3;
 pub use helpers::spatial::{SpatialVelocity, SpatialForce, SpatialInertia};
@@ -178,25 +186,88 @@ pub use geom::barycentric::{
 };
 
 // ── Scalar utilities ──────────────────────────────────────────────────────────
+
+/// Linear interpolation between `a` and `b` at parameter `t`.
 #[inline(always)]
 pub fn lerp(a: f32, b: f32, t: f32) -> f32 { a + (b - a) * t }
 
+/// Inverse of `lerp`: returns the `t` such that `lerp(a, b, t) == v`.
+/// Returns `0.0` if `a == b`.
 #[inline(always)]
 pub fn inverse_lerp(a: f32, b: f32, v: f32) -> f32 {
     let d = b - a;
     if d.abs() < constants::EPSILON { 0.0 } else { (v - a) / d }
 }
 
+/// Remap `v` from `[in_min, in_max]` to `[out_min, out_max]`.
 #[inline(always)]
 pub fn remap(v: f32, in_min: f32, in_max: f32, out_min: f32, out_max: f32) -> f32 {
     lerp(out_min, out_max, inverse_lerp(in_min, in_max, v))
 }
 
+/// Cubic Hermite smoothstep. Returns `0` below `edge0`, `1` above `edge1`.
+/// `3t² − 2t³` curve — C1 continuous.
 #[inline(always)]
 pub fn smoothstep(edge0: f32, edge1: f32, x: f32) -> f32 {
     let t = ((x - edge0) / (edge1 - edge0)).clamp(0.0, 1.0);
     t * t * (3.0 - 2.0 * t)
 }
+
+/// Quintic smootherstep (Ken Perlin's improved version).
+/// `6t⁵ − 15t⁴ + 10t³` — C2 continuous, zero first and second derivative at edges.
+#[inline(always)]
+pub fn smootherstep(edge0: f32, edge1: f32, x: f32) -> f32 {
+    let t = ((x - edge0) / (edge1 - edge0)).clamp(0.0, 1.0);
+    t * t * t * (t * (t * 6.0 - 15.0) + 10.0)
+}
+
+/// Step function: `0.0` if `x < edge`, `1.0` otherwise.
+#[inline(always)]
+pub fn step(edge: f32, x: f32) -> f32 {
+    if x < edge { 0.0 } else { 1.0 }
+}
+
+/// Sign of `x`: `+1.0`, `-1.0`, or `0.0`. Delegates to `f32::signum`.
+#[inline(always)]
+pub fn sign(x: f32) -> f32 { x.signum() }
+
+/// Fractional part of `x`: `x - floor(x)`. Always in `[0, 1)`.
+#[inline(always)]
+pub fn fract(x: f32) -> f32 { x - x.floor() }
+
+/// Ping-pong `t` between `0` and `length`. `t` increases then decreases.
+///
+/// Example: for `length = 1.0`, values `0, 0.5, 1, 1.5, 2, 2.5` →
+/// output `0, 0.5, 1, 0.5, 0, 0.5`.
+#[inline(always)]
+pub fn ping_pong(t: f32, length: f32) -> f32 {
+    if length <= 0.0 { return 0.0; }
+    let t = (t - length * (t / length).floor()).abs();
+    if t > length { 2.0 * length - t } else { t }
+}
+
+/// Shortest signed delta from angle `current` to angle `target` (both in radians).
+/// Result is in `(-π, π]`.
+#[inline(always)]
+pub fn delta_angle(current: f32, target: f32) -> f32 {
+    let mut d = (target - current) % constants::TAU;
+    if d > constants::PI       { d -= constants::TAU; }
+    else if d < -constants::PI { d += constants::TAU; }
+    d
+}
+
+/// Move `current` toward `target` by at most `max_delta`. Never overshoots.
+#[inline(always)]
+pub fn move_towards(current: f32, target: f32, max_delta: f32) -> f32 {
+    let diff = target - current;
+    if diff.abs() <= max_delta { target } else { current + diff.signum() * max_delta }
+}
+
+/// `x²` — slightly faster than `x.powi(2)` because it avoids the integer dispatch.
+#[inline(always)] pub fn pow2(x: f32) -> f32 { x * x }
+
+/// `x³`.
+#[inline(always)] pub fn pow3(x: f32) -> f32 { x * x * x }
 
 #[inline(always)] pub fn clamp(v: f32, min: f32, max: f32) -> f32 { v.clamp(min, max) }
 #[inline(always)] pub fn saturate(v: f32) -> f32 { v.clamp(0.0, 1.0) }
