@@ -1,4 +1,5 @@
 // crates/mid-math/src/f32/mod.rs
+// (full replacement — adds dual_quat submodule)
 
 pub(crate) mod math;
 
@@ -6,11 +7,13 @@ mod vec2;
 pub mod mat2;
 pub mod mat3;
 pub mod affine3;
+pub mod dual_quat;                    // ← new: moved from helpers/
 
 pub use vec2::Vec2;
 pub use mat2::Mat2;
 pub use mat3::Mat3;
 pub use affine3::Affine3;
+pub use dual_quat::DualQuat;          // ← new
 
 pub(crate) mod scalar;
 
@@ -50,13 +53,6 @@ pub(crate) mod wasm;
 pub use wasm::{Vec3, Vec4, Quat, Mat4};
 
 // ── Portable SIMD (coresimd) ──────────────────────────────────────────────────
-//
-// Used on platforms not covered by SSE2 / NEON / WASM (RISC-V, LoongArch, …).
-// Enabled via `--features coresimd`. Requires nightly unless portable_simd
-// has been stabilized.
-//
-// Module is always declared when the feature is active so the submodules
-// compile; the `pub use` is gated to non-SIMD platforms in lib.rs.
 
 #[cfg(feature = "coresimd")]
 pub(crate) mod coresimd;
@@ -73,12 +69,6 @@ pub(crate) mod coresimd;
 pub use coresimd::{Vec3, Vec4, Quat, Mat4};
 
 // ── Scalar fallback ───────────────────────────────────────────────────────────
-//
-// Active only when no SIMD backend applies:
-//   - Not x86/x86_64
-//   - Not aarch64
-//   - Not wasm32/wasm64 + simd128
-//   - coresimd feature not enabled
 
 #[cfg(not(any(
     target_arch = "x86",
