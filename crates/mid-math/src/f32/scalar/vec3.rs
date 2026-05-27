@@ -6,9 +6,6 @@ use core::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAss
 use crate::EPSILON;
 
 /// 3D vector. 16 bytes (12 data + 4 pad), align(16). Scalar storage.
-///
-/// On SIMD targets this type is used only for the scalar reference methods.
-/// The active Vec3 on x86_64 is `crate::f32::sse2::vec3::Vec3`.
 #[derive(Debug, Clone, Copy)]
 #[repr(C, align(16))]
 pub struct Vec3 {
@@ -64,6 +61,104 @@ impl Vec3 {
     #[inline(always)] pub fn is_finite(self) -> bool { self.x.is_finite()&&self.y.is_finite()&&self.z.is_finite() }
     #[inline(always)] pub fn approx_eq(self, r:Self) -> bool {
         (self.x-r.x).abs()<EPSILON&&(self.y-r.y).abs()<EPSILON&&(self.z-r.z).abs()<EPSILON
+    }
+
+    // ── p1: angle between ─────────────────────────────────────────────────────
+
+    /// Angle in radians between `self` and `rhs`. Returns `0.0` for zero-length inputs.
+    #[inline(always)]
+    pub fn angle_between(self, rhs: Self) -> f32 {
+        let denom = (self.length_sq() * rhs.length_sq()).sqrt();
+        if denom < EPSILON { 0.0 } else { (self.dot(rhs) / denom).clamp(-1.0, 1.0).acos() }
+    }
+
+    // ── p2: project / reject ──────────────────────────────────────────────────
+
+    /// Project `self` onto `rhs` (component of `self` along `rhs`).
+    /// Returns `ZERO` if `rhs` is zero-length.
+    #[inline(always)]
+    pub fn project_onto(self, rhs: Self) -> Self {
+        let d = rhs.length_sq();
+        if d < EPSILON { Self::ZERO } else { rhs * (self.dot(rhs) / d) }
+    }
+
+    /// Component of `self` perpendicular to `rhs`.
+    #[inline(always)]
+    pub fn reject_from(self, rhs: Self) -> Self { self - self.project_onto(rhs) }
+
+    // ── p7: movement / clamping helpers ──────────────────────────────────────
+
+    /// Move `self` toward `target` by at most `max_dist`. Never overshoots.
+    #[inline(always)]
+    pub fn move_towards(self, target: Self, max_dist: f32) -> Self {
+        let d = target - self;
+        let len = d.length();
+        if len <= max_dist || len < EPSILON { target } else { self + d / len * max_dist }
+    }
+
+    /// Clamp the length to `[min, max]`. Zero vector is returned unchanged.
+    #[inline(always)]
+    pub fn clamp_length(self, min: f32, max: f32) -> Self {
+        let len = self.length();
+        if len < EPSILON { return Self::ZERO; }
+        let clamped = len.clamp(min, max);
+        if (clamped - len).abs() < EPSILON { self } else { self * (clamped / len) }
+    }
+
+    /// Clamp the length to at most `max`. Zero vector is returned unchanged.
+    #[inline(always)]
+    pub fn clamp_length_max(self, max: f32) -> Self {
+        let len = self.length();
+        if len > max && len > EPSILON { self * (max / len) } else { self }
+    }
+
+    /// Clamp the length to at least `min`. Zero vector is returned unchanged.
+    #[inline(always)]
+    pub fn clamp_length_min(self, min: f32) -> Self {
+        let len = self.length();
+        if len < min && len > EPSILON { self * (min / len) } else { self }
+    }
+
+    /// Midpoint between `self` and `rhs`.
+    #[inline(always)]
+    pub fn midpoint(self, rhs: Self) -> Self { (self + rhs) * 0.5 }
+
+    /// True when `self` and `rhs` point in the same or opposite direction (cross product ≈ 0).
+    #[inline(always)]
+    pub fn is_parallel(self, rhs: Self) -> bool {
+        self.cross(rhs).length_sq() < EPSILON * EPSILON
+    }
+
+    /// True when `self` and `rhs` are perpendicular (dot product ≈ 0).
+    #[inline(always)]
+    pub fn is_perpendicular(self, rhs: Self) -> bool { self.dot(rhs).abs() < EPSILON }
+
+    // ── p6: spherical coordinates ─────────────────────────────────────────────
+
+    /// Convert to spherical coordinates `(radius, theta, phi)`.
+    ///
+    /// `theta` = polar angle from +Z axis, range `[0, π]`.
+    /// `phi`   = azimuthal angle from +X axis, range `[-π, π]`.
+    #[inline]
+    pub fn to_spherical(self) -> (f32, f32, f32) {
+        let r = self.length();
+        if r < EPSILON { return (0.0, 0.0, 0.0); }
+        let theta = (self.z / r).clamp(-1.0, 1.0).acos();
+        let phi   = self.y.atan2(self.x);
+        (r, theta, phi)
+    }
+
+    /// Build from spherical coordinates `(r, theta, phi)`.
+    ///
+    /// `theta` = polar angle from +Z, `phi` = azimuthal from +X.
+    #[inline]
+    pub fn from_spherical(r: f32, theta: f32, phi: f32) -> Self {
+        let sin_theta = theta.sin();
+        Self::new(
+            r * sin_theta * phi.cos(),
+            r * sin_theta * phi.sin(),
+            r * theta.cos(),
+        )
     }
 }
 
