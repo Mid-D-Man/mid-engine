@@ -1,14 +1,5 @@
 // crates/mid-math/src/f32/coresimd/vec3.rs
 //! Vec3 backed by `f32x4` (Rust portable SIMD).
-//!
-//! Lane layout: [x, y, z, 0] — lane 3 is always 0 (padding).
-//! Same API and layout guarantees as SSE2/NEON/WASM Vec3.
-//!
-//! `simd_swizzle!` replaces `_mm_shuffle_ps` / `vextq_f32` / `i32x4_shuffle`:
-//!   simd_swizzle!(v, [2, 0, 1, 1])   →   [v[2], v[0], v[1], v[1]]
-//!   simd_swizzle!(a, b, [0, 1, 2, 4]) →  [a[0], a[1], a[2], b[0]]
-//!
-//! `mask.select(a, b)` replaces the SSE2 ANDNOT+OR mask pattern.
 
 use core::fmt;
 use core::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAssign};
@@ -21,27 +12,16 @@ use crate::f32::vec2::Vec2;
 use crate::impl_vec3_deref;
 use crate::EPSILON;
 
-// Vec4 import — needed for extend()
 use crate::f32::coresimd::vec4::Vec4;
 
-// ── Type ──────────────────────────────────────────────────────────────────────
-
 /// 3-dimensional vector. 16 bytes, 16-byte aligned. Backed by `f32x4`.
-///
-/// Lane 3 is always 0 (padding). Arithmetic ops that commute with zero in
-/// lane 3 (add, sub, mul, lerp, normalize) preserve it automatically.
 #[derive(Clone, Copy)]
 #[repr(transparent)]
 pub struct Vec3(pub(crate) f32x4);
 
-// Deref to XYZ<f32>: f32x4 has same layout as [f32; 4], so first 3 floats
-// are x, y, z — identical to XYZ<f32> {x@0, y@4, z@8}.
 impl_vec3_deref!(Vec3);
 
-// ── Constants ─────────────────────────────────────────────────────────────────
-
 impl Vec3 {
-    // f32x4::from_array is const — no union trick needed.
     pub const ZERO:  Self = Self(f32x4::from_array([ 0.0,  0.0,  0.0, 0.0]));
     pub const ONE:   Self = Self(f32x4::from_array([ 1.0,  1.0,  1.0, 0.0]));
     pub const X:     Self = Self(f32x4::from_array([ 1.0,  0.0,  0.0, 0.0]));
@@ -51,48 +31,27 @@ impl Vec3 {
     pub const NEG_Y: Self = Self(f32x4::from_array([ 0.0, -1.0,  0.0, 0.0]));
     pub const NEG_Z: Self = Self(f32x4::from_array([ 0.0,  0.0, -1.0, 0.0]));
 
-    // ── Constructors ─────────────────────────────────────────────────────────
-
     #[inline(always)]
     pub fn new(x: f32, y: f32, z: f32) -> Self {
         Self(f32x4::from_array([x, y, z, 0.0]))
     }
 
-    #[inline(always)]
-    pub fn splat(v: f32) -> Self {
-        // Explicit new() keeps lane 3 = 0 (f32x4::splat would set it to v).
-        Self::new(v, v, v)
-    }
-
+    #[inline(always)] pub fn splat(v: f32) -> Self { Self::new(v, v, v) }
     #[inline(always)] pub fn from_array(a: [f32; 3]) -> Self { Self::new(a[0], a[1], a[2]) }
     #[inline(always)] pub fn to_array(self) -> [f32; 3] { [self.x, self.y, self.z] }
 
-    /// Extend to Vec4, setting lane 3 = `w`.
     #[inline(always)]
-    pub fn extend(self, w: f32) -> Vec4 {
-        Vec4::new(self.x, self.y, self.z, w)
-    }
+    pub fn extend(self, w: f32) -> Vec4 { Vec4::new(self.x, self.y, self.z, w) }
 
     #[inline(always)]
     pub fn truncate(self) -> Vec2 { Vec2::new(self.x, self.y) }
 
-    // ── Arithmetic ────────────────────────────────────────────────────────────
-
-    /// Dot product — zeroes lane 3 before reduce_sum.
     #[inline(always)]
     pub fn dot(self, rhs: Self) -> f32 { dot3(self.0, rhs.0) }
 
     #[inline]
     pub fn dot_into_vec(self, rhs: Self) -> Self { Self(dot3_into_f32x4(self.0, rhs.0)) }
 
-    /// Cross product via cyclic-permutation swizzle.
-    ///
-    /// Derivation (same as WASM/SSE2/NEON versions):
-    ///   lhszxy = [lz, lx, ly, ly]  swizzle [2,0,1,1]
-    ///   rhszxy = [rz, rx, ry, ry]  swizzle [2,0,1,1]
-    ///   sub    = lhszxy*rhs - rhszxy*lhs = [lz*rx-rz*lx, lx*ry-rx*ly, ly*rz-ry*lz, _]
-    ///   result = swizzle(sub, [2,0,1,1]) = [ly*rz-ry*lz, lz*rx-rz*lx, lx*ry-rx*ly]
-    ///          = [result.x, result.y, result.z] ✓
     #[inline(always)]
     pub fn cross(self, rhs: Self) -> Self {
         let lhszxy     = simd_swizzle!(self.0, [2, 0, 1, 1]);
@@ -103,13 +62,10 @@ impl Vec3 {
         Self(simd_swizzle!(sub, [2, 0, 1, 1]))
     }
 
-    // ── Length / normalise ────────────────────────────────────────────────────
-
     #[inline(always)] pub fn length_sq(self) -> f32 { self.dot(self) }
 
     #[inline]
     pub fn length(self) -> f32 {
-        // sqrt of dot3 — StdFloat provides .sqrt() for f32x4
         dot3_into_f32x4(self.0, self.0).sqrt()[0]
     }
 
@@ -119,7 +75,6 @@ impl Vec3 {
         if l < EPSILON { 0.0 } else { 1.0 / l }
     }
 
-    /// Normalize. `mask.select(norm, ZERO)` replaces SSE2's ANDNOT+OR pattern.
     #[inline]
     pub fn normalize(self) -> Self {
         let len    = dot3_into_f32x4(self.0, self.0).sqrt();
@@ -138,10 +93,6 @@ impl Vec3 {
     #[inline] pub fn normalize_or_zero(self) -> Self { self.normalize_or(Self::ZERO) }
     #[inline] pub fn is_normalized(self) -> bool { (self.length_sq() - 1.0).abs() <= 2e-4 }
 
-    // ── Interpolation / geometry ──────────────────────────────────────────────
-
-    /// Lerp: `self + (rhs - self) * t`.
-    /// No FMA intrinsic needed — compiler fuses on FMA-capable targets automatically.
     #[inline]
     pub fn lerp(self, rhs: Self, t: f32) -> Self {
         let tt = f32x4::splat(t);
@@ -152,30 +103,13 @@ impl Vec3 {
     #[inline] pub fn distance(self, rhs: Self)    -> f32 { (self - rhs).length() }
     #[inline] pub fn distance_sq(self, rhs: Self) -> f32 { (self - rhs).length_sq() }
 
-    // ── Component-wise ────────────────────────────────────────────────────────
-
-    /// `simd_lt(rhs).select(self, rhs)` — portable pmin (NaN handling may vary by platform).
-    #[inline]
-    pub fn min(self, rhs: Self) -> Self {
-        Self(self.0.simd_lt(rhs.0).select(self.0, rhs.0))
-    }
-
-    #[inline]
-    pub fn max(self, rhs: Self) -> Self {
-        Self(self.0.simd_gt(rhs.0).select(self.0, rhs.0))
-    }
-
+    #[inline] pub fn min(self, rhs: Self) -> Self { Self(self.0.simd_lt(rhs.0).select(self.0, rhs.0)) }
+    #[inline] pub fn max(self, rhs: Self) -> Self { Self(self.0.simd_gt(rhs.0).select(self.0, rhs.0)) }
     #[inline] pub fn clamp(self, lo: Self, hi: Self) -> Self { self.max(lo).min(hi) }
-
-    /// Abs via `SimdFloat::abs()` — direct instruction on all platforms.
     #[inline] pub fn abs(self) -> Self { Self(self.0.abs()) }
-
-    /// Floor via `StdFloat::floor()` (needs std; scalar fallback otherwise).
     #[inline] pub fn floor(self) -> Self { Self(self.0.floor()) }
     #[inline] pub fn ceil(self)  -> Self { Self(self.0.ceil()) }
     #[inline] pub fn round(self) -> Self { Self(self.0.round()) }
-
-    // ── Predicates ────────────────────────────────────────────────────────────
 
     #[inline] pub fn is_finite(self) -> bool {
         self.x.is_finite() && self.y.is_finite() && self.z.is_finite()
@@ -186,15 +120,87 @@ impl Vec3 {
     #[inline] pub fn approx_eq(self, rhs: Self) -> bool {
         (self - rhs).abs().length_sq() < EPSILON * EPSILON
     }
-    #[inline]
-    pub fn approx_eq_eps(self, rhs: Self, eps: f32) -> bool {
+    #[inline] pub fn approx_eq_eps(self, rhs: Self, eps: f32) -> bool {
         (self.x - rhs.x).abs() < eps
             && (self.y - rhs.y).abs() < eps
             && (self.z - rhs.z).abs() < eps
     }
-}
 
-// ── Operators ─────────────────────────────────────────────────────────────────
+    // ── p1: angle between ─────────────────────────────────────────────────────
+
+    #[inline]
+    pub fn angle_between(self, rhs: Self) -> f32 {
+        let denom = (self.length_sq() * rhs.length_sq()).sqrt();
+        if denom < EPSILON { 0.0 } else { (self.dot(rhs) / denom).clamp(-1.0, 1.0).acos() }
+    }
+
+    // ── p2: project / reject ──────────────────────────────────────────────────
+
+    #[inline]
+    pub fn project_onto(self, rhs: Self) -> Self {
+        let d = rhs.length_sq();
+        if d < EPSILON { Self::ZERO } else { rhs * (self.dot(rhs) / d) }
+    }
+
+    #[inline]
+    pub fn reject_from(self, rhs: Self) -> Self { self - self.project_onto(rhs) }
+
+    // ── p7: movement / clamping helpers ──────────────────────────────────────
+
+    #[inline]
+    pub fn move_towards(self, target: Self, max_dist: f32) -> Self {
+        let d = target - self;
+        let len = d.length();
+        if len <= max_dist || len < EPSILON { target } else { self + d / len * max_dist }
+    }
+
+    #[inline]
+    pub fn clamp_length(self, min: f32, max: f32) -> Self {
+        let len = self.length();
+        if len < EPSILON { return Self::ZERO; }
+        let clamped = len.clamp(min, max);
+        if (clamped - len).abs() < EPSILON { self } else { self * (clamped / len) }
+    }
+
+    #[inline]
+    pub fn clamp_length_max(self, max: f32) -> Self {
+        let len = self.length();
+        if len > max && len > EPSILON { self * (max / len) } else { self }
+    }
+
+    #[inline]
+    pub fn clamp_length_min(self, min: f32) -> Self {
+        let len = self.length();
+        if len < min && len > EPSILON { self * (min / len) } else { self }
+    }
+
+    #[inline] pub fn midpoint(self, rhs: Self) -> Self { (self + rhs) * 0.5 }
+
+    #[inline]
+    pub fn is_parallel(self, rhs: Self) -> bool {
+        self.cross(rhs).length_sq() < EPSILON * EPSILON
+    }
+
+    #[inline]
+    pub fn is_perpendicular(self, rhs: Self) -> bool { self.dot(rhs).abs() < EPSILON }
+
+    // ── p6: spherical coordinates ─────────────────────────────────────────────
+
+    #[inline]
+    pub fn to_spherical(self) -> (f32, f32, f32) {
+        let r = self.length();
+        if r < EPSILON { return (0.0, 0.0, 0.0); }
+        let theta = (self.z / r).clamp(-1.0, 1.0).acos();
+        let phi   = self.y.atan2(self.x);
+        (r, theta, phi)
+    }
+
+    #[inline]
+    pub fn from_spherical(r: f32, theta: f32, phi: f32) -> Self {
+        let sin_theta = theta.sin();
+        Self::new(r * sin_theta * phi.cos(), r * sin_theta * phi.sin(), r * theta.cos())
+    }
+}
 
 impl Add for Vec3 {
     type Output = Self;
@@ -224,7 +230,6 @@ impl Neg for Vec3 {
     type Output = Self;
     #[inline(always)] fn neg(self) -> Self { Self(-self.0) }
 }
-
 impl AddAssign for Vec3 { #[inline(always)] fn add_assign(&mut self, r: Self) { self.0 += r.0; } }
 impl SubAssign for Vec3 { #[inline(always)] fn sub_assign(&mut self, r: Self) { self.0 -= r.0; } }
 impl MulAssign<f32> for Vec3 { #[inline(always)] fn mul_assign(&mut self, s: f32) { self.0 *= f32x4::splat(s); } }
@@ -233,7 +238,6 @@ impl DivAssign<f32> for Vec3 { #[inline(always)] fn div_assign(&mut self, s: f32
 impl PartialEq for Vec3 {
     #[inline]
     fn eq(&self, rhs: &Self) -> bool {
-        // Check lanes 0,1,2 only — lane 3 is padding and may differ after ops.
         (self.0.simd_eq(rhs.0).to_bitmask() & 0b0111) == 0b0111
     }
 }
@@ -250,7 +254,6 @@ impl fmt::Display for Vec3 {
         write!(f, "({}, {}, {})", self.x, self.y, self.z)
     }
 }
-
 impl From<[f32; 3]> for Vec3 { #[inline] fn from(a: [f32; 3]) -> Self { Self::new(a[0], a[1], a[2]) } }
 impl From<Vec3> for [f32; 3] { #[inline] fn from(v: Vec3) -> Self { [v.x, v.y, v.z] } }
 impl From<(f32, f32, f32)> for Vec3 { #[inline] fn from(t: (f32, f32, f32)) -> Self { Self::new(t.0, t.1, t.2) } }
