@@ -5,10 +5,6 @@ use core::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAss
 use super::dvec2::DEPSILON;
 
 /// 3D double-precision vector. 24 bytes, align(8). Always scalar.
-///
-/// No padding — AVX2 wide processing uses separate SoA Vec3x4/Vec3x8 types.
-/// Padding would cost ~32% on basic ops with zero benefit since wide types
-/// use their own layout anyway.
 #[derive(Clone, Copy)]
 #[repr(C, align(8))]
 pub struct DVec3 {
@@ -27,17 +23,10 @@ impl DVec3 {
     pub const NEG_Y: Self = Self { x:  0.0, y: -1.0, z:  0.0 };
     pub const NEG_Z: Self = Self { x:  0.0, y:  0.0, z: -1.0 };
 
-    #[inline(always)]
-    pub const fn new(x: f64, y: f64, z: f64) -> Self { Self { x, y, z } }
-
-    #[inline(always)]
-    pub fn splat(v: f64) -> Self { Self::new(v, v, v) }
-
-    #[inline(always)]
-    pub fn from_array(a: [f64; 3]) -> Self { Self::new(a[0], a[1], a[2]) }
-
-    #[inline(always)]
-    pub fn to_array(self) -> [f64; 3] { [self.x, self.y, self.z] }
+    #[inline(always)] pub const fn new(x: f64, y: f64, z: f64) -> Self { Self { x, y, z } }
+    #[inline(always)] pub fn splat(v: f64) -> Self { Self::new(v, v, v) }
+    #[inline(always)] pub fn from_array(a: [f64; 3]) -> Self { Self::new(a[0], a[1], a[2]) }
+    #[inline(always)] pub fn to_array(self) -> [f64; 3] { [self.x, self.y, self.z] }
 
     #[inline(always)]
     pub fn extend(self, w: f64) -> super::dvec4::DVec4 {
@@ -84,33 +73,87 @@ impl DVec3 {
         if rcp > 0.0 && rcp.is_finite() { Some(self * rcp) } else { None }
     }
 
-    #[inline(always)]
-    pub fn normalize_or_zero(self) -> Self {
-        self.try_normalize().unwrap_or(Self::ZERO)
-    }
+    #[inline(always)] pub fn normalize_or_zero(self) -> Self { self.try_normalize().unwrap_or(Self::ZERO) }
+    #[inline(always)] pub fn is_normalized(self) -> bool { (self.length_sq() - 1.0).abs() <= 2e-10 }
 
-    #[inline(always)]
-    pub fn is_normalized(self) -> bool {
-        (self.length_sq() - 1.0).abs() <= 2e-10
-    }
-
-    #[inline(always)]
-    pub fn lerp(self, rhs: Self, t: f64) -> Self { self + (rhs - self) * t }
-
-    #[inline(always)]
-    pub fn reflect(self, n: Self) -> Self { self - n * (2.0 * self.dot(n)) }
-
-    #[inline(always)]
-    pub fn distance(self, rhs: Self) -> f64 { (self - rhs).length() }
-
-    #[inline(always)]
-    pub fn distance_sq(self, rhs: Self) -> f64 { (self - rhs).length_sq() }
+    #[inline(always)] pub fn lerp(self, rhs: Self, t: f64) -> Self { self + (rhs - self) * t }
+    #[inline(always)] pub fn reflect(self, n: Self) -> Self { self - n * (2.0 * self.dot(n)) }
+    #[inline(always)] pub fn distance(self, rhs: Self) -> f64 { (self - rhs).length() }
+    #[inline(always)] pub fn distance_sq(self, rhs: Self) -> f64 { (self - rhs).length_sq() }
 
     #[inline(always)]
     pub fn angle_between(self, rhs: Self) -> f64 {
         let denom = (self.length_sq() * rhs.length_sq()).sqrt();
-        if denom < DEPSILON { 0.0 }
-        else { (self.dot(rhs) / denom).clamp(-1.0, 1.0).acos() }
+        if denom < DEPSILON { 0.0 } else { (self.dot(rhs) / denom).clamp(-1.0, 1.0).acos() }
+    }
+
+    // ── p2: project / reject ──────────────────────────────────────────────────
+
+    #[inline(always)]
+    pub fn project_onto(self, rhs: Self) -> Self {
+        let d = rhs.length_sq();
+        if d < DEPSILON { Self::ZERO } else { rhs * (self.dot(rhs) / d) }
+    }
+
+    #[inline(always)]
+    pub fn reject_from(self, rhs: Self) -> Self { self - self.project_onto(rhs) }
+
+    // ── p7: movement / clamping helpers ──────────────────────────────────────
+
+    #[inline(always)]
+    pub fn move_towards(self, target: Self, max_dist: f64) -> Self {
+        let d = target - self;
+        let len = d.length();
+        if len <= max_dist || len < DEPSILON { target } else { self + d / len * max_dist }
+    }
+
+    #[inline(always)]
+    pub fn clamp_length(self, min: f64, max: f64) -> Self {
+        let len = self.length();
+        if len < DEPSILON { return Self::ZERO; }
+        let clamped = len.clamp(min, max);
+        if (clamped - len).abs() < DEPSILON { self } else { self * (clamped / len) }
+    }
+
+    #[inline(always)]
+    pub fn clamp_length_max(self, max: f64) -> Self {
+        let len = self.length();
+        if len > max && len > DEPSILON { self * (max / len) } else { self }
+    }
+
+    #[inline(always)]
+    pub fn clamp_length_min(self, min: f64) -> Self {
+        let len = self.length();
+        if len < min && len > DEPSILON { self * (min / len) } else { self }
+    }
+
+    #[inline(always)] pub fn midpoint(self, rhs: Self) -> Self { (self + rhs) * 0.5 }
+
+    #[inline(always)]
+    pub fn is_parallel(self, rhs: Self) -> bool {
+        self.cross(rhs).length_sq() < DEPSILON * DEPSILON
+    }
+
+    #[inline(always)]
+    pub fn is_perpendicular(self, rhs: Self) -> bool { self.dot(rhs).abs() < DEPSILON }
+
+    // ── p6: spherical coordinates ─────────────────────────────────────────────
+
+    /// Convert to `(radius, theta, phi)`. `theta` ∈ `[0, π]`, `phi` ∈ `[-π, π]`.
+    #[inline]
+    pub fn to_spherical(self) -> (f64, f64, f64) {
+        let r = self.length();
+        if r < DEPSILON { return (0.0, 0.0, 0.0); }
+        let theta = (self.z / r).clamp(-1.0, 1.0).acos();
+        let phi   = self.y.atan2(self.x);
+        (r, theta, phi)
+    }
+
+    /// Build from spherical `(r, theta, phi)`.
+    #[inline]
+    pub fn from_spherical(r: f64, theta: f64, phi: f64) -> Self {
+        let sin_theta = theta.sin();
+        Self::new(r * sin_theta * phi.cos(), r * sin_theta * phi.sin(), r * theta.cos())
     }
 
     #[inline(always)]
@@ -126,33 +169,23 @@ impl DVec3 {
         Self::new(self.x.max(rhs.x), self.y.max(rhs.y), self.z.max(rhs.z))
     }
 
-    #[inline(always)]
-    pub fn clamp(self, lo: Self, hi: Self) -> Self { self.max(lo).min(hi) }
-
-    #[inline(always)]
-    pub fn floor(self) -> Self { Self::new(self.x.floor(), self.y.floor(), self.z.floor()) }
-
-    #[inline(always)]
-    pub fn ceil(self) -> Self { Self::new(self.x.ceil(), self.y.ceil(), self.z.ceil()) }
-
-    #[inline(always)]
-    pub fn round(self) -> Self { Self::new(self.x.round(), self.y.round(), self.z.round()) }
+    #[inline(always)] pub fn clamp(self, lo: Self, hi: Self) -> Self { self.max(lo).min(hi) }
+    #[inline(always)] pub fn floor(self) -> Self { Self::new(self.x.floor(), self.y.floor(), self.z.floor()) }
+    #[inline(always)] pub fn ceil(self)  -> Self { Self::new(self.x.ceil(),  self.y.ceil(),  self.z.ceil()) }
+    #[inline(always)] pub fn round(self) -> Self { Self::new(self.x.round(), self.y.round(), self.z.round()) }
 
     #[inline(always)]
     pub fn is_finite(self) -> bool {
         self.x.is_finite() && self.y.is_finite() && self.z.is_finite()
     }
-
     #[inline(always)]
-    pub fn is_nan(self) -> bool {
-        self.x.is_nan() || self.y.is_nan() || self.z.is_nan()
-    }
+    pub fn is_nan(self) -> bool { self.x.is_nan() || self.y.is_nan() || self.z.is_nan() }
 
     #[inline(always)]
     pub fn approx_eq(self, rhs: Self) -> bool {
-        (self.x-rhs.x).abs() < DEPSILON
-            && (self.y-rhs.y).abs() < DEPSILON
-            && (self.z-rhs.z).abs() < DEPSILON
+        (self.x - rhs.x).abs() < DEPSILON
+            && (self.y - rhs.y).abs() < DEPSILON
+            && (self.z - rhs.z).abs() < DEPSILON
     }
 
     #[inline(always)]
@@ -179,11 +212,8 @@ impl MulAssign<f64> for DVec3 { #[inline(always)] fn mul_assign(&mut self,s:f64)
 impl DivAssign<f64> for DVec3 { #[inline(always)] fn div_assign(&mut self,s:f64){self.x/=s;self.y/=s;self.z/=s;} }
 
 impl PartialEq for DVec3 {
-    fn eq(&self, rhs: &Self) -> bool {
-        self.x == rhs.x && self.y == rhs.y && self.z == rhs.z
-    }
+    fn eq(&self, rhs: &Self) -> bool { self.x==rhs.x && self.y==rhs.y && self.z==rhs.z }
 }
-
 impl Default for DVec3 { fn default() -> Self { Self::ZERO } }
 
 impl fmt::Debug for DVec3 {
@@ -191,13 +221,11 @@ impl fmt::Debug for DVec3 {
         f.debug_tuple("DVec3").field(&self.x).field(&self.y).field(&self.z).finish()
     }
 }
-
 impl fmt::Display for DVec3 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "({}, {}, {})", self.x, self.y, self.z)
     }
 }
-
 impl From<[f64; 3]> for DVec3 { fn from(a:[f64;3])->Self{Self::new(a[0],a[1],a[2])} }
 impl From<DVec3> for [f64; 3] { fn from(v:DVec3)->[f64;3]{[v.x,v.y,v.z]} }
 impl From<(f64,f64,f64)> for DVec3 { fn from(t:(f64,f64,f64))->Self{Self::new(t.0,t.1,t.2)} }
