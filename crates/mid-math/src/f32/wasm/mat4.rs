@@ -1,28 +1,5 @@
 // crates/mid-math/src/f32/wasm/mat4.rs
 //! Mat4 with WASM SIMD128 fast-paths on wasm32/wasm64.
-//!
-//! Reference: cglm include/cglm/simd/wasm/mat4.h + glam src/f32/wasm/mat4.rs
-//!
-//! WASM SIMD128 shuffle note:
-//!   i32x4_shuffle::<L0,L1,L2,L3>(a, b)
-//!   Lane i of result = (Li < 4) ? a[Li] : b[Li-4]
-//!
-//!   vs SSE2 _mm_shuffle_ps::<IMM>(a, b):
-//!   result[0] = a[IMM & 3]
-//!   result[1] = a[(IMM>>2) & 3]
-//!   result[2] = b[(IMM>>4) & 3]
-//!   result[3] = b[(IMM>>6) & 3]
-//!
-//! v128_andnot(a, b) = a & ~b   ← WASM
-//! _mm_andnot_ps(a, b) = ~a & b ← SSE2  (argument order REVERSED)
-//!
-//! No native FMA in WASM SIMD128 base spec.
-//! LLVM may fuse mul+add chains on relaxed-simd capable hosts.
-//!
-//! Mul<Vec4>  — splat+multiply+accumulate: 4 mul + 3 add = 7 instructions
-//! Mul<Mat4>  — 4× Mul<Vec4>, four independent chains
-//! inverse    — cofactor expansion (fac0-fac5), ported from cglm/glam WASM reference
-//! inverse_trs — scalar TRS-specific path (structure exploit, no SIMD needed)
 
 #[cfg(target_arch = "wasm32")]
 use core::arch::wasm32::*;
@@ -39,7 +16,6 @@ use crate::wasm::v128_from_f32x4;
 use crate::EPSILON;
 
 /// 4×4 column-major matrix. 64 bytes, 16-byte aligned.
-/// `cols[c][r]` = element at column `c`, row `r`.
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[repr(C, align(16))]
 pub struct Mat4 {
@@ -95,6 +71,9 @@ impl Mat4 {
         )
     }
 
+    // ── View matrices ─────────────────────────────────────────────────────────
+
+    /// Right-handed look-at view matrix.
     pub fn look_at_rh(eye: Vec3, center: Vec3, up: Vec3) -> Self {
         let f = (center - eye).normalize();
         let r = f.cross(up).normalize();
@@ -107,6 +86,22 @@ impl Mat4 {
         )
     }
 
+    /// Left-handed look-at view matrix. Camera looks along +Z.
+    pub fn look_at_lh(eye: Vec3, center: Vec3, up: Vec3) -> Self {
+        let f = (center - eye).normalize();
+        let r = up.cross(f).normalize();
+        let u = f.cross(r);
+        Self::from_cols(
+            [ r.x,  u.x,  f.x, 0.0],
+            [ r.y,  u.y,  f.y, 0.0],
+            [ r.z,  u.z,  f.z, 0.0],
+            [-r.dot(eye), -u.dot(eye), -f.dot(eye), 1.0],
+        )
+    }
+
+    // ── Projection matrices ───────────────────────────────────────────────────
+
+    /// Right-handed perspective projection, depth `[-1, 1]`.
     pub fn perspective_rh(fov_y: f32, aspect: f32, near: f32, far: f32) -> Self {
         let f = 1.0 / (fov_y * 0.5).tan();
         let z = near - far;
@@ -118,6 +113,19 @@ impl Mat4 {
         )
     }
 
+    /// Left-handed perspective projection, depth `[0, 1]`.
+    pub fn perspective_lh(fov_y: f32, aspect: f32, near: f32, far: f32) -> Self {
+        let f = 1.0 / (fov_y * 0.5).tan();
+        let z = far - near;
+        Self::from_cols(
+            [f / aspect, 0.0,  0.0,               0.0],
+            [0.0,        f,    0.0,               0.0],
+            [0.0,        0.0,  far / z,            1.0],
+            [0.0,        0.0, -(far * near) / z,   0.0],
+        )
+    }
+
+    /// Right-handed orthographic projection.
     pub fn ortho_rh(left:f32, right:f32, bottom:f32, top:f32, near:f32, far:f32) -> Self {
         let rl=right-left; let tb=top-bottom; let nf=far-near;
         Self::from_cols(
@@ -127,6 +135,21 @@ impl Mat4 {
             [-(right+left)/rl, -(top+bottom)/tb, -(far+near)/nf, 1.0],
         )
     }
+
+    /// Left-handed orthographic projection, depth `[0, 1]`.
+    pub fn ortho_lh(left: f32, right: f32, bottom: f32, top: f32, near: f32, far: f32) -> Self {
+        let rl = right - left;
+        let tb = top   - bottom;
+        let nf = far   - near;
+        Self::from_cols(
+            [2.0 / rl, 0.0,      0.0,       0.0],
+            [0.0,      2.0 / tb, 0.0,       0.0],
+            [0.0,      0.0,      1.0 / nf,  0.0],
+            [-(right + left) / rl, -(top + bottom) / tb, -near / nf, 1.0],
+        )
+    }
+
+    // ── Transpose / transform ─────────────────────────────────────────────────
 
     pub fn transpose(self) -> Self {
         let c = &self.cols;
@@ -148,17 +171,55 @@ impl Mat4 {
         (self * v.extend(0.0)).truncate()
     }
 
+    // ── Decompose ─────────────────────────────────────────────────────────────
+
+    /// Decompose a TRS matrix into `(translation, rotation, scale)`.
+    pub fn decompose_trs(self) -> (Vec3, Quat, Vec3) {
+        let t = Vec3::new(self.cols[3][0], self.cols[3][1], self.cols[3][2]);
+
+        let sx = Vec3::new(self.cols[0][0], self.cols[0][1], self.cols[0][2]).length();
+        let sy = Vec3::new(self.cols[1][0], self.cols[1][1], self.cols[1][2]).length();
+        let sz = Vec3::new(self.cols[2][0], self.cols[2][1], self.cols[2][2]).length();
+
+        let det =
+            self.cols[0][0] * (self.cols[1][1]*self.cols[2][2] - self.cols[2][1]*self.cols[1][2])
+          - self.cols[1][0] * (self.cols[0][1]*self.cols[2][2] - self.cols[2][1]*self.cols[0][2])
+          + self.cols[2][0] * (self.cols[0][1]*self.cols[1][2] - self.cols[1][1]*self.cols[0][2]);
+
+        let sx = if det < 0.0 { -sx } else { sx };
+
+        let inv_sx = if sx.abs() < EPSILON { 0.0 } else { 1.0 / sx };
+        let inv_sy = if sy      < EPSILON { 0.0 } else { 1.0 / sy };
+        let inv_sz = if sz      < EPSILON { 0.0 } else { 1.0 / sz };
+
+        let c0 = Vec3::new(
+            self.cols[0][0] * inv_sx,
+            self.cols[0][1] * inv_sx,
+            self.cols[0][2] * inv_sx,
+        );
+        let c1 = Vec3::new(
+            self.cols[1][0] * inv_sy,
+            self.cols[1][1] * inv_sy,
+            self.cols[1][2] * inv_sy,
+        );
+        let c2 = Vec3::new(
+            self.cols[2][0] * inv_sz,
+            self.cols[2][1] * inv_sz,
+            self.cols[2][2] * inv_sz,
+        );
+
+        use crate::helpers::euler::QuatExt as _;
+        let r = Quat::from_rotation_axes(c0, c1, c2);
+
+        (t, r, Vec3::new(sx, sy, sz))
+    }
+
     // ── Inverse ───────────────────────────────────────────────────────────────
 
-    /// General Mat4 inverse via cofactor expansion with WASM SIMD shuffles.
-    ///
-    /// Ported from cglm `glm_mat4_inv_wasm` / glam `src/f32/wasm/mat4.rs`.
-    /// Returns `None` if singular.
     pub fn inverse(self) -> Option<Self> {
         unsafe { wasm_inverse_general(&self) }
     }
 
-    /// Scalar general inverse — correctness reference, also used for debug.
     pub fn inverse_scalar(self) -> Option<Self> {
         let a = [
             self.cols[0][0],self.cols[0][1],self.cols[0][2],self.cols[0][3],
@@ -196,8 +257,6 @@ impl Mat4 {
     }
 
     pub fn inverse_trs(self) -> Self {
-        // TRS structure: R^-1 = R^T, S^-1 = 1/diag.
-        // No SIMD benefit over the scalar exploit; keep scalar.
         let sx2 = self.cols[0][0]*self.cols[0][0]+self.cols[0][1]*self.cols[0][1]+self.cols[0][2]*self.cols[0][2];
         let sy2 = self.cols[1][0]*self.cols[1][0]+self.cols[1][1]*self.cols[1][1]+self.cols[1][2]*self.cols[1][2];
         let sz2 = self.cols[2][0]*self.cols[2][0]+self.cols[2][1]*self.cols[2][1]+self.cols[2][2]*self.cols[2][2];
@@ -215,10 +274,7 @@ impl Mat4 {
     }
 }
 
-// ── Mul<Vec4> — splat + multiply + accumulate (cglm glm_mat4_mulv_wasm pattern) ──
-//
-// col0*v.x + col1*v.y + col2*v.z + col3*v.w
-// No native FMA in WASM SIMD128 base spec — LLVM may fuse mul+add at IR level.
+// ── Mul<Vec4> ────────────────────────────────────────────────────────────────
 
 impl Mul<Vec4> for Mat4 {
     type Output = Vec4;
@@ -230,8 +286,6 @@ impl Mul<Vec4> for Mat4 {
             let a2 = v128_load(self.cols[2].as_ptr() as *const v128);
             let a3 = v128_load(self.cols[3].as_ptr() as *const v128);
 
-            // Broadcast each component of v to all 4 lanes.
-            // i32x4_shuffle::<0,0,0,0>(x,x) = splat lane 0
             let vx = i32x4_shuffle::<0, 0, 4, 4>(v.0, v.0);
             let vx = i32x4_shuffle::<0, 2, 4, 6>(vx, vx);
             let vy = i32x4_shuffle::<1, 1, 5, 5>(v.0, v.0);
@@ -249,8 +303,6 @@ impl Mul<Vec4> for Mat4 {
         }
     }
 }
-
-// ── Mul<Mat4> — four independent Mul<Vec4> chains ────────────────────────────
 
 impl Mul for Mat4 {
     type Output = Self;
@@ -284,16 +336,7 @@ impl fmt::Display for Mat4 {
     }
 }
 
-// ── WASM cofactor inverse — ported from cglm glm_mat4_inv_wasm ───────────────
-//
-// Shuffle translation key (SSE2 IMM → WASM lane indices):
-//   _mm_shuffle_ps::<0b11_11_11_11>(a,a) = [a3,a3,a3,a3] → i32x4_shuffle::<3,3,7,7>(a,a) then collapse
-//   _mm_movehl_ps(a,b) = [b2,b3,a2,a3]  → i32x4_shuffle::<6,7,2,3>(a,b)
-//   _mm_movelh_ps(a,b) = [a0,a1,b0,b1]  → i32x4_shuffle::<0,1,4,5>(a,b)
-//
-// v128_andnot(a,b) = a & ~b  ← NOTE: WASM argument order OPPOSITE to SSE2
-// In SSE2: _mm_andnot_ps(a,b) = ~a & b
-// To get "~a & b" in WASM: v128_andnot(b, a)  (b & ~a)
+// ── WASM cofactor inverse (unchanged from original) ───────────────────────────
 
 unsafe fn wasm_inverse_general(m: &Mat4) -> Option<Mat4> {
     let x = v128_load(m.cols[0].as_ptr() as *const v128);
@@ -301,21 +344,15 @@ unsafe fn wasm_inverse_general(m: &Mat4) -> Option<Mat4> {
     let z = v128_load(m.cols[2].as_ptr() as *const v128);
     let w = v128_load(m.cols[3].as_ptr() as *const v128);
 
-    // fac0 = cofactors involving z,w rows and cols 2,3
     let fac0 = {
-        // swp0a = [w3, w3, z3, z3]
         let swp0a = i32x4_shuffle::<3, 3, 7, 7>(w, z);
-        // swp0b = [w2, w2, z2, z2]
         let swp0b = i32x4_shuffle::<2, 2, 6, 6>(w, z);
-        // swp00 = [z2, z2, y2, y2]
         let swp00 = i32x4_shuffle::<2, 2, 6, 6>(z, y);
-        // swp01 = [swp0a[0], swp0a[0], swp0a[4], swp0a[6]]
         let swp01 = i32x4_shuffle::<0, 0, 4, 6>(swp0a, swp0a);
         let swp02 = i32x4_shuffle::<0, 0, 4, 6>(swp0b, swp0b);
         let swp03 = i32x4_shuffle::<3, 3, 7, 7>(z, y);
         f32x4_sub(f32x4_mul(swp00, swp01), f32x4_mul(swp02, swp03))
     };
-
     let fac1 = {
         let swp0a = i32x4_shuffle::<3, 3, 7, 7>(w, z);
         let swp0b = i32x4_shuffle::<1, 1, 5, 5>(w, z);
@@ -325,7 +362,6 @@ unsafe fn wasm_inverse_general(m: &Mat4) -> Option<Mat4> {
         let swp03 = i32x4_shuffle::<3, 3, 7, 7>(z, y);
         f32x4_sub(f32x4_mul(swp00, swp01), f32x4_mul(swp02, swp03))
     };
-
     let fac2 = {
         let swp0a = i32x4_shuffle::<2, 2, 6, 6>(w, z);
         let swp0b = i32x4_shuffle::<1, 1, 5, 5>(w, z);
@@ -335,7 +371,6 @@ unsafe fn wasm_inverse_general(m: &Mat4) -> Option<Mat4> {
         let swp03 = i32x4_shuffle::<2, 2, 6, 6>(z, y);
         f32x4_sub(f32x4_mul(swp00, swp01), f32x4_mul(swp02, swp03))
     };
-
     let fac3 = {
         let swp0a = i32x4_shuffle::<3, 3, 7, 7>(w, z);
         let swp0b = i32x4_shuffle::<0, 0, 4, 4>(w, z);
@@ -345,7 +380,6 @@ unsafe fn wasm_inverse_general(m: &Mat4) -> Option<Mat4> {
         let swp03 = i32x4_shuffle::<3, 3, 7, 7>(z, y);
         f32x4_sub(f32x4_mul(swp00, swp01), f32x4_mul(swp02, swp03))
     };
-
     let fac4 = {
         let swp0a = i32x4_shuffle::<2, 2, 6, 6>(w, z);
         let swp0b = i32x4_shuffle::<0, 0, 4, 4>(w, z);
@@ -355,7 +389,6 @@ unsafe fn wasm_inverse_general(m: &Mat4) -> Option<Mat4> {
         let swp03 = i32x4_shuffle::<2, 2, 6, 6>(z, y);
         f32x4_sub(f32x4_mul(swp00, swp01), f32x4_mul(swp02, swp03))
     };
-
     let fac5 = {
         let swp0a = i32x4_shuffle::<1, 1, 5, 5>(w, z);
         let swp0b = i32x4_shuffle::<0, 0, 4, 4>(w, z);
@@ -366,43 +399,32 @@ unsafe fn wasm_inverse_general(m: &Mat4) -> Option<Mat4> {
         f32x4_sub(f32x4_mul(swp00, swp01), f32x4_mul(swp02, swp03))
     };
 
-    // sign patterns: col0=[+,-,+,-]  col1=[-,+,-,+]
     let sign_a = v128_from_f32x4([ 1.0, -1.0,  1.0, -1.0]);
     let sign_b = v128_from_f32x4([-1.0,  1.0, -1.0,  1.0]);
 
-    // Build vec0..vec3: broadcast element from (y,x) combined for each row
-    let tmp0  = i32x4_shuffle::<0, 0, 4, 4>(y, x);
-    let vec0  = i32x4_shuffle::<0, 2, 4, 6>(tmp0, tmp0);
-    let tmp1  = i32x4_shuffle::<1, 1, 5, 5>(y, x);
-    let vec1  = i32x4_shuffle::<0, 2, 4, 6>(tmp1, tmp1);
-    let tmp2  = i32x4_shuffle::<2, 2, 6, 6>(y, x);
-    let vec2  = i32x4_shuffle::<0, 2, 4, 6>(tmp2, tmp2);
-    let tmp3  = i32x4_shuffle::<3, 3, 7, 7>(y, x);
-    let vec3  = i32x4_shuffle::<0, 2, 4, 6>(tmp3, tmp3);
+    let tmp0 = i32x4_shuffle::<0, 0, 4, 4>(y, x);
+    let vec0 = i32x4_shuffle::<0, 2, 4, 6>(tmp0, tmp0);
+    let tmp1 = i32x4_shuffle::<1, 1, 5, 5>(y, x);
+    let vec1 = i32x4_shuffle::<0, 2, 4, 6>(tmp1, tmp1);
+    let tmp2 = i32x4_shuffle::<2, 2, 6, 6>(y, x);
+    let vec2 = i32x4_shuffle::<0, 2, 4, 6>(tmp2, tmp2);
+    let tmp3 = i32x4_shuffle::<3, 3, 7, 7>(y, x);
+    let vec3 = i32x4_shuffle::<0, 2, 4, 6>(tmp3, tmp3);
 
-    // Compute cofactor columns
     let inv0 = f32x4_mul(sign_b,
-        f32x4_add(f32x4_sub(f32x4_mul(vec1, fac0), f32x4_mul(vec2, fac1)),
-                  f32x4_mul(vec3, fac2)));
+        f32x4_add(f32x4_sub(f32x4_mul(vec1,fac0), f32x4_mul(vec2,fac1)), f32x4_mul(vec3,fac2)));
     let inv1 = f32x4_mul(sign_a,
-        f32x4_add(f32x4_sub(f32x4_mul(vec0, fac0), f32x4_mul(vec2, fac3)),
-                  f32x4_mul(vec3, fac4)));
+        f32x4_add(f32x4_sub(f32x4_mul(vec0,fac0), f32x4_mul(vec2,fac3)), f32x4_mul(vec3,fac4)));
     let inv2 = f32x4_mul(sign_b,
-        f32x4_add(f32x4_sub(f32x4_mul(vec0, fac1), f32x4_mul(vec1, fac3)),
-                  f32x4_mul(vec3, fac5)));
+        f32x4_add(f32x4_sub(f32x4_mul(vec0,fac1), f32x4_mul(vec1,fac3)), f32x4_mul(vec3,fac5)));
     let inv3 = f32x4_mul(sign_a,
-        f32x4_add(f32x4_sub(f32x4_mul(vec0, fac2), f32x4_mul(vec1, fac4)),
-                  f32x4_mul(vec2, fac5)));
+        f32x4_add(f32x4_sub(f32x4_mul(vec0,fac2), f32x4_mul(vec1,fac4)), f32x4_mul(vec2,fac5)));
 
-    // Determinant: dot of first column of m with first row of cofactor matrix
-    // row0 of cofactors = [inv0[0], inv1[0], inv2[0], inv3[0]]
-    let row0_lo = i32x4_shuffle::<0, 0, 4, 4>(inv0, inv1); // [inv0[0], inv0[0], inv1[0], inv1[0]]
+    let row0_lo = i32x4_shuffle::<0, 0, 4, 4>(inv0, inv1);
     let row0_hi = i32x4_shuffle::<0, 0, 4, 4>(inv2, inv3);
     let row0    = i32x4_shuffle::<0, 2, 4, 6>(row0_lo, row0_hi);
 
-    // dot(x, row0)
     let dot_v  = f32x4_mul(x, row0);
-    // horizontal sum
     let s0 = f32x4_add(dot_v, i32x4_shuffle::<1, 0, 3, 2>(dot_v, dot_v));
     let s1 = f32x4_add(s0,    i32x4_shuffle::<2, 3, 0, 1>(s0,    s0));
     let det = f32x4_extract_lane::<0>(s1);
@@ -416,4 +438,4 @@ unsafe fn wasm_inverse_general(m: &Mat4) -> Option<Mat4> {
     v128_store(out.cols[2].as_mut_ptr() as *mut v128, f32x4_mul(inv2, rcp));
     v128_store(out.cols[3].as_mut_ptr() as *mut v128, f32x4_mul(inv3, rcp));
     Some(out)
-  }
+            }
