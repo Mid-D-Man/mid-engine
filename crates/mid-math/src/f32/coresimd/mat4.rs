@@ -1,16 +1,5 @@
 // crates/mid-math/src/f32/coresimd/mat4.rs
 //! Mat4 using Rust portable SIMD (`f32x4`).
-//!
-//! `simd_swizzle!` replaces all `_mm_shuffle_ps` calls from the SSE2 version.
-//! The mapping is: `_mm_shuffle_ps::<IMM>(a, b)` where
-//!   result[k] = a[((IMM >> (k*2)) & 3)]   for k in 0..2
-//!   result[k] = b[((IMM >> (k*2)) & 3)]   for k in 2..4
-//!
-//! In portable SIMD: `simd_swizzle!(a, b, [i0,i1,i2,i3])` where
-//!   indices 0-3 select from `a`, indices 4-7 select from `b`.
-//!
-//! All operations are safe (no `unsafe` blocks). The compiler lowers
-//! `simd_swizzle!` to the optimal shuffle instruction on each target.
 
 use core::fmt;
 use core::ops::Mul;
@@ -24,7 +13,6 @@ use crate::f32::coresimd::quat::Quat;
 use crate::EPSILON;
 
 /// 4×4 column-major matrix. 64 bytes, 16-byte aligned.
-/// `cols[c][r]` = element at column `c`, row `r`.
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[repr(C, align(16))]
 pub struct Mat4 {
@@ -78,6 +66,8 @@ impl Mat4 {
         )
     }
 
+    // ── View matrices ─────────────────────────────────────────────────────────
+
     pub fn look_at_rh(eye: Vec3, center: Vec3, up: Vec3) -> Self {
         let f = (center - eye).normalize();
         let r = f.cross(up).normalize();
@@ -88,12 +78,39 @@ impl Mat4 {
         )
     }
 
+    /// Left-handed look-at view matrix. Camera looks along +Z.
+    pub fn look_at_lh(eye: Vec3, center: Vec3, up: Vec3) -> Self {
+        let f = (center - eye).normalize();
+        let r = up.cross(f).normalize();
+        let u = f.cross(r);
+        Self::from_cols(
+            [ r.x,  u.x,  f.x, 0.0],
+            [ r.y,  u.y,  f.y, 0.0],
+            [ r.z,  u.z,  f.z, 0.0],
+            [-r.dot(eye), -u.dot(eye), -f.dot(eye), 1.0],
+        )
+    }
+
+    // ── Projection matrices ───────────────────────────────────────────────────
+
     pub fn perspective_rh(fov_y: f32, aspect: f32, near: f32, far: f32) -> Self {
         let f = 1.0 / (fov_y * 0.5).tan();
         let z = near - far;
         Self::from_cols(
             [f/aspect, 0.0, 0.0, 0.0], [0.0, f, 0.0, 0.0],
             [0.0, 0.0, (far+near)/z, -1.0], [0.0, 0.0, (2.0*far*near)/z, 0.0],
+        )
+    }
+
+    /// Left-handed perspective projection, depth `[0, 1]`.
+    pub fn perspective_lh(fov_y: f32, aspect: f32, near: f32, far: f32) -> Self {
+        let f = 1.0 / (fov_y * 0.5).tan();
+        let z = far - near;
+        Self::from_cols(
+            [f / aspect, 0.0,  0.0,               0.0],
+            [0.0,        f,    0.0,               0.0],
+            [0.0,        0.0,  far / z,            1.0],
+            [0.0,        0.0, -(far * near) / z,   0.0],
         )
     }
 
@@ -105,26 +122,37 @@ impl Mat4 {
         )
     }
 
-    /// Transpose using 2×2 block interleave with `simd_swizzle!`.
-    ///
-    /// `simd_swizzle!(x, y, [0,1,4,5])` = [x0,x1,y0,y1] interleaves the
-    /// first halves of two columns, enabling a 4×4 transpose in 8 swizzles.
+    /// Left-handed orthographic projection, depth `[0, 1]`.
+    pub fn ortho_lh(left: f32, right: f32, bottom: f32, top: f32, near: f32, far: f32) -> Self {
+        let rl = right - left;
+        let tb = top   - bottom;
+        let nf = far   - near;
+        Self::from_cols(
+            [2.0 / rl, 0.0,      0.0,       0.0],
+            [0.0,      2.0 / tb, 0.0,       0.0],
+            [0.0,      0.0,      1.0 / nf,  0.0],
+            [-(right + left) / rl, -(top + bottom) / tb, -near / nf, 1.0],
+        )
+    }
+
+    // ── Transpose ────────────────────────────────────────────────────────────
+
     pub fn transpose(self) -> Self {
         let x = f32x4::from_array(self.cols[0]);
         let y = f32x4::from_array(self.cols[1]);
         let z = f32x4::from_array(self.cols[2]);
         let w = f32x4::from_array(self.cols[3]);
 
-        let tmp0 = simd_swizzle!(x, y, [0, 1, 4, 5]); // [x0,x1,y0,y1]
-        let tmp1 = simd_swizzle!(x, y, [2, 3, 6, 7]); // [x2,x3,y2,y3]
-        let tmp2 = simd_swizzle!(z, w, [0, 1, 4, 5]); // [z0,z1,w0,w1]
-        let tmp3 = simd_swizzle!(z, w, [2, 3, 6, 7]); // [z2,z3,w2,w3]
+        let tmp0 = simd_swizzle!(x, y, [0, 1, 4, 5]);
+        let tmp1 = simd_swizzle!(x, y, [2, 3, 6, 7]);
+        let tmp2 = simd_swizzle!(z, w, [0, 1, 4, 5]);
+        let tmp3 = simd_swizzle!(z, w, [2, 3, 6, 7]);
 
         Self::from_cols(
-            simd_swizzle!(tmp0, tmp2, [0, 2, 4, 6]).to_array(), // col 0 of T
-            simd_swizzle!(tmp0, tmp2, [1, 3, 5, 7]).to_array(), // col 1 of T
-            simd_swizzle!(tmp1, tmp3, [0, 2, 4, 6]).to_array(), // col 2 of T
-            simd_swizzle!(tmp1, tmp3, [1, 3, 5, 7]).to_array(), // col 3 of T
+            simd_swizzle!(tmp0, tmp2, [0, 2, 4, 6]).to_array(),
+            simd_swizzle!(tmp0, tmp2, [1, 3, 5, 7]).to_array(),
+            simd_swizzle!(tmp1, tmp3, [0, 2, 4, 6]).to_array(),
+            simd_swizzle!(tmp1, tmp3, [1, 3, 5, 7]).to_array(),
         )
     }
 
@@ -140,6 +168,8 @@ impl Mat4 {
        +a(2,0)*sub3(0,1,3,1,2,3) - a(3,0)*sub3(0,1,2,1,2,3)
     }
 
+    // ── Transform helpers ─────────────────────────────────────────────────────
+
     #[inline]
     pub fn transform_point(self, p: Vec3) -> Vec3 {
         (self * p.extend(1.0)).truncate()
@@ -150,26 +180,64 @@ impl Mat4 {
         (self * v.extend(0.0)).truncate()
     }
 
-    /// General inverse via cofactor expansion (fac0-fac5) with `simd_swizzle!`.
-    ///
-    /// Each `simd_swizzle!(a, b, [i0,i1,i2,i3])` index mapping:
-    ///   0-3  → lanes from `a`,  4-7 → lanes from `b`.
-    /// This directly replaces `_mm_shuffle_ps::<IMM>(a, b)` where:
-    ///   result[k] = a[((IMM >> 2k) & 3)]  for k<2,  b[...]  for k>=2.
+    // ── Decompose ─────────────────────────────────────────────────────────────
+
+    /// Decompose a TRS matrix into `(translation, rotation, scale)`.
+    pub fn decompose_trs(self) -> (Vec3, Quat, Vec3) {
+        let t = Vec3::new(self.cols[3][0], self.cols[3][1], self.cols[3][2]);
+
+        let sx = Vec3::new(self.cols[0][0], self.cols[0][1], self.cols[0][2]).length();
+        let sy = Vec3::new(self.cols[1][0], self.cols[1][1], self.cols[1][2]).length();
+        let sz = Vec3::new(self.cols[2][0], self.cols[2][1], self.cols[2][2]).length();
+
+        let det =
+            self.cols[0][0] * (self.cols[1][1]*self.cols[2][2] - self.cols[2][1]*self.cols[1][2])
+          - self.cols[1][0] * (self.cols[0][1]*self.cols[2][2] - self.cols[2][1]*self.cols[0][2])
+          + self.cols[2][0] * (self.cols[0][1]*self.cols[1][2] - self.cols[1][1]*self.cols[0][2]);
+
+        let sx = if det < 0.0 { -sx } else { sx };
+
+        let inv_sx = if sx.abs() < EPSILON { 0.0 } else { 1.0 / sx };
+        let inv_sy = if sy      < EPSILON { 0.0 } else { 1.0 / sy };
+        let inv_sz = if sz      < EPSILON { 0.0 } else { 1.0 / sz };
+
+        let c0 = Vec3::new(
+            self.cols[0][0] * inv_sx,
+            self.cols[0][1] * inv_sx,
+            self.cols[0][2] * inv_sx,
+        );
+        let c1 = Vec3::new(
+            self.cols[1][0] * inv_sy,
+            self.cols[1][1] * inv_sy,
+            self.cols[1][2] * inv_sy,
+        );
+        let c2 = Vec3::new(
+            self.cols[2][0] * inv_sz,
+            self.cols[2][1] * inv_sz,
+            self.cols[2][2] * inv_sz,
+        );
+
+        use crate::helpers::euler::QuatExt as _;
+        let r = Quat::from_rotation_axes(c0, c1, c2);
+
+        (t, r, Vec3::new(sx, sy, sz))
+    }
+
+    // ── Inverse ───────────────────────────────────────────────────────────────
+
     pub fn inverse(self) -> Option<Self> {
         let x = f32x4::from_array(self.cols[0]);
         let y = f32x4::from_array(self.cols[1]);
         let z = f32x4::from_array(self.cols[2]);
         let w = f32x4::from_array(self.cols[3]);
 
-        // ── fac0: cofactors for (z2·w3 - z3·w2) family ───────────────────────
         let fac0 = {
-            let swp0a = simd_swizzle!(w, z, [3, 3, 7, 7]); // [w3,w3,z3,z3]
-            let swp0b = simd_swizzle!(w, z, [2, 2, 6, 6]); // [w2,w2,z2,z2]
-            let swp00 = simd_swizzle!(z, y, [2, 2, 6, 6]); // [z2,z2,y2,y2]
-            let swp01 = simd_swizzle!(swp0a, [0, 0, 0, 2]); // [w3,w3,w3,z3]
-            let swp02 = simd_swizzle!(swp0b, [0, 0, 0, 2]); // [w2,w2,w2,z2]
-            let swp03 = simd_swizzle!(z, y, [3, 3, 7, 7]);  // [z3,z3,y3,y3]
+            let swp0a = simd_swizzle!(w, z, [3, 3, 7, 7]);
+            let swp0b = simd_swizzle!(w, z, [2, 2, 6, 6]);
+            let swp00 = simd_swizzle!(z, y, [2, 2, 6, 6]);
+            let swp01 = simd_swizzle!(swp0a, [0, 0, 0, 2]);
+            let swp02 = simd_swizzle!(swp0b, [0, 0, 0, 2]);
+            let swp03 = simd_swizzle!(z, y, [3, 3, 7, 7]);
             swp00 * swp01 - swp02 * swp03
         };
         let fac1 = {
@@ -218,13 +286,9 @@ impl Mat4 {
             swp00 * swp01 - swp02 * swp03
         };
 
-        // ── Alternating sign patterns ─────────────────────────────────────────
         let sign_a = f32x4::from_array([-1.0,  1.0, -1.0,  1.0]);
         let sign_b = f32x4::from_array([ 1.0, -1.0,  1.0, -1.0]);
 
-        // ── vec0..vec3: broadcast each row element of (y,x) combined ─────────
-        // simd_swizzle!(y, x, [0,0,4,4]) = [y0,y0,x0,x0]
-        // simd_swizzle!(that, [0,2,2,2]) = [y0,x0,x0,x0]
         let tmp0 = simd_swizzle!(y, x, [0, 0, 4, 4]);
         let vec0 = simd_swizzle!(tmp0, [0, 2, 2, 2]);
         let tmp1 = simd_swizzle!(y, x, [1, 1, 5, 5]);
@@ -234,17 +298,14 @@ impl Mat4 {
         let tmp3 = simd_swizzle!(y, x, [3, 3, 7, 7]);
         let vec3 = simd_swizzle!(tmp3, [0, 2, 2, 2]);
 
-        // ── Cofactor columns ──────────────────────────────────────────────────
         let inv0 = sign_b * (vec1*fac0 - vec2*fac1 + vec3*fac2);
         let inv1 = sign_a * (vec0*fac0 - vec2*fac3 + vec3*fac4);
         let inv2 = sign_b * (vec0*fac1 - vec1*fac3 + vec3*fac5);
         let inv3 = sign_a * (vec0*fac2 - vec1*fac4 + vec2*fac5);
 
-        // ── Determinant: dot(col0, first_row_of_cofactor) ─────────────────────
-        // first row of cofactor = [inv0[0], inv1[0], inv2[0], inv3[0]]
-        let row0_lo = simd_swizzle!(inv0, inv1, [0, 0, 4, 4]); // [i0_0,i0_0,i1_0,i1_0]
-        let row0_hi = simd_swizzle!(inv2, inv3, [0, 0, 4, 4]); // [i2_0,i2_0,i3_0,i3_0]
-        let row0    = simd_swizzle!(row0_lo, row0_hi, [0, 2, 4, 6]); // [i0_0,i1_0,i2_0,i3_0]
+        let row0_lo = simd_swizzle!(inv0, inv1, [0, 0, 4, 4]);
+        let row0_hi = simd_swizzle!(inv2, inv3, [0, 0, 4, 4]);
+        let row0    = simd_swizzle!(row0_lo, row0_hi, [0, 2, 4, 6]);
         let det     = dot4(x, row0);
 
         if det.abs() < EPSILON { return None; }
@@ -259,7 +320,6 @@ impl Mat4 {
     }
 
     pub fn inverse_trs(self) -> Self {
-        // TRS structure exploit: R^T / |col|². Same as scalar version.
         let sx2 = self.cols[0][0]*self.cols[0][0]+self.cols[0][1]*self.cols[0][1]+self.cols[0][2]*self.cols[0][2];
         let sy2 = self.cols[1][0]*self.cols[1][0]+self.cols[1][1]*self.cols[1][1]+self.cols[1][2]*self.cols[1][2];
         let sz2 = self.cols[2][0]*self.cols[2][0]+self.cols[2][1]*self.cols[2][1]+self.cols[2][2]*self.cols[2][2];
@@ -277,11 +337,7 @@ impl Mat4 {
     }
 }
 
-// ── Mul<Vec4>: broadcast each component + accumulate ─────────────────────────
-//
-// `simd_swizzle!(v, [k,k,k,k])` broadcasts lane k — exactly like _mm_shuffle_ps.
-// Four such broadcasts times four columns, accumulated. Compiler fuses to
-// FMA on FMA3/FMA4/NEON targets automatically from the abstract LLVM IR.
+// ── Mul<Vec4> ────────────────────────────────────────────────────────────────
 
 impl Mul<Vec4> for Mat4 {
     type Output = Vec4;
@@ -300,10 +356,6 @@ impl Mul<Vec4> for Mat4 {
         Vec4(a0*vx + a1*vy + a2*vz + a3*vw)
     }
 }
-
-// ── Mul<Mat4>: delegate to 4× Mul<Vec4> ──────────────────────────────────────
-//
-// Four independent chains that the compiler/OOO scheduler can overlap.
 
 impl Mul for Mat4 {
     type Output = Self;
@@ -328,4 +380,4 @@ impl fmt::Display for Mat4 {
         }
         Ok(())
     }
-  }
+}
