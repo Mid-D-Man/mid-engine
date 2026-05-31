@@ -100,12 +100,9 @@ pub use f64::{
     DVec2, DVec3, DVec4, DQuat,
     DMat2, DMat3, DMat4,
     DAffine2, DAffine3,
-    DualQuat as DDualQuat,
+    DDualQuat,
     DEPSILON,
 };
-
-// Re-export DDualQuat under its own name from the dedicated module too
-pub use f64::ddual_quat::DDualQuat;
 
 // ── Wide SIMD — integer ───────────────────────────────────────────────────────
 pub use wide::int::{IMask4, IMask8, IMask16};
@@ -150,6 +147,11 @@ pub use helpers::euler::{EulerRot, QuatExt};
 pub use helpers::rotor::Rotor3;
 pub use helpers::spatial::{SpatialVelocity, SpatialForce, SpatialInertia};
 pub use helpers::tangent::{TangentFrame, PackedTangent};
+pub use helpers::octahedral::{
+    encode_octahedral, decode_octahedral,
+    encode_octahedral_snorm8,  decode_octahedral_snorm8,
+    encode_octahedral_snorm16, decode_octahedral_snorm16,
+};
 
 // ── RNG ───────────────────────────────────────────────────────────────────────
 pub use ran_gen::prng::Xorshift64;
@@ -175,6 +177,7 @@ pub use camera::frustum::{
 pub use camera::projection::{
     PerspectiveParams, unproject, unproject_separate, picking_ray,
     perspective_infinite_rh, perspective_reversed_z_rh,
+    perspective_infinite_lh, perspective_reversed_z_lh,
     perspective_decompose, perspective_resize,
     csm_split_depths, sub_frustum_corners,
 };
@@ -235,10 +238,7 @@ pub fn sign(x: f32) -> f32 { x.signum() }
 #[inline(always)]
 pub fn fract(x: f32) -> f32 { x - x.floor() }
 
-/// Ping-pong `t` between `0` and `length`. `t` increases then decreases.
-///
-/// Example: for `length = 1.0`, values `0, 0.5, 1, 1.5, 2, 2.5` →
-/// output `0, 0.5, 1, 0.5, 0, 0.5`.
+/// Ping-pong `t` between `0` and `length`.
 #[inline(always)]
 pub fn ping_pong(t: f32, length: f32) -> f32 {
     if length <= 0.0 { return 0.0; }
@@ -246,7 +246,7 @@ pub fn ping_pong(t: f32, length: f32) -> f32 {
     if t > length { 2.0 * length - t } else { t }
 }
 
-/// Shortest signed delta from angle `current` to angle `target` (both in radians).
+/// Shortest signed delta from angle `current` to angle `target` (radians).
 /// Result is in `(-π, π]`.
 #[inline(always)]
 pub fn delta_angle(current: f32, target: f32) -> f32 {
@@ -263,9 +263,8 @@ pub fn move_towards(current: f32, target: f32, max_delta: f32) -> f32 {
     if diff.abs() <= max_delta { target } else { current + diff.signum() * max_delta }
 }
 
-/// `x²` — slightly faster than `x.powi(2)` because it avoids the integer dispatch.
+/// `x²`.
 #[inline(always)] pub fn pow2(x: f32) -> f32 { x * x }
-
 /// `x³`.
 #[inline(always)] pub fn pow3(x: f32) -> f32 { x * x * x }
 
