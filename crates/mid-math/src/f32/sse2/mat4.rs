@@ -1,13 +1,5 @@
 // crates/mid-math/src/f32/sse2/mat4.rs
 //! Mat4 with SSE2 fast-paths on x86 / x86_64.
-//!
-//! CHANGED vs build #9:
-//!   1. Mul — reverted column-parallel SSE2 attempt (made things worse without +fma).
-//!      Now mirrors glam exactly: delegates Mat4*Mat4 to 4× Mat4*Vec4 calls.
-//!      LLVM sees 4 independent chains and can auto-fuse mul+add into vfmadd on
-//!      capable CPUs (GitHub CI Xeon/EPYC both have FMA3).
-//!   2. Mul<Vec4> — sequential FMA chain unchanged (correct pattern).
-//!   3. sse2_inverse_general / sse2_inverse_trs — unchanged.
 
 use core::fmt;
 use core::ops::Mul;
@@ -23,7 +15,6 @@ use crate::f32::sse2::quat::Quat;
 use crate::EPSILON;
 
 /// 4×4 column-major matrix. 64 bytes, 16-byte aligned.
-///
 /// `cols[c][r]` = element at column `c`, row `r`.
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[repr(C, align(16))]
@@ -81,6 +72,9 @@ impl Mat4 {
         )
     }
 
+    // ── View matrices ─────────────────────────────────────────────────────────
+
+    /// Right-handed look-at view matrix.
     pub fn look_at_rh(eye: Vec3, center: Vec3, up: Vec3) -> Self {
         let f = (center - eye).normalize();
         let r = f.cross(up).normalize();
@@ -93,6 +87,24 @@ impl Mat4 {
         )
     }
 
+    /// Left-handed look-at view matrix.
+    ///
+    /// Camera looks along +Z. Suitable for DirectX, Metal, and LH Vulkan.
+    pub fn look_at_lh(eye: Vec3, center: Vec3, up: Vec3) -> Self {
+        let f = (center - eye).normalize();   // forward (+Z in LH)
+        let r = up.cross(f).normalize();      // right   (LH: up × forward)
+        let u = f.cross(r);                   // up      (LH: forward × right)
+        Self::from_cols(
+            [ r.x,  u.x,  f.x, 0.0],
+            [ r.y,  u.y,  f.y, 0.0],
+            [ r.z,  u.z,  f.z, 0.0],
+            [-r.dot(eye), -u.dot(eye), -f.dot(eye), 1.0],
+        )
+    }
+
+    // ── Projection matrices ───────────────────────────────────────────────────
+
+    /// Right-handed perspective projection, depth range `[-1, 1]` (OpenGL/Vulkan RH).
     pub fn perspective_rh(fov_y: f32, aspect: f32, near: f32, far: f32) -> Self {
         let f = 1.0 / (fov_y * 0.5).tan();
         let z = near - far;
@@ -104,6 +116,22 @@ impl Mat4 {
         )
     }
 
+    /// Left-handed perspective projection, depth range `[0, 1]` (DX12/Metal/Vulkan LH).
+    ///
+    /// Camera looks along +Z. Near maps to 0, far maps to 1.
+    /// Use a standard `LESS` depth test.
+    pub fn perspective_lh(fov_y: f32, aspect: f32, near: f32, far: f32) -> Self {
+        let f = 1.0 / (fov_y * 0.5).tan();
+        let z = far - near;
+        Self::from_cols(
+            [f / aspect, 0.0,  0.0,               0.0],
+            [0.0,        f,    0.0,               0.0],
+            [0.0,        0.0,  far / z,            1.0],
+            [0.0,        0.0, -(far * near) / z,   0.0],
+        )
+    }
+
+    /// Right-handed orthographic projection.
     pub fn ortho_rh(left:f32, right:f32, bottom:f32, top:f32, near:f32, far:f32) -> Self {
         let rl = right-left; let tb = top-bottom; let nf = far-near;
         Self::from_cols(
@@ -113,6 +141,21 @@ impl Mat4 {
             [-(right+left)/rl, -(top+bottom)/tb, -(far+near)/nf, 1.0],
         )
     }
+
+    /// Left-handed orthographic projection, depth range `[0, 1]`.
+    pub fn ortho_lh(left: f32, right: f32, bottom: f32, top: f32, near: f32, far: f32) -> Self {
+        let rl = right - left;
+        let tb = top   - bottom;
+        let nf = far   - near;
+        Self::from_cols(
+            [2.0 / rl, 0.0,      0.0,       0.0],
+            [0.0,      2.0 / tb, 0.0,       0.0],
+            [0.0,      0.0,      1.0 / nf,  0.0],
+            [-(right + left) / rl, -(top + bottom) / tb, -near / nf, 1.0],
+        )
+    }
+
+    // ── Transpose / determinant ───────────────────────────────────────────────
 
     pub fn transpose(self) -> Self {
         let c = &self.cols;
@@ -139,6 +182,8 @@ impl Mat4 {
        -a(3,0)*sub3(0,1,2, 1,2,3)
     }
 
+    // ── Transform helpers ─────────────────────────────────────────────────────
+
     #[inline]
     pub fn transform_point(self, p: Vec3) -> Vec3 {
         (self * p.extend(1.0)).truncate()
@@ -148,6 +193,66 @@ impl Mat4 {
     pub fn transform_vector(self, v: Vec3) -> Vec3 {
         (self * v.extend(0.0)).truncate()
     }
+
+    // ── Decompose ─────────────────────────────────────────────────────────────
+
+    /// Decompose a TRS matrix into `(translation, rotation, scale)`.
+    ///
+    /// Works for matrices produced by `from_trs`, `from_translation`,
+    /// `from_rotation`, `from_scale`, or any composition of those.
+    ///
+    /// - `translation`: directly from `cols[3][0..3]`.
+    /// - `scale`:       length of each rotation column. `scale.x` may be
+    ///                  negative when the matrix encodes a reflection.
+    /// - `rotation`:    unit quaternion extracted from the normalised columns.
+    ///
+    /// Undefined behaviour for matrices that contain shear.
+    pub fn decompose_trs(self) -> (Vec3, Quat, Vec3) {
+        // Translation is always cols[3][0..3]
+        let t = Vec3::new(self.cols[3][0], self.cols[3][1], self.cols[3][2]);
+
+        // Scale = length of each upper-3×3 column
+        let sx = Vec3::new(self.cols[0][0], self.cols[0][1], self.cols[0][2]).length();
+        let sy = Vec3::new(self.cols[1][0], self.cols[1][1], self.cols[1][2]).length();
+        let sz = Vec3::new(self.cols[2][0], self.cols[2][1], self.cols[2][2]).length();
+
+        // Use the sign of the upper-3×3 determinant to encode reflection into
+        // scale.x rather than into the rotation quaternion.
+        let det =
+            self.cols[0][0] * (self.cols[1][1]*self.cols[2][2] - self.cols[2][1]*self.cols[1][2])
+          - self.cols[1][0] * (self.cols[0][1]*self.cols[2][2] - self.cols[2][1]*self.cols[0][2])
+          + self.cols[2][0] * (self.cols[0][1]*self.cols[1][2] - self.cols[1][1]*self.cols[0][2]);
+
+        let sx = if det < 0.0 { -sx } else { sx };
+
+        let inv_sx = if sx.abs() < EPSILON { 0.0 } else { 1.0 / sx };
+        let inv_sy = if sy      < EPSILON { 0.0 } else { 1.0 / sy };
+        let inv_sz = if sz      < EPSILON { 0.0 } else { 1.0 / sz };
+
+        // Normalised rotation columns
+        let c0 = Vec3::new(
+            self.cols[0][0] * inv_sx,
+            self.cols[0][1] * inv_sx,
+            self.cols[0][2] * inv_sx,
+        );
+        let c1 = Vec3::new(
+            self.cols[1][0] * inv_sy,
+            self.cols[1][1] * inv_sy,
+            self.cols[1][2] * inv_sy,
+        );
+        let c2 = Vec3::new(
+            self.cols[2][0] * inv_sz,
+            self.cols[2][1] * inv_sz,
+            self.cols[2][2] * inv_sz,
+        );
+
+        use crate::helpers::euler::QuatExt as _;
+        let r = Quat::from_rotation_axes(c0, c1, c2);
+
+        (t, r, Vec3::new(sx, sy, sz))
+    }
+
+    // ── Inverse ───────────────────────────────────────────────────────────────
 
     pub fn inverse(self) -> Option<Self> {
         unsafe { sse2_inverse_general(&self) }
@@ -211,86 +316,38 @@ impl Mat4 {
         Self::from_cols(ic0, ic1, ic2, [itx,ity,itz,1.0])
     }
 
-// ── Wide transform ────────────────────────────────────────────────────────────
+    // ── Wide transform ────────────────────────────────────────────────────────
 
-    /// Transform 4 points (w = 1.0) simultaneously using a single Mat4.
-    ///
-    /// All 4 points are transformed in the same number of instructions as
-    /// one scalar transform. Use for bulk entity transform, particle systems,
-    /// and any loop over positions that currently calls `transform_point` per item.
-    ///
-    /// Layout: `v.x[i]`, `v.y[i]`, `v.z[i]` is point i in SoA form.
-    ///
-    /// The computation for each output component across all 4 lanes is:
-    ///   rx[i] = col0.x * v.x[i]  +  col1.x * v.y[i]  +  col2.x * v.z[i]  + col3.x
-    ///   ry[i] = col0.y * v.x[i]  +  col1.y * v.y[i]  +  col2.y * v.z[i]  + col3.y
-    ///   rz[i] = col0.z * v.x[i]  +  col1.z * v.y[i]  +  col2.z * v.z[i]  + col3.z
+    /// Transform 4 points (w = 1.0) simultaneously using a single Mat4 (SoA).
     pub fn transform_vec3x4(
         self,
         v: crate::wide::float::sse2::vec3x4::Vec3x4,
     ) -> crate::wide::float::sse2::vec3x4::Vec3x4 {
         use crate::wide::float::sse2::vec3x4::Vec3x4;
         unsafe {
-            // Broadcast each relevant matrix element to all 4 SIMD lanes.
-            // Column-major: cols[c][r] = row r of column c.
             let c0x = _mm_set1_ps(self.cols[0][0]);
             let c0y = _mm_set1_ps(self.cols[0][1]);
             let c0z = _mm_set1_ps(self.cols[0][2]);
-
             let c1x = _mm_set1_ps(self.cols[1][0]);
             let c1y = _mm_set1_ps(self.cols[1][1]);
             let c1z = _mm_set1_ps(self.cols[1][2]);
-
             let c2x = _mm_set1_ps(self.cols[2][0]);
             let c2y = _mm_set1_ps(self.cols[2][1]);
             let c2z = _mm_set1_ps(self.cols[2][2]);
-
-            // Translation column (col3) applied as constant offset.
             let c3x = _mm_set1_ps(self.cols[3][0]);
             let c3y = _mm_set1_ps(self.cols[3][1]);
             let c3z = _mm_set1_ps(self.cols[3][2]);
-
-            // result_x = col0.x * vx  +  col1.x * vy  +  col2.x * vz  +  col3.x
-            // LLVM fuses mul+add to vfmadd231ps on FMA3 CPUs automatically.
-            let rx = _mm_add_ps(
-                _mm_add_ps(
-                    _mm_mul_ps(c0x, v.x),
-                    _mm_mul_ps(c1x, v.y),
-                ),
-                _mm_add_ps(
-                    _mm_mul_ps(c2x, v.z),
-                    c3x,
-                ),
-            );
-            let ry = _mm_add_ps(
-                _mm_add_ps(
-                    _mm_mul_ps(c0y, v.x),
-                    _mm_mul_ps(c1y, v.y),
-                ),
-                _mm_add_ps(
-                    _mm_mul_ps(c2y, v.z),
-                    c3y,
-                ),
-            );
-            let rz = _mm_add_ps(
-                _mm_add_ps(
-                    _mm_mul_ps(c0z, v.x),
-                    _mm_mul_ps(c1z, v.y),
-                ),
-                _mm_add_ps(
-                    _mm_mul_ps(c2z, v.z),
-                    c3z,
-                ),
-            );
-
+            let rx = _mm_add_ps(_mm_add_ps(_mm_mul_ps(c0x, v.x), _mm_mul_ps(c1x, v.y)),
+                                 _mm_add_ps(_mm_mul_ps(c2x, v.z), c3x));
+            let ry = _mm_add_ps(_mm_add_ps(_mm_mul_ps(c0y, v.x), _mm_mul_ps(c1y, v.y)),
+                                 _mm_add_ps(_mm_mul_ps(c2y, v.z), c3y));
+            let rz = _mm_add_ps(_mm_add_ps(_mm_mul_ps(c0z, v.x), _mm_mul_ps(c1z, v.y)),
+                                 _mm_add_ps(_mm_mul_ps(c2z, v.z), c3z));
             Vec3x4 { x: rx, y: ry, z: rz }
         }
     }
 
     /// Transform 4 direction vectors (w = 0.0) simultaneously.
-    ///
-    /// Identical to `transform_vec3x4` but without the translation column.
-    /// Use for normals, velocities, and any vector that should not be translated.
     pub fn transform_vec3x4_dir(
         self,
         v: crate::wide::float::sse2::vec3x4::Vec3x4,
@@ -306,42 +363,20 @@ impl Mat4 {
             let c2x = _mm_set1_ps(self.cols[2][0]);
             let c2y = _mm_set1_ps(self.cols[2][1]);
             let c2z = _mm_set1_ps(self.cols[2][2]);
-
             let rx = _mm_add_ps(_mm_mul_ps(c0x, v.x), _mm_add_ps(_mm_mul_ps(c1x, v.y), _mm_mul_ps(c2x, v.z)));
             let ry = _mm_add_ps(_mm_mul_ps(c0y, v.x), _mm_add_ps(_mm_mul_ps(c1y, v.y), _mm_mul_ps(c2y, v.z)));
             let rz = _mm_add_ps(_mm_mul_ps(c0z, v.x), _mm_add_ps(_mm_mul_ps(c1z, v.y), _mm_mul_ps(c2z, v.z)));
-
             Vec3x4 { x: rx, y: ry, z: rz }
         }
-        }
+    }
 }
 
-// ── Mul<Mat4> — glam delegation pattern ──────────────────────────────────────
-//
-// Mirrors glam/src/f32/sse2/mat4.rs exactly:
-//   Mat4 * Mat4 = from_cols(self * rhs.col0, self * rhs.col1, ...)
-//
-// Delegating to Mul<Vec4> (below) gives LLVM four independent computation
-// chains to schedule simultaneously. LLVM can also auto-contract the
-// `add(mul(a,b), c)` pattern in mul_vec4 into vfmadd231ps on FMA3 CPUs
-// (GitHub CI Xeon/EPYC are FMA3) because it sees abstract LLVM IR rather
-// than hard-coded intrinsics.
-//
-// Why the previous explicit column-parallel approach was slower:
-//   - Without explicit +fma, sse2_fmadd = 2 instructions (mul+add)
-//   - Created 4-deep sequential dependency chains per accumulator
-//   - Old tree was 3-deep — shallower = lower latency ceiling without FMA
-//   - Glam delegates to mul_vec4 which LLVM fuses automatically on FMA CPUs
-//
-// Expected: should match or approach glam's 7 ns on the CI runner.
+// ── Mul<Mat4> ────────────────────────────────────────────────────────────────
 
 impl Mul for Mat4 {
     type Output = Self;
     #[inline(always)]
     fn mul(self, rhs: Self) -> Self {
-        // Load each column of rhs as a Vec4 and multiply mat × vec.
-        // The four multiplications are completely independent — the OOO
-        // scheduler and LLVM can overlap all four at full throughput.
         unsafe {
             let c0 = self * Vec4(_mm_load_ps(rhs.cols[0].as_ptr()));
             let c1 = self * Vec4(_mm_load_ps(rhs.cols[1].as_ptr()));
@@ -357,19 +392,7 @@ impl Mul for Mat4 {
     }
 }
 
-// ── Mul<Vec4> — sequential FMA chain (glam mul_vec4 pattern) ─────────────────
-//
-// Matches glam's mul_vec4 exactly:
-//   res  = col0 * v.xxxx
-//   res += col1 * v.yyyy    (fmadd: col1 * yyyy + res)
-//   res += col2 * v.zzzz
-//   res += col3 * v.wwww
-//
-// On FMA3 hardware, LLVM fuses each `add(mul(a,b), c)` into vfmadd231ps
-// automatically, giving 1 mul + 3 fmadd = 4 instructions total.
-// On SSE2-only: 4 mul + 3 add = 7 instructions (same as glam fallback).
-//
-// This is also used by transform_point / transform_vector.
+// ── Mul<Vec4> ────────────────────────────────────────────────────────────────
 
 impl Mul<Vec4> for Mat4 {
     type Output = Vec4;
@@ -381,14 +404,11 @@ impl Mul<Vec4> for Mat4 {
             let a2 = _mm_load_ps(self.cols[2].as_ptr());
             let a3 = _mm_load_ps(self.cols[3].as_ptr());
 
-            // Broadcast each component of v to all 4 lanes.
             let vx = _mm_shuffle_ps::<0b00_00_00_00>(v.0, v.0);
             let vy = _mm_shuffle_ps::<0b01_01_01_01>(v.0, v.0);
             let vz = _mm_shuffle_ps::<0b10_10_10_10>(v.0, v.0);
             let vw = _mm_shuffle_ps::<0b11_11_11_11>(v.0, v.0);
 
-            // Sequential accumulation. LLVM sees: add(mul(a,b), c) ×3
-            // and emits vfmadd231ps on FMA3 CPUs automatically.
             let mut res = _mm_mul_ps(a0, vx);
             res = _mm_add_ps(res, _mm_mul_ps(a1, vy));
             res = _mm_add_ps(res, _mm_mul_ps(a2, vz));
@@ -411,7 +431,7 @@ impl fmt::Display for Mat4 {
     }
 }
 
-// ── sse2_inverse_general — glam fac0-fac5 (unchanged) ────────────────────────
+// ── sse2_inverse_general ─────────────────────────────────────────────────────
 
 unsafe fn sse2_inverse_general(m: &Mat4) -> Option<Mat4> {
     let x = _mm_load_ps(m.cols[0].as_ptr());
@@ -519,7 +539,7 @@ unsafe fn sse2_inverse_general(m: &Mat4) -> Option<Mat4> {
     Some(out)
 }
 
-// ── sse2_inverse_trs (unchanged) ──────────────────────────────────────────────
+// ── sse2_inverse_trs ─────────────────────────────────────────────────────────
 
 unsafe fn sse2_inverse_trs(m: &Mat4) -> Mat4 {
     let c0 = _mm_load_ps(m.cols[0].as_ptr());
@@ -573,4 +593,4 @@ unsafe fn sse2_inverse_trs(m: &Mat4) -> Mat4 {
     _mm_store_ps(out.cols[2].as_mut_ptr(), ic2);
     _mm_store_ps(out.cols[3].as_mut_ptr(), ic3);
     out
-                            }
+        }
