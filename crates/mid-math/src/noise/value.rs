@@ -59,7 +59,7 @@ impl Value {
             Self::val(self.p(self.p(self.p(a) + b) + c))
         };
 
-        let x1 = lerp(u, hash(xi,xi+1,0)[0], hash(xi+1,yi,  zi  ));
+        let x1 = lerp(u, hash(xi, yi,   zi), hash(xi+1, yi,   zi));
         // Full trilinear interpolation across 8 corners
         let c000 = Self::val(self.p(self.p(self.p(xi    ) + yi    ) + zi    ));
         let c100 = Self::val(self.p(self.p(self.p(xi + 1) + yi    ) + zi    ));
