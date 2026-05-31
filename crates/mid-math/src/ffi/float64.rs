@@ -7,6 +7,12 @@
 
 use crate::{DAffine3, DMat2, DMat3, DMat4, DQuat, DVec2, DVec3, DVec4};
 
+// Explicit scalar-path aliases needed because on x86_64 `crate::DVec2` and
+// `crate::DQuat` resolve to the SSE2 variants, but DMat2/DMat4/DAffine3
+// store the scalar types internally (those structs are always scalar).
+use crate::f64::dvec2::DVec2 as ScalarDVec2;
+use crate::f64::dquat::DQuat as ScalarDQuat;
+
 // ═══════════════════════════════════════════════════════════════════════════
 //  C types
 // ═══════════════════════════════════════════════════════════════════════════
@@ -40,11 +46,27 @@ impl From<CDQuat> for DQuat  { #[inline(always)] fn from(q: CDQuat) -> Self { DQ
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[repr(C, align(16))]
 pub struct CDMat2 { pub x_axis: CDVec2, pub y_axis: CDVec2 }
-impl From<DMat2>  for CDMat2 {
-    #[inline(always)] fn from(m: DMat2) -> Self { Self { x_axis: m.x_axis.into(), y_axis: m.y_axis.into() } }
+
+// DMat2 stores crate::f64::dvec2::DVec2 (always scalar) regardless of platform.
+// We must NOT use .into() here because on x86_64 `crate::DVec2` is the SSE2
+// variant which is a different type. Use explicit CDVec2::new / ScalarDVec2::new.
+impl From<DMat2> for CDMat2 {
+    #[inline(always)]
+    fn from(m: DMat2) -> Self {
+        Self {
+            x_axis: CDVec2::new(m.x_axis.x, m.x_axis.y),
+            y_axis: CDVec2::new(m.y_axis.x, m.y_axis.y),
+        }
+    }
 }
 impl From<CDMat2> for DMat2 {
-    #[inline(always)] fn from(m: CDMat2) -> Self { DMat2::from_cols(m.x_axis.into(), m.y_axis.into()) }
+    #[inline(always)]
+    fn from(m: CDMat2) -> Self {
+        DMat2::from_cols(
+            ScalarDVec2::new(m.x_axis.x, m.x_axis.y),
+            ScalarDVec2::new(m.y_axis.x, m.y_axis.y),
+        )
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -170,9 +192,17 @@ impl From<CDAffine3> for DAffine3 {
 #[no_mangle] pub extern "C" fn mid_dmat4_identity()->CDMat4{DMat4::IDENTITY.into()}
 #[no_mangle] pub extern "C" fn mid_dmat4_from_translation(t:CDVec3)->CDMat4{DMat4::from_translation(DVec3::from(t)).into()}
 #[no_mangle] pub extern "C" fn mid_dmat4_from_scale(s:CDVec3)->CDMat4{DMat4::from_scale(DVec3::from(s)).into()}
-#[no_mangle] pub extern "C" fn mid_dmat4_from_rotation(q:CDQuat)->CDMat4{DMat4::from_rotation(DQuat::from(q)).into()}
+#[no_mangle] pub extern "C" fn mid_dmat4_from_rotation(q:CDQuat)->CDMat4{
+    // DMat4::from_rotation expects crate::f64::dquat::DQuat (scalar).
+    // We must not pass `DQuat::from(q)` which on x86_64 is the SSE2 variant.
+    DMat4::from_rotation(ScalarDQuat::new(q.x, q.y, q.z, q.w)).into()
+}
 #[no_mangle] pub extern "C" fn mid_dmat4_from_trs(t:CDVec3,r:CDQuat,s:CDVec3)->CDMat4{
-    DMat4::from_trs(DVec3::from(t),DQuat::from(r),DVec3::from(s)).into()
+    DMat4::from_trs(
+        DVec3::from(t),
+        ScalarDQuat::new(r.x, r.y, r.z, r.w),
+        DVec3::from(s),
+    ).into()
 }
 #[no_mangle] pub extern "C" fn mid_dmat4_mul(a:CDMat4,b:CDMat4)->CDMat4{(DMat4::from(a)*DMat4::from(b)).into()}
 #[no_mangle] pub extern "C" fn mid_dmat4_transpose(m:CDMat4)->CDMat4{DMat4::from(m).transpose().into()}
@@ -201,13 +231,19 @@ impl From<CDAffine3> for DAffine3 {
 // ── DAffine3 ─────────────────────────────────────────────────────────────────
 #[no_mangle] pub extern "C" fn mid_daffine3_identity()->CDAffine3{DAffine3::IDENTITY.into()}
 #[no_mangle] pub extern "C" fn mid_daffine3_from_trs(t:CDVec3,r:CDQuat,s:CDVec3)->CDAffine3{
-    DAffine3::from_trs(DVec3::from(t),DQuat::from(r),DVec3::from(s)).into()
+    // DAffine3::from_trs expects crate::f64::dquat::DQuat (scalar).
+    DAffine3::from_trs(
+        DVec3::from(t),
+        ScalarDQuat::new(r.x, r.y, r.z, r.w),
+        DVec3::from(s),
+    ).into()
 }
 #[no_mangle] pub extern "C" fn mid_daffine3_from_translation(t:CDVec3)->CDAffine3{
     DAffine3::from_translation(DVec3::from(t)).into()
 }
 #[no_mangle] pub extern "C" fn mid_daffine3_from_rotation(q:CDQuat)->CDAffine3{
-    DAffine3::from_rotation(DQuat::from(q)).into()
+    // DAffine3::from_rotation expects crate::f64::dquat::DQuat (scalar).
+    DAffine3::from_rotation(ScalarDQuat::new(q.x, q.y, q.z, q.w)).into()
 }
 #[no_mangle] pub extern "C" fn mid_daffine3_from_scale(s:CDVec3)->CDAffine3{
     DAffine3::from_scale(DVec3::from(s)).into()
