@@ -1,6 +1,5 @@
 // crates/mid-math/src/f32/scalar/mat4.rs
 //! Scalar Mat4 — fallback and reference implementation.
-//! The SSE2 path delegates scalar methods here for correctness tests.
 
 use core::fmt;
 use core::ops::Mul;
@@ -66,6 +65,8 @@ impl Mat4 {
         )
     }
 
+    // ── View matrices ─────────────────────────────────────────────────────────
+
     pub fn look_at_rh(eye: Vec3, center: Vec3, up: Vec3) -> Self {
         let f = (center - eye).normalize();
         let r = f.cross(up).normalize();
@@ -78,6 +79,21 @@ impl Mat4 {
         )
     }
 
+    /// Left-handed look-at view matrix. Camera looks along +Z.
+    pub fn look_at_lh(eye: Vec3, center: Vec3, up: Vec3) -> Self {
+        let f = (center - eye).normalize();
+        let r = up.cross(f).normalize();
+        let u = f.cross(r);
+        Self::from_cols(
+            [ r.x,  u.x,  f.x, 0.0],
+            [ r.y,  u.y,  f.y, 0.0],
+            [ r.z,  u.z,  f.z, 0.0],
+            [-r.dot(eye), -u.dot(eye), -f.dot(eye), 1.0],
+        )
+    }
+
+    // ── Projection matrices ───────────────────────────────────────────────────
+
     pub fn perspective_rh(fov_y:f32, aspect:f32, near:f32, far:f32) -> Self {
         let f = 1.0 / (fov_y*0.5).tan();
         let z = near - far;
@@ -86,6 +102,18 @@ impl Mat4 {
             [0.0,      f,   0.0,               0.0],
             [0.0, 0.0, (far+near)/z,           -1.0],
             [0.0, 0.0, (2.0*far*near)/z,        0.0],
+        )
+    }
+
+    /// Left-handed perspective projection, depth `[0, 1]`.
+    pub fn perspective_lh(fov_y: f32, aspect: f32, near: f32, far: f32) -> Self {
+        let f = 1.0 / (fov_y * 0.5).tan();
+        let z = far - near;
+        Self::from_cols(
+            [f / aspect, 0.0,  0.0,               0.0],
+            [0.0,        f,    0.0,               0.0],
+            [0.0,        0.0,  far / z,            1.0],
+            [0.0,        0.0, -(far * near) / z,   0.0],
         )
     }
 
@@ -98,6 +126,21 @@ impl Mat4 {
             [-(right+left)/rl,-(top+bottom)/tb,-(far+near)/nf,1.0],
         )
     }
+
+    /// Left-handed orthographic projection, depth `[0, 1]`.
+    pub fn ortho_lh(left: f32, right: f32, bottom: f32, top: f32, near: f32, far: f32) -> Self {
+        let rl = right - left;
+        let tb = top   - bottom;
+        let nf = far   - near;
+        Self::from_cols(
+            [2.0 / rl, 0.0,      0.0,       0.0],
+            [0.0,      2.0 / tb, 0.0,       0.0],
+            [0.0,      0.0,      1.0 / nf,  0.0],
+            [-(right + left) / rl, -(top + bottom) / tb, -near / nf, 1.0],
+        )
+    }
+
+    // ── Transpose / transform ─────────────────────────────────────────────────
 
     pub fn transpose(self) -> Self {
         let c = &self.cols;
@@ -116,6 +159,51 @@ impl Mat4 {
     pub fn transform_vector(self, v: Vec3) -> Vec3 {
         (self * v.extend(0.0)).truncate()
     }
+
+    // ── Decompose ─────────────────────────────────────────────────────────────
+
+    /// Decompose a TRS matrix into `(translation, rotation, scale)`.
+    pub fn decompose_trs(self) -> (Vec3, Quat, Vec3) {
+        let t = Vec3::new(self.cols[3][0], self.cols[3][1], self.cols[3][2]);
+
+        let sx = Vec3::new(self.cols[0][0], self.cols[0][1], self.cols[0][2]).length();
+        let sy = Vec3::new(self.cols[1][0], self.cols[1][1], self.cols[1][2]).length();
+        let sz = Vec3::new(self.cols[2][0], self.cols[2][1], self.cols[2][2]).length();
+
+        let det =
+            self.cols[0][0] * (self.cols[1][1]*self.cols[2][2] - self.cols[2][1]*self.cols[1][2])
+          - self.cols[1][0] * (self.cols[0][1]*self.cols[2][2] - self.cols[2][1]*self.cols[0][2])
+          + self.cols[2][0] * (self.cols[0][1]*self.cols[1][2] - self.cols[1][1]*self.cols[0][2]);
+
+        let sx = if det < 0.0 { -sx } else { sx };
+
+        let inv_sx = if sx.abs() < EPSILON { 0.0 } else { 1.0 / sx };
+        let inv_sy = if sy      < EPSILON { 0.0 } else { 1.0 / sy };
+        let inv_sz = if sz      < EPSILON { 0.0 } else { 1.0 / sz };
+
+        let c0 = Vec3::new(
+            self.cols[0][0] * inv_sx,
+            self.cols[0][1] * inv_sx,
+            self.cols[0][2] * inv_sx,
+        );
+        let c1 = Vec3::new(
+            self.cols[1][0] * inv_sy,
+            self.cols[1][1] * inv_sy,
+            self.cols[1][2] * inv_sy,
+        );
+        let c2 = Vec3::new(
+            self.cols[2][0] * inv_sz,
+            self.cols[2][1] * inv_sz,
+            self.cols[2][2] * inv_sz,
+        );
+
+        use crate::helpers::euler::QuatExt as _;
+        let r = Quat::from_rotation_axes(c0, c1, c2);
+
+        (t, r, Vec3::new(sx, sy, sz))
+    }
+
+    // ── Inverse ───────────────────────────────────────────────────────────────
 
     pub fn inverse(self) -> Option<Self> {
         self.inverse_scalar()
@@ -236,4 +324,4 @@ impl fmt::Display for Mat4 {
         }
         Ok(())
     }
-}
+                               }
