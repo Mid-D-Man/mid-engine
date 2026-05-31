@@ -158,6 +158,24 @@ impl Quat {
         self.x.is_finite() && self.y.is_finite() &&
         self.z.is_finite() && self.w.is_finite()
     }
+    // ── QuatExt impl for scalar Quat ─────────────────────────────────────────────
+
+impl crate::helpers::euler::QuatExt for Quat {
+    #[inline(always)]
+    fn from_xyzw(x: f32, y: f32, z: f32, w: f32) -> Self {
+        Self::new(x, y, z, w)
+    }
+
+    #[inline]
+    fn to_rotation_mat3(self) -> [[f32; 3]; 3] {
+        let m = self.to_mat4();
+        [
+            [m.cols[0][0], m.cols[0][1], m.cols[0][2]],
+            [m.cols[1][0], m.cols[1][1], m.cols[1][2]],
+            [m.cols[2][0], m.cols[2][1], m.cols[2][2]],
+        ]
+    }
+                  }
 }
 
 impl Mul for Quat {
