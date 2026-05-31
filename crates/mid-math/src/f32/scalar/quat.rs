@@ -158,7 +158,10 @@ impl Quat {
         self.x.is_finite() && self.y.is_finite() &&
         self.z.is_finite() && self.w.is_finite()
     }
-    // ── QuatExt impl for scalar Quat ─────────────────────────────────────────────
+}
+
+// ── QuatExt impl for scalar Quat ─────────────────────────────────────────────
+// Must be outside `impl Quat` — nested impls are not allowed in Rust.
 
 impl crate::helpers::euler::QuatExt for Quat {
     #[inline(always)]
@@ -175,8 +178,9 @@ impl crate::helpers::euler::QuatExt for Quat {
             [m.cols[2][0], m.cols[2][1], m.cols[2][2]],
         ]
     }
-                  }
 }
+
+// ── Operators ─────────────────────────────────────────────────────────────────
 
 impl Mul for Quat {
     type Output = Self;
@@ -213,4 +217,4 @@ impl fmt::Display for Quat {
     fn fmt(&self, f:&mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "Quat({:.4}, {:.4}, {:.4}, {:.4})", self.x, self.y, self.z, self.w)
     }
-}
+                         }
