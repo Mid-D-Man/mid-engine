@@ -4,7 +4,7 @@
 use core::fmt;
 use core::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAssign};
 
-pub(crate) const DEPSILON: f64 = 1e-12;
+pub const DEPSILON: f64 = 1e-12;
 
 /// 2D double-precision vector. 16 bytes, align(16). Always scalar.
 #[derive(Debug, Clone, Copy, PartialEq)]
