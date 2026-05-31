@@ -106,13 +106,14 @@ impl Perlin {
         let q = |xo: usize, yo: usize, zo: usize, wo: usize| -> f32 {
             corners[wo * 8 + zo * 4 + yo * 2 + xo]
         };
-        lerp(t,
-            lerp(s,
-                lerp(v, lerp(u, q(0,0,0,0), q(1,0,0,0)), lerp(u, q(0,1,0,0), q(1,1,0,0))),
-                lerp(v, lerp(u, q(0,0,1,0), q(1,0,1,0)), lerp(u, q(0,1,1,0), q(1,1,1,0)))),
-            lerp(s,
-                lerp(v, lerp(u, q(0,0,0,1), q(1,0,0,1)), lerp(u, q(0,1,0,1), q(1,1,0,1)))),
-                lerp(v, lerp(u, q(0,0,1,1), q(1,0,1,1)), lerp(u, q(0,1,1,1), q(1,1,1,1))))
+        // Replace the broken 3D sample block (around lines 109-115) with:
+lerp(t,
+    lerp(v,
+        lerp(u, q(0,0,0,0), q(1,0,0,0)),
+        lerp(u, q(0,1,0,0), q(1,1,0,0))),
+    lerp(v,
+        lerp(u, q(0,0,1,0), q(1,0,1,0)),
+        lerp(u, q(0,1,1,0), q(1,1,1,0))))
     }
 }
 
