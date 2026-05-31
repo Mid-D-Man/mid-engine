@@ -1,19 +1,8 @@
 // crates/mid-math/src/f32/neon/mat4.rs
 //! Mat4 with NEON fast-paths on aarch64.
-//!
-//! NEON-optimised paths:
-//!   Mul<Vec4>  — 1 FMUL + 3 FMLA = 4 instructions (FMA mandatory on AArch64)
-//!   Mul<Mat4>  — delegates 4× to Mul<Vec4>, four independent chains
-//!
-//! Inverse   — scalar path (correct, ~117 ns on x86 baseline reference).
-//!              NEON shuffle-based inverse is Phase 2 — same priority as x86.
-//!
-//! Cross-compilation testing:
-//!   cross test -p mid-math --target aarch64-unknown-linux-gnu --release
 
 use core::fmt;
 use core::ops::Mul;
-
 use core::arch::aarch64::*;
 
 use crate::f32::neon::vec3::Vec3;
@@ -22,7 +11,6 @@ use crate::f32::neon::quat::Quat;
 use crate::EPSILON;
 
 /// 4×4 column-major matrix. 64 bytes, 16-byte aligned.
-/// `cols[c][r]` = element at column `c`, row `r`.
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[repr(C, align(16))]
 pub struct Mat4 {
@@ -78,6 +66,9 @@ impl Mat4 {
         )
     }
 
+    // ── View matrices ─────────────────────────────────────────────────────────
+
+    /// Right-handed look-at view matrix.
     pub fn look_at_rh(eye: Vec3, center: Vec3, up: Vec3) -> Self {
         let f = (center - eye).normalize();
         let r = f.cross(up).normalize();
@@ -90,6 +81,22 @@ impl Mat4 {
         )
     }
 
+    /// Left-handed look-at view matrix. Camera looks along +Z.
+    pub fn look_at_lh(eye: Vec3, center: Vec3, up: Vec3) -> Self {
+        let f = (center - eye).normalize();
+        let r = up.cross(f).normalize();
+        let u = f.cross(r);
+        Self::from_cols(
+            [ r.x,  u.x,  f.x, 0.0],
+            [ r.y,  u.y,  f.y, 0.0],
+            [ r.z,  u.z,  f.z, 0.0],
+            [-r.dot(eye), -u.dot(eye), -f.dot(eye), 1.0],
+        )
+    }
+
+    // ── Projection matrices ───────────────────────────────────────────────────
+
+    /// Right-handed perspective projection, depth `[-1, 1]`.
     pub fn perspective_rh(fov_y: f32, aspect: f32, near: f32, far: f32) -> Self {
         let f = 1.0 / (fov_y * 0.5).tan();
         let z = near - far;
@@ -101,7 +108,20 @@ impl Mat4 {
         )
     }
 
-    pub fn ortho_rh(left:f32,right:f32,bottom:f32,top:f32,near:f32,far:f32) -> Self {
+    /// Left-handed perspective projection, depth `[0, 1]` (DX12/Metal/Vulkan LH).
+    pub fn perspective_lh(fov_y: f32, aspect: f32, near: f32, far: f32) -> Self {
+        let f = 1.0 / (fov_y * 0.5).tan();
+        let z = far - near;
+        Self::from_cols(
+            [f / aspect, 0.0,  0.0,               0.0],
+            [0.0,        f,    0.0,               0.0],
+            [0.0,        0.0,  far / z,            1.0],
+            [0.0,        0.0, -(far * near) / z,   0.0],
+        )
+    }
+
+    /// Right-handed orthographic projection.
+    pub fn ortho_rh(left:f32, right:f32, bottom:f32, top:f32, near:f32, far:f32) -> Self {
         let rl=right-left; let tb=top-bottom; let nf=far-near;
         Self::from_cols(
             [2.0/rl, 0.0, 0.0, 0.0],
@@ -110,6 +130,21 @@ impl Mat4 {
             [-(right+left)/rl, -(top+bottom)/tb, -(far+near)/nf, 1.0],
         )
     }
+
+    /// Left-handed orthographic projection, depth `[0, 1]`.
+    pub fn ortho_lh(left: f32, right: f32, bottom: f32, top: f32, near: f32, far: f32) -> Self {
+        let rl = right - left;
+        let tb = top   - bottom;
+        let nf = far   - near;
+        Self::from_cols(
+            [2.0 / rl, 0.0,      0.0,       0.0],
+            [0.0,      2.0 / tb, 0.0,       0.0],
+            [0.0,      0.0,      1.0 / nf,  0.0],
+            [-(right + left) / rl, -(top + bottom) / tb, -near / nf, 1.0],
+        )
+    }
+
+    // ── Transpose / transform ─────────────────────────────────────────────────
 
     pub fn transpose(self) -> Self {
         let c = &self.cols;
@@ -121,19 +156,65 @@ impl Mat4 {
         )
     }
 
-    /// Transform a point (w=1). Uses NEON Mul<Vec4>.
     #[inline]
     pub fn transform_point(self, p: Vec3) -> Vec3 {
         (self * p.extend(1.0)).truncate()
     }
 
-    /// Transform a direction vector (w=0). Uses NEON Mul<Vec4>.
     #[inline]
     pub fn transform_vector(self, v: Vec3) -> Vec3 {
         (self * v.extend(0.0)).truncate()
     }
 
-    // ── Inverse — scalar (Phase 2: NEON shuffle path) ─────────────────────────
+    // ── Decompose ─────────────────────────────────────────────────────────────
+
+    /// Decompose a TRS matrix into `(translation, rotation, scale)`.
+    ///
+    /// The rotation quaternion is always normalised. `scale.x` may be negative
+    /// when the matrix encodes a reflection (determinant < 0). Undefined for
+    /// matrices containing shear.
+    pub fn decompose_trs(self) -> (Vec3, Quat, Vec3) {
+        let t = Vec3::new(self.cols[3][0], self.cols[3][1], self.cols[3][2]);
+
+        let sx = Vec3::new(self.cols[0][0], self.cols[0][1], self.cols[0][2]).length();
+        let sy = Vec3::new(self.cols[1][0], self.cols[1][1], self.cols[1][2]).length();
+        let sz = Vec3::new(self.cols[2][0], self.cols[2][1], self.cols[2][2]).length();
+
+        // Encode reflection into the sign of sx via the upper-3×3 determinant.
+        let det =
+            self.cols[0][0] * (self.cols[1][1]*self.cols[2][2] - self.cols[2][1]*self.cols[1][2])
+          - self.cols[1][0] * (self.cols[0][1]*self.cols[2][2] - self.cols[2][1]*self.cols[0][2])
+          + self.cols[2][0] * (self.cols[0][1]*self.cols[1][2] - self.cols[1][1]*self.cols[0][2]);
+
+        let sx = if det < 0.0 { -sx } else { sx };
+
+        let inv_sx = if sx.abs() < EPSILON { 0.0 } else { 1.0 / sx };
+        let inv_sy = if sy      < EPSILON { 0.0 } else { 1.0 / sy };
+        let inv_sz = if sz      < EPSILON { 0.0 } else { 1.0 / sz };
+
+        let c0 = Vec3::new(
+            self.cols[0][0] * inv_sx,
+            self.cols[0][1] * inv_sx,
+            self.cols[0][2] * inv_sx,
+        );
+        let c1 = Vec3::new(
+            self.cols[1][0] * inv_sy,
+            self.cols[1][1] * inv_sy,
+            self.cols[1][2] * inv_sy,
+        );
+        let c2 = Vec3::new(
+            self.cols[2][0] * inv_sz,
+            self.cols[2][1] * inv_sz,
+            self.cols[2][2] * inv_sz,
+        );
+
+        use crate::helpers::euler::QuatExt as _;
+        let r = Quat::from_rotation_axes(c0, c1, c2);
+
+        (t, r, Vec3::new(sx, sy, sz))
+    }
+
+    // ── Inverse ───────────────────────────────────────────────────────────────
 
     pub fn inverse(self) -> Option<Self> { self.inverse_scalar() }
 
@@ -194,11 +275,6 @@ impl Mat4 {
 }
 
 // ── Mul<Vec4> — 1 FMUL + 3 FMLA (FMA mandatory on AArch64) ──────────────────
-//
-// Each column is loaded as float32x4_t. The vector's lane is broadcast with
-// vdupq_laneq_f32, then accumulated via vfmaq_f32 (a + b*c).
-// On AArch64 this is 4 SIMD instructions total (1 FMUL + 3 FMLA).
-// Compare: SSE2 needs 8 instructions (4 FMUL + 4 FADD) without FMA3.
 
 impl Mul<Vec4> for Mat4 {
     type Output = Vec4;
@@ -210,14 +286,11 @@ impl Mul<Vec4> for Mat4 {
             let a2 = vld1q_f32(self.cols[2].as_ptr());
             let a3 = vld1q_f32(self.cols[3].as_ptr());
 
-            // Broadcast each component of v across all 4 lanes.
             let vx = vdupq_laneq_f32::<0>(v.0);
             let vy = vdupq_laneq_f32::<1>(v.0);
             let vz = vdupq_laneq_f32::<2>(v.0);
             let vw = vdupq_laneq_f32::<3>(v.0);
 
-            // result = col0*vx + col1*vy + col2*vz + col3*vw
-            // Using FMA chain: vfmaq_f32(acc, b, c) = acc + b*c
             let mut res = vmulq_f32(a0, vx);
             res = vfmaq_f32(res, a1, vy);
             res = vfmaq_f32(res, a2, vz);
@@ -226,11 +299,6 @@ impl Mul<Vec4> for Mat4 {
         }
     }
 }
-
-// ── Mul<Mat4> — four independent Mul<Vec4> chains ────────────────────────────
-//
-// Four columns of rhs processed independently. OOO scheduler overlaps them.
-// AArch64 has more SIMD execution ports than x86 SSE2, so this scales well.
 
 impl Mul for Mat4 {
     type Output = Self;
@@ -262,4 +330,4 @@ impl fmt::Display for Mat4 {
         }
         Ok(())
     }
-}
+             }
