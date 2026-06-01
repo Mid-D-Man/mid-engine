@@ -163,6 +163,10 @@ impl Mat4 {
     // ── Decompose ─────────────────────────────────────────────────────────────
 
     /// Decompose a TRS matrix into `(translation, rotation, scale)`.
+    ///
+    /// Uses the Shoemake largest-component algorithm inlined to avoid
+    /// any dependency on `crate::Vec3` (which is SSE2 on x86_64, not the
+    /// scalar Vec3 used here).
     pub fn decompose_trs(self) -> (Vec3, Quat, Vec3) {
         let t = Vec3::new(self.cols[3][0], self.cols[3][1], self.cols[3][2]);
 
@@ -181,26 +185,67 @@ impl Mat4 {
         let inv_sy = if sy      < EPSILON { 0.0 } else { 1.0 / sy };
         let inv_sz = if sz      < EPSILON { 0.0 } else { 1.0 / sz };
 
-        let c0 = Vec3::new(
-            self.cols[0][0] * inv_sx,
-            self.cols[0][1] * inv_sx,
-            self.cols[0][2] * inv_sx,
-        );
-        let c1 = Vec3::new(
-            self.cols[1][0] * inv_sy,
-            self.cols[1][1] * inv_sy,
-            self.cols[1][2] * inv_sy,
-        );
-        let c2 = Vec3::new(
-            self.cols[2][0] * inv_sz,
-            self.cols[2][1] * inv_sz,
-            self.cols[2][2] * inv_sz,
-        );
+        // Normalised rotation columns (as raw floats, no Vec3 needed below)
+        let m00 = self.cols[0][0] * inv_sx;
+        let m10 = self.cols[0][1] * inv_sx;
+        let m20 = self.cols[0][2] * inv_sx;
+        let m01 = self.cols[1][0] * inv_sy;
+        let m11 = self.cols[1][1] * inv_sy;
+        let m21 = self.cols[1][2] * inv_sy;
+        let m02 = self.cols[2][0] * inv_sz;
+        let m12 = self.cols[2][1] * inv_sz;
+        let m22 = self.cols[2][2] * inv_sz;
 
-        use crate::helpers::euler::QuatExt as _;
-        let r = Quat::from_rotation_axes(c0, c1, c2);
+        // Shoemake largest-component quaternion extraction.
+        // Same algorithm used in f64/dmat4.rs — inlined here to avoid the
+        // `crate::Vec3` / `QuatExt::from_rotation_axes` type-mismatch on x86_64.
+        let r = if m22 <= 0.0 {
+            let dif10 = m11 - m00;
+            let omm22 = 1.0 - m22;
+            if dif10 <= 0.0 {
+                let four_xsq = omm22 - dif10;
+                let inv4x = 0.5 / four_xsq.sqrt();
+                Quat::new(
+                    four_xsq * inv4x,
+                    (m10 + m01) * inv4x,
+                    (m20 + m02) * inv4x,
+                    (m12 - m21) * inv4x,
+                )
+            } else {
+                let four_ysq = omm22 + dif10;
+                let inv4y = 0.5 / four_ysq.sqrt();
+                Quat::new(
+                    (m10 + m01) * inv4y,
+                    four_ysq * inv4y,
+                    (m21 + m12) * inv4y,
+                    (m20 - m02) * inv4y,
+                )
+            }
+        } else {
+            let sum10 = m11 + m00;
+            let opm22 = 1.0 + m22;
+            if sum10 <= 0.0 {
+                let four_zsq = opm22 - sum10;
+                let inv4z = 0.5 / four_zsq.sqrt();
+                Quat::new(
+                    (m20 + m02) * inv4z,
+                    (m21 + m12) * inv4z,
+                    four_zsq * inv4z,
+                    (m01 - m10) * inv4z,
+                )
+            } else {
+                let four_wsq = opm22 + sum10;
+                let inv4w = 0.5 / four_wsq.sqrt();
+                Quat::new(
+                    (m12 - m21) * inv4w,
+                    (m20 - m02) * inv4w,
+                    (m01 - m10) * inv4w,
+                    four_wsq * inv4w,
+                )
+            }
+        };
 
-        (t, r, Vec3::new(sx, sy, sz))
+        (t, r.normalize(), Vec3::new(sx, sy, sz))
     }
 
     // ── Inverse ───────────────────────────────────────────────────────────────
@@ -324,4 +369,4 @@ impl fmt::Display for Mat4 {
         }
         Ok(())
     }
-                               }
+             }
