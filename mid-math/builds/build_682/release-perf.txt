@@ -1,0 +1,568 @@
+   Compiling proc-macro2 v1.0.106
+   Compiling autocfg v1.5.1
+   Compiling unicode-ident v1.0.24
+   Compiling quote v1.0.45
+   Compiling serde_core v1.0.228
+   Compiling crossbeam-utils v0.8.21
+   Compiling zerocopy v0.8.50
+   Compiling num-traits v0.2.19
+   Compiling zmij v1.0.21
+   Compiling syn v2.0.117
+   Compiling serde v1.0.228
+   Compiling bytemuck v1.25.0
+   Compiling crossbeam-epoch v0.9.18
+   Compiling safe_arch v0.7.4
+   Compiling cfg-if v1.0.4
+   Compiling rayon-core v1.13.0
+   Compiling serde_json v1.0.150
+   Compiling either v1.16.0
+   Compiling paste v1.0.15
+   Compiling libc v0.2.186
+   Compiling wide v0.7.33
+   Compiling crossbeam-deque v0.8.6
+   Compiling matrixmultiply v0.3.10
+   Compiling regex-syntax v0.8.10
+   Compiling itoa v1.0.18
+   Compiling anstyle v1.0.14
+   Compiling memchr v2.8.1
+   Compiling plotters-backend v0.3.7
+   Compiling clap_lex v1.1.0
+   Compiling ciborium-io v0.2.2
+   Compiling plotters-svg v0.3.7
+   Compiling clap_builder v4.6.0
+   Compiling regex-automata v0.4.14
+   Compiling zerocopy-derive v0.8.50
+   Compiling serde_derive v1.0.228
+   Compiling half v2.7.1
+   Compiling ciborium-ll v0.2.2
+   Compiling itertools v0.10.5
+   Compiling num-integer v0.1.46
+   Compiling num-complex v0.4.6
+   Compiling approx v0.5.1
+   Compiling rawpointer v0.2.1
+   Compiling same-file v1.0.6
+   Compiling cast v0.3.0
+   Compiling is-terminal v0.4.17
+   Compiling simba v0.9.1
+   Compiling walkdir v2.5.0
+   Compiling num-rational v0.4.2
+   Compiling criterion-plot v0.5.0
+   Compiling ciborium v0.2.2
+   Compiling tinytemplate v1.2.1
+   Compiling rayon v1.12.0
+   Compiling regex v1.12.3
+   Compiling clap v4.6.1
+   Compiling nalgebra-macros v0.2.2
+   Compiling plotters v0.3.7
+   Compiling once_cell v1.21.4
+   Compiling oorandom v11.1.5
+   Compiling anes v0.1.6
+   Compiling typenum v1.20.1
+   Compiling criterion v0.5.1
+   Compiling ultraviolet v0.9.2
+   Compiling glam v0.28.0
+   Compiling nalgebra v0.33.3
+   Compiling mid-math v0.2.0 (/home/runner/work/mid-engine/mid-engine/crates/mid-math)
+warning: unused import: `m128d_abs`
+  --> crates/mid-math/src/f64/sse2/dquat.rs:22:44
+   |
+22 | use crate::sse2::{dot4d, dot4d_into_m128d, m128d_abs, m128d_from_f64x2};
+   |                                            ^^^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `crate::f64::dvec2::DVec2 as ScalarDVec2`
+ --> crates/mid-math/src/ffi/float32.rs:9:5
+  |
+9 | use crate::f64::dvec2::DVec2 as ScalarDVec2;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `crate::f64::dquat::DQuat as ScalarDQuat`
+  --> crates/mid-math/src/ffi/float32.rs:10:5
+   |
+10 | use crate::f64::dquat::DQuat as ScalarDQuat;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `crate::f64::dvec3::DVec3 as ScalarDVec3`
+  --> crates/mid-math/src/ffi/float32.rs:11:5
+   |
+11 | use crate::f64::dvec3::DVec3 as ScalarDVec3;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `CVec2`
+ --> crates/mid-math/src/ffi/helpers.rs:9:34
+  |
+9 | use crate::ffi::float32::{CQuat, CVec2, CVec3};
+  |                                  ^^^^^
+
+warning: unnecessary parentheses around assigned value
+   --> crates/mid-math/src/ffi/helpers.rs:252:13
+    |
+252 |     let r = (Rotor3::new(a.s,a.b_yz,a.b_xz,a.b_xy)
+    |             ^
+253 |            * Rotor3::new(b.s,b.b_yz,b.b_xz,b.b_xy));
+    |                                                   ^
+    |
+    = note: `#[warn(unused_parens)]` (part of `#[warn(unused)]`) on by default
+help: remove these parentheses
+    |
+252 ~     let r = Rotor3::new(a.s,a.b_yz,a.b_xz,a.b_xy)
+253 ~            * Rotor3::new(b.s,b.b_yz,b.b_xz,b.b_xy);
+    |
+
+warning: unused imports: `FixedVec2` and `FixedVec3`
+  --> crates/mid-math/src/ffi/fixed.rs:11:5
+   |
+11 |     FixedVec2, FixedVec3,
+   |     ^^^^^^^^^  ^^^^^^^^^
+
+warning: unused import: `crate::fixed::fixed::Fixed`
+  --> crates/mid-math/src/ffi/fixed.rs:15:5
+   |
+15 | use crate::fixed::fixed::Fixed;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `PerspectiveParams`
+  --> crates/mid-math/src/ffi/camera.rs:17:13
+   |
+17 |             PerspectiveParams,
+   |             ^^^^^^^^^^^^^^^^^
+
+warning: unused import: `mask4::Mask4`
+ --> crates/mid-math/src/wide/float/scalar/mod.rs:7:9
+  |
+7 | pub use mask4::Mask4;
+  |         ^^^^^^^^^^^^
+
+warning: unused import: `vec3x4::Vec3x4`
+  --> crates/mid-math/src/wide/float/scalar/mod.rs:11:9
+   |
+11 | pub use vec3x4::Vec3x4;
+   |         ^^^^^^^^^^^^^^
+
+warning: unused import: `quatx4::QuatX4`
+  --> crates/mid-math/src/wide/float/scalar/mod.rs:12:9
+   |
+12 | pub use quatx4::QuatX4;
+   |         ^^^^^^^^^^^^^^
+
+warning: unused import: `imask4::IMask4`
+  --> crates/mid-math/src/wide/int/scalar/mod.rs:20:9
+   |
+20 | pub use imask4::IMask4;
+   |         ^^^^^^^^^^^^^^
+
+warning: unused import: `imask8::IMask8`
+  --> crates/mid-math/src/wide/int/scalar/mod.rs:21:9
+   |
+21 | pub use imask8::IMask8;
+   |         ^^^^^^^^^^^^^^
+
+warning: unused import: `imask16::IMask16`
+  --> crates/mid-math/src/wide/int/scalar/mod.rs:22:9
+   |
+22 | pub use imask16::IMask16;
+   |         ^^^^^^^^^^^^^^^^
+
+warning: unused import: `NoiseSource4d`
+  --> crates/mid-math/src/ffi/noise.rs:19:52
+   |
+19 |     DomainWarp, Fbm, NoiseSource2d, NoiseSource3d, NoiseSource4d,
+   |                                                    ^^^^^^^^^^^^^
+
+warning: unused import: `NoiseSource2d`
+  --> crates/mid-math/src/ffi/noise.rs:19:22
+   |
+19 |     DomainWarp, Fbm, NoiseSource2d, NoiseSource3d, NoiseSource4d,
+   |                      ^^^^^^^^^^^^^
+
+warning: unused import: `NoiseSource3d`
+  --> crates/mid-math/src/ffi/noise.rs:19:37
+   |
+19 |     DomainWarp, Fbm, NoiseSource2d, NoiseSource3d, NoiseSource4d,
+   |                                     ^^^^^^^^^^^^^
+
+warning: unused variable: `wy`
+  --> crates/mid-math/src/f32/affine3.rs:82:18
+   |
+82 |         let (wx, wy, wz) = (w * x2, w * y * 2.0, w * z2);
+   |                  ^^ help: if this is intentional, prefix it with an underscore: `_wy`
+   |
+   = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `indices`
+  --> crates/mid-math/src/wide/int/scalar/i8x16.rs:62:42
+   |
+62 |     #[inline] pub fn shuffle_bytes(self, indices: Self) -> Self {
+   |                                          ^^^^^^^ help: if this is intentional, prefix it with an underscore: `_indices`
+
+warning: unused variable: `s`
+  --> crates/mid-math/src/noise/perlin.rs:84:49
+   |
+84 |         let u = fade(xf); let v = fade(yf); let s = fade(zf); let t = fade(wf);
+   |                                                 ^
+   |
+help: you might have meant to pattern match on the similarly named constant `E`
+   |
+84 -         let u = fade(xf); let v = fade(yf); let s = fade(zf); let t = fade(wf);
+84 +         let u = fade(xf); let v = fade(yf); let constants::E = fade(zf); let t = fade(wf);
+   |
+help: if this is intentional, prefix it with an underscore
+   |
+84 |         let u = fade(xf); let v = fade(yf); let _s = fade(zf); let t = fade(wf);
+   |                                                 +
+
+warning: function `m128_floor` is never used
+  --> crates/mid-math/src/sse2.rs:76:22
+   |
+76 | pub(crate) unsafe fn m128_floor(v: __m128) -> __m128 {
+   |                      ^^^^^^^^^^
+   |
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: function `m128_ceil` is never used
+  --> crates/mid-math/src/sse2.rs:86:22
+   |
+86 | pub(crate) unsafe fn m128_ceil(v: __m128) -> __m128 {
+   |                      ^^^^^^^^^
+
+warning: function `m128_trunc` is never used
+  --> crates/mid-math/src/sse2.rs:96:22
+   |
+96 | pub(crate) unsafe fn m128_trunc(v: __m128) -> __m128 {
+   |                      ^^^^^^^^^^
+
+warning: function `m128_round` is never used
+   --> crates/mid-math/src/sse2.rs:102:22
+    |
+102 | pub(crate) unsafe fn m128_round(v: __m128) -> __m128 {
+    |                      ^^^^^^^^^^
+
+warning: function `sin` is never used
+  --> crates/mid-math/src/f32/math.rs:15:33
+   |
+15 | #[inline(always)] pub(crate) fn sin(v: f32) -> f32 { v.sin() }
+   |                                 ^^^
+
+warning: function `cos` is never used
+  --> crates/mid-math/src/f32/math.rs:16:33
+   |
+16 | #[inline(always)] pub(crate) fn cos(v: f32) -> f32 { v.cos() }
+   |                                 ^^^
+
+warning: function `tan` is never used
+  --> crates/mid-math/src/f32/math.rs:17:33
+   |
+17 | #[inline(always)] pub(crate) fn tan(v: f32) -> f32 { v.tan() }
+   |                                 ^^^
+
+warning: function `abs` is never used
+  --> crates/mid-math/src/f32/math.rs:19:33
+   |
+19 | #[inline(always)] pub(crate) fn abs(v: f32) -> f32 { v.abs() }
+   |                                 ^^^
+
+warning: function `signum` is never used
+  --> crates/mid-math/src/f32/math.rs:20:33
+   |
+20 | #[inline(always)] pub(crate) fn signum(v: f32) -> f32 { v.signum() }
+   |                                 ^^^^^^
+
+warning: function `exp` is never used
+  --> crates/mid-math/src/f32/math.rs:22:33
+   |
+22 | #[inline(always)] pub(crate) fn exp(v: f32) -> f32 { v.exp() }
+   |                                 ^^^
+
+warning: function `exp2` is never used
+  --> crates/mid-math/src/f32/math.rs:23:33
+   |
+23 | #[inline(always)] pub(crate) fn exp2(v: f32) -> f32 { v.exp2() }
+   |                                 ^^^^
+
+warning: function `ln` is never used
+  --> crates/mid-math/src/f32/math.rs:24:33
+   |
+24 | #[inline(always)] pub(crate) fn ln(v: f32) -> f32 { v.ln() }
+   |                                 ^^
+
+warning: function `log2` is never used
+  --> crates/mid-math/src/f32/math.rs:25:33
+   |
+25 | #[inline(always)] pub(crate) fn log2(v: f32) -> f32 { v.log2() }
+   |                                 ^^^^
+
+warning: function `powf` is never used
+  --> crates/mid-math/src/f32/math.rs:26:33
+   |
+26 | #[inline(always)] pub(crate) fn powf(v: f32, n: f32) -> f32 { v.powf(n) }
+   |                                 ^^^^
+
+warning: function `div_euclid` is never used
+  --> crates/mid-math/src/f32/math.rs:27:33
+   |
+27 | #[inline(always)] pub(crate) fn div_euclid(a: f32, b: f32) -> f32 { a.div_euclid(b) }
+   |                                 ^^^^^^^^^^
+
+warning: function `rem_euclid` is never used
+  --> crates/mid-math/src/f32/math.rs:28:33
+   |
+28 | #[inline(always)] pub(crate) fn rem_euclid(a: f32, b: f32) -> f32 { a.rem_euclid(b) }
+   |                                 ^^^^^^^^^^
+
+warning: function `mul_add` is never used
+  --> crates/mid-math/src/f32/math.rs:38:15
+   |
+38 | pub(crate) fn mul_add(a: f32, b: f32, c: f32) -> f32 {
+   |               ^^^^^^^
+
+warning: struct `Quat` is never constructed
+  --> crates/mid-math/src/f32/scalar/quat.rs:14:12
+   |
+14 | pub struct Quat {
+   |            ^^^^
+
+warning: multiple associated items are never used
+   --> crates/mid-math/src/f32/scalar/quat.rs:22:15
+    |
+ 21 | impl Quat {
+    | --------- associated items in this implementation
+ 22 |     pub const IDENTITY: Self = Self { x:0.0, y:0.0, z:0.0, w:1.0 };
+    |               ^^^^^^^^
+ 23 |     /// Zero quaternion — not a valid rotation, used for DualQuat dual part.
+ 24 |     pub const ZERO: Self     = Self { x:0.0, y:0.0, z:0.0, w:0.0 };
+    |               ^^^^
+...
+ 27 |     pub fn new(x:f32, y:f32, z:f32, w:f32) -> Self { Self{x,y,z,w} }
+    |            ^^^
+...
+ 30 |     pub fn from_xyzw(x:f32, y:f32, z:f32, w:f32) -> Self { Self::new(x,y,z,w) }
+    |            ^^^^^^^^^
+ 31 |
+ 32 |     pub fn from_axis_angle(axis: Vec3, angle_rad: f32) -> Self {
+    |            ^^^^^^^^^^^^^^^
+...
+ 38 |     pub fn from_euler(roll: f32, pitch: f32, yaw: f32) -> Self {
+    |            ^^^^^^^^^^
+...
+ 50 |     pub fn to_euler(self) -> (f32, f32, f32) {
+    |            ^^^^^^^^
+...
+ 65 |     pub fn dot(self, r: Self) -> f32 {
+    |            ^^^
+...
+ 69 |     #[inline] pub fn length_sq(self) -> f32 { self.dot(self) }
+    |                      ^^^^^^^^^
+ 70 |     #[inline] pub fn length(self)    -> f32 { self.length_sq().sqrt() }
+    |                      ^^^^^^
+...
+ 73 |     pub fn normalize(self) -> Self {
+    |            ^^^^^^^^^
+...
+ 80 |     pub fn conjugate(self) -> Self {
+    |            ^^^^^^^^^
+...
+ 85 |     pub fn inverse(self) -> Self {
+    |            ^^^^^^^
+...
+ 93 |     pub fn rotate(self, v: Vec3) -> Vec3 {
+    |            ^^^^^^
+...
+100 |     pub fn mul_quat(self, r: Self) -> Self {
+    |            ^^^^^^^^
+...
+109 |     pub fn nlerp(self, rhs: Self, t: f32) -> Self {
+    |            ^^^^^
+...
+120 |     pub fn slerp(self, mut rhs: Self, t: f32) -> Self {
+    |            ^^^^^
+...
+138 |     pub fn to_mat4(self) -> Mat4 {
+    |            ^^^^^^^
+...
+154 |     pub fn is_normalized(self) -> bool { (self.length_sq() - 1.0).abs() <= 2e-4 }
+    |            ^^^^^^^^^^^^^
+...
+157 |     pub fn is_finite(self) -> bool {
+    |            ^^^^^^^^^
+
+warning: struct `Mat4` is never constructed
+  --> crates/mid-math/src/f32/scalar/mat4.rs:14:12
+   |
+14 | pub struct Mat4 {
+   |            ^^^^
+
+warning: multiple associated items are never used
+   --> crates/mid-math/src/f32/scalar/mat4.rs:19:15
+    |
+ 18 | impl Mat4 {
+    | --------- associated items in this implementation
+ 19 |     pub const ZERO: Self = Self { cols: [[0.0;4];4] };
+    |               ^^^^
+ 20 |     pub const IDENTITY: Self = Self { cols: [
+    |               ^^^^^^^^
+...
+ 28 |     pub fn from_cols(c0:[f32;4], c1:[f32;4], c2:[f32;4], c3:[f32;4]) -> Self {
+    |            ^^^^^^^^^
+...
+ 33 |     pub fn from_translation(t: Vec3) -> Self {
+    |            ^^^^^^^^^^^^^^^^
+...
+ 40 |     pub fn from_scale(s: Vec3) -> Self {
+    |            ^^^^^^^^^^
+...
+ 50 |     pub fn from_rotation(q: Quat) -> Self { q.to_mat4() }
+    |            ^^^^^^^^^^^^^
+...
+ 53 |     pub fn from_trs(t: Vec3, r: Quat, s: Vec3) -> Self {
+    |            ^^^^^^^^
+...
+ 70 |     pub fn look_at_rh(eye: Vec3, center: Vec3, up: Vec3) -> Self {
+    |            ^^^^^^^^^^
+...
+ 83 |     pub fn look_at_lh(eye: Vec3, center: Vec3, up: Vec3) -> Self {
+    |            ^^^^^^^^^^
+...
+ 97 |     pub fn perspective_rh(fov_y:f32, aspect:f32, near:f32, far:f32) -> Self {
+    |            ^^^^^^^^^^^^^^
+...
+109 |     pub fn perspective_lh(fov_y: f32, aspect: f32, near: f32, far: f32) -> Self {
+    |            ^^^^^^^^^^^^^^
+...
+120 |     pub fn ortho_rh(left:f32,right:f32,bottom:f32,top:f32,near:f32,far:f32)->Self{
+    |            ^^^^^^^^
+...
+131 |     pub fn ortho_lh(left: f32, right: f32, bottom: f32, top: f32, near: f32, far: f32) -> Self {
+    |            ^^^^^^^^
+...
+145 |     pub fn transpose(self) -> Self {
+    |            ^^^^^^^^^
+...
+155 |     pub fn transform_point(self, p: Vec3) -> Vec3 {
+    |            ^^^^^^^^^^^^^^^
+...
+159 |     pub fn transform_vector(self, v: Vec3) -> Vec3 {
+    |            ^^^^^^^^^^^^^^^^
+...
+170 |     pub fn decompose_trs(self) -> (Vec3, Quat, Vec3) {
+    |            ^^^^^^^^^^^^^
+...
+253 |     pub fn inverse(self) -> Option<Self> {
+    |            ^^^^^^^
+...
+257 |     pub fn inverse_scalar(self) -> Option<Self> {
+    |            ^^^^^^^^^^^^^^
+...
+293 |     pub fn inverse_trs(self) -> Self { self.inverse_trs_scalar() }
+    |            ^^^^^^^^^^^
+294 |
+295 |     pub fn inverse_trs_scalar(self) -> Self {
+    |            ^^^^^^^^^^^^^^^^^^
+
+warning: associated function `from_bools` is never used
+  --> crates/mid-math/src/wide/float/scalar/mask4.rs:29:19
+   |
+13 | impl Mask4 {
+   | ---------- associated function in this implementation
+...
+29 |     pub(crate) fn from_bools(a: bool, b: bool, c: bool, d: bool) -> Self {
+   |                   ^^^^^^^^^^
+
+warning: associated function `from_m128` is never used
+  --> crates/mid-math/src/wide/float/sse2/mask4.rs:41:19
+   |
+23 | impl Mask4 {
+   | ---------- associated function in this implementation
+...
+41 |     pub(crate) fn from_m128(m: __m128) -> Self { Mask4(m) }
+   |                   ^^^^^^^^^
+
+warning: `mid-math` (lib) generated 44 warnings (run `cargo fix --lib -p mid-math` to apply 18 suggestions)
+error[E0433]: cannot find module or crate `mid_math` in this scope
+  --> crates/mid-math/src/tests/noise.rs:13:5
+   |
+13 | use mid_math::noise::{
+   |     ^^^^^^^^ use of unresolved module or unlinked crate `mid_math`
+   |
+   = help: if you wanted to use a crate named `mid_math`, use `cargo add mid_math` to add it to your `Cargo.toml`
+
+error[E0432]: unresolved import `mid_math`
+ --> crates/mid-math/src/tests/fixed.rs:7:5
+  |
+7 | use mid_math::{Fixed16, Fixed8, Fixed12, Fixed16Vec2, Fixed16Vec3, Fixed};
+  |     ^^^^^^^^ use of unresolved module or unlinked crate `mid_math`
+  |
+  = help: if you wanted to use a crate named `mid_math`, use `cargo add mid_math` to add it to your `Cargo.toml`
+
+error[E0433]: cannot find module or crate `mid_math` in this scope
+ --> crates/mid-math/src/tests/camera.rs:4:5
+  |
+4 | use mid_math::{
+  |     ^^^^^^^^ use of unresolved module or unlinked crate `mid_math`
+  |
+  = help: if you wanted to use a crate named `mid_math`, use `cargo add mid_math` to add it to your `Cargo.toml`
+
+error[E0432]: unresolved import `mid_math`
+ --> crates/mid-math/src/tests/camera.rs:4:5
+  |
+4 | use mid_math::{
+  |     ^^^^^^^^ use of unresolved module or unlinked crate `mid_math`
+  |
+  = help: if you wanted to use a crate named `mid_math`, use `cargo add mid_math` to add it to your `Cargo.toml`
+
+error[E0433]: cannot find module or crate `mid_math` in this scope
+ --> crates/mid-math/src/tests/geom.rs:5:5
+  |
+5 | use mid_math::geom::barycentric::{
+  |     ^^^^^^^^ use of unresolved module or unlinked crate `mid_math`
+  |
+  = help: if you wanted to use a crate named `mid_math`, use `cargo add mid_math` to add it to your `Cargo.toml`
+
+error[E0432]: unresolved import `mid_math`
+ --> crates/mid-math/src/tests/geom.rs:4:5
+  |
+4 | use mid_math::{Vec2, Vec3};
+  |     ^^^^^^^^ use of unresolved module or unlinked crate `mid_math`
+  |
+  = help: if you wanted to use a crate named `mid_math`, use `cargo add mid_math` to add it to your `Cargo.toml`
+
+warning: unused import: `EPSILON`
+ --> crates/mid-math/src/tests/vec_tests.rs:4:46
+  |
+4 |     use crate::{Vec2, Vec3, Vec4, approx_eq, EPSILON};
+  |                                              ^^^^^^^
+
+warning: unused imports: `EPSILON` and `Mat4`
+ --> crates/mid-math/src/tests/quat_tests.rs:4:29
+  |
+4 |     use crate::{Quat, Vec3, Mat4, approx_eq, to_radians, EPSILON};
+  |                             ^^^^                         ^^^^^^^
+
+warning: unused imports: `Vec4` and `approx_eq`
+ --> crates/mid-math/src/tests/stress_tests.rs:5:23
+  |
+5 |     use crate::{Vec3, Vec4, Quat, Mat4, to_radians, lerp, smoothstep, approx_eq, EPSILON};
+  |                       ^^^^                                            ^^^^^^^^^
+
+warning: unused import: `DEPSILON`
+  --> crates/mid-math/src/tests/f64_tests.rs:10:68
+   |
+10 |         DAffine3, DMat2, DMat3, DMat4, DQuat, DVec2, DVec3, DVec4, DEPSILON,
+   |                                                                    ^^^^^^^^
+
+warning: unused imports: `IMask16` and `IMask8`
+  --> crates/mid-math/src/tests/wide_tests.rs:12:17
+   |
+12 |         IMask4, IMask8, IMask16,
+   |                 ^^^^^^  ^^^^^^^
+
+warning: unused imports: `EPSILON` and `approx_eq`
+  --> crates/mid-math/src/tests/wide_tests.rs:22:21
+   |
+22 |         to_radians, approx_eq, EPSILON,
+   |                     ^^^^^^^^^  ^^^^^^^
+
+Some errors have detailed explanations: E0432, E0433.
+For more information about an error, try `rustc --explain E0432`.
+warning: `mid-math` (lib test) generated 21 warnings (15 duplicates)
+error: could not compile `mid-math` (lib test) due to 6 previous errors; 21 warnings emitted
