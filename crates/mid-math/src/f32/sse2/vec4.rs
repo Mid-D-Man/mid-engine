@@ -1,5 +1,4 @@
 // crates/mid-math/src/f32/sse2/vec4.rs
-// Fix: add Vec3 import for truncate()
 
 use core::fmt;
 use core::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAssign};
@@ -9,8 +8,7 @@ use core::arch::x86::*;
 #[cfg(target_arch = "x86_64")]
 use core::arch::x86_64::*;
 
-use crate::sse2::{dot4, dot4_in_x, dot4_into_m128, m128_abs};
-// *** FIX: need sse2 Vec3 for truncate() ***
+use crate::sse2::{dot4, dot4_in_x, dot4_into_m128, m128_abs, rsqrt_nr};
 use crate::f32::sse2::vec3::Vec3;
 use crate::EPSILON;
 use crate::impl_vec4_deref;
@@ -44,16 +42,12 @@ impl Vec4 {
     #[inline(always)]
     pub fn splat(v: f32) -> Self { Self(unsafe { _mm_set1_ps(v) }) }
 
-    #[inline(always)]
-    pub fn from_array(a: [f32; 4]) -> Self { Self::new(a[0], a[1], a[2], a[3]) }
-
-    #[inline(always)]
-    pub fn to_array(self) -> [f32; 4] { [self.x, self.y, self.z, self.w] }
+    #[inline(always)] pub fn from_array(a: [f32; 4]) -> Self { Self::new(a[0], a[1], a[2], a[3]) }
+    #[inline(always)] pub fn to_array(self) -> [f32; 4] { [self.x, self.y, self.z, self.w] }
 
     /// Truncate to Vec3 — zeros out lane 3 and wraps in Vec3.
     #[inline(always)]
     pub fn truncate(self) -> Vec3 {
-        // Zero lane 3 via AND with mask [0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0x00000000]
         use crate::sse2::m128_from_f32x4;
         const MASK: __m128 = m128_from_f32x4([
             f32::from_bits(0xFFFF_FFFF),
@@ -69,25 +63,25 @@ impl Vec4 {
 
     #[inline]
     pub fn length(self) -> f32 {
-        unsafe {
-            _mm_cvtss_f32(_mm_sqrt_ps(dot4_in_x(self.0, self.0)))
-        }
+        unsafe { _mm_cvtss_f32(_mm_sqrt_ps(dot4_in_x(self.0, self.0))) }
     }
 
     #[inline]
     pub fn length_recip(self) -> f32 {
-        unsafe {
-            _mm_cvtss_f32(_mm_div_ps(Self::ONE.0, _mm_sqrt_ps(dot4_in_x(self.0, self.0))))
-        }
+        unsafe { _mm_cvtss_f32(_mm_div_ps(Self::ONE.0, _mm_sqrt_ps(dot4_in_x(self.0, self.0)))) }
     }
 
+    /// Normalize to unit length.
+    ///
+    /// Fix A: uses `rsqrt` + one Newton–Raphson step instead of `sqrt` + `div`.
+    /// Returns `Vec4::ZERO` for near-zero-length inputs (|v|² ≤ 1e-12).
     #[inline]
     pub fn normalize(self) -> Self {
         unsafe {
-            let len = _mm_sqrt_ps(dot4_into_m128(self.0, self.0));
-            let n   = Self(_mm_div_ps(self.0, len));
-            let ok  = _mm_cmpgt_ps(len, _mm_set1_ps(EPSILON));
-            Self(_mm_and_ps(n.0, ok))
+            let dot     = dot4_into_m128(self.0, self.0);
+            let mask    = _mm_cmpgt_ps(dot, _mm_set1_ps(1e-12_f32));
+            let inv_len = rsqrt_nr(dot);
+            Self(_mm_and_ps(_mm_mul_ps(self.0, inv_len), mask))
         }
     }
 
@@ -117,8 +111,7 @@ impl Vec4 {
     #[inline] pub fn is_normalized(self) -> bool { (self.length_sq() - 1.0).abs() <= 2e-4 }
     #[inline]
     pub fn is_finite(self) -> bool {
-        self.x.is_finite() && self.y.is_finite() &&
-        self.z.is_finite() && self.w.is_finite()
+        self.x.is_finite() && self.y.is_finite() && self.z.is_finite() && self.w.is_finite()
     }
 
     #[inline]
@@ -197,4 +190,4 @@ impl From<[f32; 4]> for Vec4 {
 }
 impl From<Vec4> for [f32; 4] {
     #[inline] fn from(v: Vec4) -> Self { [v.x, v.y, v.z, v.w] }
-}
+    }
