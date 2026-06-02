@@ -32,7 +32,7 @@ pub(crate) unsafe fn dot3_in_x(lhs: __m128, rhs: __m128) -> __m128 {
 /// 4-lane dot product. Result lands in lane 0; lanes 1-3 are unspecified.
 #[inline(always)]
 pub(crate) unsafe fn dot4_in_x(lhs: __m128, rhs: __m128) -> __m128 {
-    let mul     = _mm_mul_ps(lhs, rhs);
+    let mul      = _mm_mul_ps(lhs, rhs);
     let zw_in_xy = _mm_shuffle_ps::<0b00_00_11_10>(mul, mul);
     let xz_yw    = _mm_add_ps(mul, zw_in_xy);
     let yw_in_0  = _mm_shuffle_ps::<0b00_00_00_01>(xz_yw, xz_yw);
@@ -114,6 +114,26 @@ pub(crate) unsafe fn m128_sin(v: __m128) -> __m128 {
     let z = _mm_cvtss_f32(_mm_shuffle_ps::<0b10_10_10_10>(v, v));
     let w = _mm_cvtss_f32(_mm_shuffle_ps::<0b11_11_11_11>(v, v));
     _mm_set_ps(w.sin(), z.sin(), y.sin(), x.sin())
+}
+
+/// Reciprocal square root: `_mm_rsqrt_ps` (14-bit) + one Newton–Raphson step (~23-bit).
+///
+/// Replaces the expensive `sqrt` + `div` pair in `normalize`.  On modern x86,
+/// `rsqrt` is 1–3 cycles; `sqrt`+`div` is ~20–30 cycles combined.
+///
+/// Formula:  r₁ = r₀ · (1.5 − 0.5 · v · r₀²)
+///
+/// `v` must be a broadcast — all 4 lanes holding the same squared-length value.
+/// All 4 output lanes receive the same refined reciprocal sqrt.
+#[inline(always)]
+pub(crate) unsafe fn rsqrt_nr(v: __m128) -> __m128 {
+    let r    = _mm_rsqrt_ps(v);
+    let half = _mm_set1_ps(0.5_f32);
+    let c    = _mm_set1_ps(1.5_f32);
+    // r₁ = r₀ · (1.5 − 0.5 · v · r₀²)
+    let rr   = _mm_mul_ps(r, r);
+    let nr   = _mm_sub_ps(c, _mm_mul_ps(half, _mm_mul_ps(v, rr)));
+    _mm_mul_ps(r, nr)
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
