@@ -13,7 +13,7 @@ use core::arch::x86::*;
 #[cfg(target_arch = "x86_64")]
 use core::arch::x86_64::*;
 
-use crate::sse2::{dot4_into_m128, m128_from_f32x4, m128_sin};
+use crate::sse2::{dot4_into_m128, m128_from_f32x4, m128_sin, rsqrt_nr};
 use crate::f32::sse2::vec3::Vec3;
 use crate::f32::sse2::mat4::Mat4;
 use crate::f32::math;
@@ -109,13 +109,20 @@ impl Quat {
     #[inline] pub fn length_sq(self) -> f32 { self.dot(self) }
     #[inline] pub fn length(self)    -> f32 { self.length_sq().sqrt() }
 
+    /// Normalize to unit length.
+    ///
+    /// Fix A: uses `rsqrt` + one Newton–Raphson step instead of `sqrt` + `div`.
+    /// Returns `Quat::IDENTITY` (not ZERO) for near-zero inputs — an identity
+    /// quaternion is always valid to compose or interpolate with.
     #[inline]
     pub fn normalize(self) -> Self {
         unsafe {
-            let len = _mm_sqrt_ps(dot4_into_m128(self.0, self.0));
-            let n   = Self(_mm_div_ps(self.0, len));
-            let ok  = _mm_cmpgt_ps(len, _mm_set1_ps(EPSILON));
-            let keep = _mm_and_ps(n.0, ok);
+            let dot     = dot4_into_m128(self.0, self.0);
+            let ok      = _mm_cmpgt_ps(dot, _mm_set1_ps(1e-12_f32));
+            let inv_len = rsqrt_nr(dot);
+            let n       = _mm_mul_ps(self.0, inv_len);
+            // Blend: n where ok, IDENTITY where !ok.
+            let keep = _mm_and_ps(n, ok);
             let alt  = _mm_andnot_ps(ok, Self::IDENTITY.0);
             Self(_mm_or_ps(keep, alt))
         }
@@ -203,9 +210,9 @@ impl Quat {
                 _mm_set1_ps(angle),
                 _mm_set_ps(0.0, 1.0, t, 1.0 - t),
             );
-            let sins   = m128_sin(angles);
-            let s0     = _mm_shuffle_ps::<0b00_00_00_00>(sins, sins);
-            let s1     = _mm_shuffle_ps::<0b01_01_01_01>(sins, sins);
+            let sins      = m128_sin(angles);
+            let s0        = _mm_shuffle_ps::<0b00_00_00_00>(sins, sins);
+            let s1        = _mm_shuffle_ps::<0b01_01_01_01>(sins, sins);
             let theta_sin = _mm_shuffle_ps::<0b10_10_10_10>(sins, sins);
             let _ = sin_a;
             let blended = _mm_add_ps(
@@ -299,4 +306,4 @@ impl fmt::Display for Quat {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "Quat({:.4}, {:.4}, {:.4}, {:.4})", self.x, self.y, self.z, self.w)
     }
-}
+            }
