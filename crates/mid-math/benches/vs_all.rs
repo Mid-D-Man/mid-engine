@@ -14,6 +14,26 @@
 //!   Any library beating mid-math = implementation technique to study.
 //!   Any library mid-math beats   = confirmation we're doing it right.
 //!
+//! ── Build history ────────────────────────────────────────────────────────────
+//!
+//!  Build 5 (baseline):
+//!    vec3/normalize      4.97 ns   glam 2.92 ns
+//!    vec4/normalize      3.25 ns   glam 2.93 ns
+//!    rotation/nlerp      5.40 ns   glam 4.19 ns
+//!    mat4/mul           19.74 ns   glam 6.91 ns
+//!
+//!  Build 6 (rsqrt_nr + mat4_mul_col tree form):
+//!    vec3/normalize      4.08 ns   (-18% — partial win, guard mask was overhead)
+//!    vec4/normalize      3.41 ns   (+5%  — slight regression, noise)
+//!    rotation/nlerp      8.22 ns   (+52% — REGRESSION: IDENTITY blend on hot path)
+//!    mat4/mul           19.77 ns   (0%   — tree form blocked FMA; no effect)
+//!
+//!  Build 7 (sequential accumulation + normalize_fast + remove zero-guard):
+//!    vec3/normalize      ~2.9 ns   target (guard removed, matches glam contract)
+//!    vec4/normalize      ~2.9 ns   target (guard removed)
+//!    rotation/nlerp      ~4.2 ns   target (normalize_fast, regression fixed)
+//!    mat4/mul            ~7-10 ns  target (sequential FMA pattern, -C target-cpu=native)
+//!
 //! Run: cargo bench --bench vs_all -p mid-math
 //! HTML report: target/criterion/report/index.html
 
@@ -102,6 +122,8 @@ fn bench_vec3(c: &mut Criterion) {
     g.bench_function("cross/ultraviolet", |b| b.iter(|| black_box(uv_a).cross(black_box(uv_b))));
 
     // normalize ───────────────────────────────────────────────────────────────
+    // Build 7: guard mask removed from mid-math normalize().
+    // Target: ~2.9 ns (parity with glam).
     g.bench_function("normalize/mid-math",    |b| b.iter(|| black_box(mm_a).normalize()));
     g.bench_function("normalize/glam",        |b| b.iter(|| black_box(gl_a).normalize()));
     g.bench_function("normalize/nalgebra",    |b| b.iter(|| black_box(na_a).normalize()));
@@ -136,6 +158,8 @@ fn bench_vec4(c: &mut Criterion) {
     g.bench_function("dot/nalgebra",    |b| b.iter(|| black_box(na).dot(&black_box(na))));
     g.bench_function("dot/ultraviolet", |b| b.iter(|| black_box(uv).dot(black_box(uv))));
 
+    // Build 7: guard mask removed from mid-math normalize().
+    // Target: ~2.9 ns (parity with glam).
     g.bench_function("normalize/mid-math",    |b| b.iter(|| black_box(mm).normalize()));
     g.bench_function("normalize/glam",        |b| b.iter(|| black_box(gl).normalize()));
     g.bench_function("normalize/nalgebra",    |b| b.iter(|| black_box(na).normalize()));
@@ -146,26 +170,19 @@ fn bench_vec4(c: &mut Criterion) {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Group 3: Rotation (Quat vs UnitQuat vs Rotor3)
-//
-// Note: ultraviolet uses Rotor3 (geometric-algebra rotor), not a quaternion.
-// Rotors are ~equivalent in cost but encode the rotation differently.
-// This tells us whether the quaternion representation matters for speed.
 // ─────────────────────────────────────────────────────────────────────────────
 
 fn bench_rotation(c: &mut Criterion) {
     let mut g = c.benchmark_group("rotation");
 
-    // mid-math quat
     let mm_q1 = Quat::from_axis_angle(Vec3::Y, to_radians(45.0));
     let mm_q2 = Quat::from_axis_angle(Vec3::new(1.0, 1.0, 0.0).normalize(), to_radians(30.0));
     let mm_v  = Vec3::new(1.0, 0.0, 0.0);
 
-    // glam quat
     let gl_q1 = GQuat::from_rotation_y(45_f32.to_radians());
     let gl_q2 = GQuat::from_axis_angle(glam::Vec3::new(1.0, 1.0, 0.0).normalize(), 30_f32.to_radians());
     let gl_v  = glam::Vec3::X;
 
-    // nalgebra unit quaternion
     let na_q1 = UnitQuaternion::from_axis_angle(&Vector3::y_axis(), 45_f32.to_radians());
     let na_q2 = UnitQuaternion::from_axis_angle(
         &Unit::new_normalize(Vector3::new(1.0f32, 1.0, 0.0)),
@@ -173,7 +190,6 @@ fn bench_rotation(c: &mut Criterion) {
     );
     let na_v = Vector3::new(1.0f32, 0.0, 0.0);
 
-    // ultraviolet rotor (geometric algebra — no gimbal lock, same benefit as quat)
     let uv_r1 = Rotor3::from_rotation_between(UVec3::unit_x(), UVec3::unit_y());
     let uv_r2 = Rotor3::from_rotation_between(UVec3::unit_y(), UVec3::unit_z());
     let uv_v  = UVec3::unit_x();
@@ -197,9 +213,10 @@ fn bench_rotation(c: &mut Criterion) {
     g.bench_function("slerp/ultraviolet-rotor", |b| b.iter(|| black_box(uv_r1).slerp(black_box(uv_r2), 0.5)));
 
     // nlerp ───────────────────────────────────────────────────────────────────
+    // Build 6 regression (+52%): IDENTITY blend guard on every call.
+    // Build 7 fix: normalize_fast() skips the guard. Target: ~4.2 ns (parity with glam).
     g.bench_function("nlerp/mid-math-quat",     |b| b.iter(|| black_box(mm_q1).nlerp(black_box(mm_q2), 0.5)));
     g.bench_function("nlerp/glam-quat",         |b| b.iter(|| black_box(gl_q1).lerp(black_box(gl_q2), 0.5)));
-    // nalgebra nlerp:
     g.bench_function("nlerp/nalgebra-unitquat", |b| b.iter(|| black_box(na_q1).nlerp(&black_box(na_q2), 0.5)));
 
     g.finish();
@@ -207,11 +224,6 @@ fn bench_rotation(c: &mut Criterion) {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Group 4: Mat4 operations
-//
-// This is the most important group — mat4 mul and inverse are where
-// mid-math currently loses to glam by 2.5× and 3× respectively.
-// Seeing nalgebra and ultraviolet numbers tells us whether glam's approach
-// is the only path or if there's something better.
 // ─────────────────────────────────────────────────────────────────────────────
 
 fn bench_mat4(c: &mut Criterion) {
@@ -234,7 +246,9 @@ fn bench_mat4(c: &mut Criterion) {
     let uv_p  = UVec3::new(1.0, 2.0, 3.0);
 
     // mul ─────────────────────────────────────────────────────────────────────
-    // KEY GAP: mid-math 17.6 ns vs glam 7.0 ns. What does nalgebra/uv cost?
+    // Build 6 gap: mid-math 19.77 ns vs glam 6.91 ns — tree accumulation blocked FMA.
+    // Build 7 fix: sequential accumulation in mat4_mul_col enables vfmadd231ps.
+    // Target with -C target-cpu=native: ~7-10 ns.
     g.bench_function("mul/mid-math",    |b| b.iter(|| black_box(mm_a) * black_box(mm_b)));
     g.bench_function("mul/glam",        |b| b.iter(|| black_box(gl_a) * black_box(gl_b)));
     g.bench_function("mul/nalgebra",    |b| b.iter(|| black_box(na_a) * black_box(na_b)));
@@ -247,8 +261,7 @@ fn bench_mat4(c: &mut Criterion) {
     g.bench_function("transform_point/ultraviolet", |b| b.iter(|| black_box(uv_a).transform_point3(black_box(uv_p))));
 
     // inverse (general) ───────────────────────────────────────────────────────
-    // KEY GAP: mid-math 40 ns vs glam 13 ns. Does nalgebra/uv close this gap
-    // with a different algorithm, or is glam's shuffle approach uniquely fast?
+    // Build 6: mid-math 15.4 ns vs glam 13.1 ns — gap is small (2.25 ns), acceptable.
     g.bench_function("inverse_general/mid-math",    |b| b.iter(|| black_box(mm_a).inverse()));
     g.bench_function("inverse_general/glam",        |b| b.iter(|| black_box(gl_a).inverse()));
     g.bench_function("inverse_general/nalgebra",    |b| b.iter(|| black_box(na_a).try_inverse()));
@@ -261,7 +274,6 @@ fn bench_mat4(c: &mut Criterion) {
         b.iter(|| black_box(aff).inverse())
     });
     g.bench_function("inverse_trs/nalgebra-isometry", |b| {
-        // nalgebra Isometry3 inverse is just conjugate — O(1), the fastest possible
         let iso = nalgebra::Isometry3::<f32>::from_parts(
             nalgebra::Translation3::new(1.0, 0.0, 0.0),
             UnitQuaternion::from_axis_angle(&Vector3::y_axis(), 45_f32.to_radians()),
@@ -274,10 +286,6 @@ fn bench_mat4(c: &mut Criterion) {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Group 5: 100k entity bulk transforms
-//
-// The engine-critical case. Measures sustained throughput, not single-call
-// latency. Cache effects, SIMD pipelining, and memory layout all matter here.
-// This is where ultraviolet's SoA wide-SIMD approach might shine.
 // ─────────────────────────────────────────────────────────────────────────────
 
 fn bench_100k_entities(c: &mut Criterion) {
@@ -295,6 +303,7 @@ fn bench_100k_entities(c: &mut Criterion) {
     let pos_na: Vec<Point3<f32>>   = (0..N).map(|i| Point3::new(i as f32 * 0.01, 0.0, 0.0)).collect();
     let pos_uv: Vec<UVec3>         = (0..N).map(|i| UVec3::new(i as f32 * 0.01, 0.0, 0.0)).collect();
 
+    // mid-math has led glam by ~12% in this group since Build 5 — verify maintained.
     g.bench_function("mid-math", |b| {
         b.iter_batched(
             || pos_mm.clone(),
