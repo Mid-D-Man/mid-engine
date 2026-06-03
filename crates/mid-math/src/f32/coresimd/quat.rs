@@ -1,9 +1,7 @@
 // crates/mid-math/src/f32/coresimd/quat.rs
 //! Quat backed by `f32x4` (Rust portable SIMD).
 //!
-//! The `mul_quat` uses the same sign-control vector algorithm as SSE2/NEON/WASM —
-//! `simd_swizzle!` replaces `_mm_shuffle_ps` / `vextq_f32` / `i32x4_shuffle`.
-//! No `unsafe` required — portable SIMD ops are safe Rust.
+//! The `mul_quat` uses the same sign-control vector algorithm as SSE2/NEON/WASM.
 
 use core::fmt;
 use core::ops::{Add, Mul, MulAssign, Neg, Sub};
@@ -19,12 +17,10 @@ use crate::impl_vec4_deref;
 use crate::EPSILON;
 
 // ── Sign-control constants ────────────────────────────────────────────────────
-// Same sign patterns as SSE2/NEON/WASM — same Hamilton product derivation.
 
 const CONTROL_WZYX: f32x4 = f32x4::from_array([ 1.0, -1.0,  1.0, -1.0]);
 const CONTROL_ZWXY: f32x4 = f32x4::from_array([ 1.0,  1.0, -1.0, -1.0]);
 const CONTROL_YXWZ: f32x4 = f32x4::from_array([-1.0,  1.0,  1.0, -1.0]);
-// Conjugate sign mask: negate x,y,z (sign bit XOR), keep w.
 const CONJ_SIGN: f32x4 = f32x4::from_array([-0.0, -0.0, -0.0, 0.0]);
 
 // ── Type ──────────────────────────────────────────────────────────────────────
@@ -36,8 +32,6 @@ const CONJ_SIGN: f32x4 = f32x4::from_array([-0.0, -0.0, -0.0, 0.0]);
 pub struct Quat(pub(crate) f32x4);
 
 impl_vec4_deref!(Quat);
-
-// ── Constants ─────────────────────────────────────────────────────────────────
 
 impl Quat {
     pub const IDENTITY: Self = Self(f32x4::from_array([0.0, 0.0, 0.0, 1.0]));
@@ -100,6 +94,16 @@ impl Quat {
         Self(ok.select(n.0, Self::IDENTITY.0))
     }
 
+    /// Fast normalize — **no** IDENTITY fallback guard.
+    ///
+    /// Precondition: `self` must not be near-zero length. Always satisfied
+    /// when input is a lerped blend of two unit quaternions (nlerp/slerp).
+    #[inline(always)]
+    pub(crate) fn normalize_fast(self) -> Self {
+        let len = dot4_into_f32x4(self.0, self.0).sqrt();
+        Self(self.0 / len)
+    }
+
     /// Conjugate: negate xyz, keep w. Single XOR via sign-bit mask.
     #[inline]
     pub fn conjugate(self) -> Self {
@@ -120,10 +124,6 @@ impl Quat {
         v + self.w * t + qv.cross(t)
     }
 
-    /// Hamilton product using sign-control vectors + simd_swizzle!
-    ///
-    /// `simd_swizzle!(rhs, [3,2,1,0])` replaces `_mm_shuffle_ps::<0b00_01_10_11>`.
-    /// Algorithm identical to SSE2 quat — only intrinsics differ.
     pub fn mul_quat(self, rhs: Self) -> Self {
         let lhs = self.0;
         let r   = rhs.0;
@@ -151,15 +151,16 @@ impl Quat {
 
     // ── Interpolation ──────────────────────────────────────────────────────────
 
-    /// Normalised linear interpolation. Branchless shortest-path flip via XOR.
+    /// Normalised linear interpolation.
+    ///
+    /// Uses `normalize_fast()` — blend of two unit quats is always non-zero.
     #[inline]
     pub fn nlerp(self, rhs: Self, t: f32) -> Self {
         let dot_val  = self.dot(rhs);
-        // Copy sign bit of dot to every lane, XOR into rhs to flip if dot < 0
         let sign_bit = f32x4_bitand(f32x4::splat(dot_val), f32x4::splat(-0.0));
         let rhs_adj  = Self(f32x4_bitxor(rhs.0, sign_bit));
         let lerped   = Self(self.0 + (rhs_adj.0 - self.0) * f32x4::splat(t));
-        lerped.normalize()
+        lerped.normalize_fast()
     }
 
     pub fn slerp(self, mut rhs: Self, t: f32) -> Self {
@@ -171,7 +172,8 @@ impl Quat {
         let scale1    = math::sin(angle * (1.0 - t));
         let scale2    = math::sin(angle * t);
         let blended   = self.0 * f32x4::splat(scale1) + rhs.0 * f32x4::splat(scale2);
-        Self(blended / f32x4::splat(sin_theta)).normalize()
+        // blended / sin_theta is ≈unit — normalize_fast() corrects FP drift.
+        Self(blended / f32x4::splat(sin_theta)).normalize_fast()
     }
 
     // ── Conversion ─────────────────────────────────────────────────────────────
@@ -242,4 +244,4 @@ impl fmt::Display for Quat {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "Quat({:.4}, {:.4}, {:.4}, {:.4})", self.x, self.y, self.z, self.w)
     }
-  }
+            }
