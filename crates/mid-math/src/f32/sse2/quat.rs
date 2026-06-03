@@ -35,7 +35,6 @@ union UnionCast {
 #[repr(transparent)]
 pub struct Quat(pub(crate) __m128);
 
-// Deref gives .x .y .z .w access on the __m128 storage.
 impl_vec4_deref!(Quat);
 
 const CONTROL_WZYX: __m128 = m128_from_f32x4([ 1.0, -1.0,  1.0, -1.0]);
@@ -45,9 +44,7 @@ const CONTROL_YXWZ: __m128 = m128_from_f32x4([-1.0,  1.0,  1.0, -1.0]);
 impl Quat {
     // ── Constants ────────────────────────────────────────────────────────────
 
-    /// Identity quaternion — represents no rotation.
     pub const IDENTITY: Self = unsafe { UnionCast { f: [0.0, 0.0, 0.0, 1.0] }.v };
-    /// Zero quaternion — not a valid rotation, used for DualQuat dual part.
     pub const ZERO: Self     = unsafe { UnionCast { f: [0.0; 4] }.v };
 
     // ── Constructors ─────────────────────────────────────────────────────────
@@ -62,7 +59,6 @@ impl Quat {
         Self::new(x, y, z, w)
     }
 
-    /// Build from a unit axis and an angle in radians.
     #[inline]
     pub fn from_axis_angle(axis: Vec3, angle_rad: f32) -> Self {
         let (s, c) = math::sin_cos(angle_rad * 0.5);
@@ -70,7 +66,6 @@ impl Quat {
         Self::new(n.x * s, n.y * s, n.z * s, c)
     }
 
-    /// Build from Euler angles (radians), ZYX convention.
     pub fn from_euler(roll: f32, pitch: f32, yaw: f32) -> Self {
         let (sx, cx) = math::sin_cos(roll  * 0.5);
         let (sy, cy) = math::sin_cos(pitch * 0.5);
@@ -82,8 +77,6 @@ impl Quat {
             cz * cy * cx + sz * sy * sx,
         ).normalize()
     }
-
-    // ── Decomposition ─────────────────────────────────────────────────────────
 
     pub fn to_euler(self) -> (f32, f32, f32) {
         let sinp  = 2.0 * (self.w * self.y - self.z * self.x);
@@ -112,7 +105,7 @@ impl Quat {
     /// Normalize to unit length. Returns `Quat::IDENTITY` for near-zero input.
     ///
     /// The IDENTITY fallback guard costs 4 SSE ops (cmpgt, and, andnot, or).
-    /// For internal hot-paths where the input is known non-zero, prefer
+    /// For internal hot-paths where the input is known non-zero, use
     /// `normalize_fast()`.
     #[inline]
     pub fn normalize(self) -> Self {
@@ -121,7 +114,6 @@ impl Quat {
             let ok      = _mm_cmpgt_ps(dot, _mm_set1_ps(1e-12_f32));
             let inv_len = rsqrt_nr(dot);
             let n       = _mm_mul_ps(self.0, inv_len);
-            // Blend: n where ok, IDENTITY where !ok.
             let keep = _mm_and_ps(n, ok);
             let alt  = _mm_andnot_ps(ok, Self::IDENTITY.0);
             Self(_mm_or_ps(keep, alt))
@@ -130,13 +122,12 @@ impl Quat {
 
     /// Fast normalize — **no** IDENTITY fallback guard.
     ///
-    /// Precondition: `self` must not be near-zero length. This is always
-    /// satisfied after lerping two unit quaternions (nlerp/slerp inputs)
-    /// and after the slerp division-by-sin step.
+    /// Precondition: `self` must not be near-zero length. Always satisfied
+    /// after lerping two unit quaternions (nlerp/slerp inputs) and after
+    /// the slerp division-by-sin step.
     ///
-    /// Saves 4 SSE ops (cmpgt + and + andnot + or) vs `normalize()`.
-    /// Keep this `pub(crate)` — callers outside the library must use the
-    /// safe `normalize()`.
+    /// Saves 4 SSE ops vs `normalize()`. Keep `pub(crate)` — external callers
+    /// must use the safe `normalize()`.
     #[inline(always)]
     pub(crate) fn normalize_fast(self) -> Self {
         unsafe {
@@ -199,23 +190,24 @@ impl Quat {
 
     /// Normalised linear interpolation.
     ///
-    /// OPT-3 (Build 7): replaced `.normalize()` with `.normalize_fast()`.
-    /// When `self` and `rhs` are unit quats the lerp result is always
-    /// non-zero, so the IDENTITY fallback guard is wasted work — removing
-    /// it saves 4 SSE ops and fixes the +52% regression from Build 6.
+    /// Build 8 fix: `dot4_into_m128` replaces `dot4` (scalar) to avoid the
+    /// scalar→SIMD round-trip that cost ~4–6 cycles.
+    ///
+    /// `dot4` extracts to f32 via `_mm_cvtss_f32`, then `_mm_set1_ps` broadcasts
+    /// back — a latency hit of ~5 cycles crossing the XMM/GPR boundary.
+    /// `dot4_into_m128` never leaves SIMD, matching glam's approach exactly.
+    ///
+    /// Also uses `normalize_fast()` — blend of two unit quats is always non-zero.
     #[inline]
     pub fn nlerp(self, rhs: Self, t: f32) -> Self {
         unsafe {
-            let dot_val = crate::sse2::dot4(self.0, rhs.0);
-            // Copy the sign bit of dot_val into every lane, then XOR into
-            // rhs to flip it if dot < 0 (take shorter arc).
-            let sign_mask = _mm_and_ps(
-                _mm_set1_ps(dot_val),
-                _mm_set1_ps(-0.0f32),
-            );
-            let rhs_adj = _mm_xor_ps(rhs.0, sign_mask);
-            let tt      = _mm_set1_ps(t);
-            let lerped  = _mm_add_ps(self.0, _mm_mul_ps(_mm_sub_ps(rhs_adj, self.0), tt));
+            // dot4_into_m128: all 4 lanes = dot(self, rhs). No scalar extraction.
+            let dot_v    = dot4_into_m128(self.0, rhs.0);
+            // Extract sign bit of dot into every lane, XOR into rhs to flip if dot < 0.
+            let sign_bit = _mm_and_ps(dot_v, _mm_set1_ps(-0.0f32));
+            let rhs_adj  = _mm_xor_ps(rhs.0, sign_bit);
+            let tt       = _mm_set1_ps(t);
+            let lerped   = _mm_add_ps(self.0, _mm_mul_ps(_mm_sub_ps(rhs_adj, self.0), tt));
             // lerped is a linear blend of two unit quats — always non-zero.
             Self(lerped).normalize_fast()
         }
@@ -246,8 +238,6 @@ impl Quat {
                 _mm_mul_ps(self.0, s0),
                 _mm_mul_ps(rhs.0,  s1),
             );
-            // After dividing by sin(θ), the quaternion is ≈unit length.
-            // normalize_fast() corrects FP rounding without the IDENTITY guard.
             Self(_mm_div_ps(blended, theta_sin)).normalize_fast()
         }
     }
@@ -335,4 +325,4 @@ impl fmt::Display for Quat {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "Quat({:.4}, {:.4}, {:.4}, {:.4})", self.x, self.y, self.z, self.w)
     }
-                  }
+}
