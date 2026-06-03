@@ -12,10 +12,11 @@ crate-type = ["rlib", "cdylib", "staticlib"]
 [dependencies]
 
 [dev-dependencies]
-criterion   = { version = "0.5", features = ["html_reports"] }
-glam        = { version = "0.28", features = [] }
-nalgebra    = { version = "0.33" }
-ultraviolet = { version = "0.9" }
+criterion        = { version = "0.5", features = ["html_reports"] }
+glam             = { version = "0.28", features = [] }
+nalgebra         = { version = "0.33" }
+ultraviolet      = { version = "0.9" }
+matrixmultiply   = { version = "0.3" }
 
 [[bench]]
 name    = "vs_glam"
@@ -81,8 +82,4 @@ harness = false
 default  = []
 simd     = []
 avx2     = []
-# Rust portable SIMD backend — single implementation covering any target
-# (RISC-V, LoongArch, etc.). Requires nightly unless portable_simd is stable.
-# Usage: cargo build --features coresimd
-# Nightly: RUSTFLAGS="" cargo +nightly build --features coresimd
 coresimd = []
