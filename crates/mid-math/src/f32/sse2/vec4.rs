@@ -73,15 +73,17 @@ impl Vec4 {
 
     /// Normalize to unit length.
     ///
-    /// Fix A: uses `rsqrt` + one Newton–Raphson step instead of `sqrt` + `div`.
-    /// Returns `Vec4::ZERO` for near-zero-length inputs (|v|² ≤ 1e-12).
+    /// **Undefined (NaN in practice) for zero-length input.**
+    /// Use [`Self::normalize_or_zero()`] for safe behaviour.
+    ///
+    /// OPT-3 (Build 7): removed the zero-guard mask (cmpgt + andps), matching
+    /// glam's `normalize()` contract and closing the remaining throughput gap.
     #[inline]
     pub fn normalize(self) -> Self {
         unsafe {
             let dot     = dot4_into_m128(self.0, self.0);
-            let mask    = _mm_cmpgt_ps(dot, _mm_set1_ps(1e-12_f32));
             let inv_len = rsqrt_nr(dot);
-            Self(_mm_and_ps(_mm_mul_ps(self.0, inv_len), mask))
+            Self(_mm_mul_ps(self.0, inv_len))
         }
     }
 
@@ -190,4 +192,4 @@ impl From<[f32; 4]> for Vec4 {
 }
 impl From<Vec4> for [f32; 4] {
     #[inline] fn from(v: Vec4) -> Self { [v.x, v.y, v.z, v.w] }
-    }
+}
