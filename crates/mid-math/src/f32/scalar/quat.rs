@@ -69,11 +69,22 @@ impl Quat {
     #[inline] pub fn length_sq(self) -> f32 { self.dot(self) }
     #[inline] pub fn length(self)    -> f32 { self.length_sq().sqrt() }
 
+    /// Normalize. Returns IDENTITY for near-zero-length input.
     #[inline]
     pub fn normalize(self) -> Self {
         let l = self.length();
         if l < EPSILON { Self::IDENTITY }
         else { Self::new(self.x/l, self.y/l, self.z/l, self.w/l) }
+    }
+
+    /// Fast normalize — **no** IDENTITY fallback guard.
+    ///
+    /// Precondition: `self` must not be near-zero length. Always satisfied
+    /// when input is a lerped blend of two unit quaternions (nlerp/slerp).
+    #[inline(always)]
+    pub(crate) fn normalize_fast(self) -> Self {
+        let l = self.length();
+        Self::new(self.x/l, self.y/l, self.z/l, self.w/l)
     }
 
     #[inline]
@@ -106,6 +117,10 @@ impl Quat {
         )
     }
 
+    /// Normalised linear interpolation.
+    ///
+    /// Uses `normalize_fast()` — input is always a blend of unit quats,
+    /// so the IDENTITY fallback guard is unnecessary work.
     pub fn nlerp(self, rhs: Self, t: f32) -> Self {
         let dot  = self.dot(rhs);
         let sign = if dot < 0.0 { -1.0f32 } else { 1.0f32 };
@@ -114,7 +129,7 @@ impl Quat {
             self.y + (rhs.y * sign - self.y) * t,
             self.z + (rhs.z * sign - self.z) * t,
             self.w + (rhs.w * sign - self.w) * t,
-        ).normalize()
+        ).normalize_fast()
     }
 
     pub fn slerp(self, mut rhs: Self, t: f32) -> Self {
@@ -161,7 +176,6 @@ impl Quat {
 }
 
 // ── QuatExt impl for scalar Quat ─────────────────────────────────────────────
-// Must be outside `impl Quat` — nested impls are not allowed in Rust.
 
 impl crate::helpers::euler::QuatExt for Quat {
     #[inline(always)]
@@ -217,4 +231,4 @@ impl fmt::Display for Quat {
     fn fmt(&self, f:&mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "Quat({:.4}, {:.4}, {:.4}, {:.4})", self.x, self.y, self.z, self.w)
     }
-                         }
+}
