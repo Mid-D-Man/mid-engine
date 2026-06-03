@@ -1,4 +1,4 @@
-// crates/mid-math/src/f32/neon/quat.rs  ← CLEAN FINAL VERSION
+// crates/mid-math/src/f32/neon/quat.rs
 //! Quaternion backed by `float32x4_t` on aarch64.
 
 use core::arch::aarch64::*;
@@ -14,11 +14,9 @@ use crate::EPSILON;
 #[repr(C)] union UnionCast { f: [f32; 4], v: Quat }
 #[repr(C)] union SignCast  { f: [f32; 4], v: float32x4_t }
 
-// Sign-control vectors for mul_quat (placed in .rodata, single LDR on AArch64).
 const QMUL_WZYX: float32x4_t = unsafe { SignCast { f: [ 1.0, -1.0,  1.0, -1.0] }.v };
 const QMUL_ZWXY: float32x4_t = unsafe { SignCast { f: [ 1.0,  1.0, -1.0, -1.0] }.v };
 const QMUL_YXWZ: float32x4_t = unsafe { SignCast { f: [-1.0,  1.0,  1.0, -1.0] }.v };
-// Mask for conjugate: negate xyz, keep w (sign-bit XOR).
 const CONJ_SIGN: float32x4_t = unsafe { SignCast { f: [-0.0, -0.0, -0.0, 0.0] }.v };
 
 /// Quaternion. 16 bytes, 16-byte aligned. Lane layout: [x, y, z, w].
@@ -78,11 +76,24 @@ impl Quat {
     #[inline] pub fn length_sq(self) -> f32 { self.dot(self) }
     #[inline] pub fn length(self)    -> f32 { self.length_sq().sqrt() }
 
+    /// Normalize. Returns IDENTITY for near-zero-length input.
     #[inline]
     pub fn normalize(self) -> Self {
         unsafe {
             let dot = vaddvq_f32(vmulq_f32(self.0, self.0));
             if dot < EPSILON { return Self::IDENTITY; }
+            Self(vdivq_f32(self.0, vsqrtq_f32(vdupq_n_f32(dot))))
+        }
+    }
+
+    /// Fast normalize — **no** IDENTITY fallback guard.
+    ///
+    /// Precondition: `self` must not be near-zero length. Always satisfied
+    /// when input is a lerped blend of two unit quaternions (nlerp/slerp).
+    #[inline(always)]
+    pub(crate) fn normalize_fast(self) -> Self {
+        unsafe {
+            let dot = vaddvq_f32(vmulq_f32(self.0, self.0));
             Self(vdivq_f32(self.0, vsqrtq_f32(vdupq_n_f32(dot))))
         }
     }
@@ -112,11 +123,6 @@ impl Quat {
         v + self.w * t + qv.cross(t)
     }
 
-    /// Quaternion product. NEON permutation derivation (verified lane-by-lane):
-    ///   rhs   = [rx, ry, rz, rw]
-    ///   wzyx  = [rw, rz, ry, rx]  via vrev64 + vextq::<2>
-    ///   zwxy  = [rz, rw, rx, ry]  via vrev64(wzyx)
-    ///   yxwz  = [ry, rx, rw, rz]  via vrev64(zwxy) + vextq::<2>
     pub fn mul_quat(self, rhs: Self) -> Self {
         unsafe {
             let lhs = self.0;
@@ -127,14 +133,12 @@ impl Quat {
             let ly = vdupq_laneq_f32::<1>(lhs);
             let lz = vdupq_laneq_f32::<2>(lhs);
 
-            // Build permutations of rhs.
             let rev1   = vrev64q_f32(r);
             let l_wzyx = vextq_f32::<2>(rev1, rev1);
             let l_zwxy = vrev64q_f32(l_wzyx);
             let rev2   = vrev64q_f32(l_zwxy);
             let l_yxwz = vextq_f32::<2>(rev2, rev2);
 
-            // Four multiply-then-sign-flip terms.
             let t1 = vmulq_f32(lw, r);
             let t2 = vmulq_f32(vmulq_f32(lx, l_wzyx), QMUL_WZYX);
             let t3 = vmulq_f32(vmulq_f32(ly, l_zwxy), QMUL_ZWXY);
@@ -144,13 +148,16 @@ impl Quat {
         }
     }
 
+    /// Normalised linear interpolation.
+    ///
+    /// Uses `normalize_fast()` — blend of two unit quats is always non-zero.
     #[inline]
     pub fn nlerp(self, rhs: Self, t: f32) -> Self {
         let rhs_adj = if self.dot(rhs) < 0.0 { -rhs } else { rhs };
         unsafe {
             let t_v  = vdupq_n_f32(t);
             let diff = vsubq_f32(rhs_adj.0, self.0);
-            Self(vfmaq_f32(self.0, diff, t_v)).normalize()
+            Self(vfmaq_f32(self.0, diff, t_v)).normalize_fast()
         }
     }
 
@@ -167,7 +174,8 @@ impl Quat {
                 vmulq_n_f32(self.0, s0),
                 vmulq_n_f32(rhs.0,  s1),
             );
-            Self(vdivq_f32(blended, vdupq_n_f32(sin_theta))).normalize()
+            // blended / sin_theta is ≈unit — normalize_fast() corrects FP drift.
+            Self(vdivq_f32(blended, vdupq_n_f32(sin_theta))).normalize_fast()
         }
     }
 
@@ -231,4 +239,4 @@ impl fmt::Display for Quat {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "Quat({:.4}, {:.4}, {:.4}, {:.4})", self.x, self.y, self.z, self.w)
     }
-}
+    }
