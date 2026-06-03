@@ -102,21 +102,18 @@ impl Vec3 {
 
     /// Normalize to unit length.
     ///
-    /// Fix A: uses `rsqrt` + one Newton–Raphson step instead of `sqrt` + `div`.
-    /// ~2× faster than the previous implementation.
-    /// Returns `Vec3::ZERO` for near-zero-length inputs (|v|² ≤ 1e-12).
+    /// **Undefined (NaN in practice) for zero-length input.**
+    /// Use [`Self::normalize_or_zero()`] for safe behaviour.
+    ///
+    /// OPT-3 (Build 7): removed the zero-guard mask (cmpgt + andps), matching
+    /// glam's `normalize()` contract. The mask saved nothing on non-zero inputs
+    /// but cost 2 SSE ops on every call, explaining the remaining gap vs glam.
     #[inline]
     pub fn normalize(self) -> Self {
         unsafe {
-            // Broadcast squared length to all 4 lanes.
             let dot     = dot3_into_m128(self.0, self.0);
-            // Zero-guard: mask is all-ones where length > EPSILON (1e-6).
-            // Comparing dot (length²) against EPSILON² (1e-12) is equivalent.
-            let mask    = _mm_cmpgt_ps(dot, _mm_set1_ps(1e-12_f32));
-            // rsqrt_nr: _mm_rsqrt_ps + 1 Newton–Raphson step ≈ full f32 precision.
             let inv_len = rsqrt_nr(dot);
-            // Zero out the result for near-zero vectors.
-            Self(_mm_and_ps(_mm_mul_ps(self.0, inv_len), mask))
+            Self(_mm_mul_ps(self.0, inv_len))
         }
     }
 
