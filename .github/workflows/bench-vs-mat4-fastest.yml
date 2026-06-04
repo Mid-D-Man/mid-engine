@@ -1,0 +1,173 @@
+# .github/workflows/bench-vs-mat4-fastest.yml
+# Who has the fastest 4×4 matrix multiply?
+# mid-math vs glam vs nalgebra vs ultraviolet vs vek vs matrixmultiply vs faer
+# Run: Actions → "mid-math: bench vs mat4 fastest" → Run workflow
+# DO NOT add push/pull_request triggers — benchmarks take 15+ minutes.
+
+name: mid-math — bench vs mat4 fastest
+
+on:
+  workflow_dispatch:
+    inputs:
+      baseline_note:
+        description: 'Context for this run (e.g. "pre storage layout fix")'
+        required: false
+        default: 'manual mat4 benchmark'
+
+permissions:
+  contents: read
+  actions:  read
+
+jobs:
+  bench:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Get Rust version
+        id: rustver
+        run: echo "ver=$(rustc --version)" >> $GITHUB_OUTPUT
+
+      - name: Cache cargo registry
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+          key: cargo-registry-bench-mat4fastest-${{ hashFiles('crates/mid-math/Cargo.toml') }}
+          restore-keys: cargo-registry-
+
+      - name: Run vs_mat4_fastest benchmarks
+        run: |
+          echo "Running: cargo bench --bench vs_mat4_fastest -p mid-math"
+          echo "Note: ${{ inputs.baseline_note }}"
+          cargo bench --bench vs_mat4_fastest -p mid-math 2>&1 | tee bench-mat4-fastest-raw.txt
+
+      - name: Publish summary
+        run: |
+          {
+            echo "## mid-math — 4×4 Matrix Multiply: Who's Fastest?"
+            echo ""
+            echo "**Build:** #${{ github.run_number }} &nbsp; **Rust:** \`${{ steps.rustver.outputs.ver }}\`"
+            echo ""
+            echo "**Note:** ${{ inputs.baseline_note }}"
+            echo ""
+            echo "> Lower is faster. glam (~7 ns) is the x86-64 gold standard."
+            echo "> mid-math target after storage fix: ≤7 ns (parity). After AVX2 (OPT-7): ~3.5 ns."
+            echo ""
+
+            python3 - << 'PYEOF'
+import re, sys
+from collections import OrderedDict
+
+RE_ANSI   = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
+RE_RESULT = re.compile(
+    r'^(\S[^\n]+?)\s+time:\s+\[\s*([\d.]+\s+\S+)\s+([\d.]+\s+\S+)\s+([\d.]+\s+\S+)\s*\]',
+    re.MULTILINE,
+)
+
+try:
+    raw = open('bench-mat4-fastest-raw.txt', encoding='utf-8', errors='replace').read()
+except FileNotFoundError:
+    print("*(bench-mat4-fastest-raw.txt not found)*")
+    sys.exit(0)
+
+text = RE_ANSI.sub('', raw)
+
+def to_ns(s):
+    try:
+        val, unit = s.strip().split()
+        val = float(val)
+        if 'µs' in unit or 'us' in unit: return val * 1_000
+        if 'ms' in unit:                 return val * 1_000_000
+        if unit == 's':                  return val * 1_000_000_000
+        return val  # assume ns
+    except:
+        return None
+
+rows = []
+for m in RE_RESULT.finditer(text):
+    name = m.group(1).strip()
+    mean = m.group(3).strip()
+    parts = name.split('/')
+    group   = '/'.join(parts[:-1]) if len(parts) >= 2 else name
+    variant = parts[-1]            if len(parts) >= 2 else ''
+    rows.append((group, variant, mean, to_ns(mean)))
+
+groups = OrderedDict()
+for g, v, m, ns in rows:
+    groups.setdefault(g, []).append((v, m, ns))
+
+# Track the 4x4 latency numbers for the final diagnostic
+mid_4x4_ns  = None
+glam_4x4_ns = None
+
+for group, variants in groups.items():
+    # Identify the glam baseline for this group
+    glam_ns = None
+    for v, m, ns in variants:
+        if 'glam' in v.lower():
+            glam_ns = ns
+            break
+
+    print(f"#### {group}")
+    has_ratio = glam_ns is not None
+    if has_ratio:
+        print("| Impl | Mean | vs glam |")
+        print("|---|---|---|")
+    else:
+        print("| Impl | Mean |")
+        print("|---|---|")
+
+    for v, m, ns in variants:
+        if has_ratio and ns and glam_ns:
+            r = ns / glam_ns
+            if r <= 1.05:
+                badge = "✅ parity"
+            elif r <= 1.5:
+                badge = f"⚠️ {r:.2f}×"
+            elif r <= 5.0:
+                badge = f"❌ {r:.2f}×"
+            else:
+                badge = f"🔴 {r:.0f}× (overhead dominated)"
+            print(f"| {v} | {m} | {badge} |")
+        else:
+            print(f"| {v} | {m} |")
+
+        # Capture for final diagnostic
+        if '4x4_latency' in group:
+            if 'mid-math' in v.lower() and 'current' in v.lower() and ns:
+                mid_4x4_ns = ns
+            if 'glam' in v.lower() and ns:
+                glam_4x4_ns = ns
+
+    print()
+
+# Diagnostic summary
+if mid_4x4_ns and glam_4x4_ns:
+    ratio = mid_4x4_ns / glam_4x4_ns
+    print(f"> **Key finding:** mid-math 4×4 latency is **{ratio:.1f}×** glam's ({mid_4x4_ns:.1f} ns vs {glam_4x4_ns:.1f} ns).")
+    if ratio > 1.1:
+        print(">")
+        print("> **Root cause:** `[[f32;4];4]` storage → Mat4 passed by pointer → 8× `_mm_load_ps` before any FP math.")
+        print("> **Fix (OPT-3):** Change to named `Vec4` fields. ABI then passes columns in XMM0-XMM3. Target: ≤7 ns.")
+        print("> **Next (OPT-7):** AVX2 two-column-per-ymm approach → ~3.5 ns.")
+    else:
+        print("> 🎉 Storage fix working — at or near parity with glam!")
+PYEOF
+
+          } >> $GITHUB_STEP_SUMMARY
+
+      - name: Upload raw results
+        uses: actions/upload-artifact@v4
+        with:
+          name: bench-mat4-fastest-${{ github.run_number }}
+          path: bench-mat4-fastest-raw.txt
+          retention-days: 30
