@@ -8,7 +8,8 @@
 //! - `error`  — engine error types
 //! - `traits` — shared interfaces (Update, Fixed, etc.)
 //! - `types`  — primitive shared types (EntityId, Tick, etc.)
-//! - `string` — string utilities: StrRef, NulStr, FixedStr, StringSearch, uniquename
+//! - `string` — StrRef, NulStr, FixedStr, StringSearch, uniquename, flip_side_name
+//! - `ffi`    — C-ABI exports (CFixedStr32/64/256, MidStringSearch, utility fns)
 
 #![no_std]
 extern crate alloc;
@@ -17,10 +18,12 @@ pub mod error;
 pub mod traits;
 pub mod types;
 pub mod string;
+pub mod ffi;
 
-// ── Flat re-exports — most-used types available at crate root ─────────────────
+// ── Flat re-exports ────────────────────────────────────────────────────────────
 
 pub use error::MidError;
+
 pub use string::{
     StrRef,
     NulStr,
@@ -34,6 +37,10 @@ pub use string::{
     SideChar,
 };
 
-// Macro re-exports (defined with #[macro_export], so they're already at crate root,
-// but document them here for discoverability)
-//   nul_str!(b"...\0")  — create a NulStr from a byte literal
+pub use ffi::{
+    CFixedStr32,
+    CFixedStr64,
+    CFixedStr256,
+    CSearchResult,
+    MidStringSearch,
+};
