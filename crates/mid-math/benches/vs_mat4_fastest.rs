@@ -65,7 +65,7 @@
 //!  |---------------------|---------|-------------------|--------------------|
 //!  | mat4/mul            | 17.6 ns | ~7.0 ns  (=glam)  | ~3.5 ns            |
 //!  | mat4/transform_pt   |  6.0 ns | ~3.9 ns           | ~2.0 ns            |
-//!  | mat4/transpose *    |  9.6 ns | ~3.2 ns †         | ~3.2 ns (no gain)  |
+//!  | mat4/transpose * |  9.6 ns | ~3.2 ns †         | ~3.2 ns (no gain)  |
 //!  | mat4/from_trs       | 13.5 ns | ~7.0 ns           | n/a                |
 //!  | chain_mat4_8        | 98.0 ns | ~50 ns            | ~25 ns             |
 //!
@@ -87,8 +87,8 @@ use mid_math::{to_radians, Mat4, Quat, Vec3};
 use glam::{Mat4 as GMat4, Quat as GQuat};
 
 // ── faer — large-matrix specialist ───────────────────────────────────────────
-// NOTE: if faer >= 0.23 renames Parallelism → Par, change to faer::Par::Seq.
-use faer::{Mat as FMat, Parallelism};
+// NOTE: faer >= 0.22 renamed Parallelism → Par and changed the matmul signature.
+use faer::{Mat as FMat, Par};
 
 // ── vek — game math with repr_simd ───────────────────────────────────────────
 // repr_simd gives Vec4 SIMD-aligned storage → auto-vectorised Mat4 ops.
@@ -254,11 +254,11 @@ fn bench_4x4_latency(c: &mut Criterion) {
             b.iter(|| {
                 faer::linalg::matmul::matmul(
                     fc.as_mut(),
+                    faer::linalg::matmul::Accum::Replace, // Replaces old beta=None
                     black_box(fa.as_ref()),
                     black_box(fb.as_ref()),
-                    None,   // beta=None: c = 1.0 * a * b (no accumulate)
                     1.0f32, // alpha
-                    Parallelism::None,
+                    Par::Seq,
                 );
                 black_box(&fc)
             })
@@ -446,11 +446,11 @@ fn bench_crossover(c: &mut Criterion) {
             b.iter(|| {
                 faer::linalg::matmul::matmul(
                     fc.as_mut(),
+                    faer::linalg::matmul::Accum::Replace,
                     black_box(fa.as_ref()),
                     black_box(fb.as_ref()),
-                    None,
                     1.0f32,
-                    Parallelism::None,
+                    Par::Seq,
                 );
                 black_box(&fc)
             })
@@ -558,11 +558,11 @@ fn bench_faer_peak_throughput(c: &mut Criterion) {
             b.iter(|| {
                 faer::linalg::matmul::matmul(
                     fc.as_mut(),
+                    faer::linalg::matmul::Accum::Replace,
                     black_box(fa.as_ref()),
                     black_box(fb.as_ref()),
-                    None,
                     1.0f32,
-                    Parallelism::None,
+                    Par::Seq,
                 );
                 black_box(&fc)
             })
