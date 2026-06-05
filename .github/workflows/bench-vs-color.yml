@@ -56,42 +56,7 @@ jobs:
             echo "> sRGB↔linear: IEC 61966-2-1 (powf 2.4). LogLuv32/RGBE use transcendentals — expect 10–50 ns."
             echo "> bulk\_100k column is throughput; sample\_size=20 for stability."
             echo ""
-            python3 - << 'PYEOF'
-          import re, sys
-
-          RE_ANSI   = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
-          RE_RESULT = re.compile(
-              r'^(\S[^\n]+?)\s+time:\s+\[\s*([\d.]+\s+\S+)\s+([\d.]+\s+\S+)\s+([\d.]+\s+\S+)\s*\]',
-              re.MULTILINE,
-          )
-
-          try:
-              raw = open('bench-color-raw.txt', encoding='utf-8', errors='replace').read()
-          except FileNotFoundError:
-              print("*(bench-color-raw.txt not found)*")
-              sys.exit(0)
-
-          text = RE_ANSI.sub('', raw)
-          current_group = None
-
-          for m in RE_RESULT.finditer(text):
-              name    = m.group(1).strip()
-              lo      = m.group(2).strip()
-              mean    = m.group(3).strip()
-              hi      = m.group(4).strip()
-              parts   = name.split('/')
-              group   = '/'.join(parts[:-1]) if len(parts) >= 2 else name
-              variant = parts[-1]            if len(parts) >= 2 else ''
-              if group != current_group:
-                  if current_group is not None:
-                      print()
-                  print(f"#### {group}")
-                  print("| Variant | Low | Mean | High |")
-                  print("|---|---|---|---|")
-                  current_group = group
-              print(f"| {variant} | {lo} | {mean} | {hi} |")
-          PYEOF
-
+            python3 scripts/bench_vs_color.py
           } >> $GITHUB_STEP_SUMMARY
 
       - uses: actions/upload-artifact@v4
