@@ -66,72 +66,72 @@ jobs:
           # used in DirectXMath.h and its .inl files including _Use_decl_annotations_,
           # _Out_writes_bytes_, _In_reads_bytes_, etc.
           cat > /tmp/dxm/Inc/sal.h << 'SALEOF'
-#pragma once
-/* sal.h stub for Linux/GCC — SAL (Source Annotation Language) is MSVC-only.
-   All annotations expand to nothing. Required for DirectXMath on Linux. */
-#define _In_
-#define _In_z_
-#define _In_opt_
-#define _In_opt_z_
-#define _In_reads_(n)
-#define _In_reads_opt_(n)
-#define _In_reads_bytes_(n)
-#define _In_reads_bytes_opt_(n)
-#define _In_range_(lo,hi)
-#define _In_z_count_(n)
-#define _Out_
-#define _Out_opt_
-#define _Out_writes_(n)
-#define _Out_writes_opt_(n)
-#define _Out_writes_bytes_(n)
-#define _Out_writes_bytes_opt_(n)
-#define _Out_writes_to_(n,c)
-#define _Out_writes_all_(n)
-#define _Out_range_(lo,hi)
-#define _Inout_
-#define _Inout_opt_
-#define _Inout_updates_(n)
-#define _Inout_updates_bytes_(n)
-#define _Inout_updates_to_(n,c)
-#define _Inout_updates_all_(n)
-#define _Inout_updates_bytes_all_(n)
-#define _Check_return_
-#define _Must_inspect_result_
-#define _Use_decl_annotations_
-#define _Analysis_assume_(e)
-#define _Pre_satisfies_(c)
-#define _Post_satisfies_(c)
-#define _Deref_in_range_(lo,hi)
-#define _Deref_out_range_(lo,hi)
-#define _Field_range_(lo,hi)
-#define _Ret_range_(lo,hi)
-#define _COM_Outptr_
-#define _Outptr_
-#define _Outptr_opt_
-#define _Outptr_result_maybenull_
-#define _Outptr_opt_result_maybenull_
-#define _Outptr_result_z_
-#define _Outptr_opt_result_z_
-#define _Outptr_result_buffer_(n)
-#define _Outptr_opt_result_buffer_(n)
-#define _Outptr_result_buffer_all_(n)
-#define _Outptr_opt_result_buffer_all_(n)
-#define _Outptr_result_bytebuffer_(n)
-#define _Outptr_result_bytebuffer_all_(n)
-#define _Outptr_result_maybenull_z_
-#define _Result_nullonfailure_
-#define _Result_zeroonfailure_
-#define _Ret_maybenull_
-#define _Ret_notnull_
-#define _Ret_null_
-#define _Ret_valid_
-#define _Success_(e)
-#define _On_failure_(a)
-#define _Always_(a)
-#define _Printf_format_string_
-#define _Scanf_format_string_
-#define _Scanf_s_format_string_
-SALEOF
+          #pragma once
+          /* sal.h stub for Linux/GCC — SAL (Source Annotation Language) is MSVC-only.
+             All annotations expand to nothing. Required for DirectXMath on Linux. */
+          #define _In_
+          #define _In_z_
+          #define _In_opt_
+          #define _In_opt_z_
+          #define _In_reads_(n)
+          #define _In_reads_opt_(n)
+          #define _In_reads_bytes_(n)
+          #define _In_reads_bytes_opt_(n)
+          #define _In_range_(lo,hi)
+          #define _In_z_count_(n)
+          #define _Out_
+          #define _Out_opt_
+          #define _Out_writes_(n)
+          #define _Out_writes_opt_(n)
+          #define _Out_writes_bytes_(n)
+          #define _Out_writes_bytes_opt_(n)
+          #define _Out_writes_to_(n,c)
+          #define _Out_writes_all_(n)
+          #define _Out_range_(lo,hi)
+          #define _Inout_
+          #define _Inout_opt_
+          #define _Inout_updates_(n)
+          #define _Inout_updates_bytes_(n)
+          #define _Inout_updates_to_(n,c)
+          #define _Inout_updates_all_(n)
+          #define _Inout_updates_bytes_all_(n)
+          #define _Check_return_
+          #define _Must_inspect_result_
+          #define _Use_decl_annotations_
+          #define _Analysis_assume_(e)
+          #define _Pre_satisfies_(c)
+          #define _Post_satisfies_(c)
+          #define _Deref_in_range_(lo,hi)
+          #define _Deref_out_range_(lo,hi)
+          #define _Field_range_(lo,hi)
+          #define _Ret_range_(lo,hi)
+          #define _COM_Outptr_
+          #define _Outptr_
+          #define _Outptr_opt_
+          #define _Outptr_result_maybenull_
+          #define _Outptr_opt_result_maybenull_
+          #define _Outptr_result_z_
+          #define _Outptr_opt_result_z_
+          #define _Outptr_result_buffer_(n)
+          #define _Outptr_opt_result_buffer_(n)
+          #define _Outptr_result_buffer_all_(n)
+          #define _Outptr_opt_result_buffer_all_(n)
+          #define _Outptr_result_bytebuffer_(n)
+          #define _Outptr_result_bytebuffer_all_(n)
+          #define _Outptr_result_maybenull_z_
+          #define _Result_nullonfailure_
+          #define _Result_zeroonfailure_
+          #define _Ret_maybenull_
+          #define _Ret_notnull_
+          #define _Ret_null_
+          #define _Ret_valid_
+          #define _Success_(e)
+          #define _On_failure_(a)
+          #define _Always_(a)
+          #define _Printf_format_string_
+          #define _Scanf_format_string_
+          #define _Scanf_s_format_string_
+          SALEOF
           echo "sal.h stub created at /tmp/dxm/Inc/sal.h"
 
       - name: Compile C benchmarks
