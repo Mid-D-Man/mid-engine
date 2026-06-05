@@ -54,36 +54,85 @@ jobs:
             -o crates/mid-math/benches/HandmadeMath.h
           echo "HandmadeMath.h downloaded ($(wc -l < crates/mid-math/benches/HandmadeMath.h) lines)"
 
-      - name: Fetch DirectXMath headers + create sal.h stub
+      - name: Fetch DirectXMath headers and create sal.h stub
         run: |
           git clone --quiet --depth 1 \
             https://github.com/microsoft/DirectXMath \
             /tmp/dxm
           echo "DirectXMath headers fetched"
 
-          # sal.h stub — required for Linux compilation of DirectXMath
-          # SAL is Windows source annotation language, not needed on Linux
+          # Comprehensive sal.h stub — SAL is Windows source annotation language.
+          # All annotations expand to nothing on Linux. Must cover every annotation
+          # used in DirectXMath.h and its .inl files including _Use_decl_annotations_,
+          # _Out_writes_bytes_, _In_reads_bytes_, etc.
           cat > /tmp/dxm/Inc/sal.h << 'SALEOF'
-          /* sal.h stub for Linux — SAL annotations not evaluated at compile time */
-          #pragma once
-          #define _In_
-          #define _In_opt_
-          #define _In_z_
-          #define _In_reads_(x)
-          #define _In_reads_opt_(x)
-          #define _Out_
-          #define _Out_opt_
-          #define _Out_writes_(x)
-          #define _Inout_
-          #define _Inout_opt_
-          #define _Check_return_
-          #define _Success_(x)
-          #define _Outptr_
-          #define _Outptr_opt_
-          #define _When_(x, y)
-          #define _Analysis_assume_(x)
-          SALEOF
-          echo "sal.h stub created"
+#pragma once
+/* sal.h stub for Linux/GCC — SAL (Source Annotation Language) is MSVC-only.
+   All annotations expand to nothing. Required for DirectXMath on Linux. */
+#define _In_
+#define _In_z_
+#define _In_opt_
+#define _In_opt_z_
+#define _In_reads_(n)
+#define _In_reads_opt_(n)
+#define _In_reads_bytes_(n)
+#define _In_reads_bytes_opt_(n)
+#define _In_range_(lo,hi)
+#define _In_z_count_(n)
+#define _Out_
+#define _Out_opt_
+#define _Out_writes_(n)
+#define _Out_writes_opt_(n)
+#define _Out_writes_bytes_(n)
+#define _Out_writes_bytes_opt_(n)
+#define _Out_writes_to_(n,c)
+#define _Out_writes_all_(n)
+#define _Out_range_(lo,hi)
+#define _Inout_
+#define _Inout_opt_
+#define _Inout_updates_(n)
+#define _Inout_updates_bytes_(n)
+#define _Inout_updates_to_(n,c)
+#define _Inout_updates_all_(n)
+#define _Inout_updates_bytes_all_(n)
+#define _Check_return_
+#define _Must_inspect_result_
+#define _Use_decl_annotations_
+#define _Analysis_assume_(e)
+#define _Pre_satisfies_(c)
+#define _Post_satisfies_(c)
+#define _Deref_in_range_(lo,hi)
+#define _Deref_out_range_(lo,hi)
+#define _Field_range_(lo,hi)
+#define _Ret_range_(lo,hi)
+#define _COM_Outptr_
+#define _Outptr_
+#define _Outptr_opt_
+#define _Outptr_result_maybenull_
+#define _Outptr_opt_result_maybenull_
+#define _Outptr_result_z_
+#define _Outptr_opt_result_z_
+#define _Outptr_result_buffer_(n)
+#define _Outptr_opt_result_buffer_(n)
+#define _Outptr_result_buffer_all_(n)
+#define _Outptr_opt_result_buffer_all_(n)
+#define _Outptr_result_bytebuffer_(n)
+#define _Outptr_result_bytebuffer_all_(n)
+#define _Outptr_result_maybenull_z_
+#define _Result_nullonfailure_
+#define _Result_zeroonfailure_
+#define _Ret_maybenull_
+#define _Ret_notnull_
+#define _Ret_null_
+#define _Ret_valid_
+#define _Success_(e)
+#define _On_failure_(a)
+#define _Always_(a)
+#define _Printf_format_string_
+#define _Scanf_format_string_
+#define _Scanf_s_format_string_
+SALEOF
+          echo "sal.h stub created at /tmp/dxm/Inc/sal.h"
 
       - name: Compile C benchmarks
         working-directory: crates/mid-math/benches
@@ -146,171 +195,7 @@ jobs:
             echo "> Rust: criterion medians. C: 4-way interleaved throughput approximation."
             echo "> All binaries compiled \`-O3 -march=native\` on the same \`ubuntu-latest\` runner."
             echo ""
-
-            python3 - << 'PYEOF'
-          import re, sys
-          from collections import OrderedDict
-
-          RE_ANSI = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
-
-          def to_ns(val_str, unit):
-              v = float(val_str)
-              u = unit.lower().strip().rstrip('/op').strip()
-              if 'µs' in u or 'us' in u: return v * 1_000
-              if 'ms' in u:               return v * 1_000_000
-              if u == 's':                 return v * 1_000_000_000
-              return v  # ns
-
-          def fmt_ns(ns):
-              if ns >= 1_000_000: return f"{ns/1_000_000:.2f} ms"
-              if ns >= 1_000:     return f"{ns/1_000:.2f} µs"
-              return f"{ns:.2f} ns"
-
-          # ── Parse C benchmark output ──────────────────────────────────────────────────
-          # Format:
-          #   "vec3 (4-way interleaved...):"   ← section header (first word = section name)
-          #   "  add/cglm              1.23 ns/op"  ← result line
-
-          def parse_c(path):
-              results = {}   # "section/op" → (display_str, ns)
-              try:
-                  lines = open(path).readlines()
-              except:
-                  return results
-
-              section = None
-              for raw in lines:
-                  line = raw.strip()
-                  if not line:
-                      continue
-
-                  # Section header: starts at column 0, ends with ':', no '/op'
-                  if not raw.startswith(' ') and line.endswith(':') and '/op' not in line:
-                      m = re.match(r'^(\w+)\b', line)
-                      if m:
-                          section = m.group(1).lower()
-                      continue
-
-                  # Skip non-result lines (titles, blanks, "sink=..." footer)
-                  if '/op' not in line:
-                      continue
-
-                  # Result: "label   X.XX ns/op" — use rsplit so labels with spaces work
-                  parts = line.rsplit(None, 2)
-                  if len(parts) != 3:
-                      continue
-                  label_full, val_str, unit_op = parts
-                  if '/op' not in unit_op.lower():
-                      continue
-
-                  try:
-                      ns = to_ns(val_str, unit_op)
-                  except:
-                      continue
-
-                  # op name is the part before the first '/' in the label
-                  op = label_full.split('/')[0].strip()
-                  key = f"{section}/{op}" if section else op
-                  results[key] = (f"{val_str} {unit_op.replace('/op','').strip()}", ns)
-
-              return results
-
-          # ── Parse Rust criterion output ───────────────────────────────────────────────
-          # Format: "group/op/impl   time:   [lo  MID  hi]"
-
-          def parse_rust(path):
-              results = {}   # "section/op" → {impl_name: (display_str, ns)}
-              try:
-                  raw = RE_ANSI.sub('', open(path, errors='replace').read())
-              except:
-                  return results
-
-              RE = re.compile(
-                  r'^(\S[^\n]+?)\s+time:\s+\[\s*[\d.]+ \S+\s+([\d.]+) (\S+)\s+[\d.]+ \S+\s*\]',
-                  re.MULTILINE,
-              )
-              for m in RE.finditer(raw):
-                  name     = m.group(1).strip()
-                  mean_val = m.group(2)
-                  unit     = m.group(3)
-                  ns = to_ns(mean_val, unit)
-                  parts = name.split('/')
-                  if len(parts) >= 3:
-                      section = parts[0]
-                      op      = parts[1]
-                      impl    = '/'.join(parts[2:])
-                      key = f"{section}/{op}"
-                      results.setdefault(key, {})[impl] = (f"{mean_val} {unit}", ns)
-
-              return results
-
-          cglm_data = parse_c('/tmp/cglm.txt')
-          hmm_data  = parse_c('/tmp/hmm.txt')
-          dxm_data  = parse_c('/tmp/dxm.txt')
-          rust_data = parse_rust('/tmp/rust.txt')
-
-          # ── Unified comparison table ──────────────────────────────────────────────────
-          OPS = [
-              ('vec3',     'add',              'Vec3 add'),
-              ('vec3',     'dot',              'Vec3 dot'),
-              ('vec3',     'cross',            'Vec3 cross'),
-              ('vec3',     'normalize',        'Vec3 normalize'),
-              ('vec3',     'lerp',             'Vec3 lerp'),
-              ('rotation', 'mul',              'Quat mul'),
-              ('rotation', 'rotate',           'Quat rotate vec'),
-              ('rotation', 'slerp',            'Quat slerp'),
-              ('mat4',     'mul',              'Mat4 mul ⚠️'),
-              ('mat4',     'transform_point',  'Mat4 transform_point'),
-              ('mat4',     'inverse_general',  'Mat4 inverse_general'),
-          ]
-
-          print("### Unified Comparison")
-          print("")
-          print("| Operation | mid-math | glam | cglm | HandmadeMath | DirectXMath |")
-          print("|---|---|---|---|---|---|")
-
-          for section, op, label in OPS:
-              key = f"{section}/{op}"
-
-              # Rust results
-              rust_ops = rust_data.get(key, {})
-              mid_str  = '—'
-              glam_str = '—'
-              for k, (s, ns) in rust_ops.items():
-                  kl = k.lower()
-                  if 'mid-math' in kl and mid_str  == '—': mid_str  = s
-                  if 'glam'     in kl and glam_str == '—': glam_str = s
-
-              # C results
-              c1 = cglm_data.get(key, ('—',))[0]
-              c2 = hmm_data.get(key,  ('—',))[0]
-              c3 = dxm_data.get(key,  ('—',))[0]
-
-              print(f"| {label} | {mid_str} | {glam_str} | {c1} | {c2} | {c3} |")
-
-          print("")
-
-          # Highlight the mat4/mul gap specifically
-          mat4_key = "mat4/mul"
-          rust_mat4 = rust_data.get(mat4_key, {})
-          mid_ns  = next((v[1] for k,v in rust_mat4.items() if 'mid-math' in k.lower()), None)
-          glam_ns = next((v[1] for k,v in rust_mat4.items() if 'glam'     in k.lower()), None)
-          cglm_ns = cglm_data.get(mat4_key, (None, None))[1]
-          dxm_ns  = dxm_data.get(mat4_key,  (None, None))[1]
-
-          print("#### Mat4 multiply gap analysis")
-          print("")
-          if mid_ns and glam_ns:
-              print(f"- mid-math vs glam:       **{mid_ns/glam_ns:.2f}×** slower  ({fmt_ns(mid_ns)} vs {fmt_ns(glam_ns)})")
-              print(f"  - Cause: `[[f32;4];4]` storage → pointer ABI → 8× `_mm_load_ps` before math")
-              print(f"  - Fix: named `Vec4` fields → data in XMM registers → target ≤7 ns")
-          if cglm_ns and glam_ns:
-              print(f"- cglm vs glam:           **{cglm_ns/glam_ns:.2f}×** ({fmt_ns(cglm_ns)} vs {fmt_ns(glam_ns)})")
-          if dxm_ns and glam_ns:
-              print(f"- DirectXMath vs glam:    **{dxm_ns/glam_ns:.2f}×** ({fmt_ns(dxm_ns)} vs {fmt_ns(glam_ns)})")
-
-          PYEOF
-
+            python3 scripts/bench_vs_c_libs.py
             echo ""
             echo "---"
             echo "### Raw C Benchmark Output"
@@ -338,7 +223,6 @@ jobs:
             echo '```'
             echo ""
             echo "</details>"
-
           } >> $GITHUB_STEP_SUMMARY
 
       - name: Upload all benchmark artifacts
