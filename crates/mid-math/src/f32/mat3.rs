@@ -1,9 +1,9 @@
 // crates/mid-math/src/f32/mat3.rs
-// Fix: use crate::Mat4 (platform-dispatched) instead of hardcoding sse2
+// Updated for Build 8: use Vec4 field names (x_axis, y_axis, z_axis)
+// instead of cols[i][j] indexing for from_mat4 and normal_matrix.
 
 use core::fmt;
 use core::ops::Mul;
-// *** FIX: use platform-dispatched types, not arch-specific paths ***
 use crate::{Vec3, Mat4};
 use crate::EPSILON;
 
@@ -15,7 +15,7 @@ pub struct Mat3 {
 }
 
 impl Mat3 {
-    pub const ZERO: Self = Self { cols: [[0.0;3];3] };
+    pub const ZERO: Self = Self { cols: [[0.0; 3]; 3] };
     pub const IDENTITY: Self = Self { cols: [
         [1.0, 0.0, 0.0],
         [0.0, 1.0, 0.0],
@@ -23,17 +23,20 @@ impl Mat3 {
     ]};
 
     #[inline]
-    pub fn from_cols(c0: [f32;3], c1: [f32;3], c2: [f32;3]) -> Self {
+    pub fn from_cols(c0: [f32; 3], c1: [f32; 3], c2: [f32; 3]) -> Self {
         Self { cols: [c0, c1, c2] }
     }
 
     /// Extract upper-left 3×3 from a Mat4.
+    ///
+    /// Updated for Build 8: accesses the named Vec4 fields (x_axis, y_axis, z_axis)
+    /// via their Deref components rather than the removed cols[i][j] indexing.
     #[inline]
     pub fn from_mat4(m: &Mat4) -> Self {
         Self::from_cols(
-            [m.cols[0][0], m.cols[0][1], m.cols[0][2]],
-            [m.cols[1][0], m.cols[1][1], m.cols[1][2]],
-            [m.cols[2][0], m.cols[2][1], m.cols[2][2]],
+            [m.x_axis.x, m.x_axis.y, m.x_axis.z],
+            [m.y_axis.x, m.y_axis.y, m.y_axis.z],
+            [m.z_axis.x, m.z_axis.y, m.z_axis.z],
         )
     }
 
@@ -58,23 +61,23 @@ impl Mat3 {
 
     #[inline]
     pub fn from_scale(s: Vec3) -> Self {
-        Self::from_cols([s.x,0.0,0.0],[0.0,s.y,0.0],[0.0,0.0,s.z])
+        Self::from_cols([s.x, 0.0, 0.0], [0.0, s.y, 0.0], [0.0, 0.0, s.z])
     }
 
     pub fn transpose(self) -> Self {
         let c = &self.cols;
         Self::from_cols(
-            [c[0][0],c[1][0],c[2][0]],
-            [c[0][1],c[1][1],c[2][1]],
-            [c[0][2],c[1][2],c[2][2]],
+            [c[0][0], c[1][0], c[2][0]],
+            [c[0][1], c[1][1], c[2][1]],
+            [c[0][2], c[1][2], c[2][2]],
         )
     }
 
     pub fn determinant(self) -> f32 {
         let c = &self.cols;
-        c[0][0]*(c[1][1]*c[2][2]-c[2][1]*c[1][2])
-       -c[1][0]*(c[0][1]*c[2][2]-c[2][1]*c[0][2])
-       +c[2][0]*(c[0][1]*c[1][2]-c[1][1]*c[0][2])
+        c[0][0] * (c[1][1]*c[2][2] - c[2][1]*c[1][2])
+       -c[1][0] * (c[0][1]*c[2][2] - c[2][1]*c[0][2])
+       +c[2][0] * (c[0][1]*c[1][2] - c[1][1]*c[0][2])
     }
 
     pub fn inverse(self) -> Option<Self> {
@@ -84,19 +87,19 @@ impl Mat3 {
         let c = &self.cols;
         Some(Self::from_cols(
             [
-                 (c[1][1]*c[2][2]-c[2][1]*c[1][2])*id,
-                -(c[0][1]*c[2][2]-c[2][1]*c[0][2])*id,
-                 (c[0][1]*c[1][2]-c[1][1]*c[0][2])*id,
+                 (c[1][1]*c[2][2] - c[2][1]*c[1][2]) * id,
+                -(c[0][1]*c[2][2] - c[2][1]*c[0][2]) * id,
+                 (c[0][1]*c[1][2] - c[1][1]*c[0][2]) * id,
             ],
             [
-                -(c[1][0]*c[2][2]-c[2][0]*c[1][2])*id,
-                 (c[0][0]*c[2][2]-c[2][0]*c[0][2])*id,
-                -(c[0][0]*c[1][2]-c[1][0]*c[0][2])*id,
+                -(c[1][0]*c[2][2] - c[2][0]*c[1][2]) * id,
+                 (c[0][0]*c[2][2] - c[2][0]*c[0][2]) * id,
+                -(c[0][0]*c[1][2] - c[1][0]*c[0][2]) * id,
             ],
             [
-                 (c[1][0]*c[2][1]-c[2][0]*c[1][1])*id,
-                -(c[0][0]*c[2][1]-c[2][0]*c[0][1])*id,
-                 (c[0][0]*c[1][1]-c[1][0]*c[0][1])*id,
+                 (c[1][0]*c[2][1] - c[2][0]*c[1][1]) * id,
+                -(c[0][0]*c[2][1] - c[2][0]*c[0][1]) * id,
+                 (c[0][0]*c[1][1] - c[1][0]*c[0][1]) * id,
             ],
         ))
     }
@@ -167,4 +170,4 @@ impl fmt::Display for Mat3 {
         }
         Ok(())
     }
-}
+         }
