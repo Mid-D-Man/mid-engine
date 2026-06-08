@@ -1,5 +1,5 @@
 // crates/mid-math/benches/vs_all.rs
-//! Comprehensive four-way benchmark: mid-math vs glam vs nalgebra vs ultraviolet.
+//! Comprehensive benchmark: mid-math vs glam vs nalgebra vs ultraviolet.
 //!
 //! ── Build history ────────────────────────────────────────────────────────────
 //!
@@ -9,42 +9,39 @@
 //!    mat4/mul         19.74 ns  glam 6.91 ns
 //!
 //!  Build 6 (rsqrt_nr + tree-form mat4_mul_col):
-//!    vec3/normalize    4.08 ns  (-18% partial win)
-//!    rotation/nlerp    8.22 ns  (+52% REGRESSION: IDENTITY blend on hot path)
-//!    mat4/mul         19.77 ns  (0%: tree form blocked FMA)
+//!    vec3/normalize    4.08 ns  (-18%)
+//!    rotation/nlerp    8.22 ns  REGRESSION
+//!    mat4/mul         19.77 ns  (0%)
 //!
 //!  Build 7 (sequential accumulation + normalize_fast + remove vec3 guard):
 //!    vec3/normalize    2.62 ns  WE BEAT GLAM (2.92 ns)
-//!    rotation/nlerp    6.44 ns  still slow — scalar↔SIMD round-trip in dot4
-//!    mat4/mul         19.78 ns  UNCHANGED — root cause is [[f32;4];4] storage
+//!    rotation/nlerp    6.44 ns  still slow
+//!    mat4/mul         19.78 ns  UNCHANGED — root cause [[f32;4];4] storage
 //!
-//!  Build 8 targets:
-//!    rotation/nlerp    ~4.2 ns  (dot4_into_m128 fixes scalar round-trip)
-//!    mat4/mul          ~7 ns    (requires Mat4 storage→[Vec4;4] layout change)
-//!
-//! ── matrixmultiply note ──────────────────────────────────────────────────────
-//!
-//! `matrixmultiply` is a BLAS-style crate for large n×m matrices using AVX2.
-//! For 4×4 it will be much slower (per-call overhead dominates).  Benching it
-//! confirms the floor for a general approach vs hand-written SIMD, and is
-//! useful to know when designing the future AVX2 wide-batch path.
+//!  Build 8 (Vec4 field storage, dot4_into_m128):
+//!    mat4/mul          ~7 ns    TARGET: parity glam
+//!    mat4/transform_pt ~3.9 ns  improved
+//!    rotation/nlerp    ~4.2 ns  dot4_into_m128 fix
 //!
 //! Run: cargo bench --bench vs_all -p mid-math
-//! HTML report: target/criterion/report/index.html
 
 use criterion::{black_box, criterion_group, criterion_main, BatchSize, Criterion, Throughput};
 
 // ── mid-math ──────────────────────────────────────────────────────────────────
-use mid_math::{to_radians, Affine3, Mat4, Quat, Vec3, Vec4};
+use mid_math::{to_radians, Affine3, Mat2, Mat3, Mat4, Quat, Vec2, Vec3, Vec4};
 
 // ── glam ─────────────────────────────────────────────────────────────────────
-use glam::{Affine3A as GAffine3A, Mat4 as GMat4, Quat as GQuat, Vec3A as GVec3, Vec4 as GVec4};
+use glam::{
+    Affine3A as GAffine3A, Mat2 as GMat2, Mat3 as GMat3,
+    Mat4 as GMat4, Quat as GQuat, Vec2 as GVec2, Vec3 as GVec3A,
+    Vec3A as GVec3, Vec4 as GVec4,
+};
 
 // ── nalgebra ──────────────────────────────────────────────────────────────────
-use nalgebra::{Matrix4, Point3, Unit, UnitQuaternion, Vector3, Vector4};
+use nalgebra::{Matrix2, Matrix3, Matrix4, Point3, Unit, UnitQuaternion, Vector2, Vector3, Vector4};
 
 // ── ultraviolet ───────────────────────────────────────────────────────────────
-use ultraviolet::{Mat4 as UMat4, Rotor3, Slerp, Vec3 as UVec3, Vec4 as UVec4};
+use ultraviolet::{Mat2 as UMat2, Mat3 as UMat3, Mat4 as UMat4, Rotor3, Slerp, Vec2 as UVec2, Vec3 as UVec3, Vec4 as UVec4};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Shared helpers
@@ -83,7 +80,7 @@ fn uv_trs(tx: f32, angle_deg: f32, sx: f32) -> UMat4 {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Group 1: Vec3 arithmetic
+// Group 1: Vec3
 // ─────────────────────────────────────────────────────────────────────────────
 
 fn bench_vec3(c: &mut Criterion) {
@@ -119,8 +116,6 @@ fn bench_vec3(c: &mut Criterion) {
     g.bench_function("normalize/nalgebra",    |b| b.iter(|| black_box(na_a).normalize()));
     g.bench_function("normalize/ultraviolet", |b| b.iter(|| black_box(uv_a).normalized()));
 
-    // Safe normalize: returns ZERO for zero-length (vs normalize() which is UB there).
-    // Expect slightly slower than normalize() due to the guard check.
     g.bench_function("normalize_or_zero/mid-math", |b| b.iter(|| black_box(mm_a).normalize_or_zero()));
     g.bench_function("normalize_or_zero/glam",     |b| b.iter(|| black_box(gl_a).normalize_or_zero()));
 
@@ -152,18 +147,18 @@ fn bench_vec4(c: &mut Criterion) {
     let na = Vector4::new(1.0f32, 2.0, 3.0, 4.0);
     let uv = UVec4::new(1.0, 2.0, 3.0, 4.0);
 
-    g.bench_function("dot/mid-math",       |b| b.iter(|| black_box(mm).dot(black_box(mm))));
-    g.bench_function("dot/glam",           |b| b.iter(|| black_box(gl).dot(black_box(gl))));
-    g.bench_function("dot/nalgebra",       |b| b.iter(|| black_box(na).dot(&black_box(na))));
-    g.bench_function("dot/ultraviolet",    |b| b.iter(|| black_box(uv).dot(black_box(uv))));
+    g.bench_function("dot/mid-math",    |b| b.iter(|| black_box(mm).dot(black_box(mm))));
+    g.bench_function("dot/glam",        |b| b.iter(|| black_box(gl).dot(black_box(gl))));
+    g.bench_function("dot/nalgebra",    |b| b.iter(|| black_box(na).dot(&black_box(na))));
+    g.bench_function("dot/ultraviolet", |b| b.iter(|| black_box(uv).dot(black_box(uv))));
 
     g.bench_function("normalize/mid-math",    |b| b.iter(|| black_box(mm).normalize()));
     g.bench_function("normalize/glam",        |b| b.iter(|| black_box(gl).normalize()));
     g.bench_function("normalize/nalgebra",    |b| b.iter(|| black_box(na).normalize()));
     g.bench_function("normalize/ultraviolet", |b| b.iter(|| black_box(uv).normalized()));
 
-    g.bench_function("lerp/mid-math",    |b| b.iter(|| black_box(mm).lerp(black_box(mm), 0.5)));
-    g.bench_function("lerp/glam",        |b| b.iter(|| black_box(gl).lerp(black_box(gl), 0.5)));
+    g.bench_function("lerp/mid-math", |b| b.iter(|| black_box(mm).lerp(black_box(mm), 0.5)));
+    g.bench_function("lerp/glam",     |b| b.iter(|| black_box(gl).lerp(black_box(gl), 0.5)));
 
     g.finish();
 }
@@ -199,7 +194,7 @@ fn bench_rotation(c: &mut Criterion) {
     g.bench_function("mul/nalgebra-unitquat", |b| b.iter(|| black_box(na_q1) * black_box(na_q2)));
     g.bench_function("mul/ultraviolet-rotor", |b| b.iter(|| black_box(uv_r1) * black_box(uv_r2)));
 
-    // mid-math 1.9× faster than glam here — architectural win from our rotate impl.
+    // mid-math 1.9× faster than glam — architectural win from our rotate impl.
     g.bench_function("rotate/mid-math-quat",     |b| b.iter(|| black_box(mm_q1).rotate(black_box(mm_v))));
     g.bench_function("rotate/glam-quat",         |b| b.iter(|| black_box(gl_q1) * black_box(gl_v)));
     g.bench_function("rotate/nalgebra-unitquat", |b| b.iter(|| black_box(na_q1) * black_box(na_v)));
@@ -210,17 +205,15 @@ fn bench_rotation(c: &mut Criterion) {
     g.bench_function("slerp/nalgebra-unitquat", |b| b.iter(|| black_box(na_q1).slerp(&black_box(na_q2), 0.5)));
     g.bench_function("slerp/ultraviolet-rotor", |b| b.iter(|| black_box(uv_r1).slerp(black_box(uv_r2), 0.5)));
 
-    // Build 7: 6.44 ns — still slow despite normalize_fast.
-    // Build 8 fix: dot4_into_m128 (no scalar round-trip). Target: ~4.2 ns.
+    // Build 8: dot4_into_m128 eliminates scalar round-trip. Target: ~4.2 ns.
     g.bench_function("nlerp/mid-math-quat",     |b| b.iter(|| black_box(mm_q1).nlerp(black_box(mm_q2), 0.5)));
     g.bench_function("nlerp/glam-quat",         |b| b.iter(|| black_box(gl_q1).lerp(black_box(gl_q2), 0.5)));
     g.bench_function("nlerp/nalgebra-unitquat", |b| b.iter(|| black_box(na_q1).nlerp(&black_box(na_q2), 0.5)));
 
-    // Construction: from_axis_angle (exercises normalize path)
     g.bench_function("from_axis_angle/mid-math", |b| b.iter(|| {
         Quat::from_axis_angle(black_box(Vec3::Y), black_box(0.785_f32))
     }));
-    g.bench_function("from_axis_angle/glam",     |b| b.iter(|| {
+    g.bench_function("from_axis_angle/glam", |b| b.iter(|| {
         GQuat::from_axis_angle(black_box(glam::Vec3::Y), black_box(0.785_f32))
     }));
 
@@ -228,31 +221,29 @@ fn bench_rotation(c: &mut Criterion) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Group 4: Mat4 operations
+// Group 4: Mat4
 // ─────────────────────────────────────────────────────────────────────────────
 
 fn bench_mat4(c: &mut Criterion) {
     let mut g = c.benchmark_group("mat4");
 
-    let mm_a  = mid_trs(1.0, 45.0, 2.0);
-    let mm_b  = mid_trs(0.5, 30.0, 1.5);
-    let mm_p  = Vec3::new(1.0, 2.0, 3.0);
+    let mm_a = mid_trs(1.0, 45.0, 2.0);
+    let mm_b = mid_trs(0.5, 30.0, 1.5);
+    let mm_p = Vec3::new(1.0, 2.0, 3.0);
 
-    let gl_a  = glam_trs(1.0, 45.0, 2.0);
-    let gl_b  = glam_trs(0.5, 30.0, 1.5);
-    let gl_p  = glam::Vec3::new(1.0, 2.0, 3.0);
+    let gl_a = glam_trs(1.0, 45.0, 2.0);
+    let gl_b = glam_trs(0.5, 30.0, 1.5);
+    let gl_p = glam::Vec3::new(1.0, 2.0, 3.0);
 
-    let na_a  = na_trs(1.0, 45.0, 2.0);
-    let na_b  = na_trs(0.5, 30.0, 1.5);
-    let na_p  = Point3::new(1.0f32, 2.0, 3.0);
+    let na_a = na_trs(1.0, 45.0, 2.0);
+    let na_b = na_trs(0.5, 30.0, 1.5);
+    let na_p = Point3::new(1.0f32, 2.0, 3.0);
 
-    let uv_a  = uv_trs(1.0, 45.0, 2.0);
-    let uv_b  = uv_trs(0.5, 30.0, 1.5);
-    let uv_p  = UVec3::new(1.0, 2.0, 3.0);
+    let uv_a = uv_trs(1.0, 45.0, 2.0);
+    let uv_b = uv_trs(0.5, 30.0, 1.5);
+    let uv_p = UVec3::new(1.0, 2.0, 3.0);
 
-    // Build 7: 19.78 ns — UNCHANGED. Root cause: [[f32;4];4] storage forces
-    // stack loads on every mul; glam's Vec4 fields pass in XMM registers.
-    // Fix requires Mat4 storage change to [Vec4;4]. Target: ~7 ns.
+    // Build 8: Vec4 field storage → target ~7 ns (parity glam).
     g.bench_function("mul/mid-math",    |b| b.iter(|| black_box(mm_a) * black_box(mm_b)));
     g.bench_function("mul/glam",        |b| b.iter(|| black_box(gl_a) * black_box(gl_b)));
     g.bench_function("mul/nalgebra",    |b| b.iter(|| black_box(na_a) * black_box(na_b)));
@@ -289,8 +280,6 @@ fn bench_mat4(c: &mut Criterion) {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Group 5: Mat4 construction
-//   Measures how fast each library builds transformation matrices.
-//   Important for animation systems that rebuild transforms every frame.
 // ─────────────────────────────────────────────────────────────────────────────
 
 fn bench_mat4_construction(c: &mut Criterion) {
@@ -303,7 +292,6 @@ fn bench_mat4_construction(c: &mut Criterion) {
     let ctr = Vec3::ZERO;
     let up  = Vec3::Y;
 
-    // from_trs: the most common animation path
     g.bench_function("from_trs/mid-math", |b| b.iter(|| {
         Mat4::from_trs(black_box(t), black_box(q), black_box(s))
     }));
@@ -323,7 +311,6 @@ fn bench_mat4_construction(c: &mut Criterion) {
         black_box(iso.to_homogeneous() * Matrix4::new_scaling(2.0))
     }));
 
-    // look_at: camera setup, done once per frame but important
     g.bench_function("look_at_rh/mid-math", |b| b.iter(|| {
         Mat4::look_at_rh(black_box(eye), black_box(ctr), black_box(up))
     }));
@@ -335,19 +322,18 @@ fn bench_mat4_construction(c: &mut Criterion) {
         )
     }));
 
-    // perspective: done once per frame per camera
     g.bench_function("perspective_rh/mid-math", |b| b.iter(|| {
-        Mat4::perspective_rh(black_box(0.785_f32), black_box(16.0 / 9.0), black_box(0.1_f32), black_box(1000.0_f32))
+        Mat4::perspective_rh(black_box(0.785_f32), black_box(16.0/9.0), black_box(0.1_f32), black_box(1000.0_f32))
     }));
     g.bench_function("perspective_rh/glam", |b| b.iter(|| {
-        GMat4::perspective_rh(black_box(0.785_f32), black_box(16.0 / 9.0_f32), black_box(0.1_f32), black_box(1000.0_f32))
+        GMat4::perspective_rh(black_box(0.785_f32), black_box(16.0/9.0_f32), black_box(0.1_f32), black_box(1000.0_f32))
     }));
 
     g.finish();
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Group 6: Affine3 (TRS-only operations — faster than full Mat4)
+// Group 6: Affine3
 // ─────────────────────────────────────────────────────────────────────────────
 
 fn bench_affine3(c: &mut Criterion) {
@@ -362,21 +348,15 @@ fn bench_affine3(c: &mut Criterion) {
     let mm_a2 = Affine3::from_trs(Vec3::new(-1.0, 0.0, 1.0), mm_q, Vec3::new(1.5, 1.5, 1.5));
 
     let gl_a1 = GAffine3A::from_scale_rotation_translation(
-        glam::Vec3::splat(2.0),
-        GQuat::from_rotation_y(0.785),
-        glam::Vec3::new(1.0, 2.0, 3.0),
+        glam::Vec3::splat(2.0), GQuat::from_rotation_y(0.785), glam::Vec3::new(1.0, 2.0, 3.0),
     );
     let gl_a2 = GAffine3A::from_scale_rotation_translation(
-        glam::Vec3::splat(1.5),
-        GQuat::from_rotation_y(0.785),
-        glam::Vec3::new(-1.0, 0.0, 1.0),
+        glam::Vec3::splat(1.5), GQuat::from_rotation_y(0.785), glam::Vec3::new(-1.0, 0.0, 1.0),
     );
 
-    // compose two affine transforms — ~40% fewer ops than Mat4 mul
-    g.bench_function("mul/mid-math-affine3",  |b| b.iter(|| black_box(mm_a1) * black_box(mm_a2)));
-    g.bench_function("mul/glam-affine3a",     |b| b.iter(|| black_box(gl_a1) * black_box(gl_a2)));
+    g.bench_function("mul/mid-math-affine3", |b| b.iter(|| black_box(mm_a1) * black_box(mm_a2)));
+    g.bench_function("mul/glam-affine3a",    |b| b.iter(|| black_box(gl_a1) * black_box(gl_a2)));
 
-    // inverse — ~2× faster than Mat4::inverse for TRS
     g.bench_function("inverse/mid-math-affine3", |b| b.iter(|| black_box(mm_a1).inverse()));
     g.bench_function("inverse/glam-affine3a",    |b| b.iter(|| black_box(gl_a1).inverse()));
 
@@ -387,11 +367,7 @@ fn bench_affine3(c: &mut Criterion) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Group 7: Mat4 vs matrixmultiply (general BLAS-style for 4×4)
-//
-// matrixmultiply is designed for large n×m multiplies using AVX2.
-// For 4×4 it carries per-call overhead that will make it much slower.
-// This bench answers: what is the floor for a general algorithm vs hand SIMD?
+// Group 7: Mat4 vs matrixmultiply
 // ─────────────────────────────────────────────────────────────────────────────
 
 fn bench_mat4_vs_matrixmultiply(c: &mut Criterion) {
@@ -402,32 +378,24 @@ fn bench_mat4_vs_matrixmultiply(c: &mut Criterion) {
     let gl_a = glam_trs(1.0, 45.0, 2.0);
     let gl_b = glam_trs(0.5, 30.0, 1.5);
 
-    // Flat arrays for matrixmultiply (column-major: row_stride=1, col_stride=4)
-    let a_flat: [f32; 16] = unsafe { core::mem::transmute(mm_a.cols) };
-    let b_flat: [f32; 16] = unsafe { core::mem::transmute(mm_b.cols) };
+    // Build 8: Mat4 is repr(C) over four Vec4 fields = 64 bytes = [f32;16].
+    // Transmute of the whole Mat4 is safe — layout identical to old [[f32;4];4].
+    let a_flat: [f32; 16] = unsafe { core::mem::transmute(mm_a) };
+    let b_flat: [f32; 16] = unsafe { core::mem::transmute(mm_b) };
 
-    g.bench_function("mid-math-mat4-mul", |b| b.iter(|| {
-        black_box(mm_a) * black_box(mm_b)
-    }));
+    g.bench_function("mid-math-mat4-mul", |b| b.iter(|| black_box(mm_a) * black_box(mm_b)));
+    g.bench_function("glam-mat4-mul",     |b| b.iter(|| black_box(gl_a) * black_box(gl_b)));
 
-    g.bench_function("glam-mat4-mul", |b| b.iter(|| {
-        black_box(gl_a) * black_box(gl_b)
-    }));
-
-    // matrixmultiply::sgemm for 4×4 column-major matrices.
-    // Column-major strides: row_stride=1, col_stride=4.
-    // Expected: significantly slower than hand-written SIMD due to call overhead.
     g.bench_function("matrixmultiply-sgemm-4x4", |b| {
         b.iter(|| {
             let mut c_flat = [0.0f32; 16];
             unsafe {
                 matrixmultiply::sgemm(
-                    4, 4, 4,                              // m, k, n
-                    1.0,
-                    a_flat.as_ptr(), 1, 4,                // A: row_stride=1, col_stride=4
-                    b_flat.as_ptr(), 1, 4,                // B: same
+                    4, 4, 4, 1.0,
+                    a_flat.as_ptr(), 1, 4,
+                    b_flat.as_ptr(), 1, 4,
                     0.0,
-                    c_flat.as_mut_ptr(), 1, 4,            // C: same
+                    c_flat.as_mut_ptr(), 1, 4,
                 );
             }
             black_box(c_flat)
@@ -439,8 +407,6 @@ fn bench_mat4_vs_matrixmultiply(c: &mut Criterion) {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Group 8: Chain of 8 Mat4 multiplies
-//   Simulates a scene graph hierarchy traversal (parent → child transforms).
-//   Tests how mat4 mul throughput stacks under pipeline pressure.
 // ─────────────────────────────────────────────────────────────────────────────
 
 fn bench_chain_mat4(c: &mut Criterion) {
@@ -459,7 +425,6 @@ fn bench_chain_mat4(c: &mut Criterion) {
         for i in 1..8 { m = black_box(m) * black_box(mm_mats[i]); }
         black_box(m)
     }));
-
     g.bench_function("glam", |b| b.iter(|| {
         let mut m = black_box(gl_mats[0]);
         for i in 1..8 { m = black_box(m) * black_box(gl_mats[i]); }
@@ -478,10 +443,10 @@ fn bench_100k_entities(c: &mut Criterion) {
     let mut g = c.benchmark_group("100k_entity_transforms");
     g.throughput(Throughput::Elements(N as u64));
 
-    let mm_t  = mid_trs(1.0, 45.0, 1.0);
-    let gl_t  = glam_trs(1.0, 45.0, 1.0);
-    let na_t  = na_trs(1.0, 45.0, 1.0);
-    let uv_t  = uv_trs(1.0, 45.0, 1.0);
+    let mm_t = mid_trs(1.0, 45.0, 1.0);
+    let gl_t = glam_trs(1.0, 45.0, 1.0);
+    let na_t = na_trs(1.0, 45.0, 1.0);
+    let uv_t = uv_trs(1.0, 45.0, 1.0);
 
     let pos_mm: Vec<Vec3>        = (0..N).map(|i| Vec3::new(i as f32 * 0.01, 0.0, 0.0)).collect();
     let pos_gl: Vec<glam::Vec3>  = (0..N).map(|i| glam::Vec3::new(i as f32 * 0.01, 0.0, 0.0)).collect();
@@ -513,16 +478,13 @@ fn bench_100k_entities(c: &mut Criterion) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Group 10: 1M entity transforms (scale stress test)
-//   Tests cache behaviour at scale — L1/L2/L3 eviction patterns.
-//   If mid-math maintains its 11% lead at 100k, it should hold here too.
+// Group 10: 1M entity transforms
 // ─────────────────────────────────────────────────────────────────────────────
 
 fn bench_1m_entities(c: &mut Criterion) {
     const N: usize = 1_000_000;
     let mut g = c.benchmark_group("1m_entity_transforms");
     g.throughput(Throughput::Elements(N as u64));
-    // 1M Vec3 = 12 MB — well outside L3 on most CPUs. Tests memory bandwidth.
     g.sample_size(10);
 
     let mm_t = mid_trs(1.0, 45.0, 1.0);
@@ -547,8 +509,6 @@ fn bench_1m_entities(c: &mut Criterion) {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Group 11: 100k quaternion slerp batch
-//   Simulates a full animation pass (bone rotation blending).
-//   Exercises slerp throughput under cache pressure.
 // ─────────────────────────────────────────────────────────────────────────────
 
 fn bench_100k_quat_slerp(c: &mut Criterion) {
@@ -556,7 +516,6 @@ fn bench_100k_quat_slerp(c: &mut Criterion) {
     let mut g = c.benchmark_group("100k_quat_slerp");
     g.throughput(Throughput::Elements(N as u64));
 
-    // Build N pairs of quaternions along a known arc so slerp doesn't degenerate.
     let quats_mm: Vec<(Quat, Quat)> = (0..N)
         .map(|i| {
             let a = Quat::from_axis_angle(Vec3::Y, to_radians(i as f32 * 0.01));
@@ -575,41 +534,22 @@ fn bench_100k_quat_slerp(c: &mut Criterion) {
 
     g.bench_function("mid-math-slerp", |b| b.iter_batched(
         || quats_mm.clone(),
-        |pairs| {
-            let mut acc = Quat::IDENTITY;
-            for (a, b) in &pairs { acc = black_box(*a).slerp(black_box(*b), 0.5); }
-            black_box(acc)
-        },
+        |pairs| { let mut acc = Quat::IDENTITY; for (a, b) in &pairs { acc = black_box(*a).slerp(black_box(*b), 0.5); } black_box(acc) },
         BatchSize::LargeInput,
     ));
-
     g.bench_function("glam-slerp", |b| b.iter_batched(
         || quats_gl.clone(),
-        |pairs| {
-            let mut acc = GQuat::IDENTITY;
-            for (a, b) in &pairs { acc = black_box(*a).slerp(black_box(*b), 0.5); }
-            black_box(acc)
-        },
+        |pairs| { let mut acc = GQuat::IDENTITY; for (a, b) in &pairs { acc = black_box(*a).slerp(black_box(*b), 0.5); } black_box(acc) },
         BatchSize::LargeInput,
     ));
-
     g.bench_function("mid-math-nlerp", |b| b.iter_batched(
         || quats_mm.clone(),
-        |pairs| {
-            let mut acc = Quat::IDENTITY;
-            for (a, b) in &pairs { acc = black_box(*a).nlerp(black_box(*b), 0.5); }
-            black_box(acc)
-        },
+        |pairs| { let mut acc = Quat::IDENTITY; for (a, b) in &pairs { acc = black_box(*a).nlerp(black_box(*b), 0.5); } black_box(acc) },
         BatchSize::LargeInput,
     ));
-
     g.bench_function("glam-nlerp", |b| b.iter_batched(
         || quats_gl.clone(),
-        |pairs| {
-            let mut acc = GQuat::IDENTITY;
-            for (a, b) in &pairs { acc = black_box(*a).lerp(black_box(*b), 0.5); }
-            black_box(acc)
-        },
+        |pairs| { let mut acc = GQuat::IDENTITY; for (a, b) in &pairs { acc = black_box(*a).lerp(black_box(*b), 0.5); } black_box(acc) },
         BatchSize::LargeInput,
     ));
 
@@ -639,6 +579,140 @@ fn bench_5k_inverse(c: &mut Criterion) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Group 13: Mat2
+//
+// 2×2 operations: mul, determinant, inverse, from_angle.
+// These are always scalar (no SIMD benefit at 2 floats), but establish a
+// correctness and regression baseline.
+// glam: Mat2. nalgebra: Matrix2<f32>. ultraviolet: Mat2.
+// ─────────────────────────────────────────────────────────────────────────────
+
+fn bench_mat2(c: &mut Criterion) {
+    let mut g = c.benchmark_group("mat2");
+
+    let mm_a = Mat2::from_angle(0.785_f32);
+    let mm_b = Mat2::from_scale(Vec2::new(2.0, 1.5));
+    let mm_v = Vec2::new(1.0, 2.0);
+
+    let gl_a = GMat2::from_angle(0.785_f32);
+    let gl_b = GMat2::from_scale_angle(glam::Vec2::new(2.0, 1.5), 0.0);
+    let gl_v = GVec2::new(1.0, 2.0);
+
+    let na_a = Matrix2::new(
+        0.785_f32.cos(), -0.785_f32.sin(),
+        0.785_f32.sin(),  0.785_f32.cos(),
+    );
+    let na_b: Matrix2<f32> = Matrix2::new_scaling(2.0);
+
+    let uv_a = UMat2::from_rotation(0.785_f32);
+    let uv_b = UMat2::new(
+        ultraviolet::Vec2::new(2.0, 0.0),
+        ultraviolet::Vec2::new(0.0, 1.5),
+    );
+
+    // Matrix multiply — 2×2 = 8 scalar multiplies + 4 adds
+    g.bench_function("mul/mid-math",    |b| b.iter(|| black_box(mm_a).mul_mat2(black_box(mm_b))));
+    g.bench_function("mul/glam",        |b| b.iter(|| black_box(gl_a) * black_box(gl_b)));
+    g.bench_function("mul/nalgebra",    |b| b.iter(|| black_box(na_a) * black_box(na_b)));
+    g.bench_function("mul/ultraviolet", |b| b.iter(|| black_box(uv_a) * black_box(uv_b)));
+
+    // Determinant
+    g.bench_function("determinant/mid-math", |b| b.iter(|| black_box(mm_a).determinant()));
+    g.bench_function("determinant/glam",     |b| b.iter(|| black_box(gl_a).determinant()));
+    g.bench_function("determinant/nalgebra", |b| b.iter(|| black_box(na_a).determinant()));
+
+    // Inverse (2×2 adjugate — 5 muls + 1 div)
+    g.bench_function("inverse/mid-math", |b| b.iter(|| black_box(mm_a).inverse()));
+    g.bench_function("inverse/glam",     |b| b.iter(|| black_box(gl_a).inverse()));
+    g.bench_function("inverse/nalgebra", |b| b.iter(|| black_box(na_a).try_inverse()));
+
+    // Transform vector (mat × vec2)
+    g.bench_function("mul_vec2/mid-math", |b| b.iter(|| black_box(mm_a).mul_vec2(black_box(mm_v))));
+    g.bench_function("mul_vec2/glam",     |b| b.iter(|| black_box(gl_a) * black_box(gl_v)));
+
+    // Transpose
+    g.bench_function("transpose/mid-math", |b| b.iter(|| black_box(mm_a).transpose()));
+    g.bench_function("transpose/glam",     |b| b.iter(|| black_box(gl_a).transpose()));
+
+    // Construction: from_angle (sin+cos → 4 element fills)
+    g.bench_function("from_angle/mid-math", |b| b.iter(|| Mat2::from_angle(black_box(0.785_f32))));
+    g.bench_function("from_angle/glam",     |b| b.iter(|| GMat2::from_angle(black_box(0.785_f32))));
+
+    g.finish();
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Group 14: Mat3
+//
+// 3×3 operations: mul, transform, transpose, inverse, from_rotation_z.
+// Always scalar. Important for 2D transform hierarchies and normal matrices.
+// glam: Mat3. nalgebra: Matrix3<f32>. ultraviolet: Mat3.
+// ─────────────────────────────────────────────────────────────────────────────
+
+fn bench_mat3(c: &mut Criterion) {
+    let mut g = c.benchmark_group("mat3");
+
+    // Rotation matrices so inverse is well-conditioned
+    let angle = 0.785_f32;
+    let mm_a = Mat3::from_rotation_z(angle);
+    let mm_b = Mat3::from_scale(Vec3::new(2.0, 1.5, 1.0));
+    let mm_v = Vec3::new(1.0, 2.0, 3.0);
+
+    let gl_a = GMat3::from_rotation_z(angle);
+    let gl_b = GMat3::from_scale(glam::Vec2::new(2.0, 1.5));
+    let gl_v = glam::Vec3::new(1.0, 2.0, 0.0);
+
+    let na_a = Matrix3::new_rotation(angle);
+    let na_b: Matrix3<f32> = Matrix3::new_scaling(2.0);
+    let na_v = Vector3::new(1.0f32, 2.0, 3.0);
+
+    let uv_a = UMat3::from_rotation_z(angle);
+    let uv_v = UVec3::new(1.0, 2.0, 3.0);
+
+    // Matrix multiply — 3×3 = 27 scalar multiplies + 18 adds
+    g.bench_function("mul/mid-math",    |b| b.iter(|| black_box(mm_a) * black_box(mm_b)));
+    g.bench_function("mul/glam",        |b| b.iter(|| black_box(gl_a) * black_box(gl_b)));
+    g.bench_function("mul/nalgebra",    |b| b.iter(|| black_box(na_a) * black_box(na_b)));
+    g.bench_function("mul/ultraviolet", |b| b.iter(|| black_box(uv_a) * black_box(uv_a)));
+
+    // Transform vector (3×3 × Vec3 — no translation)
+    g.bench_function("transform/mid-math", |b| b.iter(|| black_box(mm_a).transform(black_box(mm_v))));
+    g.bench_function("transform/glam",     |b| b.iter(|| black_box(gl_a).transform_vector3(black_box(gl_v))));
+    g.bench_function("transform/nalgebra", |b| b.iter(|| black_box(na_a) * black_box(na_v)));
+    g.bench_function("transform/ultraviolet", |b| b.iter(|| black_box(uv_a) * black_box(uv_v)));
+
+    // Transpose
+    g.bench_function("transpose/mid-math", |b| b.iter(|| black_box(mm_a).transpose()));
+    g.bench_function("transpose/glam",     |b| b.iter(|| black_box(gl_a).transpose()));
+    g.bench_function("transpose/nalgebra", |b| b.iter(|| black_box(na_a).transpose()));
+
+    // Determinant
+    g.bench_function("determinant/mid-math", |b| b.iter(|| black_box(mm_a).determinant()));
+    g.bench_function("determinant/glam",     |b| b.iter(|| black_box(gl_a).determinant()));
+    g.bench_function("determinant/nalgebra", |b| b.iter(|| black_box(na_a).determinant()));
+
+    // Inverse (3×3 cofactor — more expensive than 2×2)
+    g.bench_function("inverse/mid-math", |b| b.iter(|| black_box(mm_a).inverse()));
+    g.bench_function("inverse/glam",     |b| b.iter(|| black_box(gl_a).inverse()));
+    g.bench_function("inverse/nalgebra", |b| b.iter(|| black_box(na_a).try_inverse()));
+
+    // Construction: from_rotation_z (sin+cos → 9 element fills)
+    g.bench_function("from_rotation_z/mid-math", |b| b.iter(|| Mat3::from_rotation_z(black_box(0.785_f32))));
+    g.bench_function("from_rotation_z/glam",     |b| b.iter(|| GMat3::from_rotation_z(black_box(0.785_f32))));
+
+    // Normal matrix (inverse-transpose of upper-3×3 — used in shaders every frame)
+    let mm_model = mid_trs(1.0, 45.0, 2.0);
+    let gl_model = glam_trs(1.0, 45.0, 2.0);
+    g.bench_function("normal_matrix/mid-math", |b| b.iter(|| Mat3::normal_matrix(black_box(&mm_model))));
+    g.bench_function("normal_matrix/glam",     |b| b.iter(|| {
+        let m3 = GMat3::from_mat4(black_box(gl_model));
+        black_box(m3.inverse().map(|m| m.transpose()))
+    }));
+
+    g.finish();
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 
 criterion_group!(
     benches,
@@ -654,5 +728,7 @@ criterion_group!(
     bench_1m_entities,
     bench_100k_quat_slerp,
     bench_5k_inverse,
+    bench_mat2,
+    bench_mat3,
 );
 criterion_main!(benches);
