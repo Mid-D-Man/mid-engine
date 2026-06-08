@@ -1,14 +1,15 @@
 // crates/mid-math/src/ffi/float32.rs
 //! C-ABI types and #[no_mangle] exports for f32 math types.
 //!
-//! Types:  CVec2, CVec3, CVec4, CQuat, CMat3, CMat4, CAffine3
-//! Exports: mid_vec2_*, mid_vec3_*, mid_vec4_*, mid_quat_*,
-//!          mid_mat4_*, mid_affine3_*
+//! CMat4 retains `cols: [[f32;4];4]` — immutable C ABI contract.
+//! From impls updated for Build 8 to convert between that array layout
+//! and Mat4's new Vec4-field layout.
 
 use crate::{Affine3, Mat3, Mat4, Quat, Vec2, Vec3, Vec4};
 use crate::f64::dvec2::DVec2 as ScalarDVec2;
 use crate::f64::dquat::DQuat as ScalarDQuat;
 use crate::f64::dvec3::DVec3 as ScalarDVec3;
+
 // ═══════════════════════════════════════════════════════════════════════════
 //  C types
 // ═══════════════════════════════════════════════════════════════════════════
@@ -22,7 +23,9 @@ impl From<CVec2> for Vec2  { #[inline(always)] fn from(v: CVec2) -> Self { Vec2:
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[repr(C)]
 pub struct CVec3 { pub x: f32, pub y: f32, pub z: f32, pub _pad: f32 }
-impl CVec3 { #[inline(always)] pub fn new(x: f32, y: f32, z: f32) -> Self { Self { x, y, z, _pad: 0.0 } } }
+impl CVec3 {
+    #[inline(always)] pub fn new(x: f32, y: f32, z: f32) -> Self { Self { x, y, z, _pad: 0.0 } }
+}
 impl From<Vec3>  for CVec3 { #[inline(always)] fn from(v: Vec3)  -> Self { Self::new(v.x, v.y, v.z) } }
 impl From<CVec3> for Vec3  { #[inline(always)] fn from(v: CVec3) -> Self { Vec3::new(v.x, v.y, v.z) } }
 
@@ -44,17 +47,42 @@ pub struct CMat3 { pub cols: [[f32; 3]; 3] }
 impl From<Mat3>  for CMat3 { #[inline(always)] fn from(m: Mat3)  -> Self { Self { cols: m.cols } } }
 impl From<CMat3> for Mat3  { #[inline(always)] fn from(m: CMat3) -> Self { Mat3 { cols: m.cols } } }
 
+/// CMat4: immutable C ABI type. Always `cols: [[f32;4];4]`.
+///
+/// Conversions explicitly bridge between this array layout and Mat4's
+/// Vec4-field layout (Build 8). LLVM folds to 4 loads + 4 stores.
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[repr(C, align(16))]
 pub struct CMat4 { pub cols: [[f32; 4]; 4] }
-impl From<Mat4>  for CMat4 { #[inline(always)] fn from(m: Mat4)  -> Self { Self { cols: m.cols } } }
-impl From<CMat4> for Mat4  { #[inline(always)] fn from(m: CMat4) -> Self { Mat4 { cols: m.cols } } }
+
+impl From<Mat4> for CMat4 {
+    #[inline(always)]
+    fn from(m: Mat4) -> Self {
+        Self {
+            cols: [
+                m.x_axis.to_array(),
+                m.y_axis.to_array(),
+                m.z_axis.to_array(),
+                m.w_axis.to_array(),
+            ],
+        }
+    }
+}
+
+impl From<CMat4> for Mat4 {
+    #[inline(always)]
+    fn from(m: CMat4) -> Self {
+        Mat4::from_cols(m.cols[0], m.cols[1], m.cols[2], m.cols[3])
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[repr(C, align(16))]
 pub struct CAffine3 {
-    pub x_axis: CVec3, pub y_axis: CVec3,
-    pub z_axis: CVec3, pub translation: CVec3,
+    pub x_axis:      CVec3,
+    pub y_axis:      CVec3,
+    pub z_axis:      CVec3,
+    pub translation: CVec3,
 }
 impl CAffine3 {
     #[inline(always)]
@@ -62,16 +90,26 @@ impl CAffine3 {
         Self { x_axis, y_axis, z_axis, translation }
     }
 }
-impl From<Affine3>  for CAffine3 {
-    #[inline(always)] fn from(a: Affine3) -> Self {
-        Self { x_axis: a.x_axis.into(), y_axis: a.y_axis.into(),
-               z_axis: a.z_axis.into(), translation: a.translation.into() }
+impl From<Affine3> for CAffine3 {
+    #[inline(always)]
+    fn from(a: Affine3) -> Self {
+        Self {
+            x_axis:      a.x_axis.into(),
+            y_axis:      a.y_axis.into(),
+            z_axis:      a.z_axis.into(),
+            translation: a.translation.into(),
+        }
     }
 }
 impl From<CAffine3> for Affine3 {
-    #[inline(always)] fn from(a: CAffine3) -> Self {
-        Self { x_axis: a.x_axis.into(), y_axis: a.y_axis.into(),
-               z_axis: a.z_axis.into(), translation: a.translation.into() }
+    #[inline(always)]
+    fn from(a: CAffine3) -> Self {
+        Self {
+            x_axis:      a.x_axis.into(),
+            y_axis:      a.y_axis.into(),
+            z_axis:      a.z_axis.into(),
+            translation: a.translation.into(),
+        }
     }
 }
 
@@ -79,7 +117,6 @@ impl From<CAffine3> for Affine3 {
 //  Exports
 // ═══════════════════════════════════════════════════════════════════════════
 
-// ── Vec2 ─────────────────────────────────────────────────────────────────────
 #[no_mangle] pub extern "C" fn mid_vec2_new(x:f32,y:f32)->CVec2{Vec2::new(x,y).into()}
 #[no_mangle] pub extern "C" fn mid_vec2_add(a:CVec2,b:CVec2)->CVec2{(Vec2::from(a)+Vec2::from(b)).into()}
 #[no_mangle] pub extern "C" fn mid_vec2_sub(a:CVec2,b:CVec2)->CVec2{(Vec2::from(a)-Vec2::from(b)).into()}
@@ -90,7 +127,6 @@ impl From<CAffine3> for Affine3 {
 #[no_mangle] pub extern "C" fn mid_vec2_lerp(a:CVec2,b:CVec2,t:f32)->CVec2{Vec2::from(a).lerp(Vec2::from(b),t).into()}
 #[no_mangle] pub extern "C" fn mid_vec2_distance(a:CVec2,b:CVec2)->f32{Vec2::from(a).distance(Vec2::from(b))}
 
-// ── Vec3 ─────────────────────────────────────────────────────────────────────
 #[no_mangle] pub extern "C" fn mid_vec3_new(x:f32,y:f32,z:f32)->CVec3{Vec3::new(x,y,z).into()}
 #[no_mangle] pub extern "C" fn mid_vec3_add(a:CVec3,b:CVec3)->CVec3{(Vec3::from(a)+Vec3::from(b)).into()}
 #[no_mangle] pub extern "C" fn mid_vec3_sub(a:CVec3,b:CVec3)->CVec3{(Vec3::from(a)-Vec3::from(b)).into()}
@@ -103,14 +139,12 @@ impl From<CAffine3> for Affine3 {
 #[no_mangle] pub extern "C" fn mid_vec3_distance(a:CVec3,b:CVec3)->f32{Vec3::from(a).distance(Vec3::from(b))}
 #[no_mangle] pub extern "C" fn mid_vec3_reflect(v:CVec3,n:CVec3)->CVec3{Vec3::from(v).reflect(Vec3::from(n)).into()}
 
-// ── Vec4 ─────────────────────────────────────────────────────────────────────
 #[no_mangle] pub extern "C" fn mid_vec4_new(x:f32,y:f32,z:f32,w:f32)->CVec4{Vec4::new(x,y,z,w).into()}
 #[no_mangle] pub extern "C" fn mid_vec4_add(a:CVec4,b:CVec4)->CVec4{(Vec4::from(a)+Vec4::from(b)).into()}
 #[no_mangle] pub extern "C" fn mid_vec4_dot(a:CVec4,b:CVec4)->f32{Vec4::from(a).dot(Vec4::from(b))}
 #[no_mangle] pub extern "C" fn mid_vec4_normalize(v:CVec4)->CVec4{Vec4::from(v).normalize().into()}
 #[no_mangle] pub extern "C" fn mid_vec4_lerp(a:CVec4,b:CVec4,t:f32)->CVec4{Vec4::from(a).lerp(Vec4::from(b),t).into()}
 
-// ── Quat ─────────────────────────────────────────────────────────────────────
 #[no_mangle] pub extern "C" fn mid_quat_identity()->CQuat{Quat::IDENTITY.into()}
 #[no_mangle] pub extern "C" fn mid_quat_new(x:f32,y:f32,z:f32,w:f32)->CQuat{Quat::new(x,y,z,w).into()}
 #[no_mangle] pub extern "C" fn mid_quat_from_axis_angle(axis:CVec3,angle_rad:f32)->CQuat{
@@ -126,7 +160,6 @@ impl From<CAffine3> for Affine3 {
 #[no_mangle] pub extern "C" fn mid_quat_slerp(a:CQuat,b:CQuat,t:f32)->CQuat{Quat::from(a).slerp(Quat::from(b),t).into()}
 #[no_mangle] pub extern "C" fn mid_quat_to_mat4(q:CQuat)->CMat4{Quat::from(q).to_mat4().into()}
 
-// ── Mat4 ─────────────────────────────────────────────────────────────────────
 #[no_mangle] pub extern "C" fn mid_mat4_identity()->CMat4{Mat4::IDENTITY.into()}
 #[no_mangle] pub extern "C" fn mid_mat4_from_translation(t:CVec3)->CMat4{Mat4::from_translation(Vec3::from(t)).into()}
 #[no_mangle] pub extern "C" fn mid_mat4_from_scale(s:CVec3)->CMat4{Mat4::from_scale(Vec3::from(s)).into()}
@@ -151,7 +184,6 @@ impl From<CAffine3> for Affine3 {
     Mat4::from(m).inverse().unwrap_or(Mat4::IDENTITY).into()
 }
 
-// ── Affine3 ───────────────────────────────────────────────────────────────────
 #[no_mangle] pub extern "C" fn mid_affine3_identity()->CAffine3{Affine3::IDENTITY.into()}
 #[no_mangle] pub extern "C" fn mid_affine3_from_trs(t:CVec3,r:CQuat,s:CVec3)->CAffine3{
     Affine3::from_trs(Vec3::from(t),Quat::from(r),Vec3::from(s)).into()
