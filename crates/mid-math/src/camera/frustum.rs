@@ -76,16 +76,13 @@ impl Frustum {
     /// let frustum   = Frustum::from_view_proj(view_proj);
     /// ```
     pub fn from_view_proj(m: Mat4) -> Self {
-        // Our Mat4 is column-major: m.cols[column][row].
-        // To get row `r` as a Vec4: (cols[0][r], cols[1][r], cols[2][r], cols[3][r]).
-        let row = |r: usize| Vec4::new(
-            m.cols[0][r], m.cols[1][r], m.cols[2][r], m.cols[3][r],
-        );
-
-        let r0 = row(0);
-        let r1 = row(1);
-        let r2 = row(2);
-        let r3 = row(3);
+        // Mat4 is column-major with named Vec4 fields (x_axis, y_axis, z_axis, w_axis).
+        // Row r is formed by taking component r from each column field:
+        //   row 0: (.x from each col), row 1: (.y from each col), etc.
+        let r0 = Vec4::new(m.x_axis.x, m.y_axis.x, m.z_axis.x, m.w_axis.x);
+        let r1 = Vec4::new(m.x_axis.y, m.y_axis.y, m.z_axis.y, m.w_axis.y);
+        let r2 = Vec4::new(m.x_axis.z, m.y_axis.z, m.z_axis.z, m.w_axis.z);
+        let r3 = Vec4::new(m.x_axis.w, m.y_axis.w, m.z_axis.w, m.w_axis.w);
 
         // Gribb-Hartmann plane extraction (clip-space [-1, 1]):
         //   Left:   w + x >= 0  →  row3 + row0
@@ -289,4 +286,4 @@ fn normalise_plane(p: Vec4) -> Vec4 {
 }
 #[inline] fn v4_sub(a: Vec4, b: Vec4) -> Vec4 {
     Vec4::new(a.x - b.x, a.y - b.y, a.z - b.z, a.w - b.w)
-  }
+            }
