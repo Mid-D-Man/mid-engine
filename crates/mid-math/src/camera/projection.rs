@@ -189,17 +189,27 @@ pub fn perspective_reversed_z_lh(fov_y: f32, aspect: f32, near: f32, far: f32) -
 /// back into its constituent parameters.
 ///
 /// Returns `None` if `proj` is not a valid RH perspective matrix.
+///
+/// Field mapping (Build 8 Vec4-field layout):
+///   col 0 = x_axis, col 1 = y_axis, col 2 = z_axis, col 3 = w_axis
+///   row 0 = .x,     row 1 = .y,     row 2 = .z,     row 3 = .w
 pub fn perspective_decompose(proj: Mat4) -> Option<PerspectiveParams> {
-    if (proj.cols[2][3] + 1.0).abs() > 1e-4 { return None; }
+    // RH perspective: z_axis.w must be -1.0 (the perspective divide sentinel).
+    // Previously: proj.cols[2][3]  →  col 2, row 3  →  z_axis.w
+    if (proj.z_axis.w + 1.0).abs() > 1e-4 { return None; }
 
-    let f      = proj.cols[1][1];
+    // proj.cols[1][1]  →  col 1, row 1  →  y_axis.y  (vertical scale = f)
+    let f: f32 = proj.y_axis.y;
     if f < 1e-6 { return None; }
 
-    let aspect = f / proj.cols[0][0];
-    let fov_y  = 2.0 * (1.0 / f).atan();
+    // proj.cols[0][0]  →  col 0, row 0  →  x_axis.x  (horizontal scale = f/aspect)
+    let aspect = f / proj.x_axis.x;
+    let fov_y  = 2.0_f32 * (1.0_f32 / f).atan();
 
-    let a = proj.cols[2][2];
-    let b = proj.cols[3][2];
+    // proj.cols[2][2]  →  col 2, row 2  →  z_axis.z
+    // proj.cols[3][2]  →  col 3, row 2  →  w_axis.z
+    let a = proj.z_axis.z;
+    let b = proj.w_axis.z;
 
     let near = b / (a - 1.0);
     let far  = b / (a + 1.0);
@@ -213,11 +223,15 @@ pub fn perspective_decompose(proj: Mat4) -> Option<PerspectiveParams> {
 
 /// Update only the aspect ratio of an existing perspective projection matrix.
 ///
-/// Works for both RH and LH projections — only `cols[0][0]` changes.
+/// Works for both RH and LH projections — only the horizontal scale changes.
+///
+/// Field mapping (Build 8 Vec4-field layout):
+///   x_axis.x = col 0, row 0  (horizontal scale = f/aspect)
+///   y_axis.y = col 1, row 1  (vertical scale   = f)
 #[inline]
 pub fn perspective_resize(proj: &mut Mat4, new_aspect: f32) {
-    if proj.cols[0][0] == 0.0 || new_aspect == 0.0 { return; }
-    proj.cols[0][0] = proj.cols[1][1] / new_aspect;
+    if proj.x_axis.x == 0.0 || new_aspect == 0.0 { return; }
+    proj.x_axis.x = proj.y_axis.y / new_aspect;
 }
 
 // ── Cascaded Shadow Maps ──────────────────────────────────────────────────────
