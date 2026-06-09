@@ -386,12 +386,18 @@ pub trait QuatExt: Sized {
     ///
     /// The matrix must encode a pure rotation (no scale, no shear in the 3 × 3 block).
     /// For TRS matrices with scale, normalise the columns first.
+    ///
+    /// Build 8: Mat4 now uses named Vec4 fields (x_axis, y_axis, z_axis, w_axis).
+    /// Field mapping: col N = {x_axis,y_axis,z_axis,w_axis}[N], row R = .{x,y,z,w}[R].
+    /// Old:  m.cols[0][0]  →  col 0, row 0  →  m.x_axis.x
+    /// Old:  m.cols[1][2]  →  col 1, row 2  →  m.y_axis.z
+    /// etc.
     #[inline]
     fn from_mat4_rotation(m: &crate::Mat4) -> Self {
         Self::from_rotation_axes(
-            crate::Vec3::new(m.cols[0][0], m.cols[0][1], m.cols[0][2]),
-            crate::Vec3::new(m.cols[1][0], m.cols[1][1], m.cols[1][2]),
-            crate::Vec3::new(m.cols[2][0], m.cols[2][1], m.cols[2][2]),
+            crate::Vec3::new(m.x_axis.x, m.x_axis.y, m.x_axis.z),
+            crate::Vec3::new(m.y_axis.x, m.y_axis.y, m.y_axis.z),
+            crate::Vec3::new(m.z_axis.x, m.z_axis.y, m.z_axis.z),
         )
     }
 
@@ -422,14 +428,19 @@ impl QuatExt for crate::Quat {
     ///
     /// `to_mat4()` normalises `self` internally, so the returned block is
     /// always a proper rotation matrix even for slightly denormalised quaternions.
+    ///
+    /// Build 8: Mat4 now uses named Vec4 fields — the old `cols[c][r]` indexing
+    /// is replaced with the equivalent named-field access:
+    ///   col 0 = x_axis  (.x = row 0, .y = row 1, .z = row 2)
+    ///   col 1 = y_axis  (.x = row 0, .y = row 1, .z = row 2)
+    ///   col 2 = z_axis  (.x = row 0, .y = row 1, .z = row 2)
     #[inline]
     fn to_rotation_mat3(self) -> [[f32; 3]; 3] {
         let m = self.to_mat4();
-        // cols[c][r] — extract only the 3×3 rotation block (ignore w row/col).
         [
-            [m.cols[0][0], m.cols[0][1], m.cols[0][2]], // col 0
-            [m.cols[1][0], m.cols[1][1], m.cols[1][2]], // col 1
-            [m.cols[2][0], m.cols[2][1], m.cols[2][2]], // col 2
+            [m.x_axis.x, m.x_axis.y, m.x_axis.z], // col 0
+            [m.y_axis.x, m.y_axis.y, m.y_axis.z], // col 1
+            [m.z_axis.x, m.z_axis.y, m.z_axis.z], // col 2
         ]
     }
-  }
+                }
