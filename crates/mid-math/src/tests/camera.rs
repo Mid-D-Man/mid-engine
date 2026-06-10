@@ -1,18 +1,15 @@
 // crates/mid-math/src/tests/camera.rs
 //! Tests for camera math utilities — Frustum, projections, unproject, CSM.
 
-use crate::mid_math::{
-    Mat4, Quat, Vec3, Vec4,
-    camera::{
-        Frustum, Visibility,
-        projection::{
-            PerspectiveParams,
-            csm_split_depths, perspective_decompose, perspective_infinite_rh,
-            perspective_resize, perspective_reversed_z_rh, picking_ray,
-            sub_frustum_corners, unproject,
-        },
-    },
+use crate::{
+    Mat4, Vec3, Vec4,
     to_radians,
+    Frustum, Visibility,
+    PerspectiveParams,
+    unproject, picking_ray,
+    perspective_infinite_rh, perspective_reversed_z_rh,
+    perspective_decompose, perspective_resize,
+    csm_split_depths, sub_frustum_corners,
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -43,7 +40,6 @@ fn assert_approx(a: f32, b: f32, eps: f32, label: &str) {
 fn frustum_from_view_proj_has_six_planes() {
     let vp = test_view_proj();
     let f  = Frustum::from_view_proj(vp);
-    // Each plane normal should be unit length (they are normalised).
     for (i, plane) in f.planes.iter().enumerate() {
         let len = (plane.x * plane.x + plane.y * plane.y + plane.z * plane.z).sqrt();
         assert!((len - 1.0).abs() < 1e-4, "Plane {} not normalised: len={}", i, len);
@@ -52,7 +48,6 @@ fn frustum_from_view_proj_has_six_planes() {
 
 #[test]
 fn frustum_origin_is_inside() {
-    // Camera at (0,0,5) looking at origin — origin should be visible.
     let vp = test_view_proj();
     let f  = Frustum::from_view_proj(vp);
     assert!(f.test_point(Vec3::ZERO), "Origin should be inside frustum");
@@ -62,7 +57,6 @@ fn frustum_origin_is_inside() {
 fn frustum_behind_camera_is_outside() {
     let vp = test_view_proj();
     let f  = Frustum::from_view_proj(vp);
-    // Point behind camera eye (eye at Z=5 looking toward -Z origin).
     let behind = Vec3::new(0.0, 0.0, 6.0);
     assert!(!f.test_point(behind), "Point behind camera should be outside frustum");
 }
@@ -71,7 +65,6 @@ fn frustum_behind_camera_is_outside() {
 fn frustum_far_behind_target_is_outside() {
     let vp = test_view_proj();
     let f  = Frustum::from_view_proj(vp);
-    // Very far point along -Z.
     assert!(!f.test_point(Vec3::new(0.0, 0.0, -200.0)), "Far point should be outside far plane");
 }
 
@@ -79,7 +72,6 @@ fn frustum_far_behind_target_is_outside() {
 fn frustum_test_sphere_large_sphere_visible() {
     let vp = test_view_proj();
     let f  = Frustum::from_view_proj(vp);
-    // Giant sphere centred near origin — definitely visible.
     assert!(f.test_sphere(Vec3::ZERO, 50.0), "Huge sphere at origin should be visible");
 }
 
@@ -87,7 +79,6 @@ fn frustum_test_sphere_large_sphere_visible() {
 fn frustum_test_sphere_tiny_far_sphere_invisible() {
     let vp = test_view_proj();
     let f  = Frustum::from_view_proj(vp);
-    // Tiny sphere far behind camera.
     assert!(!f.test_sphere(Vec3::new(0.0, 0.0, 10.0), 0.01));
 }
 
@@ -96,7 +87,6 @@ fn frustum_sphere_visibility_origin() {
     let vp = test_view_proj();
     let f  = Frustum::from_view_proj(vp);
     let vis = f.test_sphere_visibility(Vec3::ZERO, 0.1);
-    // Small sphere at origin — inside or intersect, never outside.
     assert_ne!(vis, Visibility::Outside, "Small sphere at origin should not be Outside");
 }
 
@@ -130,7 +120,6 @@ fn frustum_test_aabb_far_box_invisible() {
 fn frustum_aabb_visibility_classifications() {
     let vp  = test_view_proj();
     let f   = Frustum::from_view_proj(vp);
-    // Huge box that contains the whole frustum → Inside.
     let big_min = Vec3::new(-1000.0, -1000.0, -1000.0);
     let big_max = Vec3::new( 1000.0,  1000.0,  1000.0);
     let vis = f.test_aabb_visibility(big_min, big_max);
@@ -157,9 +146,7 @@ fn frustum_world_center_near_camera_target() {
     let vp     = test_view_proj();
     let inv_vp = vp.inverse().expect("VP invertible");
     let center = Frustum::world_center(inv_vp);
-    // Center should be between near plane and far plane along view axis.
     assert!(center.is_finite(), "World center not finite");
-    // Should be somewhere between camera eye (Z=5) and target (Z=0) toward far.
     assert!(center.z < 5.1, "Center should be in front of camera");
     assert!(center.z > -105.0, "Center should be before far plane");
 }
@@ -187,10 +174,8 @@ fn unproject_near_depth_is_near_plane() {
     let inv  = vp.inverse().expect("invertible");
     let viewport = Vec4::new(0.0, 0.0, 800.0, 600.0);
 
-    // Screen center at depth 0 should land near the near plane.
     let world = unproject(Vec3::new(400.0, 300.0, 0.0), inv, viewport);
     assert!(world.is_finite(), "Unproject result not finite: {:?}", world);
-    // Should be somewhere in front of camera, not behind.
     assert!(world.z < 5.1, "Unprojected point should be in front of eye (z=5)");
 }
 
@@ -205,7 +190,6 @@ fn unproject_far_depth_is_far_from_eye() {
     let near_pt = unproject(Vec3::new(400.0, 300.0, 0.0), inv, vp2d);
     let far_pt  = unproject(Vec3::new(400.0, 300.0, 1.0), inv, vp2d);
 
-    // Far point should be significantly further from eye than near point.
     let eye = Vec3::new(0.0, 0.0, 5.0);
     let d_near = (near_pt - eye).length();
     let d_far  = (far_pt  - eye).length();
@@ -266,38 +250,41 @@ fn perspective_resize_changes_only_aspect() {
     let mut resized = proj;
     perspective_resize(&mut resized, 4.0 / 3.0);
 
-    // cols[0][0] = f/aspect — must change.
+    // x_axis.x = f/aspect — must change.
     assert!(
-        (resized.cols[0][0] - proj.cols[0][0]).abs() > 1e-5,
-        "cols[0][0] should change after resize"
+        (resized.x_axis.x - proj.x_axis.x).abs() > 1e-5,
+        "x_axis.x should change after resize"
     );
-    // cols[1][1] = f — must NOT change.
-    assert_approx(resized.cols[1][1], proj.cols[1][1], 1e-6, "f (cols[1][1])");
-    // cols[2][2] and cols[3][2] — must NOT change (depth).
-    assert_approx(resized.cols[2][2], proj.cols[2][2], 1e-6, "depth (cols[2][2])");
-    assert_approx(resized.cols[3][2], proj.cols[3][2], 1e-6, "depth (cols[3][2])");
+    // y_axis.y = f — must NOT change.
+    assert_approx(resized.y_axis.y, proj.y_axis.y, 1e-6, "f (y_axis.y)");
+    // z_axis.z — must NOT change (depth).
+    assert_approx(resized.z_axis.z, proj.z_axis.z, 1e-6, "depth (z_axis.z)");
+    // w_axis.z — must NOT change (depth).
+    assert_approx(resized.w_axis.z, proj.w_axis.z, 1e-6, "depth (w_axis.z)");
 }
 
 #[test]
 fn perspective_infinite_rh_no_far_clip() {
     let proj = perspective_infinite_rh(to_radians(60.0), 1.0, 0.1);
-    // cols[2][2] should be -1 for infinite far.
-    assert_approx(proj.cols[2][2], -1.0, 1e-5, "infinite proj cols[2][2]");
-    assert!(proj.cols[3][2].abs() > 0.0, "Near plane term should be non-zero");
+    // z_axis.z should be -1 for infinite far.
+    assert_approx(proj.z_axis.z, -1.0, 1e-5, "infinite proj z_axis.z");
+    assert!(proj.w_axis.z.abs() > 0.0, "Near plane term should be non-zero");
 }
 
 #[test]
 fn perspective_reversed_z_far_maps_to_zero() {
-    // For reversed-Z: far plane → depth 0, near plane → depth 1.
-    // We just check the matrix is finite and non-trivial.
     let proj = perspective_reversed_z_rh(to_radians(60.0), 1.0, 0.1, 100.0);
-    for col in &proj.cols {
-        for &v in col {
-            assert!(v.is_finite(), "Reversed-Z projection contains non-finite value");
-        }
+    // Check all columns are finite.
+    for v in [
+        proj.x_axis.x, proj.x_axis.y, proj.x_axis.z, proj.x_axis.w,
+        proj.y_axis.x, proj.y_axis.y, proj.y_axis.z, proj.y_axis.w,
+        proj.z_axis.x, proj.z_axis.y, proj.z_axis.z, proj.z_axis.w,
+        proj.w_axis.x, proj.w_axis.y, proj.w_axis.z, proj.w_axis.w,
+    ] {
+        assert!(v.is_finite(), "Reversed-Z projection contains non-finite value");
     }
-    // cols[2][2] should be positive for reversed-Z (opposite sign from standard).
-    assert!(proj.cols[2][2] > 0.0, "Reversed-Z cols[2][2] should be positive");
+    // z_axis.z should be positive for reversed-Z.
+    assert!(proj.z_axis.z > 0.0, "Reversed-Z z_axis.z should be positive");
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -330,12 +317,10 @@ fn csm_split_depths_sorted_ascending() {
 
 #[test]
 fn csm_split_depths_lambda_0_is_linear() {
-    // λ=0 → linear distribution.
     let splits = csm_split_depths(0.0, 100.0, 4, 0.0);
-    // Linear: split[i] = near + (far-near)*i/count = 25, 50, 75.
-    assert_approx(splits[1], 25.0,  1.0, "linear split 1");
-    assert_approx(splits[2], 50.0,  1.0, "linear split 2");
-    assert_approx(splits[3], 75.0,  1.0, "linear split 3");
+    assert_approx(splits[1], 25.0, 1.0, "linear split 1");
+    assert_approx(splits[2], 50.0, 1.0, "linear split 2");
+    assert_approx(splits[3], 75.0, 1.0, "linear split 3");
 }
 
 #[test]
@@ -365,10 +350,10 @@ fn sub_frustum_corners_returns_eight_finite_points() {
 
 #[test]
 fn sub_frustum_corners_fails_for_non_perspective() {
-    let view = Mat4::look_at_rh(Vec3::new(0.0, 0.0, 5.0), Vec3::ZERO, Vec3::Y);
+    let view  = Mat4::look_at_rh(Vec3::new(0.0, 0.0, 5.0), Vec3::ZERO, Vec3::Y);
     let ortho = Mat4::ortho_rh(-1.0, 1.0, -1.0, 1.0, 0.1, 100.0);
     assert!(
         sub_frustum_corners(view, ortho, 0.1, 10.0).is_none(),
         "sub_frustum_corners should fail for orthographic proj"
     );
-      }
+        }
