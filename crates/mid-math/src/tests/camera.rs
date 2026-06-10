@@ -1,7 +1,7 @@
 // crates/mid-math/src/tests/camera.rs
 //! Tests for camera math utilities — Frustum, projections, unproject, CSM.
 
-use mid_math::{
+use crate::mid_math::{
     Mat4, Quat, Vec3, Vec4,
     camera::{
         Frustum, Visibility,
