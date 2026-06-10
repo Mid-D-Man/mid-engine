@@ -10,7 +10,7 @@
 //!   - Fbm and DomainWarp stay in reasonable bounds
 //!   - Worley distance mode correctness (F2 ≥ F1, F2-F1 ≥ 0)
 
-use mid_math::noise::{
+use crate::mid_math::noise::{
     DomainWarp, Fbm, NoiseSource2d, NoiseSource3d, NoiseSource4d,
     Perlin, Simplex, Value, Worley,
     worley::{DistanceMode, DistanceMetric},
