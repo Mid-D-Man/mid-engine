@@ -604,7 +604,12 @@ fn bench_mat2(c: &mut Criterion) {
     );
     let na_b: Matrix2<f32> = Matrix2::new_scaling(2.0);
 
-    let uv_a = UMat2::from_rotation(0.785_f32);
+    // ultraviolet Mat2 has no from_rotation constructor; build it manually.
+    let (sin_uv, cos_uv) = (0.785_f32_f32).sin_cos();
+    let uv_a = UMat2::new(
+        ultraviolet::Vec2::new(cos_uv,  sin_uv),
+        ultraviolet::Vec2::new(-sin_uv, cos_uv),
+    );
     let uv_b = UMat2::new(
         ultraviolet::Vec2::new(2.0, 0.0),
         ultraviolet::Vec2::new(0.0, 1.5),
@@ -676,9 +681,10 @@ fn bench_mat3(c: &mut Criterion) {
     g.bench_function("mul/ultraviolet", |b| b.iter(|| black_box(uv_a) * black_box(uv_a)));
 
     // Transform vector (3×3 × Vec3 — no translation)
-    g.bench_function("transform/mid-math", |b| b.iter(|| black_box(mm_a).transform(black_box(mm_v))));
-    g.bench_function("transform/glam",     |b| b.iter(|| black_box(gl_a).transform_vector3(black_box(gl_v))));
-    g.bench_function("transform/nalgebra", |b| b.iter(|| black_box(na_a) * black_box(na_v)));
+    // glam::Mat3 transforms a Vec3 via mul_vec3 (or the * operator).
+    g.bench_function("transform/mid-math",    |b| b.iter(|| black_box(mm_a).transform(black_box(mm_v))));
+    g.bench_function("transform/glam",        |b| b.iter(|| black_box(gl_a).mul_vec3(black_box(gl_v))));
+    g.bench_function("transform/nalgebra",    |b| b.iter(|| black_box(na_a) * black_box(na_v)));
     g.bench_function("transform/ultraviolet", |b| b.iter(|| black_box(uv_a) * black_box(uv_v)));
 
     // Transpose
@@ -701,12 +707,13 @@ fn bench_mat3(c: &mut Criterion) {
     g.bench_function("from_rotation_z/glam",     |b| b.iter(|| GMat3::from_rotation_z(black_box(0.785_f32))));
 
     // Normal matrix (inverse-transpose of upper-3×3 — used in shaders every frame)
+    // glam::Mat3::inverse() returns Self (not Option), so no .map() needed.
     let mm_model = mid_trs(1.0, 45.0, 2.0);
     let gl_model = glam_trs(1.0, 45.0, 2.0);
     g.bench_function("normal_matrix/mid-math", |b| b.iter(|| Mat3::normal_matrix(black_box(&mm_model))));
     g.bench_function("normal_matrix/glam",     |b| b.iter(|| {
         let m3 = GMat3::from_mat4(black_box(gl_model));
-        black_box(m3.inverse().map(|m| m.transpose()))
+        black_box(m3.inverse().transpose())
     }));
 
     g.finish();
