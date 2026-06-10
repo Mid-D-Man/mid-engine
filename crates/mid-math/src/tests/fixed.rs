@@ -1,10 +1,10 @@
-// crates/mid-math/tests/fixed.rs
+// crates/mid-math/src/tests/fixed.rs
 //! Fixed-point arithmetic tests.
 //!
 //! Tests cover: arithmetic correctness, floor/ceil, lerp,
 //! overflow protection, f32 boundary, vec operations, cross product.
 
-use mid_math::{Fixed16, Fixed8, Fixed12, Fixed16Vec2, Fixed16Vec3, Fixed};
+use crate::{Fixed16, Fixed8, Fixed12, Fixed16Vec2, Fixed16Vec3, Fixed};
 
 // ── Arithmetic correctness ────────────────────────────────────────────────────
 
@@ -385,4 +385,4 @@ fn vec3_to_from_vec3_boundary() {
     assert!((v3.x - 1.0).abs() < 0.001);
     assert!((v3.y - 2.5).abs() < 0.001);
     assert!((v3.z - (-3.0)).abs() < 0.001);
-      }
+}
