@@ -1,8 +1,8 @@
 // crates/mid-math/src/tests/geom.rs
 //! Tests for geometric primitives — BarycentricCoords, Triangle2, Triangle3.
 
-use mid_math::{Vec2, Vec3};
-use mid_math::geom::barycentric::{
+use crate::{Vec2, Vec3};
+use crate::geom::barycentric::{
     BarycentricCoords, Triangle2, Triangle3,
     signed_area_2d, triangle_area_3d,
 };
@@ -320,7 +320,7 @@ fn triangle3_ray_hit_from_above() {
 #[test]
 fn triangle3_ray_miss_outside_triangle() {
     let tri    = unit_tri3();
-    let origin = Vec3::new(5.0, 5.0, 5.0);  // Far outside the triangle footprint.
+    let origin = Vec3::new(5.0, 5.0, 5.0);
     let dir    = Vec3::new(0.0, 0.0, -1.0);
     assert!(tri.ray_intersect(origin, dir, false).is_none(), "Ray outside footprint should miss");
 }
@@ -329,27 +329,24 @@ fn triangle3_ray_miss_outside_triangle() {
 fn triangle3_ray_miss_parallel_to_plane() {
     let tri    = unit_tri3();
     let origin = Vec3::new(0.2, 0.2, 0.5);
-    let dir    = Vec3::new(1.0, 0.0, 0.0);  // Parallel to XY plane.
+    let dir    = Vec3::new(1.0, 0.0, 0.0);
     assert!(tri.ray_intersect(origin, dir, false).is_none(), "Parallel ray should miss");
 }
 
 #[test]
 fn triangle3_ray_miss_behind_origin() {
     let tri    = unit_tri3();
-    let origin = Vec3::new(0.2, 0.2, -5.0);  // Below the XY plane.
-    let dir    = Vec3::new(0.0, 0.0, -1.0);  // Going further away.
+    let origin = Vec3::new(0.2, 0.2, -5.0);
+    let dir    = Vec3::new(0.0, 0.0, -1.0);
     assert!(tri.ray_intersect(origin, dir, false).is_none(), "Ray going away should miss");
 }
 
 #[test]
 fn triangle3_ray_back_face_culling_rejects_back_hit() {
     let tri    = unit_tri3();
-    // Ray from below hitting the back face.
     let origin = Vec3::new(0.2, 0.2, -5.0);
     let dir    = Vec3::new(0.0, 0.0, 1.0);
-    // Without culling: should hit.
     assert!(tri.ray_intersect(origin, dir, false).is_some(), "No culling: back hit should register");
-    // With culling: should miss (back face).
     assert!(tri.ray_intersect(origin, dir, true).is_none(), "Culling: back face hit should be rejected");
 }
 
@@ -361,7 +358,6 @@ fn triangle3_ray_hit_t_equals_geometric_distance() {
     let dir    = Vec3::new(0.0, 0.0, -1.0);
 
     let (t, _) = tri.ray_intersect(origin, dir, false).unwrap();
-    // Triangle is in XY plane (z=0), origin is at z=height → t should equal height.
     assert!((t - height).abs() < 1e-4, "t={} expected {}", t, height);
 }
 
@@ -372,18 +368,15 @@ fn triangle3_ray_hit_t_equals_geometric_distance() {
 #[test]
 fn triangle3_closest_point_inside_projects_to_plane() {
     let tri = unit_tri3();
-    let p   = Vec3::new(0.2, 0.2, 5.0);  // Above interior point.
+    let p   = Vec3::new(0.2, 0.2, 5.0);
     let (closest, bary) = tri.closest_point(p);
-    // Closest point should be on the XY plane.
     assert!(approx(closest.z, 0.0), "Closest point z should be 0: {}", closest.z);
-    // Bary should be interior.
     assert!(bary.is_inside_or_on_edge());
 }
 
 #[test]
 fn triangle3_closest_point_to_vertex_a_is_vertex_a() {
     let tri = unit_tri3();
-    // Point far beyond vertex A.
     let p   = Vec3::new(-10.0, -10.0, 0.0);
     let (closest, bary) = tri.closest_point(p);
     assert!(approx3(closest, Vec3::ZERO), "Closest to far-outside should be vertex A: {:?}", closest);
@@ -393,7 +386,6 @@ fn triangle3_closest_point_to_vertex_a_is_vertex_a() {
 #[test]
 fn triangle3_closest_point_on_edge() {
     let tri = unit_tri3();
-    // Point directly above midpoint of edge AB.
     let mid = Vec3::new(0.5, 0.0, 3.0);
     let (closest, bary) = tri.closest_point(mid);
     assert!(approx(closest.x, 0.5), "Closest x: {}", closest.x);
@@ -408,7 +400,6 @@ fn triangle3_closest_point_on_edge() {
 #[test]
 fn triangle3_plane_equation_correct() {
     let (n, d) = unit_tri3().plane_equation().unwrap();
-    // Normal is +Z, offset d = -dot(Z, origin) = 0.
     assert!(approx(n.z, 1.0) && approx(n.x, 0.0) && approx(n.y, 0.0));
     assert!(approx(d, 0.0), "d for XY-plane triangle: {}", d);
 }
@@ -470,7 +461,7 @@ fn triangle_area_3d_correct() {
 fn triangle_area_3d_degenerate_is_zero() {
     let a = Vec3::new(0.0, 0.0, 0.0);
     let b = Vec3::new(1.0, 0.0, 0.0);
-    let c = Vec3::new(2.0, 0.0, 0.0);  // Collinear.
+    let c = Vec3::new(2.0, 0.0, 0.0);
     let area = triangle_area_3d(a, b, c);
     assert!(approx(area, 0.0), "Degenerate triangle area: {}", area);
-      }
+                   }
