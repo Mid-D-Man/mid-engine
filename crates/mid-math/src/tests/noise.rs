@@ -10,7 +10,7 @@
 //!   - Fbm and DomainWarp stay in reasonable bounds
 //!   - Worley distance mode correctness (F2 ≥ F1, F2-F1 ≥ 0)
 
-use crate::mid_math::noise::{
+use crate::noise::{
     DomainWarp, Fbm, NoiseSource2d, NoiseSource3d, NoiseSource4d,
     Perlin, Simplex, Value, Worley,
     worley::{DistanceMode, DistanceMetric},
@@ -55,7 +55,6 @@ fn assert_range_3d<N: NoiseSource3d>(src: &N, lo: f32, hi: f32, name: &str) {
 
 #[test]
 fn perlin_2d_range() {
-    // Perlin can reach slightly beyond [-1, 1] in theory but practically stays within.
     let p = Perlin::new();
     assert_range_2d(&p, -1.1, 1.1, "Perlin2D");
 }
@@ -99,7 +98,6 @@ fn perlin_determinism_3d() {
 fn perlin_different_seeds_differ() {
     let a = Perlin::from_seed(1);
     let b = Perlin::from_seed(2);
-    // At least one sample must differ — same outputs for all would be a bug.
     let any_differ = (0..20).any(|i| {
         let x = i as f32 * 0.5;
         a.sample_2d(x, x) != b.sample_2d(x, x)
@@ -109,7 +107,6 @@ fn perlin_different_seeds_differ() {
 
 #[test]
 fn perlin_continuity_2d() {
-    // Two inputs that differ by epsilon should produce similar outputs.
     let p = Perlin::new();
     let base  = p.sample_2d(1.0, 1.0);
     let nudge = p.sample_2d(1.0 + 1e-4, 1.0);
@@ -153,8 +150,6 @@ fn simplex_determinism_2d() {
 
 #[test]
 fn simplex_no_directional_bias() {
-    // Simplex should not have the axis-aligned streaks classic Perlin has.
-    // Simple check: sample along diagonal should vary, not look constant.
     let s = Simplex::new();
     let mut seen_positive = false;
     let mut seen_negative = false;
@@ -210,7 +205,6 @@ fn value_determinism() {
 
 #[test]
 fn value_integer_coords_at_grid() {
-    // Value noise at integer coordinates should be consistent.
     let v = Value::new();
     let s1 = v.sample_2d(1.0, 2.0);
     let s2 = v.sample_2d(1.0, 2.0);
@@ -223,7 +217,6 @@ fn value_integer_coords_at_grid() {
 
 #[test]
 fn worley_f1_range_2d() {
-    // F1 in [0, 1]
     let w = Worley::new().with_mode(DistanceMode::F1);
     for i in 0i32..50 {
         for j in 0i32..20 {
@@ -244,9 +237,8 @@ fn worley_f2_range_2d() {
 
 #[test]
 fn worley_f2_minus_f1_non_negative_2d() {
-    // F2 ≥ F1 always, so F2-F1 ≥ 0.
-    let wf1 = Worley::new().with_mode(DistanceMode::F1);
-    let wf2 = Worley::new().with_mode(DistanceMode::F2);
+    let wf1  = Worley::new().with_mode(DistanceMode::F1);
+    let wf2  = Worley::new().with_mode(DistanceMode::F2);
     let wdiff = Worley::new().with_mode(DistanceMode::F2MinusF1);
     for i in 0i32..30 {
         let x = i as f32 * 0.5;
@@ -277,7 +269,6 @@ fn worley_3d_range() {
 
 #[test]
 fn worley_manhattan_metric() {
-    // Manhattan metric should still produce [0, 1] output.
     let w = Worley::new().with_mode(DistanceMode::F1).with_metric(DistanceMetric::Manhattan);
     for i in 0..30 {
         let v = w.sample_2d(i as f32 * 0.4, i as f32 * 0.2);
@@ -301,7 +292,6 @@ fn worley_chebyshev_metric() {
 #[test]
 fn fbm_simplex_2d_range() {
     let fbm = Fbm::new(Simplex::new()).octaves(6).lacunarity(2.0).gain(0.5).frequency(1.0);
-    // fBm normalises its output so it stays in [-1, 1].
     for i in 0i32..100 {
         let v = fbm.sample_2d(i as f32 * 0.1, i as f32 * 0.07);
         assert!(v >= -1.05 && v <= 1.05, "Fbm Simplex 2D out of range: {}", v);
@@ -320,7 +310,6 @@ fn fbm_perlin_3d_range() {
 
 #[test]
 fn fbm_more_octaves_adds_detail() {
-    // More octaves should produce more variation in output.
     let few  = Fbm::new(Simplex::new()).octaves(1).lacunarity(2.0).gain(0.5).frequency(1.0);
     let many = Fbm::new(Simplex::new()).octaves(8).lacunarity(2.0).gain(0.5).frequency(1.0);
 
@@ -332,7 +321,6 @@ fn fbm_more_octaves_adds_detail() {
         few_range  = few_range.max(few.sample_2d(x, 0.0).abs());
         many_range = many_range.max(many.sample_2d(x, 0.0).abs());
     }
-    // Many octaves should reach at least similar max amplitude.
     assert!(many_range >= few_range * 0.5,
         "Many-octave fBm ({}) weaker than 1-octave ({})", many_range, few_range);
 }
@@ -368,7 +356,6 @@ fn domain_warp_double_differs_from_single() {
     let single = DomainWarp::new(Simplex::from_seed(1)).with_fbm(make_fbm()).warp_scale(1.0).double_warp(false);
     let double = DomainWarp::new(Simplex::from_seed(1)).with_fbm(make_fbm()).warp_scale(1.0).double_warp(true);
 
-    // Double warp should produce different values from single warp at most points.
     let any_differ = (0..20).any(|i| {
         let x = i as f32 * 0.5 + 0.1;
         (single.sample_2d(x, x * 0.3) - double.sample_2d(x, x * 0.3)).abs() > 1e-6
@@ -385,4 +372,4 @@ fn domain_warp_3d_range() {
         let v = warp.sample_3d(x, x * 0.4, x * 0.6);
         assert!(v >= -1.05 && v <= 1.05, "DomainWarp 3D out of range: {}", v);
     }
-                                     }
+        }
