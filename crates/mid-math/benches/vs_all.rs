@@ -605,7 +605,8 @@ fn bench_mat2(c: &mut Criterion) {
     let na_b: Matrix2<f32> = Matrix2::new_scaling(2.0);
 
     // ultraviolet Mat2 has no from_rotation constructor; build it manually.
-    let (sin_uv, cos_uv) = (0.785_f32_f32).sin_cos();
+    // ultraviolet Mat2 has no from_rotation constructor; build it manually.
+    let (sin_uv, cos_uv) = (0.785_f32).sin_cos();
     let uv_a = UMat2::new(
         ultraviolet::Vec2::new(cos_uv,  sin_uv),
         ultraviolet::Vec2::new(-sin_uv, cos_uv),
