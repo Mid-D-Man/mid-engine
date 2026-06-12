@@ -1,5 +1,16 @@
 // crates/mid-math/src/deref.rs
-//! View structs that SIMD-backed types Deref into for .x/.y/.z/.w access.
+// crates/mid-math/src/deref.rs
+//! View structs that SIMD-backed types Deref into for field access.
+
+/// Column view for 2×2 matrices packed into a single register.
+/// Gives `.x_axis` / `.y_axis` field access on the SSE2 Mat2.
+/// Memory layout must match: x_axis at offset 0, y_axis at offset 8.
+#[derive(Clone, Copy, Default)]
+#[repr(C)]
+pub struct Cols2<T> {
+    pub x_axis: T,
+    pub y_axis: T,
+}
 
 /// Component view for 2D types.
 #[derive(Clone, Copy, Default)]
@@ -76,7 +87,6 @@ macro_rules! impl_vec4_deref {
 /// Implement Deref/DerefMut to XY<f64> for a #[repr(transparent)] __m128d newtype.
 ///
 /// Memory layout requirement: lane 0 = x (bytes 0-7), lane 1 = y (bytes 8-15).
-/// This matches `__m128d` storage on x86 (little-endian, sequential).
 #[macro_export]
 macro_rules! impl_dvec2_deref {
     ($ty:ty) => {
@@ -98,14 +108,6 @@ macro_rules! impl_dvec2_deref {
 
 /// Implement Deref/DerefMut to XYZW<f64> for a `#[repr(C, align(32))]` type
 /// whose first 32 bytes map to [x, y, z, w] as consecutive f64.
-///
-/// Required memory layout (bytes):
-///   0-7   = x   (lo __m128d lane 0)
-///   8-15  = y   (lo __m128d lane 1)
-///   16-23 = z   (hi __m128d lane 0)
-///   24-31 = w   (hi __m128d lane 1)
-///
-/// This matches XYZW<f64> = {x@0, y@8, z@16, w@24}.
 #[macro_export]
 macro_rules! impl_dvec4_deref {
     ($ty:ty) => {
@@ -123,4 +125,4 @@ macro_rules! impl_dvec4_deref {
             }
         }
     };
-}
+        }
