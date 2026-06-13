@@ -29,7 +29,8 @@
 //!   100k entity transforms — all unchanged or improved (transform_point now zero-load too).
 
 use core::fmt;
-use core::ops::Mul;
+use core::ops::{Mul, MulAssign};
+
 
 #[cfg(target_arch = "x86")]
 use core::arch::x86::*;
@@ -694,6 +695,8 @@ impl Mul<Vec4> for Mat4 {
 //   × 4 cols = 80 scalar-equivalent ops → ~7 ns at 4 GHz
 // With FMA: 4 shuffles + 1 mul + 3 FMAs per col × 4 cols = 32 ops → ~3.5 ns
 
+// Gate the SSE2 implementation so it steps aside when AVX + FMA is active
+#[cfg(not(all(target_feature = "avx", target_feature = "fma")))]
 impl Mul for Mat4 {
     type Output = Self;
     #[inline(always)]
@@ -706,6 +709,15 @@ impl Mul for Mat4 {
         }
     }
 }
+
+// MulAssign is ungated — it automatically calls whichever Mul is in scope.
+impl MulAssign for Mat4 {
+    #[inline(always)]
+    fn mul_assign(&mut self, rhs: Self) {
+        *self = *self * rhs;
+    }
+}
+
 
 impl Default for Mat4 {
     #[inline]
