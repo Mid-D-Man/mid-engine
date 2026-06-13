@@ -1,73 +1,158 @@
-# .github/workflows/bench-vs-all.yml
-# Four-way benchmark: mid-math vs glam vs nalgebra vs ultraviolet.
-# Run: Actions → "mid-math: bench vs all" → Run workflow
-# DO NOT add push/pull_request triggers — benchmarks take 10-15 minutes.
-
+# .github/workflows/bemch-vs-all.yml
 name: mid-math — bench vs all
 
 on:
   workflow_dispatch:
     inputs:
-      baseline_note:
-        description: 'Context for this run (e.g. "post mat4 mul sse2 fix")'
-        required: false
-        default: 'manual benchmark run'
+      target_cpu:
+        description: >
+          Compiler target-cpu. Controls which SIMD instructions rustc emits.
+          native = all hardware features (AVX2+FMA on typical CI).
+          x86-64-v3 = AVX2+FMA guaranteed baseline (Haswell+).
+          x86-64-v2 = SSE4.2 baseline (no AVX).
+          x86-64    = SSE2 only — matches pre-OPT-7 baseline numbers.
+        required: true
+        default: 'native'
+        type: choice
+        options:
+          - native
+          - x86-64-v3
+          - x86-64-v2
+          - x86-64
 
-permissions:
-  contents: read
-  actions:  read
+env:
+  RUSTFLAGS: "-C target-cpu=${{ inputs.target_cpu }}"
+  CARGO_TERM_COLOR: always
 
 jobs:
   bench:
+    name: bench
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+      - name: Set up Rust stable
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+          override: true
 
-      - name: Get Rust version
-        id: rustver
-        run: echo "ver=$(rustc --version)" >> $GITHUB_OUTPUT
+      # ── Confirm what the runner and compiler actually have ──────────────────
+      - name: Confirm CPU and compiler features
+        run: |
+          echo "## CPU & Compiler — Build #${{ github.run_number }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| | |" >> $GITHUB_STEP_SUMMARY
+          echo "|---|---|" >> $GITHUB_STEP_SUMMARY
+          echo "| Runner        | \`ubuntu-latest\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| target-cpu    | \`${{ inputs.target_cpu }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| RUSTFLAGS     | \`-C target-cpu=${{ inputs.target_cpu }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Rust          | \`$(rustc --version)\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Branch        | \`${{ github.ref_name }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Commit        | \`${GITHUB_SHA:0:8}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
 
-      - name: Cache cargo registry
+          echo "### Hardware SIMD flags (/proc/cpuinfo)" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          grep -m1 '^flags' /proc/cpuinfo \
+            | tr ' ' '\n' \
+            | grep -E '^(sse|avx|fma|bmi|aes|sha|vpclm)' \
+            | sort \
+            | paste - - - - - - - \
+            >> $GITHUB_STEP_SUMMARY || true
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          echo "### Rustc target_feature cfg for \`-C target-cpu=${{ inputs.target_cpu }}\`" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          rustc --print cfg -C "target-cpu=${{ inputs.target_cpu }}" 2>&1 \
+            | grep '^target_feature' \
+            | sort \
+            >> $GITHUB_STEP_SUMMARY || true
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          # Fail loudly if the requested target-cpu produces no avx2 feature when
+          # the user chose x86-64-v3 (they explicitly wanted AVX2).
+          if [ "${{ inputs.target_cpu }}" = "x86-64-v3" ]; then
+            rustc --print cfg -C target-cpu=x86-64-v3 2>&1 | grep -q 'target_feature="avx2"' \
+              || (echo "::warning ::x86-64-v3 selected but avx2 not confirmed in rustc output"; true)
+          fi
+
+      - name: Cache cargo registry + build artefacts
         uses: actions/cache@v3
         with:
           path: |
-            ~/.cargo/bin/
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git/db/
-          key: cargo-registry-bench-all-${{ hashFiles('crates/mid-math/Cargo.toml') }}
-          restore-keys: cargo-registry-
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-bench-${{ inputs.target_cpu }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-bench-${{ inputs.target_cpu }}-
+            ${{ runner.os }}-bench-
 
-      - name: Run four-way criterion benchmarks
+      # ── Run the benchmark suite ─────────────────────────────────────────────
+      - name: Run vs_all benchmarks
         run: |
-          echo "Running: cargo bench --bench vs_all -p mid-math"
-          echo "Note: ${{ inputs.baseline_note }}"
-          cargo bench --bench vs_all -p mid-math 2>&1 | tee bench-vs-all-raw.txt
+          cargo bench --bench vs_all -p mid-math 2>&1 \
+            | tee mid-math-bench-raw.txt
+          echo "Bench exit code: $?" >> $GITHUB_STEP_SUMMARY
 
-      - name: Publish summary
+      # ── Parse and publish results ───────────────────────────────────────────
+      - name: Publish bench summary
         run: |
-          {
-            echo "## mid-math vs glam vs nalgebra vs ultraviolet"
-            echo ""
-            echo "**Build:** #${{ github.run_number }} &nbsp; **Rust:** \`${{ steps.rustver.outputs.ver }}\`"
-            echo ""
-            echo "**Note:** ${{ inputs.baseline_note }}"
-            echo ""
-            echo "> Lower is faster. Gaps vs mid-math show what to borrow."
-            echo ""
-            python3 scripts/bench_vs_all.py
-          } >> $GITHUB_STEP_SUMMARY
+          echo "## bench summary mid-math vs glam vs nalgebra vs ultraviolet" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Build: #${{ github.run_number }} &nbsp; Rust: \`$(rustc --version | cut -d' ' -f2)\` &nbsp; target-cpu: \`${{ inputs.target_cpu }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "> Note: manual benchmark run" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Lower is faster." >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
 
-      - name: Upload artifacts
+          # Each Criterion bench group emits lines like:
+          #   vec3/add/mid-math          time: [960 ps 963 ps 967 ps]
+          # We extract the median (middle value) and build the table rows.
+
+          python3 - << 'PYEOF'
+          import re, sys, os
+
+          raw = open("mid-math-bench-raw.txt").read()
+          summary_path = os.environ.get("GITHUB_STEP_SUMMARY", "/dev/stdout")
+
+          # Pattern: "<group>/<bench>/<impl>  time:  [lo   med   hi]"
+          pat = re.compile(
+              r'^(\S+/\S+)/(\S+)\s+time:\s+\[.*?\s+([\d.]+)\s+(ps|ns|µs|ms)\s+\]',
+              re.MULTILINE,
+          )
+
+          def to_ns(val, unit):
+              return {'ps': val/1000, 'ns': val, 'µs': val*1000, 'ms': val*1e6}[unit]
+
+          def fmt(ns):
+              if ns < 1:      return f"{ns*1000:.2f} ps"
+              if ns < 1000:   return f"{ns:.4f} ns"
+              if ns < 1e6:    return f"{ns/1000:.4f} µs"
+              return f"{ns/1e6:.4f} ms"
+
+          groups = {}
+          for m in pat.finditer(raw):
+              group, impl, val, unit = m.group(1), m.group(2), float(m.group(3)), m.group(4)
+              groups.setdefault(group, {})[impl] = to_ns(val, unit)
+
+          with open(summary_path, "a") as f:
+              for group, impls in sorted(groups.items()):
+                  f.write(f"**{group}**\n\n")
+                  f.write("| Impl | Mean |\n|---|---|\n")
+                  for impl, ns in sorted(impls.items()):
+                      f.write(f"| {impl} | {fmt(ns)} |\n")
+                  f.write("\n")
+          PYEOF
+
+      - name: Upload raw bench output
         uses: actions/upload-artifact@v4
         with:
           name: bench-vs-all-${{ github.run_number }}
-          path: |
-            bench-vs-all-raw.txt
-            target/criterion/
-          retention-days: 30
+          path: mid-math-bench-raw.txt
+          retention-days: 90
