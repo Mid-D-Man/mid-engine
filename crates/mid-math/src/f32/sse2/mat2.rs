@@ -195,40 +195,59 @@ impl Mat2 {
     // SSE2: shuffle storage to [d,c,b,a] then multiply by SIGN/det = [+,-,-,+]/det
     // → result lanes: [d/det, -c/det, -b/det, a/det] ✓
 
-    #[inline(always)]
+       #[inline(always)]
     unsafe fn inverse_inner(self) -> (Self, bool) {
-        let abcd = self.0;
-        // Determinant (same sequence as determinant())
-        let dcba = _mm_shuffle_ps::<0b00_01_10_11>(abcd, abcd);
-        let prod = _mm_mul_ps(abcd, dcba);
-        let sub  = _mm_sub_ps(prod, _mm_shuffle_ps::<0b01_01_01_01>(prod, prod));
-        let det_scalar = _mm_cvtss_f32(sub);
-        if det_scalar.abs() < EPSILON {
+        let abcd    = self.0;
+        let dcba    = _mm_shuffle_ps::<0b00_01_10_11>(abcd, abcd);
+        let prod    = _mm_mul_ps(abcd, dcba);
+        let sub     = _mm_sub_ps(prod, _mm_shuffle_ps::<0b01_01_01_01>(prod, prod));
+        let det_f32 = _mm_cvtss_f32(sub);
+        if det_f32.abs() < EPSILON {
             return (Self::ZERO, false);
         }
-        // Broadcast det to all 4 lanes for vectorised division
-        let det  = _mm_shuffle_ps::<0b00_00_00_00>(sub, sub);
-        // SIGN / det = [+1/det, -1/det, -1/det, +1/det]
-        let tmp  = _mm_div_ps(SIGN, det);
-        // Shuffle storage: [y.y, x.y, y.x, x.x] = [d, c, b, a]
-        //   lane0 ← abcd[3]=y.y, lane1 ← abcd[1]=x.y,
-        //   lane2 ← abcd[2]=y.x, lane3 ← abcd[0]=x.x
-        //   imm: bits[1:0]=0b11, bits[3:2]=0b01, bits[5:4]=0b10, bits[7:6]=0b00 → 0b00_10_01_11
-        let dcba_reorder = _mm_shuffle_ps::<0b00_10_01_11>(abcd, abcd);
-        (Self(_mm_mul_ps(dcba_reorder, tmp)), true)
+        let det     = _mm_shuffle_ps::<0b00_00_00_00>(sub, sub);
+        let tmp     = _mm_div_ps(SIGN, det);
+        let reorder = _mm_shuffle_ps::<0b00_10_01_11>(abcd, abcd);
+        (Self(_mm_mul_ps(reorder, tmp)), true)
     }
 
-    /// Inverse. Returns `None` when singular (|det| < EPSILON).
+    /// Checked inverse — returns `None` when singular (|det| < EPSILON).
+    ///
+    /// The `_mm_cvtss_f32` scalar extraction + branch is unavoidable for
+    /// `Option<Self>`. Glam's `inverse()` emits no branch in release builds
+    /// (guarded only by `glam_assert!`) — that explains the ~0.7 ns gap.
+    /// When the caller can tolerate a zero result, prefer `inverse_or_zero`.
     #[inline]
     pub fn inverse(self) -> Option<Self> {
         let (m, ok) = unsafe { self.inverse_inner() };
         if ok { Some(m) } else { None }
     }
 
-    /// Inverse or `Mat2::ZERO` when singular. Use when you want a no-branch fallback.
+    /// Branchless inverse — returns `Mat2::ZERO` when singular.
+    ///
+    /// Uses an SSE2 compare-and-mask (`_mm_cmpge_ps`) to zero out the result
+    /// without any conditional jump in the hot path. Preferred over `inverse()`
+    /// in throughput-critical code when the caller accepts a zero fallback.
+    ///
+    /// ```text
+    /// 1. Compute full inverse unconditionally (±∞ if |det| ≈ 0 — safe under IEEE 754)
+    /// 2. mask = (|det| ≥ EPSILON) → all-ones lanes
+    /// 3. result = _mm_and_ps(inverse, mask)  → zero if singular, inverse otherwise
+    /// ```
     #[inline]
     pub fn inverse_or_zero(self) -> Self {
-        unsafe { self.inverse_inner().0 }
+        unsafe {
+            let abcd    = self.0;
+            let dcba    = _mm_shuffle_ps::<0b00_01_10_11>(abcd, abcd);
+            let prod    = _mm_mul_ps(abcd, dcba);
+            let sub     = _mm_sub_ps(prod, _mm_shuffle_ps::<0b01_01_01_01>(prod, prod));
+            let det     = _mm_shuffle_ps::<0b00_00_00_00>(sub, sub); // broadcast to all 4 lanes
+            // SSE2 select — no scalar roundtrip, no branch instruction
+            let mask    = _mm_cmpge_ps(m128_abs(det), _mm_set1_ps(EPSILON));
+            let tmp     = _mm_div_ps(SIGN, det);
+            let reorder = _mm_shuffle_ps::<0b00_10_01_11>(abcd, abcd);
+            Self(_mm_and_ps(_mm_mul_ps(reorder, tmp), mask))
+        }
     }
 
     // ── Transform helpers ─────────────────────────────────────────────────────
