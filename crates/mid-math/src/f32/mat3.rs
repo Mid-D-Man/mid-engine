@@ -80,30 +80,54 @@ impl Mat3 {
        +c[2][0] * (c[0][1]*c[1][2] - c[1][1]*c[0][2])
     }
 
+    /// Inverse via cross-product method — leverages SSE2 Vec3 cross/dot
+    /// instead of the old scalar cofactor expansion.
+    ///
+    /// ## Algorithm
+    /// ```text
+    /// col0 = x, col1 = y, col2 = z
+    ///
+    /// tmp0 = y × z   ← cofactor column 0 of adj(M)
+    /// tmp1 = z × x   ← cofactor column 1 of adj(M)
+    /// tmp2 = x × y   ← cofactor column 2 of adj(M)
+    /// det  = x · tmp0
+    ///
+    /// M⁻¹ = [tmp0 tmp1 tmp2]ᵀ / det   (transpose = column-major storage)
+    /// ```
+    ///
+    /// ## Instruction count (x86/x86_64 with SSE2 Vec3)
+    /// 3 × cross (~6 SSE2 each) + 1 × dot (~3 SSE2) + 9 scalar muls
+    /// ≈ 30 SSE2 + 9 scalar vs old ~28 all-scalar — but SSE2 crosses
+    /// process 3 floats in parallel, so wall-clock latency drops significantly.
+    #[inline]
     pub fn inverse(self) -> Option<Self> {
-        let det = self.determinant();
-        if det.abs() < EPSILON { return None; }
-        let id = 1.0 / det;
-        let c = &self.cols;
-        Some(Self::from_cols(
-            [
-                 (c[1][1]*c[2][2] - c[2][1]*c[1][2]) * id,
-                -(c[0][1]*c[2][2] - c[2][1]*c[0][2]) * id,
-                 (c[0][1]*c[1][2] - c[1][1]*c[0][2]) * id,
-            ],
-            [
-                -(c[1][0]*c[2][2] - c[2][0]*c[1][2]) * id,
-                 (c[0][0]*c[2][2] - c[2][0]*c[0][2]) * id,
-                -(c[0][0]*c[1][2] - c[1][0]*c[0][2]) * id,
-            ],
-            [
-                 (c[1][0]*c[2][1] - c[2][0]*c[1][1]) * id,
-                -(c[0][0]*c[2][1] - c[2][0]*c[0][1]) * id,
-                 (c[0][0]*c[1][1] - c[1][0]*c[0][1]) * id,
-            ],
-        ))
-    }
+        use crate::Vec3;
+        // Load the three columns into SSE2-backed Vec3 (one _mm_set_ps each).
+        let x = Vec3::new(self.cols[0][0], self.cols[0][1], self.cols[0][2]);
+        let y = Vec3::new(self.cols[1][0], self.cols[1][1], self.cols[1][2]);
+        let z = Vec3::new(self.cols[2][0], self.cols[2][1], self.cols[2][2]);
 
+        // Cofactor rows of the adjugate via cross products.
+        let tmp0 = y.cross(z); // row 0 of adj(M)
+        let tmp1 = z.cross(x); // row 1 of adj(M)
+        let tmp2 = x.cross(y); // row 2 of adj(M)
+
+        let det = x.dot(tmp0);
+        if det.abs() < crate::EPSILON {
+            return None;
+        }
+        let inv = det.recip();
+
+        // adj(M) rows become columns of adj(M)ᵀ = M⁻¹ (column-major storage).
+        //   col 0 = [tmp0.x, tmp1.x, tmp2.x] / det
+        //   col 1 = [tmp0.y, tmp1.y, tmp2.y] / det
+        //   col 2 = [tmp0.z, tmp1.z, tmp2.z] / det
+        Some(Self::from_cols(
+            [tmp0.x * inv, tmp1.x * inv, tmp2.x * inv],
+            [tmp0.y * inv, tmp1.y * inv, tmp2.y * inv],
+            [tmp0.z * inv, tmp1.z * inv, tmp2.z * inv],
+        ))
+}
     /// Normal matrix = inverse-transpose of upper-left 3×3 of the model matrix.
     pub fn normal_matrix(model: &Mat4) -> Option<Self> {
         Self::from_mat4(model).inverse().map(|m| m.transpose())
