@@ -25,9 +25,15 @@ pub(crate) mod sse2;
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 pub use sse2::{Vec3, Vec4, Quat, Mat4, Mat2};
 
-/// AVX2 fast-paths (OPT-7 placeholder — no exports until OPT-7 lands).
-#[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), target_feature = "avx2"))]
-pub(crate) mod avx2;
+// AVX + FMA fast paths — compiled when hardware and RUSTFLAGS support it.
+// Currently provides: Mul<Mat4> for Mat4 (~3.2 ns vs 6.5 ns SSE2).
+// Gating is symmetric: avx/mat4.rs has cfg(avx+fma), sse2/mat4.rs has cfg(not(avx+fma)).
+#[cfg(all(
+    any(target_arch = "x86", target_arch = "x86_64"),
+    target_feature = "avx",
+    target_feature = "fma",
+))]
+pub(crate) mod avx;
 
 // ── aarch64 ──────────────────────────────────────────────────────────────────
 
