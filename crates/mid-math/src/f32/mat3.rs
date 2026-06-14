@@ -113,7 +113,7 @@ impl Mat3 {
         let tmp2 = x.cross(y); // row 2 of adj(M)
 
         let det = x.dot(tmp0);
-        if det.abs() < crate::EPSILON {
+        if det.abs() < EPSILON {
             return None;
         }
         let inv = det.recip();
@@ -127,7 +127,8 @@ impl Mat3 {
             [tmp0.y * inv, tmp1.y * inv, tmp2.y * inv],
             [tmp0.z * inv, tmp1.z * inv, tmp2.z * inv],
         ))
-}
+    }
+
     /// Normal matrix = inverse-transpose of upper-left 3×3 of the model matrix.
     pub fn normal_matrix(model: &Mat4) -> Option<Self> {
         Self::from_mat4(model).inverse().map(|m| m.transpose())
@@ -194,4 +195,4 @@ impl fmt::Display for Mat3 {
         }
         Ok(())
     }
-         }
+}
