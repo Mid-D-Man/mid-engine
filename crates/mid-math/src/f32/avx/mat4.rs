@@ -37,8 +37,8 @@ use core::arch::x86::*;
 #[cfg(target_arch = "x86_64")]
 use core::arch::x86_64::*;
 
-use crate::f32::mat4::Mat4;
-use crate::f32::vec4::Vec4;
+use crate::f32::sse2::mat4::Mat4;
+use crate::f32::sse2::vec4::Vec4;
 
 // ── Inner helper ──────────────────────────────────────────────────────────────
 
