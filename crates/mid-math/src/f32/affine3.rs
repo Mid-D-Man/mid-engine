@@ -6,9 +6,19 @@
 //!
 //! Updated for Build 8: from_mat4 and to_mat4 use Vec3::truncate / Vec3::extend
 //! instead of element-by-element access, matching the new Mat4 Vec4-field layout.
+//!
+//! `inverse()` gained an SSE2 fast path on x86/x86_64, ported from
+//! `Mat4::inverse_trs`'s column-transpose + masked-reciprocal-scale algorithm
+//! (see the Inverse section below). `inverse_scalar()` retains the original
+//! portable implementation as a fallback and correctness cross-check reference.
 
 use core::fmt;
 use core::ops::Mul;
+
+#[cfg(target_arch = "x86")]
+use core::arch::x86::*;
+#[cfg(target_arch = "x86_64")]
+use core::arch::x86_64::*;
 
 use crate::{Mat4, Quat, Vec3};
 use crate::EPSILON;
@@ -147,13 +157,125 @@ impl Affine3 {
 
     // ── Inverse ───────────────────────────────────────────────────────────────
 
-    /// Inverse of a TRS affine transform.
+    /// Inverse of a TRS affine transform — SSE2 fast path.
     ///
     /// ~2× faster than `Mat4::inverse_general` because the implicit bottom row
     /// [0,0,0,1] is never computed. Valid for translation + rotation + non-zero
     /// scale. Does NOT handle shear.
+    ///
+    /// # Algorithm
+    ///
+    /// Ported verbatim from `Mat4::inverse_trs`'s 3-column transpose
+    /// (`unpacklo`/`unpackhi`/`movelh`/`movehl`) + masked-reciprocal scale +
+    /// dot-product translation negate. The Mat4 version finishes by forcing
+    /// the translation column's lane 3 to `1.0` (homogeneous row contract).
+    /// Affine3 has no implicit row, so that fixup is dropped entirely:
+    ///
+    /// - `x_axis`/`y_axis`/`z_axis`/`translation` are `Vec3` ⇒ lane 3 = 0 going in.
+    /// - `sums[3]` (sum of squared lane-3 components) is therefore `0`.
+    /// - `0 < EPSILON` ⇒ the reciprocal mask is false for lane 3 ⇒ `inv_scales[3] = 0`.
+    /// - Every output column's lane 3 = `(transposed row lane 3) * inv_scales[3]
+    ///   = 0 * 0 = 0`, and the translation's lane 3 = `0 - dot_col[3] = -0.0`.
+    ///
+    /// Both `0` and `-0.0` are correct/ignored padding for `Vec3` (its `PartialEq`,
+    /// `Debug`, `Display`, and arithmetic all operate on lanes 0-2 only), so lane 3
+    /// stays naturally well-formed with zero extra masking.
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
     #[inline]
     pub fn inverse(self) -> Self {
+        unsafe {
+            let c0 = self.x_axis.0;
+            let c1 = self.y_axis.0;
+            let c2 = self.z_axis.0;
+            let c3 = self.translation.0;
+
+            // Squared lengths of the three rotation columns.
+            let sq0  = _mm_mul_ps(c0, c0);
+            let sq1  = _mm_mul_ps(c1, c1);
+            let sq2  = _mm_mul_ps(c2, c2);
+            let zero = _mm_setzero_ps();
+
+            // Horizontal sum: sums[i] = sq_i.x + sq_i.y + sq_i.z
+            // Using 3-way transpose + column-wise add.
+            let lo01 = _mm_unpacklo_ps(sq0, sq1);
+            let lo2z = _mm_unpacklo_ps(sq2, zero);
+            let hi01 = _mm_unpackhi_ps(sq0, sq1);
+            let hi2z = _mm_unpackhi_ps(sq2, zero);
+            let row0 = _mm_movelh_ps(lo01, lo2z); // [sq0.x, sq1.x, sq2.x, 0]
+            let row1 = _mm_movehl_ps(lo2z, lo01); // [sq0.y, sq1.y, sq2.y, 0]
+            let row2 = _mm_movelh_ps(hi01, hi2z); // [sq0.z, sq1.z, sq2.z, 0]
+            let sums = _mm_add_ps(_mm_add_ps(row0, row1), row2);
+            // sums = [sx², sy², sz², 0]
+
+            // Safe reciprocals: guard against near-zero scale.
+            let eps  = _mm_set1_ps(EPSILON);
+            let mask = _mm_cmpge_ps(sums, eps);
+            let safe = _mm_or_ps(
+                _mm_and_ps(mask, sums),
+                _mm_andnot_ps(mask, _mm_set1_ps(1.0)),
+            );
+            let inv_scales = _mm_and_ps(mask, _mm_div_ps(_mm_set1_ps(1.0), safe));
+            // inv_scales = [1/sx², 1/sy², 1/sz², 0]
+
+            // Transpose the 3×3 of the rotation columns.
+            let lo01_r = _mm_unpacklo_ps(c0, c1);
+            let lo2z_r = _mm_unpacklo_ps(c2, zero);
+            let hi01_r = _mm_unpackhi_ps(c0, c1);
+            let hi2z_r = _mm_unpackhi_ps(c2, zero);
+            let trow0 = _mm_movelh_ps(lo01_r, lo2z_r); // [c0.x, c1.x, c2.x, 0]
+            let trow1 = _mm_movehl_ps(lo2z_r, lo01_r); // [c0.y, c1.y, c2.y, 0]
+            let trow2 = _mm_movelh_ps(hi01_r, hi2z_r); // [c0.z, c1.z, c2.z, 0]
+
+            // Scale each transposed row by the corresponding inverse squared scale.
+            let ic0 = _mm_mul_ps(trow0, inv_scales);
+            let ic1 = _mm_mul_ps(trow1, inv_scales);
+            let ic2 = _mm_mul_ps(trow2, inv_scales);
+
+            // Inverse translation: -(inv_rot × original_t)
+            let tx = _mm_shuffle_ps::<0b00_00_00_00>(c3, c3);
+            let ty = _mm_shuffle_ps::<0b01_01_01_01>(c3, c3);
+            let tz = _mm_shuffle_ps::<0b10_10_10_10>(c3, c3);
+            let dot_col = _mm_add_ps(
+                _mm_add_ps(_mm_mul_ps(ic0, tx), _mm_mul_ps(ic1, ty)),
+                _mm_mul_ps(ic2, tz),
+            );
+            let inv_t = _mm_sub_ps(zero, dot_col);
+
+            Self {
+                x_axis:      Vec3(ic0),
+                y_axis:      Vec3(ic1),
+                z_axis:      Vec3(ic2),
+                translation: Vec3(inv_t),
+            }
+        }
+    }
+
+    /// Inverse of a TRS affine transform — portable fallback for non-x86 targets.
+    ///
+    /// Identical contract to the SSE2 `inverse()`: valid for translation +
+    /// rotation + non-zero scale, does NOT handle shear.
+    #[cfg(not(any(target_arch = "x86", target_arch = "x86_64")))]
+    #[inline]
+    pub fn inverse(self) -> Self {
+        self.inverse_scalar()
+    }
+
+    /// Scalar fallback inverse — exact same algorithm as the SSE2 path, no SIMD.
+    ///
+    /// Kept as a portable reference implementation for non-x86 targets and as
+    /// a correctness cross-check against the SSE2 `inverse()` (both produce
+    /// bit-equivalent results).
+    ///
+    /// # Derivation
+    ///
+    /// For M = R × S (the stored 3×3):
+    /// ```text
+    /// M^-1 = S^-1 × R^T
+    /// (M^-1)[i,j] = axis_j[i] / |axis_j|²
+    /// inv_t       = -(M^-1 × original_t)
+    /// ```
+    #[inline]
+    pub fn inverse_scalar(self) -> Self {
         let sx2 = self.x_axis.length_sq();
         let sy2 = self.y_axis.length_sq();
         let sz2 = self.z_axis.length_sq();
@@ -244,4 +366,4 @@ impl From<Mat4> for Affine3 {
 impl From<Affine3> for Mat4 {
     #[inline]
     fn from(a: Affine3) -> Self { a.to_mat4() }
-    }
+             }
