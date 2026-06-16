@@ -190,14 +190,10 @@ impl Quat {
 
     /// Normalised linear interpolation.
     ///
-    /// Build 8 fix: `dot4_into_m128` replaces `dot4` (scalar) to avoid the
-    /// scalar→SIMD round-trip that cost ~4–6 cycles.
+    /// `dot4_into_m128` (now 5 ops with pairwise-add broadcast) replaces the old
+    /// 6-op path to avoid a scalar→SIMD round-trip that cost ~4–6 cycles.
     ///
-    /// `dot4` extracts to f32 via `_mm_cvtss_f32`, then `_mm_set1_ps` broadcasts
-    /// back — a latency hit of ~5 cycles crossing the XMM/GPR boundary.
-    /// `dot4_into_m128` never leaves SIMD, matching glam's approach exactly.
-    ///
-    /// Also uses `normalize_fast()` — blend of two unit quats is always non-zero.
+    /// Uses `normalize_fast()` — blend of two unit quats is always non-zero.
     #[inline]
     pub fn nlerp(self, rhs: Self, t: f32) -> Self {
         unsafe {
@@ -213,6 +209,17 @@ impl Quat {
         }
     }
 
+    /// Spherical linear interpolation.
+    ///
+    /// Uses the vectorized sin-table approach: compute `sin(angle * [(1-t), t, 1, 0])`
+    /// in one `m128_sin` call, then blend `self * sin(angle*(1-t)) + rhs * sin(angle*t)`
+    /// and divide by `sin(angle)`.
+    ///
+    /// The division already places the result on the unit sphere geometrically —
+    /// no `normalize_fast()` needed. Removing it saves: 1 `dot4_into_m128` +
+    /// 1 `rsqrt_nr` (mul+mul+sub+mul) + 1 mul = ~8 instructions.
+    ///
+    /// Equivalent output quality to glam, which also skips the post-slerp normalize.
     pub fn slerp(self, mut rhs: Self, t: f32) -> Self {
         let mut cos_theta = self.dot(rhs);
         if cos_theta < 0.0 {
@@ -222,23 +229,27 @@ impl Quat {
         if cos_theta > 1.0 - EPSILON {
             return self.nlerp(rhs, t);
         }
-        let angle  = math::acos_approx(cos_theta);
-        let sin_a  = math::sqrt(1.0 - cos_theta * cos_theta);
+        let angle = math::acos_approx(cos_theta);
         unsafe {
+            // Compute sin(angle * (1-t)), sin(angle * t), sin(angle) in one shot.
+            // _mm_set_ps(e3, e2, e1, e0): lane0=(1-t), lane1=t, lane2=1.0, lane3=0.0
             let angles = _mm_mul_ps(
                 _mm_set1_ps(angle),
                 _mm_set_ps(0.0, 1.0, t, 1.0 - t),
             );
             let sins      = m128_sin(angles);
-            let s0        = _mm_shuffle_ps::<0b00_00_00_00>(sins, sins);
-            let s1        = _mm_shuffle_ps::<0b01_01_01_01>(sins, sins);
-            let theta_sin = _mm_shuffle_ps::<0b10_10_10_10>(sins, sins);
-            let _ = sin_a;
+            let s0        = _mm_shuffle_ps::<0b00_00_00_00>(sins, sins); // sin(angle*(1-t))
+            let s1        = _mm_shuffle_ps::<0b01_01_01_01>(sins, sins); // sin(angle*t)
+            let theta_sin = _mm_shuffle_ps::<0b10_10_10_10>(sins, sins); // sin(angle)
+
             let blended = _mm_add_ps(
                 _mm_mul_ps(self.0, s0),
                 _mm_mul_ps(rhs.0,  s1),
             );
-            Self(_mm_div_ps(blended, theta_sin)).normalize_fast()
+
+            // Division by sin(angle) places the result on the unit sphere.
+            // No normalize_fast() needed — matches glam's contract.
+            Self(_mm_div_ps(blended, theta_sin))
         }
     }
 
@@ -325,4 +336,4 @@ impl fmt::Display for Quat {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "Quat({:.4}, {:.4}, {:.4}, {:.4})", self.x, self.y, self.z, self.w)
     }
-}
+                           }
