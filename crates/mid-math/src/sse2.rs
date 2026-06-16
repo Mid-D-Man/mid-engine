@@ -39,18 +39,72 @@ pub(crate) unsafe fn dot4_in_x(lhs: __m128, rhs: __m128) -> __m128 {
     _mm_add_ps(xz_yw, yw_in_0)
 }
 
-/// Broadcast dot3 result to all 4 lanes.
+/// Broadcast dot3 result to all 4 lanes via pairwise-add — 5 instructions.
+///
+/// **Requires lane 3 of `lhs` and `rhs` to be `0.0`** (the `Vec3` padding invariant).
+/// The zero lane contributes `0` to all 4 output lanes, so the broadcast falls
+/// out of the pairwise-add pattern without a separate shuffle.
+///
+/// ## Why this beats the old path
+///
+/// Old: `dot3_in_x` (1 mul + 2 shuffles + 2 adds, result in lane 0) + 1 broadcast
+/// shuffle = **6 instructions**, result valid only in lane 0 before broadcast.
+///
+/// New: 1 mul + 2 shuffles + 2 adds = **5 instructions**, all 4 lanes already equal.
+///
+/// ## Derivation
+///
+/// ```text
+/// mul = [x·rx, y·ry, z·rz, 0]       (lane 3 = 0 by Vec3 contract)
+/// swp = [y·ry, x·rx, 0,    z·rz]    (adjacent-pair swap)
+/// sum = [x+y,  x+y,  z,    z  ]     (add: lanes 2 & 3 contain z·rz + 0 = z·rz)
+/// shf = [z,    z,    x+y,  x+y]     (half-swap)
+/// res = [x+y+z, x+y+z, x+y+z, x+y+z]  ✓ all equal, no extra broadcast
+/// ```
+///
+/// `swp` IMM `0b10_11_00_01`: out[0]=in[1], out[1]=in[0], out[2]=in[3], out[3]=in[2].
+/// `shf` IMM `0b01_00_11_10`: out[0]=sum[2], out[1]=sum[3], out[2]=sum[0], out[3]=sum[1].
 #[inline(always)]
 pub(crate) unsafe fn dot3_into_m128(lhs: __m128, rhs: __m128) -> __m128 {
-    let dot = dot3_in_x(lhs, rhs);
-    _mm_shuffle_ps::<0b00_00_00_00>(dot, dot)
+    let mul = _mm_mul_ps(lhs, rhs);                         // [x,   y,   z,   0  ]
+    let swp = _mm_shuffle_ps::<0b10_11_00_01>(mul, mul);   // [y,   x,   0,   z  ]
+    let sum = _mm_add_ps(mul, swp);                         // [x+y, x+y, z,   z  ]
+    let shf = _mm_shuffle_ps::<0b01_00_11_10>(sum, sum);   // [z,   z,   x+y, x+y]
+    _mm_add_ps(sum, shf)                                    // [dot, dot, dot, dot ]
 }
 
-/// Broadcast dot4 result to all 4 lanes.
+/// Broadcast dot4 result to all 4 lanes via pairwise-add — 5 instructions.
+///
+/// ## Why this beats the old path
+///
+/// Old: `dot4_in_x` (1 mul + 2 shuffles + 2 adds, result in lane 0) + 1 broadcast
+/// shuffle = **6 instructions**.
+///
+/// New: 1 mul + 2 shuffles + 2 adds = **5 instructions**, all 4 lanes already equal.
+///
+/// Called on every `Vec4::normalize`, `Vec4::dot_into_vec`, `Quat::normalize`,
+/// `Quat::normalize_fast`, `Quat::nlerp`, `Quat::slerp` — the saved shuffle
+/// compounds across the entire codebase.
+///
+/// ## Derivation
+///
+/// ```text
+/// mul = [x·rx, y·ry, z·rz, w·rw]
+/// swp = [y·ry, x·rx, w·rw, z·rz]    (adjacent-pair swap)
+/// sum = [x+y,  x+y,  z+w,  z+w ]
+/// shf = [z+w,  z+w,  x+y,  x+y ]    (half-swap)
+/// res = [dot,  dot,  dot,  dot  ]    ✓ all equal
+/// ```
+///
+/// `swp` IMM `0b10_11_00_01`: out[0]=in[1], out[1]=in[0], out[2]=in[3], out[3]=in[2].
+/// `shf` IMM `0b01_00_11_10`: out[0]=sum[2], out[1]=sum[3], out[2]=sum[0], out[3]=sum[1].
 #[inline(always)]
 pub(crate) unsafe fn dot4_into_m128(lhs: __m128, rhs: __m128) -> __m128 {
-    let dot = dot4_in_x(lhs, rhs);
-    _mm_shuffle_ps::<0b00_00_00_00>(dot, dot)
+    let mul = _mm_mul_ps(lhs, rhs);                         // [x,   y,   z,   w  ]
+    let swp = _mm_shuffle_ps::<0b10_11_00_01>(mul, mul);   // [y,   x,   w,   z  ]
+    let sum = _mm_add_ps(mul, swp);                         // [x+y, x+y, z+w, z+w]
+    let shf = _mm_shuffle_ps::<0b01_00_11_10>(sum, sum);   // [z+w, z+w, x+y, x+y]
+    _mm_add_ps(sum, shf)                                    // [dot, dot, dot, dot ]
 }
 
 /// Scalar f32 dot3.
