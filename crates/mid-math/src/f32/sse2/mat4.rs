@@ -27,6 +27,28 @@
 //! Advantages preserved:
 //!   vec3/normalize, vec4/normalize, quat/rotate, affine3/transform_point,
 //!   100k entity transforms — all unchanged or improved (transform_point now zero-load too).
+//!
+//! ── Construction-path fixes (this revision) ───────────────────────────────────
+//!
+//! `perspective_rh`/`perspective_lh`: replaced `1.0 / tan(fov/2)` with
+//! `cos(fov/2) / sin(fov/2)` via a single `sin_cos` call. Same identity
+//! (`1/tan(x) = cos(x)/sin(x)`), measured faster on every target benched.
+//!
+//! `look_at_rh`/`look_at_lh`: column assembly now uses the same
+//! unpacklo/unpackhi + movelh/movehl transpose pattern as `Mat4::transpose`
+//! below, instead of `Vec4::new(r.x, u.x, -f.x, 0.0)` etc. The old form reads
+//! each of r/u/f through the `XYZ<f32>` Deref pointer-cast, which forces those
+//! Vec3 values to be spilled to the stack before they can be read field-by-field.
+//! The transpose form never leaves XMM registers.
+//!
+//! `from_trs`: quaternion components are now pulled out of the normalized
+//! quat via shuffle + `_mm_cvtss_f32` instead of the `q.x`/`q.y`/`q.z`/`q.w`
+//! Deref accessors, for the same reason — `q` stays live in a register for
+//! the whole function instead of being spilled once per field read. Same
+//! applies to the `s`/`t` scalar pulls. The arithmetic itself is unchanged.
+//! Note: `Quat::to_mat4` in `sse2/quat.rs` has the identical Deref pattern
+//! and would benefit from the same treatment — not touched here since it
+//! wasn't in the three asked for.
 
 use core::fmt;
 use core::ops::{Mul, MulAssign};
@@ -38,6 +60,7 @@ use core::arch::x86::*;
 use core::arch::x86_64::*;
 
 use crate::sse2::dot4;
+use crate::f32::math;
 use crate::f32::sse2::vec3::Vec3;
 use crate::f32::sse2::vec4::Vec4;
 use crate::f32::sse2::quat::Quat;
@@ -118,52 +141,101 @@ impl Mat4 {
     #[inline]
     pub fn from_rotation(q: Quat) -> Self { q.to_mat4() }
 
+    /// Full TRS — scale, then rotate, then translate.
+    ///
+    /// Pulls the normalized quaternion's x/y/z/w lanes out via shuffle +
+    /// `_mm_cvtss_f32` rather than the `q.x`/`q.y`/`q.z`/`q.w` Deref accessors
+    /// (same for the `s`/`t` scalar pulls). The Deref path casts `&Quat` to
+    /// `&XYZW<f32>` through a raw pointer, which requires `q` to be addressable
+    /// — i.e. spilled to the stack — before any field can be read. Shuffle +
+    /// `_mm_cvtss_f32` reads the same lane straight out of the XMM register
+    /// `q` is already sitting in. The scalar arithmetic that follows is
+    /// otherwise identical to the original formula.
     #[inline]
     pub fn from_trs(t: Vec3, r: Quat, s: Vec3) -> Self {
-        let q = r.normalize();
-        let (x, y, z, w) = (q.x, q.y, q.z, q.w);
-        let (x2, y2, z2) = (x + x, y + y, z + z);
-        let (xx, yy, zz) = (x * x2, y * y2, z * z2);
-        let (xy, xz, yz) = (x * y2, x * z2, y * z2);
-        let (wx, wy, wz) = (w * x2, w * y2, w * z2);
-        Self {
-            x_axis: Vec4::new((1.0 - yy - zz) * s.x, (xy + wz) * s.x, (xz - wy) * s.x, 0.0),
-            y_axis: Vec4::new((xy - wz) * s.y, (1.0 - xx - zz) * s.y, (yz + wx) * s.y, 0.0),
-            z_axis: Vec4::new((xz + wy) * s.z, (yz - wx) * s.z, (1.0 - xx - yy) * s.z, 0.0),
-            w_axis: Vec4::new(t.x, t.y, t.z, 1.0),
+        unsafe {
+            let q = r.normalize().0;
+            let x = _mm_cvtss_f32(q);
+            let y = _mm_cvtss_f32(_mm_shuffle_ps::<0b01_01_01_01>(q, q));
+            let z = _mm_cvtss_f32(_mm_shuffle_ps::<0b10_10_10_10>(q, q));
+            let w = _mm_cvtss_f32(_mm_shuffle_ps::<0b11_11_11_11>(q, q));
+
+            let (x2, y2, z2) = (x + x, y + y, z + z);
+            let (xx, yy, zz) = (x * x2, y * y2, z * z2);
+            let (xy, xz, yz) = (x * y2, x * z2, y * z2);
+            let (wx, wy, wz) = (w * x2, w * y2, w * z2);
+
+            let sx = _mm_cvtss_f32(s.0);
+            let sy = _mm_cvtss_f32(_mm_shuffle_ps::<0b01_01_01_01>(s.0, s.0));
+            let sz = _mm_cvtss_f32(_mm_shuffle_ps::<0b10_10_10_10>(s.0, s.0));
+            let tx = _mm_cvtss_f32(t.0);
+            let ty = _mm_cvtss_f32(_mm_shuffle_ps::<0b01_01_01_01>(t.0, t.0));
+            let tz = _mm_cvtss_f32(_mm_shuffle_ps::<0b10_10_10_10>(t.0, t.0));
+
+            Self {
+                x_axis: Vec4::new((1.0 - yy - zz) * sx, (xy + wz) * sx, (xz - wy) * sx, 0.0),
+                y_axis: Vec4::new((xy - wz) * sy, (1.0 - xx - zz) * sy, (yz + wx) * sy, 0.0),
+                z_axis: Vec4::new((xz + wy) * sz, (yz - wx) * sz, (1.0 - xx - yy) * sz, 0.0),
+                w_axis: Vec4::new(tx, ty, tz, 1.0),
+            }
         }
     }
 
     // ── View matrices ─────────────────────────────────────────────────────────
 
+    /// Right-handed look-at view matrix.
+    ///
+    /// Column assembly uses the same unpacklo/unpackhi + movelh/movehl
+    /// transpose pattern as [`Mat4::transpose`] instead of
+    /// `Vec4::new(r.x, u.x, -f.x, 0.0)` etc. — see module doc for why.
     pub fn look_at_rh(eye: Vec3, center: Vec3, up: Vec3) -> Self {
         let f = (center - eye).normalize();
         let r = f.cross(up).normalize();
         let u = r.cross(f);
-        Self {
-            x_axis: Vec4::new(r.x, u.x, -f.x, 0.0),
-            y_axis: Vec4::new(r.y, u.y, -f.y, 0.0),
-            z_axis: Vec4::new(r.z, u.z, -f.z, 0.0),
-            w_axis: Vec4::new(-r.dot(eye), -u.dot(eye), f.dot(eye), 1.0),
+        let nf = -f;
+        unsafe {
+            let zero = _mm_setzero_ps();
+            let tmp0 = _mm_unpacklo_ps(r.0, u.0);   // [r.x, u.x, r.y, u.y]
+            let tmp1 = _mm_unpacklo_ps(nf.0, zero); // [nf.x, 0,  nf.y, 0]
+            let tmp2 = _mm_unpackhi_ps(r.0, u.0);   // [r.z, u.z, 0,    0]
+            let tmp3 = _mm_unpackhi_ps(nf.0, zero); // [nf.z, 0,  0,    0]
+            Self {
+                x_axis: Vec4(_mm_movelh_ps(tmp0, tmp1)), // [r.x, u.x, nf.x, 0]
+                y_axis: Vec4(_mm_movehl_ps(tmp1, tmp0)), // [r.y, u.y, nf.y, 0]
+                z_axis: Vec4(_mm_movelh_ps(tmp2, tmp3)), // [r.z, u.z, nf.z, 0]
+                w_axis: Vec4::new(-r.dot(eye), -u.dot(eye), f.dot(eye), 1.0),
+            }
         }
     }
 
+    /// Left-handed look-at view matrix. Same transpose-based assembly as
+    /// `look_at_rh`; `f` keeps its sign here so no negation is needed.
     pub fn look_at_lh(eye: Vec3, center: Vec3, up: Vec3) -> Self {
         let f = (center - eye).normalize();
         let r = up.cross(f).normalize();
         let u = f.cross(r);
-        Self {
-            x_axis: Vec4::new(r.x, u.x, f.x, 0.0),
-            y_axis: Vec4::new(r.y, u.y, f.y, 0.0),
-            z_axis: Vec4::new(r.z, u.z, f.z, 0.0),
-            w_axis: Vec4::new(-r.dot(eye), -u.dot(eye), -f.dot(eye), 1.0),
+        unsafe {
+            let zero = _mm_setzero_ps();
+            let tmp0 = _mm_unpacklo_ps(r.0, u.0);
+            let tmp1 = _mm_unpacklo_ps(f.0, zero);
+            let tmp2 = _mm_unpackhi_ps(r.0, u.0);
+            let tmp3 = _mm_unpackhi_ps(f.0, zero);
+            Self {
+                x_axis: Vec4(_mm_movelh_ps(tmp0, tmp1)),
+                y_axis: Vec4(_mm_movehl_ps(tmp1, tmp0)),
+                z_axis: Vec4(_mm_movelh_ps(tmp2, tmp3)),
+                w_axis: Vec4::new(-r.dot(eye), -u.dot(eye), -f.dot(eye), 1.0),
+            }
         }
     }
 
     // ── Projection matrices ───────────────────────────────────────────────────
 
+    /// `1/tan(fov/2)` replaced with `cos(fov/2)/sin(fov/2)` via one `sin_cos`
+    /// call — same identity, measured faster than `tan()` on every target benched.
     pub fn perspective_rh(fov_y: f32, aspect: f32, near: f32, far: f32) -> Self {
-        let f = 1.0 / (fov_y * 0.5).tan();
+        let (sin_fov, cos_fov) = math::sin_cos(fov_y * 0.5);
+        let f = cos_fov / sin_fov;
         let z = near - far;
         Self {
             x_axis: Vec4::new(f / aspect, 0.0, 0.0, 0.0),
@@ -174,7 +246,8 @@ impl Mat4 {
     }
 
     pub fn perspective_lh(fov_y: f32, aspect: f32, near: f32, far: f32) -> Self {
-        let f = 1.0 / (fov_y * 0.5).tan();
+        let (sin_fov, cos_fov) = math::sin_cos(fov_y * 0.5);
+        let f = cos_fov / sin_fov;
         let z = far - near;
         Self {
             x_axis: Vec4::new(f / aspect, 0.0, 0.0, 0.0),
@@ -746,4 +819,4 @@ impl fmt::Display for Mat4 {
         }
         Ok(())
     }
-}
+         }
