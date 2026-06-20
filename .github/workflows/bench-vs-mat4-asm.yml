@@ -1,108 +1,125 @@
 # .github/workflows/bench-vs-mat4-asm.yml
-# mat4 multiply benchmark: AVX intrinsic vs explicit asm! vs glam.
-# Evaluates if pinning ymm0–ymm9 changes wall-clock time vs LLVM's free assignment.
-# Run: Actions → "mid-math: bench mat4 asm" → Run workflow
-# DO NOT add push/pull_request triggers.
+# Bench mat4 multiply: AVX intrinsic vs explicit asm! with pinned low ymm registers.
+# Runs ONLY on manual dispatch to avoid polluting CI.
 
 name: mid-math — bench mat4 asm
 
 on:
   workflow_dispatch:
     inputs:
-      baseline_note:
-        description: 'Context for this run (e.g. "AVX intrinsic vs pinned ymm asm")'
+      note:
+        description: 'Context for this run'
         required: false
-        default: 'manual mat4 asm benchmark run'
+        default: 'asm vs intrinsic mat4 mul'
 
-permissions:
-  contents: read
-  actions:  read
+env:
+  RUSTFLAGS: "-C target-cpu=native"
+  CARGO_TERM_COLOR: never
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
   bench:
+    name: bench
     runs-on: ubuntu-latest
+
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Get Rust version
-        id: rustver
-        run: echo "ver=$(rustc --version)" >> $GITHUB_OUTPUT
-
-      - name: Cache cargo registry
-        uses: actions/cache@v3
+      - name: Set up Rust stable
+        uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
-          path: |
-            ~/.cargo/bin/
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git/db/
-          key: cargo-registry-bench-mat4-asm-${{ hashFiles('crates/mid-math/Cargo.toml') }}
-          restore-keys: cargo-registry-
+          toolchain: stable
+          override: true
 
-      - name: Run mat4 asm criterion benchmarks
-        run: |
-          echo "Running: RUSTFLAGS='-C target-cpu=native' cargo bench --bench vs_mat4_asm -p mid-math"
-          echo "Note: ${{ inputs.baseline_note }}"
-          RUSTFLAGS='-C target-cpu=native' cargo bench --bench vs_mat4_asm -p mid-math 2>&1 | tee bench-mat4-asm-raw.txt
-
-      - name: Publish summary
+      - name: Confirm CPU features and AVX availability
         run: |
           {
-            echo "## mid-math mat4 asm vs intrinsic vs glam — Criterion Benchmarks"
+            echo "## CPU & Compiler — Build #${{ github.run_number }}"
             echo ""
-            echo "**Build:** #${{ github.run_number }} &nbsp; **Rust:** \`${{ steps.rustver.outputs.ver }}\`"
+            echo "| | |"
+            echo "|---|---|"
+            echo "| Runner        | \`ubuntu-latest\` |"
+            echo "| RUSTFLAGS     | \`-C target-cpu=native\` |"
+            echo "| Rust          | \`$(rustc --version)\` |"
+            echo "| Commit        | \`${GITHUB_SHA:0:8}\` |"
+            echo "| Note          | ${{ inputs.note }} |"
             echo ""
-            echo "**Note:** ${{ inputs.baseline_note }}"
+            echo "### AVX/FMA flags"
+            echo '```'
+            grep -m1 '^flags' /proc/cpuinfo \
+              | tr ' ' '\n' \
+              | grep -E '^(avx|fma|sse)' \
+              | sort \
+              | paste - - - - -
+            echo '```'
             echo ""
-            echo "> Evaluates AVX intrinsic performance vs explicit \`asm!\` with pinned \`ymm0-ymm9\` registers."
-            echo "> Compiled with \`-C target-cpu=native\` to ensure AVX+FMA active. Includes a 4-way independent throughput test."
+            echo "### Rustc target_feature cfg"
+            echo '```'
+            rustc --print cfg -C target-cpu=native 2>&1 \
+              | grep '^target_feature' \
+              | grep -E '"(avx|fma|sse)' \
+              | sort
+            echo '```'
             echo ""
+            # Hard fail if AVX+FMA not present — bench is meaningless without it
+            rustc --print cfg -C target-cpu=native 2>&1 | grep -q 'target_feature="avx"' \
+              || { echo "::error::AVX not available on this runner — asm bench requires AVX+FMA"; exit 1; }
+            rustc --print cfg -C target-cpu=native 2>&1 | grep -q 'target_feature="fma"' \
+              || { echo "::error::FMA not available on this runner — asm bench requires AVX+FMA"; exit 1; }
+          } >> "$GITHUB_STEP_SUMMARY"
 
-            python3 - << 'PYEOF'
-          import re, sys
+      - name: Cache cargo registry + build artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-bench-asm-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-bench-asm-
+            ${{ runner.os }}-bench-
 
-          RE_ANSI   = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
-          RE_RESULT = re.compile(
-              r'^(\S[^\n]+?)\s+time:\s+\[\s*([\d.]+\s+\S+)\s+([\d.]+\s+\S+)\s+([\d.]+\s+\S+)\s*\]',
-              re.MULTILINE,
-          )
+      - name: Run mat4 asm benchmark
+        run: |
+          cargo bench --bench vs_mat4_asm -p mid-math \
+            2>&1 | tee bench-mat4-asm-raw.txt
+          echo "Exit: $?" >> "$GITHUB_STEP_SUMMARY"
 
-          try:
-              raw  = open('bench-mat4-asm-raw.txt', encoding='utf-8', errors='replace').read()
-          except FileNotFoundError:
-              print("*(bench-mat4-asm-raw.txt not found)*")
-              sys.exit(0)
+      - name: Publish bench summary
+        run: |
+          {
+            echo "## mat4 mul — asm vs intrinsic vs glam"
+            echo ""
+            echo "Build: #${{ github.run_number }} &nbsp;|&nbsp; Rust: \`$(rustc --version | cut -d' ' -f2)\` &nbsp;|&nbsp; target-cpu: \`native\`"
+            echo ""
+            echo "> \`mid-math/4x-independent\` throughput ≈ cglm methodology (4 independent muls)."
+            echo "> Lower is faster. All times are per operation."
+            echo ""
+            python3 scripts/bench_vs_all.py
+          } >> "$GITHUB_STEP_SUMMARY"
+        env:
+          BENCH_RAW_FILE: bench-mat4-asm-raw.txt
 
-          text = RE_ANSI.sub('', raw)
-          current_group = None
-
-          for m in RE_RESULT.finditer(text):
-              name = m.group(1).strip()
-              mean = m.group(3).strip()
-              parts = name.split('/')
-              group   = '/'.join(parts[:-1]) if len(parts) >= 2 else name
-              variant = parts[-1] if len(parts) >= 2 else ''
-              if group != current_group:
-                  if current_group is not None:
-                      print()
-                  print(f"#### {group}")
-                  print("| Impl | Mean |")
-                  print("|---|---|")
-                  current_group = group
-              print(f"| {variant} | {mean} |")
-          PYEOF
-
-          } >> $GITHUB_STEP_SUMMARY
+      - name: Emit LLVM assembly for inspection
+        run: |
+          RUSTFLAGS="-C target-cpu=native --emit=asm" \
+          cargo build -p mid-math --release 2>/dev/null || true
+          # Pull the col_pair / mat4_mul sections for the summary
+          ASM_FILE=$(find target/release/deps -name 'mid_math-*.s' 2>/dev/null | head -1)
+          if [ -n "$ASM_FILE" ]; then
+            {
+              echo ""
+              echo "### LLVM ASM — col_pair / avx mat4 mul (first 60 lines)"
+              echo '```asm'
+              grep -A 60 'col_pair\|glm_mat4_mul_avx\|mat4.*mul\|from_trs' "$ASM_FILE" 2>/dev/null | head -80 || echo "(not found)"
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
           name: bench-mat4-asm-${{ github.run_number }}
-          path: |
-            bench-mat4-asm-raw.txt
-            target/criterion/
+          path: bench-mat4-asm-raw.txt
           retention-days: 30
