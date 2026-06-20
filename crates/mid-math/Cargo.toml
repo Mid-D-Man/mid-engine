@@ -17,8 +17,8 @@ glam             = { version = "0.28", features = [] }
 nalgebra         = { version = "0.33" }
 ultraviolet      = { version = "0.9" }
 matrixmultiply   = { version = "0.3" }
-faer             = { version = "0.22" }                          # new: large-matrix specialist
-vek              = { version = "0.17", features = ["repr_simd"] } # new: game math + repr_simd
+faer             = { version = "0.22" }
+vek              = { version = "0.17", features = ["repr_simd"] }
 
 [[bench]]
 name    = "vs_glam"
@@ -33,7 +33,11 @@ name    = "vs_all_f64"
 harness = false
 
 [[bench]]
-name    = "vs_mat4_fastest"      # new
+name    = "vs_mat4_fastest"
+harness = false
+
+[[bench]]
+name    = "vs_mat4_asm"
 harness = false
 
 [[bench]]
