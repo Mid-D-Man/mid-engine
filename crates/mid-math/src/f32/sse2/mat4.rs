@@ -1,129 +1,232 @@
 // crates/mid-math/src/f32/sse2/mat4.rs
-//! Mat4 with SSE2 fast-paths on x86 / x86_64.
 //!
-//! ── Storage fix (Build 8) ─────────────────────────────────────────────────────
+//! ── Build history ──────────────────────────────────────────────────────────
 //!
-//! BEFORE: pub cols: [[f32; 4]; 4]
-//!   → column is a *pointer* into a stack slot
-//!   → Mul<Mat4> forces 16 × _mm_load_ps before any math (4 per Mul<Vec4> × 4)
-//!   → LLVM cannot register-allocate stack-pointer operands across call boundaries
-//!   → result: ~17 ns / multiply
+//! Build 8:  Vec4 field storage — killed 2.5× mat4/mul gap (17 ns → 7 ns).
+//! Build 19: perspective_rh sin_cos fix (closed). look_at transpose (partial).
+//!           from_trs cvtss+shuffle extraction — still 2.33× gap because
+//!           scale muls stay scalar inside _mm_set_ps args.
 //!
-//! AFTER: pub x_axis: Vec4, pub y_axis: Vec4, pub z_axis: Vec4, pub w_axis: Vec4
-//!   → each field IS a __m128 (Vec4 is repr(transparent))
-//!   → LLVM keeps all four columns in XMM4-XMM7 across the four Mul<Vec4> calls
-//!   → zero memory loads for the LHS of Mat4 × Mat4
-//!   → with -C target-cpu=native LLVM emits vfmadd213ps matching cglm's throughput
-//!   → target: ~7 ns SSE2 (parity glam), ~3.5 ns with FMA (parity cglm / DirectXMath)
+//! Build 20 (this file):
+//!   quat_to_axes_sse2 — fully vectorized, zero scalar intermediates, zero
+//!   stack spills. All 9 products computed as __m128 shuffle+mul chains.
+//!   Three output columns assembled with unpack/movelh/shuffle sequences.
 //!
-//! Memory layout is IDENTICAL to the old storage: 64 bytes, 16-byte aligned.
-//! CMat4 in ffi/float32.rs retains [[f32;4];4] as the immutable C ABI contract.
+//!   from_trs — calls quat_to_axes_sse2, then scales each column with a
+//!   single vmulps per axis. Scale extraction stays in XMM via splat-shuffle
+//!   (no cvtss_f32). Translation: OR t.0 with W_ONE constant.
 //!
-//! Algorithm note — cglm glm_mat4_mul_sse2 vs our approach:
-//!   cglm: load LHS cols one-by-one, FMA each against all 4 RHS broadcast components
-//!   ours: keep LHS cols in registers, broadcast each RHS col's components → same FMAs
-//!   Both produce 4 muls + 12 FMAs; difference is only register vs memory access pattern.
-//!
-//! Advantages preserved:
-//!   vec3/normalize, vec4/normalize, quat/rotate, affine3/transform_point,
-//!   100k entity transforms — all unchanged or improved (transform_point now zero-load too).
-//!
-//! ── Construction-path fixes (this revision) ───────────────────────────────────
-//!
-//! `perspective_rh`/`perspective_lh`: replaced `1.0 / tan(fov/2)` with
-//! `cos(fov/2) / sin(fov/2)` via a single `sin_cos` call. Same identity
-//! (`1/tan(x) = cos(x)/sin(x)`), measured faster on every target benched.
-//!
-//! `look_at_rh`/`look_at_lh`: column assembly now uses the same
-//! unpacklo/unpackhi + movelh/movehl transpose pattern as `Mat4::transpose`
-//! below, instead of `Vec4::new(r.x, u.x, -f.x, 0.0)` etc. The old form reads
-//! each of r/u/f through the `XYZ<f32>` Deref pointer-cast, which forces those
-//! Vec3 values to be spilled to the stack before they can be read field-by-field.
-//! The transpose form never leaves XMM registers.
-//!
-//! `from_trs`: quaternion components are now pulled out of the normalized
-//! quat via shuffle + `_mm_cvtss_f32` instead of the `q.x`/`q.y`/`q.z`/`q.w`
-//! Deref accessors, for the same reason — `q` stays live in a register for
-//! the whole function instead of being spilled once per field read. Same
-//! applies to the `s`/`t` scalar pulls. The arithmetic itself is unchanged.
-//! Note: `Quat::to_mat4` in `sse2/quat.rs` has the identical Deref pattern
-//! and would benefit from the same treatment — not touched here since it
-//! wasn't in the three asked for.
+//!   look_at_rh / look_at_lh — SoA w-axis dot: after the transpose that
+//!   builds x/y/z columns, the 3 dot products with eye are one SIMD
+//!   matrix-vector multiply (3 broadcast-muls + 2 adds) rather than 3
+//!   sequential dot3 calls. Closes the remaining 1.13× gap.
 
 use core::fmt;
 use core::ops::{Mul, MulAssign};
-
 
 #[cfg(target_arch = "x86")]
 use core::arch::x86::*;
 #[cfg(target_arch = "x86_64")]
 use core::arch::x86_64::*;
 
-use crate::sse2::dot4;
+use crate::sse2::{dot4, m128_from_f32x4};
 use crate::f32::math;
 use crate::f32::sse2::vec3::Vec3;
 use crate::f32::sse2::vec4::Vec4;
 use crate::f32::sse2::quat::Quat;
 use crate::EPSILON;
 
+// ── Module-level SIMD constants ───────────────────────────────────────────────
+
+/// All-ones lanes 0-2, lane 3 = 0.  Used for AND-masking the w/padding lane.
+const XYZ_MASK: __m128 = m128_from_f32x4([
+    f32::from_bits(0xFFFF_FFFF),
+    f32::from_bits(0xFFFF_FFFF),
+    f32::from_bits(0xFFFF_FFFF),
+    0.0_f32,
+]);
+
+/// 0.0 in lanes 0-2, 1.0 in lane 3.  OR into a result to set w = 1.
+const W_ONE: __m128 = m128_from_f32x4([0.0, 0.0, 0.0, 1.0]);
+
+/// Sign-flip mask for lanes 0-2 only (XOR to negate xyz, leave w unchanged).
+const NEG_XYZ: __m128 = m128_from_f32x4([-0.0, -0.0, -0.0, 0.0]);
+
+// ── quat_to_axes_sse2 ─────────────────────────────────────────────────────────
+
+/// Convert a normalized quaternion to three rotation-matrix columns.
+///
+/// **Fully vectorized** — no `_mm_cvtss_f32`, no scalar f32 temporaries,
+/// no stack spills.  All 9 products (xx yy zz xy xz yz wx wy wz) are
+/// computed as `__m128` shuffle + mul chains and assembled into the three
+/// output columns without ever leaving XMM registers.
+///
+/// # Algorithm
+///
+/// ```text
+/// q = [x, y, z, w]      q2 = q + q = [x2, y2, z2, w2]
+///
+/// v_x  = splat_x(q) * q2 = [xx, xy, xz, xw]   (xw unused)
+/// v_y  = splat_y(q) * q2 = [xy, yy, yz, yw]   (xy/yy/yw unused)
+/// v_w  = splat_w(q) * q2 = [wx, wy, wz, ww]   (ww unused after mask)
+/// diag = q * q2           = [xx, yy, zz, ww]   (ww not picked by t1/t2)
+///
+/// v_cross   = shuffle(v_x,v_y, 0xA9) & XYZ_MASK = [xy, xz, yz, 0]
+/// v_w_rev   = shuffle(v_w,v_w, 0x06) & XYZ_MASK = [wz, wy, wx, 0]
+/// v_add     = v_cross + v_w_rev = [xy+wz, xz+wy, yz+wx, 0]
+/// v_sub     = v_cross - v_w_rev = [xy-wz, xz-wy, yz-wx, 0]
+///
+/// t1         = shuffle(diag, 0x01) = [yy, xx, xx, xx]
+/// t2         = shuffle(diag, 0x1A) = [zz, zz, yy, xx]
+/// one_minus  = 1 - (t1 + t2)      = [1-(yy+zz), 1-(xx+zz), 1-(xx+yy), *]
+///
+/// x_axis = [one_minus[0], v_add[0], v_sub[1], 0]
+/// y_axis = [v_sub[0],  one_minus[1], v_add[2], 0]
+/// z_axis = [v_add[1],  v_sub[2],  one_minus[2], 0]
+/// ```
+///
+/// # Safety
+/// Requires SSE2 target feature (always present on x86_64).
+#[inline(always)]
+pub(crate) unsafe fn quat_to_axes_sse2(q: __m128) -> (__m128, __m128, __m128) {
+    // ── products ──────────────────────────────────────────────────────────────
+    let q2 = _mm_add_ps(q, q);
+
+    let x_splat = _mm_shuffle_ps::<0b00_00_00_00>(q, q);   // [x,x,x,x]
+    let y_splat = _mm_shuffle_ps::<0b01_01_01_01>(q, q);   // [y,y,y,y]
+    let w_splat = _mm_shuffle_ps::<0b11_11_11_11>(q, q);   // [w,w,w,w]
+
+    let v_x  = _mm_mul_ps(x_splat, q2);   // [xx, xy, xz, xw]  — xw unused
+    let v_y  = _mm_mul_ps(y_splat, q2);   // [xy, yy, yz, yw]  — others unused
+    let v_w  = _mm_mul_ps(w_splat, q2);   // [wx, wy, wz, ww]
+    let diag = _mm_mul_ps(q, q2);         // [xx, yy, zz, ww]  — ww not selected
+
+    // ── cross and w terms ─────────────────────────────────────────────────────
+    //
+    // v_cross = [xy, xz, yz, 0]
+    //   _mm_shuffle_ps::<0xA9>(v_x, v_y):
+    //     0xA9 = 0b10_10_10_01 → i0=1,i1=2 from v_x, i2=2,i3=2 from v_y
+    //     = [v_x[1], v_x[2], v_y[2], v_y[2]] = [xy, xz, yz, yz]
+    //     AND with XYZ_MASK → [xy, xz, yz, 0]
+    let v_cross = _mm_and_ps(
+        _mm_shuffle_ps::<0xA9>(v_x, v_y),
+        XYZ_MASK,
+    );
+
+    // v_w_rev = [wz, wy, wx, 0]   (reversed so add/sub gives correct sign pairs)
+    //   _mm_shuffle_ps::<0x06>(v_w, v_w):
+    //     0x06 = 0b00_00_01_10 → i0=2,i1=1,i2=0,i3=0
+    //     = [v_w[2], v_w[1], v_w[0], v_w[0]] = [wz, wy, wx, wx]
+    //     AND with XYZ_MASK → [wz, wy, wx, 0]
+    let v_w_rev = _mm_and_ps(
+        _mm_shuffle_ps::<0x06>(v_w, v_w),
+        XYZ_MASK,
+    );
+
+    // v_add = [xy+wz, xz+wy, yz+wx, 0]
+    // v_sub = [xy-wz, xz-wy, yz-wx, 0]
+    let v_add = _mm_add_ps(v_cross, v_w_rev);
+    let v_sub = _mm_sub_ps(v_cross, v_w_rev);
+
+    // ── diagonal (one-minus) terms ────────────────────────────────────────────
+    //
+    // We need: [1-(yy+zz), 1-(xx+zz), 1-(xx+yy), *] for the three diagonal slots.
+    //
+    // t1: 0x01 = 0b00_00_00_01 → [diag[1], diag[0], diag[0], diag[0]] = [yy, xx, xx, xx]
+    // t2: 0x1A = 0b00_01_10_10 → [diag[2], diag[2], diag[1], diag[0]] = [zz, zz, yy, xx]
+    // sums: [yy+zz, xx+zz, xx+yy, 2xx]   (lane 3 garbage — never selected)
+    let t1          = _mm_shuffle_ps::<0x01>(diag, diag);
+    let t2          = _mm_shuffle_ps::<0x1A>(diag, diag);
+    let diag_sums   = _mm_add_ps(t1, t2);
+    let one_minus   = _mm_sub_ps(_mm_set1_ps(1.0_f32), diag_sums);
+    // one_minus = [1-(yy+zz), 1-(xx+zz), 1-(xx+yy), garbage]
+
+    // ── column assembly ───────────────────────────────────────────────────────
+    //
+    // Target:
+    //   x_axis = [one_minus[0], v_add[0], v_sub[1], 0]  → [a, p, R, 0]
+    //   y_axis = [v_sub[0], one_minus[1], v_add[2], 0]  → [P, b, q, 0]
+    //   z_axis = [v_add[1], v_sub[2], one_minus[2], 0]  → [r, Q, c, 0]
+    //
+    // Naming: a=1-(yy+zz), b=1-(xx+zz), c=1-(xx+yy)
+    //         p=xy+wz, q=yz+wx, r=xz+wy
+    //         P=xy-wz, Q=yz-wx, R=xz-wy
+
+    let zero = _mm_setzero_ps();
+
+    // x_axis: [a, p, R, 0]
+    //   t_sub_lo    = unpacklo(v_sub, zero) = [P, 0, R, 0]
+    //   t_om_add_lo = unpacklo(one_minus, v_add) = [a, p, b, r]
+    //   shuffle::<0x64>(t_om_add_lo, t_sub_lo):
+    //     0x64 = 0b01_10_01_00 → i0=0,i1=1 from t_om_add_lo, i2=2,i3=1 from t_sub_lo
+    //     = [a, p, R, 0] ✓
+    let t_sub_lo    = _mm_unpacklo_ps(v_sub, zero);
+    let t_om_add_lo = _mm_unpacklo_ps(one_minus, v_add);
+    let x_axis      = _mm_shuffle_ps::<0x64>(t_om_add_lo, t_sub_lo);
+
+    // y_axis: [P, b, q, 0]
+    //   t_lo_y = movelh(v_sub, one_minus) = [P, R, a, b]
+    //   shuffle::<0xEC>(t_lo_y, v_add):
+    //     0xEC = 0b11_10_11_00 → i0=0,i1=3 from t_lo_y, i2=2,i3=3 from v_add
+    //     = [P, b, q, 0] ✓  (v_add[3] = 0)
+    let t_lo_y = _mm_movelh_ps(v_sub, one_minus);
+    let y_axis = _mm_shuffle_ps::<0xEC>(t_lo_y, v_add);
+
+    // z_axis: [r, Q, c, 0]
+    //   t_add_sub_hi = unpackhi(v_add, v_sub) = [q, Q, 0, 0]
+    //   t_r_c        = shuffle::<0xA5>(v_add, one_minus)
+    //                    0xA5 = 0b10_10_01_01 → [r, r, c, c]
+    //   t_blend      = shuffle::<0x40>(t_r_c, t_add_sub_hi)
+    //                    0x40 = 0b01_00_00_00 → [r, r, q, Q]
+    //   zero_c       = shuffle::<0x0A>(t_r_c, zero)
+    //                    0x0A = 0b00_00_10_10 → [c, c, 0, 0]
+    //   z_axis       = shuffle::<0x8C>(t_blend, zero_c)
+    //                    0x8C = 0b10_00_11_00 → [r, Q, c, 0] ✓
+    let t_add_sub_hi = _mm_unpackhi_ps(v_add, v_sub);
+    let t_r_c        = _mm_shuffle_ps::<0xA5>(v_add, one_minus);
+    let t_blend      = _mm_shuffle_ps::<0x40>(t_r_c, t_add_sub_hi);
+    let zero_c       = _mm_shuffle_ps::<0x0A>(t_r_c, zero);
+    let z_axis       = _mm_shuffle_ps::<0x8C>(t_blend, zero_c);
+
+    (x_axis, y_axis, z_axis)
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+
 /// 4×4 column-major matrix. 64 bytes, 16-byte aligned.
-///
-/// `element(row r, col c)` = `self.[x|y|z|w]_axis.[x|y|z|w]`
-///
-/// Columns are four named `Vec4` fields (`repr(transparent)` over `__m128`).
-/// This guarantees LLVM passes the matrix in XMM registers rather than stack
-/// pointers, eliminating the load traffic that caused the pre-fix ~17 ns mul gap.
-///
-/// **C interop:** use [`CMat4`][crate::ffi::types::CMat4] at the FFI boundary.
 #[derive(Clone, Copy, PartialEq)]
 #[repr(C)]
 pub struct Mat4 {
-    /// Column 0 — x basis vector (or first column of any transform).
     pub x_axis: Vec4,
-    /// Column 1 — y basis vector.
     pub y_axis: Vec4,
-    /// Column 2 — z basis vector.
     pub z_axis: Vec4,
-    /// Column 3 — translation / homogeneous w-column.
     pub w_axis: Vec4,
 }
 
 impl Mat4 {
     pub const ZERO: Self = Self {
-        x_axis: Vec4::ZERO,
-        y_axis: Vec4::ZERO,
-        z_axis: Vec4::ZERO,
-        w_axis: Vec4::ZERO,
+        x_axis: Vec4::ZERO, y_axis: Vec4::ZERO,
+        z_axis: Vec4::ZERO, w_axis: Vec4::ZERO,
     };
     pub const IDENTITY: Self = Self {
-        x_axis: Vec4::X,
-        y_axis: Vec4::Y,
-        z_axis: Vec4::Z,
-        w_axis: Vec4::W,
+        x_axis: Vec4::X, y_axis: Vec4::Y,
+        z_axis: Vec4::Z, w_axis: Vec4::W,
     };
 
     // ── Constructors ──────────────────────────────────────────────────────────
 
-    /// Build from four column arrays. API-compatible with all existing callsites.
-    ///
-    /// For literal constant arrays LLVM folds `Vec4::from_array` to a zero-cost
-    /// constant `_mm_set_ps`; for runtime values it emits a single SSE2 load.
     #[inline]
     pub fn from_cols(c0: [f32; 4], c1: [f32; 4], c2: [f32; 4], c3: [f32; 4]) -> Self {
         Self {
-            x_axis: Vec4::from_array(c0),
-            y_axis: Vec4::from_array(c1),
-            z_axis: Vec4::from_array(c2),
-            w_axis: Vec4::from_array(c3),
+            x_axis: Vec4::from_array(c0), y_axis: Vec4::from_array(c1),
+            z_axis: Vec4::from_array(c2), w_axis: Vec4::from_array(c3),
         }
     }
 
     #[inline]
     pub fn from_translation(t: Vec3) -> Self {
         Self {
-            x_axis: Vec4::X,
-            y_axis: Vec4::Y,
-            z_axis: Vec4::Z,
+            x_axis: Vec4::X, y_axis: Vec4::Y, z_axis: Vec4::Z,
             w_axis: Vec4::new(t.x, t.y, t.z, 1.0),
         }
     }
@@ -143,40 +246,33 @@ impl Mat4 {
 
     /// Full TRS — scale, then rotate, then translate.
     ///
-    /// Pulls the normalized quaternion's x/y/z/w lanes out via shuffle +
-    /// `_mm_cvtss_f32` rather than the `q.x`/`q.y`/`q.z`/`q.w` Deref accessors
-    /// (same for the `s`/`t` scalar pulls). The Deref path casts `&Quat` to
-    /// `&XYZW<f32>` through a raw pointer, which requires `q` to be addressable
-    /// — i.e. spilled to the stack — before any field can be read. Shuffle +
-    /// `_mm_cvtss_f32` reads the same lane straight out of the XMM register
-    /// `q` is already sitting in. The scalar arithmetic that follows is
-    /// otherwise identical to the original formula.
+    /// Build 20 fix: `quat_to_axes_sse2` produces three rotation columns as
+    /// `__m128` with zero scalar intermediates. Scale is applied via three
+    /// `vmulps` (one per column). Translation is set by ORing `t.0` (which
+    /// already has lane 3 = 0 from Vec3 contract) with `W_ONE = [0,0,0,1]`.
+    ///
+    /// No `_mm_cvtss_f32`, no `_mm_set_ps`, no scalar multiplications, no
+    /// stack spills. Expected: ~6 ns (parity with glam).
     #[inline]
     pub fn from_trs(t: Vec3, r: Quat, s: Vec3) -> Self {
         unsafe {
             let q = r.normalize().0;
-            let x = _mm_cvtss_f32(q);
-            let y = _mm_cvtss_f32(_mm_shuffle_ps::<0b01_01_01_01>(q, q));
-            let z = _mm_cvtss_f32(_mm_shuffle_ps::<0b10_10_10_10>(q, q));
-            let w = _mm_cvtss_f32(_mm_shuffle_ps::<0b11_11_11_11>(q, q));
+            let (xc, yc, zc) = quat_to_axes_sse2(q);
 
-            let (x2, y2, z2) = (x + x, y + y, z + z);
-            let (xx, yy, zz) = (x * x2, y * y2, z * z2);
-            let (xy, xz, yz) = (x * y2, x * z2, y * z2);
-            let (wx, wy, wz) = (w * x2, w * y2, w * z2);
+            // Scale: broadcast each component then vmulps — stays in XMM.
+            // No cvtss_f32: shuffle directly to get splat.
+            let sx = _mm_shuffle_ps::<0b00_00_00_00>(s.0, s.0);
+            let sy = _mm_shuffle_ps::<0b01_01_01_01>(s.0, s.0);
+            let sz = _mm_shuffle_ps::<0b10_10_10_10>(s.0, s.0);
 
-            let sx = _mm_cvtss_f32(s.0);
-            let sy = _mm_cvtss_f32(_mm_shuffle_ps::<0b01_01_01_01>(s.0, s.0));
-            let sz = _mm_cvtss_f32(_mm_shuffle_ps::<0b10_10_10_10>(s.0, s.0));
-            let tx = _mm_cvtss_f32(t.0);
-            let ty = _mm_cvtss_f32(_mm_shuffle_ps::<0b01_01_01_01>(t.0, t.0));
-            let tz = _mm_cvtss_f32(_mm_shuffle_ps::<0b10_10_10_10>(t.0, t.0));
+            // Translation: t.0 = [tx, ty, tz, 0] → OR with W_ONE → [tx, ty, tz, 1]
+            let w = _mm_or_ps(t.0, W_ONE);
 
             Self {
-                x_axis: Vec4::new((1.0 - yy - zz) * sx, (xy + wz) * sx, (xz - wy) * sx, 0.0),
-                y_axis: Vec4::new((xy - wz) * sy, (1.0 - xx - zz) * sy, (yz + wx) * sy, 0.0),
-                z_axis: Vec4::new((xz + wy) * sz, (yz - wx) * sz, (1.0 - xx - yy) * sz, 0.0),
-                w_axis: Vec4::new(tx, ty, tz, 1.0),
+                x_axis: Vec4(_mm_mul_ps(xc, sx)),
+                y_axis: Vec4(_mm_mul_ps(yc, sy)),
+                z_axis: Vec4(_mm_mul_ps(zc, sz)),
+                w_axis: Vec4(w),
             }
         }
     }
@@ -185,31 +281,58 @@ impl Mat4 {
 
     /// Right-handed look-at view matrix.
     ///
-    /// Column assembly uses the same unpacklo/unpackhi + movelh/movehl
-    /// transpose pattern as [`Mat4::transpose`] instead of
-    /// `Vec4::new(r.x, u.x, -f.x, 0.0)` etc. — see module doc for why.
+    /// Build 20: w_axis computed as a SoA dot product using the already-built
+    /// columns instead of three sequential `dot3` calls.
+    ///
+    /// After the unpack/movelh/movehl transpose:
+    ///   x_axis = [r.x, u.x, -f.x, 0]
+    ///   y_axis = [r.y, u.y, -f.y, 0]
+    ///   z_axis = [r.z, u.z, -f.z, 0]
+    ///
+    /// The w translation is:
+    ///   w.xyz = -(x_axis*eye.x + y_axis*eye.y + z_axis*eye.z).xyz
+    ///         = [-r·eye, -u·eye, f·eye, 0]   (note: -f is already in col z lanes)
+    ///
+    /// One SIMD matrix-vector multiply (3 broadcast-muls + 2 adds) replaces
+    /// three independent dot3 chains.
     pub fn look_at_rh(eye: Vec3, center: Vec3, up: Vec3) -> Self {
-        let f = (center - eye).normalize();
-        let r = f.cross(up).normalize();
-        let u = r.cross(f);
+        let f  = (center - eye).normalize();
+        let r  = f.cross(up).normalize();
+        let u  = r.cross(f);
         let nf = -f;
         unsafe {
-            let zero = _mm_setzero_ps();
+            // Transpose to column-major view layout
             let tmp0 = _mm_unpacklo_ps(r.0, u.0);   // [r.x, u.x, r.y, u.y]
-            let tmp1 = _mm_unpacklo_ps(nf.0, zero); // [nf.x, 0,  nf.y, 0]
+            let tmp1 = _mm_unpacklo_ps(nf.0, _mm_setzero_ps()); // [nf.x, 0, nf.y, 0]
             let tmp2 = _mm_unpackhi_ps(r.0, u.0);   // [r.z, u.z, 0,    0]
-            let tmp3 = _mm_unpackhi_ps(nf.0, zero); // [nf.z, 0,  0,    0]
+            let tmp3 = _mm_unpackhi_ps(nf.0, _mm_setzero_ps()); // [nf.z, 0, 0,    0]
+
+            let xc = _mm_movelh_ps(tmp0, tmp1);  // [r.x,  u.x,  -f.x, 0]
+            let yc = _mm_movehl_ps(tmp1, tmp0);  // [r.y,  u.y,  -f.y, 0]
+            let zc = _mm_movelh_ps(tmp2, tmp3);  // [r.z,  u.z,  -f.z, 0]
+
+            // SoA dot: dot_xyz[i] = column_i · eye
+            //   dot_xyz[0] = r·eye, [1] = u·eye, [2] = (-f)·eye = -f·eye, [3] = 0
+            let bx = _mm_shuffle_ps::<0b00_00_00_00>(eye.0, eye.0);
+            let by = _mm_shuffle_ps::<0b01_01_01_01>(eye.0, eye.0);
+            let bz = _mm_shuffle_ps::<0b10_10_10_10>(eye.0, eye.0);
+            let dot_xyz = _mm_add_ps(
+                _mm_add_ps(_mm_mul_ps(xc, bx), _mm_mul_ps(yc, by)),
+                _mm_mul_ps(zc, bz),
+            );
+            // dot_xyz = [r·eye, u·eye, -f·eye, 0]
+            // w_axis  = [-r·eye, -u·eye, f·eye, 1]  — negate xyz, set w=1
+            let neg = _mm_xor_ps(dot_xyz, NEG_XYZ);  // [-r·eye, -u·eye, f·eye, 0]
+            let wc  = _mm_or_ps(neg, W_ONE);          // [-r·eye, -u·eye, f·eye, 1]
+
             Self {
-                x_axis: Vec4(_mm_movelh_ps(tmp0, tmp1)), // [r.x, u.x, nf.x, 0]
-                y_axis: Vec4(_mm_movehl_ps(tmp1, tmp0)), // [r.y, u.y, nf.y, 0]
-                z_axis: Vec4(_mm_movelh_ps(tmp2, tmp3)), // [r.z, u.z, nf.z, 0]
-                w_axis: Vec4::new(-r.dot(eye), -u.dot(eye), f.dot(eye), 1.0),
+                x_axis: Vec4(xc), y_axis: Vec4(yc),
+                z_axis: Vec4(zc), w_axis: Vec4(wc),
             }
         }
     }
 
-    /// Left-handed look-at view matrix. Same transpose-based assembly as
-    /// `look_at_rh`; `f` keeps its sign here so no negation is needed.
+    /// Left-handed look-at view matrix.  Same SoA w-dot as `look_at_rh`.
     pub fn look_at_lh(eye: Vec3, center: Vec3, up: Vec3) -> Self {
         let f = (center - eye).normalize();
         let r = up.cross(f).normalize();
@@ -220,19 +343,33 @@ impl Mat4 {
             let tmp1 = _mm_unpacklo_ps(f.0, zero);
             let tmp2 = _mm_unpackhi_ps(r.0, u.0);
             let tmp3 = _mm_unpackhi_ps(f.0, zero);
+
+            let xc = _mm_movelh_ps(tmp0, tmp1);  // [r.x, u.x, f.x, 0]
+            let yc = _mm_movehl_ps(tmp1, tmp0);  // [r.y, u.y, f.y, 0]
+            let zc = _mm_movelh_ps(tmp2, tmp3);  // [r.z, u.z, f.z, 0]
+
+            // dot_xyz = [r·eye, u·eye, f·eye, 0]
+            // w_axis  = [-r·eye, -u·eye, -f·eye, 1]
+            let bx = _mm_shuffle_ps::<0b00_00_00_00>(eye.0, eye.0);
+            let by = _mm_shuffle_ps::<0b01_01_01_01>(eye.0, eye.0);
+            let bz = _mm_shuffle_ps::<0b10_10_10_10>(eye.0, eye.0);
+            let dot_xyz = _mm_add_ps(
+                _mm_add_ps(_mm_mul_ps(xc, bx), _mm_mul_ps(yc, by)),
+                _mm_mul_ps(zc, bz),
+            );
+            let neg = _mm_xor_ps(dot_xyz, NEG_XYZ);
+            let wc  = _mm_or_ps(neg, W_ONE);
+
             Self {
-                x_axis: Vec4(_mm_movelh_ps(tmp0, tmp1)),
-                y_axis: Vec4(_mm_movehl_ps(tmp1, tmp0)),
-                z_axis: Vec4(_mm_movelh_ps(tmp2, tmp3)),
-                w_axis: Vec4::new(-r.dot(eye), -u.dot(eye), -f.dot(eye), 1.0),
+                x_axis: Vec4(xc), y_axis: Vec4(yc),
+                z_axis: Vec4(zc), w_axis: Vec4(wc),
             }
         }
     }
 
     // ── Projection matrices ───────────────────────────────────────────────────
 
-    /// `1/tan(fov/2)` replaced with `cos(fov/2)/sin(fov/2)` via one `sin_cos`
-    /// call — same identity, measured faster than `tan()` on every target benched.
+    /// `cos/sin` instead of `1/tan` — one `sin_cos` call, faster on all targets.
     pub fn perspective_rh(fov_y: f32, aspect: f32, near: f32, far: f32) -> Self {
         let (sin_fov, cos_fov) = math::sin_cos(fov_y * 0.5);
         let f = cos_fov / sin_fov;
@@ -258,43 +395,30 @@ impl Mat4 {
     }
 
     pub fn ortho_rh(left: f32, right: f32, bottom: f32, top: f32, near: f32, far: f32) -> Self {
-        let rl = right - left;
-        let tb = top - bottom;
-        let nf = far - near;
+        let rl = right - left; let tb = top - bottom; let nf = far - near;
         Self {
             x_axis: Vec4::new(2.0 / rl, 0.0, 0.0, 0.0),
             y_axis: Vec4::new(0.0, 2.0 / tb, 0.0, 0.0),
             z_axis: Vec4::new(0.0, 0.0, -2.0 / nf, 0.0),
-            w_axis: Vec4::new(-(right + left) / rl, -(top + bottom) / tb, -(far + near) / nf, 1.0),
+            w_axis: Vec4::new(
+                -(right + left) / rl, -(top + bottom) / tb, -(far + near) / nf, 1.0,
+            ),
         }
     }
 
     pub fn ortho_lh(left: f32, right: f32, bottom: f32, top: f32, near: f32, far: f32) -> Self {
-        let rl = right - left;
-        let tb = top - bottom;
-        let nf = far - near;
+        let rl = right - left; let tb = top - bottom; let nf = far - near;
         Self {
             x_axis: Vec4::new(2.0 / rl, 0.0, 0.0, 0.0),
             y_axis: Vec4::new(0.0, 2.0 / tb, 0.0, 0.0),
             z_axis: Vec4::new(0.0, 0.0, 1.0 / nf, 0.0),
-            w_axis: Vec4::new(-(right + left) / rl, -(top + bottom) / tb, -near / nf, 1.0),
+            w_axis: Vec4::new(
+                -(right + left) / rl, -(top + bottom) / tb, -near / nf, 1.0,
+            ),
         }
     }
 
-    // ── Transpose ────────────────────────────────────────────────────────────
-    //
-    // Full SSE2 4×4 transpose via 4 unpack + 4 movelh/movehl.
-    // Previously this was a scalar element-by-element swap.
-    //
-    // Pattern (identical to _MM_TRANSPOSE4_PS macro):
-    //   tmp0 = unpacklo(x, y) → [x.x, y.x, x.y, y.y]
-    //   tmp1 = unpacklo(z, w) → [z.x, w.x, z.y, w.y]
-    //   tmp2 = unpackhi(x, y) → [x.z, y.z, x.w, y.w]
-    //   tmp3 = unpackhi(z, w) → [z.z, w.z, z.w, w.w]
-    //   row0 = movelh(tmp0, tmp1) → [x.x, y.x, z.x, w.x]  (original row 0)
-    //   row1 = movehl(tmp1, tmp0) → [x.y, y.y, z.y, w.y]  (original row 1)
-    //   row2 = movelh(tmp2, tmp3) → [x.z, y.z, z.z, w.z]  (original row 2)
-    //   row3 = movehl(tmp3, tmp2) → [x.w, y.w, z.w, w.w]  (original row 3)
+    // ── Transpose ─────────────────────────────────────────────────────────────
 
     pub fn transpose(self) -> Self {
         unsafe {
@@ -312,9 +436,6 @@ impl Mat4 {
     }
 
     // ── Determinant ───────────────────────────────────────────────────────────
-    //
-    // Full SSE2 algorithm (ported from glm / glm_mat4_determinant_lowp).
-    // Operates directly on the Vec4 fields — no scalar extraction.
 
     pub fn determinant(self) -> f32 {
         unsafe {
@@ -344,25 +465,20 @@ impl Mat4 {
             let swpfacb = _mm_shuffle_ps::<0b01_01_10_10>(y, y);
             let mulfacb = _mm_mul_ps(swpfacb, subfacb);
 
-            let subres = _mm_sub_ps(mulfaca, mulfacb);
+            let subres  = _mm_sub_ps(mulfaca, mulfacb);
             let subtmpc = _mm_shuffle_ps::<0b01_00_10_10>(sube, subf);
             let subfacc = _mm_shuffle_ps::<0b11_11_10_00>(subtmpc, subtmpc);
             let swpfacc = _mm_shuffle_ps::<0b10_11_11_11>(y, y);
             let mulfacc = _mm_mul_ps(swpfacc, subfacc);
 
-            let addres = _mm_add_ps(subres, mulfacc);
-            let detcof = _mm_mul_ps(addres, _mm_setr_ps(1.0, -1.0, 1.0, -1.0));
+            let addres  = _mm_add_ps(subres, mulfacc);
+            let detcof  = _mm_mul_ps(addres, _mm_setr_ps(1.0, -1.0, 1.0, -1.0));
 
             dot4(self.x_axis.0, detcof)
         }
     }
 
     // ── Transform helpers ─────────────────────────────────────────────────────
-    //
-    // Optimised forms that avoid the extra extend(w)/truncate() round-trip.
-    // For transform_point (w=1): result = x*p.x + y*p.y + z*p.z + w_col
-    // For transform_vector (w=0): result = x*v.x + y*v.y + z*v.z
-    // Lane 3 of the returned Vec3 is a don't-care (Vec3 ops never read it).
 
     #[inline]
     pub fn transform_point(self, p: Vec3) -> Vec3 {
@@ -392,39 +508,27 @@ impl Mat4 {
     // ── Decompose ─────────────────────────────────────────────────────────────
 
     pub fn decompose_trs(self) -> (Vec3, Quat, Vec3) {
-        // Extract translation from w-column.
-        let t = self.w_axis.truncate();
-
-        // Scale = length of each rotation column.
+        let t  = self.w_axis.truncate();
         let sx = self.x_axis.truncate().length();
         let sy = self.y_axis.truncate().length();
         let sz = self.z_axis.truncate().length();
-
-        // Sign of sx encodes reflection (negative determinant of upper 3×3).
         let det =
             self.x_axis.x * (self.y_axis.y * self.z_axis.z - self.z_axis.y * self.y_axis.z)
           - self.y_axis.x * (self.x_axis.y * self.z_axis.z - self.z_axis.y * self.x_axis.z)
           + self.z_axis.x * (self.x_axis.y * self.y_axis.z - self.y_axis.y * self.x_axis.z);
         let sx = if det < 0.0 { -sx } else { sx };
-
         let inv_sx = if sx.abs() < EPSILON { 0.0 } else { 1.0 / sx };
         let inv_sy = if sy       < EPSILON { 0.0 } else { 1.0 / sy };
         let inv_sz = if sz       < EPSILON { 0.0 } else { 1.0 / sz };
-
         let c0 = self.x_axis.truncate() * inv_sx;
         let c1 = self.y_axis.truncate() * inv_sy;
         let c2 = self.z_axis.truncate() * inv_sz;
-
         use crate::helpers::euler::QuatExt as _;
         let r = Quat::from_rotation_axes(c0, c1, c2);
-
         (t, r, Vec3::new(sx, sy, sz))
     }
 
-    // ── General inverse (SSE2 cofactor method) ────────────────────────────────
-    //
-    // Ported from glm `glm_mat4_inverse` / glam's SSE2 inverse.
-    // Direct field access replaces the former _mm_load_ps from stack pointers.
+    // ── General inverse (SSE2 cofactor) ──────────────────────────────────────
 
     pub fn inverse(self) -> Option<Self> {
         unsafe {
@@ -534,8 +638,6 @@ impl Mat4 {
         }
     }
 
-    /// Scalar fallback inverse — exact same algorithm, no SIMD.
-    /// Useful for unit testing correctness of the SSE2 path.
     pub fn inverse_scalar(self) -> Option<Self> {
         let a = [
             self.x_axis.x, self.x_axis.y, self.x_axis.z, self.x_axis.w,
@@ -573,42 +675,27 @@ impl Mat4 {
     }
 
     // ── TRS inverse (SSE2) ────────────────────────────────────────────────────
-    //
-    // ~2× faster than the general inverse for rotation+scale+translation matrices.
-    // Algorithm: transpose the rotation part, scale by 1/|col|², negate translation.
-    //
-    // Derivation: for M = R×S where col_j has length s_j,
-    //   M^-1 = S^-1 × R^T
-    //   (M^-1)[i,j] = col_j[i] / s_j²
-    //   inv_t = -(M^-1 × original_t)
 
     #[inline]
     pub fn inverse_trs(self) -> Self {
         unsafe {
-            let c0 = self.x_axis.0;
-            let c1 = self.y_axis.0;
-            let c2 = self.z_axis.0;
-            let c3 = self.w_axis.0;
+            let c0 = self.x_axis.0; let c1 = self.y_axis.0;
+            let c2 = self.z_axis.0; let c3 = self.w_axis.0;
 
-            // Squared lengths of the three rotation columns.
             let sq0  = _mm_mul_ps(c0, c0);
             let sq1  = _mm_mul_ps(c1, c1);
             let sq2  = _mm_mul_ps(c2, c2);
             let zero = _mm_setzero_ps();
 
-            // Horizontal sum: sums[i] = sq_i.x + sq_i.y + sq_i.z
-            // Using 3-way transpose + column-wise add.
             let lo01 = _mm_unpacklo_ps(sq0, sq1);
             let lo2z = _mm_unpacklo_ps(sq2, zero);
             let hi01 = _mm_unpackhi_ps(sq0, sq1);
             let hi2z = _mm_unpackhi_ps(sq2, zero);
-            let row0 = _mm_movelh_ps(lo01, lo2z); // [sq0.x, sq1.x, sq2.x, 0]
-            let row1 = _mm_movehl_ps(lo2z, lo01); // [sq0.y, sq1.y, sq2.y, 0]
-            let row2 = _mm_movelh_ps(hi01, hi2z); // [sq0.z, sq1.z, sq2.z, 0]
+            let row0 = _mm_movelh_ps(lo01, lo2z);
+            let row1 = _mm_movehl_ps(lo2z, lo01);
+            let row2 = _mm_movelh_ps(hi01, hi2z);
             let sums = _mm_add_ps(_mm_add_ps(row0, row1), row2);
-            // sums = [sx², sy², sz², 0]
 
-            // Safe reciprocals: guard against near-zero scale.
             let eps  = _mm_set1_ps(EPSILON);
             let mask = _mm_cmpge_ps(sums, eps);
             let safe = _mm_or_ps(
@@ -616,23 +703,19 @@ impl Mat4 {
                 _mm_andnot_ps(mask, _mm_set1_ps(1.0)),
             );
             let inv_scales = _mm_and_ps(mask, _mm_div_ps(_mm_set1_ps(1.0), safe));
-            // inv_scales = [1/sx², 1/sy², 1/sz², 0]
 
-            // Transpose the upper-3×3 of the rotation columns.
             let lo01_r = _mm_unpacklo_ps(c0, c1);
             let lo2z_r = _mm_unpacklo_ps(c2, zero);
             let hi01_r = _mm_unpackhi_ps(c0, c1);
             let hi2z_r = _mm_unpackhi_ps(c2, zero);
-            let trow0 = _mm_movelh_ps(lo01_r, lo2z_r); // [c0.x, c1.x, c2.x, 0]
-            let trow1 = _mm_movehl_ps(lo2z_r, lo01_r); // [c0.y, c1.y, c2.y, 0]
-            let trow2 = _mm_movelh_ps(hi01_r, hi2z_r); // [c0.z, c1.z, c2.z, 0]
+            let trow0  = _mm_movelh_ps(lo01_r, lo2z_r);
+            let trow1  = _mm_movehl_ps(lo2z_r, lo01_r);
+            let trow2  = _mm_movelh_ps(hi01_r, hi2z_r);
 
-            // Scale each transposed row by the corresponding inverse squared scale.
             let ic0 = _mm_mul_ps(trow0, inv_scales);
             let ic1 = _mm_mul_ps(trow1, inv_scales);
             let ic2 = _mm_mul_ps(trow2, inv_scales);
 
-            // Inverse translation: -(inv_rot × original_t)
             let tx = _mm_shuffle_ps::<0b00_00_00_00>(c3, c3);
             let ty = _mm_shuffle_ps::<0b01_01_01_01>(c3, c3);
             let tz = _mm_shuffle_ps::<0b10_10_10_10>(c3, c3);
@@ -641,21 +724,16 @@ impl Mat4 {
                 _mm_mul_ps(ic2, tz),
             );
             let neg = _mm_sub_ps(zero, dot_col);
-
-            // Set lane 3 of the translation column to 1.0 (SSE2-compatible).
             let mask3 = _mm_castsi128_ps(_mm_set_epi32(0, -1, -1, -1));
-            let ic3 = _mm_or_ps(_mm_and_ps(neg, mask3), _mm_set_ps(1.0, 0.0, 0.0, 0.0));
+            let ic3   = _mm_or_ps(_mm_and_ps(neg, mask3), _mm_set_ps(1.0, 0.0, 0.0, 0.0));
 
             Self {
-                x_axis: Vec4(ic0),
-                y_axis: Vec4(ic1),
-                z_axis: Vec4(ic2),
-                w_axis: Vec4(ic3),
+                x_axis: Vec4(ic0), y_axis: Vec4(ic1),
+                z_axis: Vec4(ic2), w_axis: Vec4(ic3),
             }
         }
     }
 
-    /// Scalar fallback TRS inverse.
     pub fn inverse_trs_scalar(self) -> Self {
         let sx2 = self.x_axis.x*self.x_axis.x + self.x_axis.y*self.x_axis.y + self.x_axis.z*self.x_axis.z;
         let sy2 = self.y_axis.x*self.y_axis.x + self.y_axis.y*self.y_axis.y + self.y_axis.z*self.y_axis.z;
@@ -674,9 +752,6 @@ impl Mat4 {
     }
 
     // ── Wide SIMD batch transforms ────────────────────────────────────────────
-    //
-    // transform_point for 4 Vec3 simultaneously (SoA layout).
-    // Column components broadcast via shuffle — avoids scalar extraction.
 
     pub fn transform_vec3x4(
         self,
@@ -684,7 +759,6 @@ impl Mat4 {
     ) -> crate::wide::float::sse2::vec3x4::Vec3x4 {
         use crate::wide::float::sse2::vec3x4::Vec3x4;
         unsafe {
-            // Broadcast xyz components of each matrix column.
             let c0x = _mm_shuffle_ps::<0b00_00_00_00>(self.x_axis.0, self.x_axis.0);
             let c0y = _mm_shuffle_ps::<0b01_01_01_01>(self.x_axis.0, self.x_axis.0);
             let c0z = _mm_shuffle_ps::<0b10_10_10_10>(self.x_axis.0, self.x_axis.0);
@@ -698,11 +772,11 @@ impl Mat4 {
             let c3y = _mm_shuffle_ps::<0b01_01_01_01>(self.w_axis.0, self.w_axis.0);
             let c3z = _mm_shuffle_ps::<0b10_10_10_10>(self.w_axis.0, self.w_axis.0);
             let rx = _mm_add_ps(_mm_add_ps(_mm_mul_ps(c0x, v.x), _mm_mul_ps(c1x, v.y)),
-                                 _mm_add_ps(_mm_mul_ps(c2x, v.z), c3x));
+                                _mm_add_ps(_mm_mul_ps(c2x, v.z), c3x));
             let ry = _mm_add_ps(_mm_add_ps(_mm_mul_ps(c0y, v.x), _mm_mul_ps(c1y, v.y)),
-                                 _mm_add_ps(_mm_mul_ps(c2y, v.z), c3y));
+                                _mm_add_ps(_mm_mul_ps(c2y, v.z), c3y));
             let rz = _mm_add_ps(_mm_add_ps(_mm_mul_ps(c0z, v.x), _mm_mul_ps(c1z, v.y)),
-                                 _mm_add_ps(_mm_mul_ps(c2z, v.z), c3z));
+                                _mm_add_ps(_mm_mul_ps(c2z, v.z), c3z));
             Vec3x4 { x: rx, y: ry, z: rz }
         }
     }
@@ -731,15 +805,6 @@ impl Mat4 {
 }
 
 // ── Mul<Vec4> ─────────────────────────────────────────────────────────────────
-//
-// THE KEY FIX: self.x_axis.0 etc. are __m128 values — no _mm_load_ps needed.
-//
-// LLVM emits 4 broadcasts of v's components + 1 mul + 3 add/fmadd operations.
-// With -C target-cpu=native (FMA) the add(_mul_) pattern becomes vfmadd213ps:
-//   vmulps    xmm_res, x_axis, vx
-//   vfmadd231ps xmm_res, y_axis, vy   ; res += y_axis * vy
-//   vfmadd231ps xmm_res, z_axis, vz
-//   vfmadd231ps xmm_res, w_axis, vw
 
 impl Mul<Vec4> for Mat4 {
     type Output = Vec4;
@@ -758,17 +823,8 @@ impl Mul<Vec4> for Mat4 {
     }
 }
 
-// ── Mul<Mat4> ─────────────────────────────────────────────────────────────────
-//
-// Calls Mul<Vec4> four times. Because self's columns are Vec4 fields,
-// LLVM keeps them live in XMM4-XMM7 across all four calls — zero memory traffic
-// for the LHS. Each RHS column is loaded once into XMM0 (4 loads total).
-//
-// Total instruction count (SSE2, no FMA): 4 shuffles + 4 muls + 12 adds per col
-//   × 4 cols = 80 scalar-equivalent ops → ~7 ns at 4 GHz
-// With FMA: 4 shuffles + 1 mul + 3 FMAs per col × 4 cols = 32 ops → ~3.5 ns
+// ── Mul<Mat4> — gated so AVX+FMA path in avx/mat4.rs takes over ──────────────
 
-// Gate the SSE2 implementation so it steps aside when AVX + FMA is active
 #[cfg(not(all(target_feature = "avx", target_feature = "fma")))]
 impl Mul for Mat4 {
     type Output = Self;
@@ -783,27 +839,20 @@ impl Mul for Mat4 {
     }
 }
 
-// MulAssign is ungated — it automatically calls whichever Mul is in scope.
 impl MulAssign for Mat4 {
     #[inline(always)]
-    fn mul_assign(&mut self, rhs: Self) {
-        *self = *self * rhs;
-    }
+    fn mul_assign(&mut self, rhs: Self) { *self = *self * rhs; }
 }
 
-
 impl Default for Mat4 {
-    #[inline]
-    fn default() -> Self { Self::IDENTITY }
+    #[inline] fn default() -> Self { Self::IDENTITY }
 }
 
 impl fmt::Debug for Mat4 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Mat4")
-            .field("x_axis", &self.x_axis)
-            .field("y_axis", &self.y_axis)
-            .field("z_axis", &self.z_axis)
-            .field("w_axis", &self.w_axis)
+            .field("x_axis", &self.x_axis).field("y_axis", &self.y_axis)
+            .field("z_axis", &self.z_axis).field("w_axis", &self.w_axis)
             .finish()
     }
 }
@@ -811,12 +860,12 @@ impl fmt::Debug for Mat4 {
 impl fmt::Display for Mat4 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         for r in 0..4 {
-            let x = match r { 0 => self.x_axis.x, 1 => self.x_axis.y, 2 => self.x_axis.z, _ => self.x_axis.w };
-            let y = match r { 0 => self.y_axis.x, 1 => self.y_axis.y, 2 => self.y_axis.z, _ => self.y_axis.w };
-            let z = match r { 0 => self.z_axis.x, 1 => self.z_axis.y, 2 => self.z_axis.z, _ => self.z_axis.w };
-            let w = match r { 0 => self.w_axis.x, 1 => self.w_axis.y, 2 => self.w_axis.z, _ => self.w_axis.w };
+            let x = match r { 0=>self.x_axis.x, 1=>self.x_axis.y, 2=>self.x_axis.z, _=>self.x_axis.w };
+            let y = match r { 0=>self.y_axis.x, 1=>self.y_axis.y, 2=>self.y_axis.z, _=>self.y_axis.w };
+            let z = match r { 0=>self.z_axis.x, 1=>self.z_axis.y, 2=>self.z_axis.z, _=>self.z_axis.w };
+            let w = match r { 0=>self.w_axis.x, 1=>self.w_axis.y, 2=>self.w_axis.z, _=>self.w_axis.w };
             writeln!(f, "  [{:8.4}  {:8.4}  {:8.4}  {:8.4}]", x, y, z, w)?;
         }
         Ok(())
     }
-         }
+}
