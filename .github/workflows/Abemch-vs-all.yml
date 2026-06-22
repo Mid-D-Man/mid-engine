@@ -1,16 +1,17 @@
-# .github/workflows/bemch-vs-all.yml
-name: mid-math — bench vs all
+name: A-mid-math — bench vs all
 
 on:
   workflow_dispatch:
     inputs:
       target_cpu:
         description: >
-          Compiler target-cpu. Controls which SIMD instructions rustc emits.
+          Compiler target-cpu or architecture configuration. Controls which SIMD instructions rustc emits.
           native     = all hardware features the runner has (AVX2+FMA on GitHub-hosted).
           x86-64-v3  = AVX2+FMA+BMI2 guaranteed (Haswell+) — use for OPT-7 AVX2 work.
           x86-64-v2  = SSE4.2 baseline — no AVX.
           x86-64     = SSE2 only — baseline numbers before AVX2 work lands.
+          neon       = ARM NEON acceleration (runs on native aarch64 runner).
+          wasm       = WebAssembly wasm32-wasip1 target + simd128 via wasmtime.
         required: true
         default: 'native'
         type: choice
@@ -19,25 +20,57 @@ on:
           - x86-64-v3
           - x86-64-v2
           - x86-64
+          - neon
+          - wasm
 
 env:
-  RUSTFLAGS: "-C target-cpu=${{ inputs.target_cpu }}"
   CARGO_TERM_COLOR: never                     # keep bench-vs-all-raw.txt ANSI-free
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true    # opt into Node.js 24 before forced cutover
 
 jobs:
   bench:
-    name: bench
-    runs-on: ubuntu-latest
+    name: bench (${{ inputs.target_cpu }})
+    runs-on: ${{ inputs.target_cpu == 'neon' && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}
 
     steps:
       - uses: actions/checkout@v4
+
+      # ── Setup environment flags based on target selection ──────────────────
+      - name: Configure target environment
+        run: |
+          if [ "${{ inputs.target_cpu }}" = "wasm" ]; then
+            echo "RUSTFLAGS=-C target-feature=+simd128" >> $GITHUB_ENV
+            echo "BENCH_TARGET=--target wasm32-wasip1" >> $GITHUB_ENV
+          elif [ "${{ inputs.target_cpu }}" = "neon" ]; then
+            echo "RUSTFLAGS=" >> $GITHUB_ENV
+            echo "BENCH_TARGET=" >> $GITHUB_ENV
+          else
+            echo "RUSTFLAGS=-C target-cpu=${{ inputs.target_cpu }}" >> $GITHUB_ENV
+            echo "BENCH_TARGET=" >> $GITHUB_ENV
+          fi
 
       - name: Set up Rust stable
         uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           toolchain: stable
           override: true
+          target: ${{ inputs.target_cpu == 'wasm' && 'wasm32-wasip1' || '' }}
+
+      # ── Extra setup steps required for WebAssembly execution ────────────────
+      - name: Install wasmtime
+        if: inputs.target_cpu == 'wasm'
+        uses: bytecodealliance/actions/wasmtime/setup@v1
+        with:
+          version: v25.0.2
+
+      - name: Configure WASM test runner
+        if: inputs.target_cpu == 'wasm'
+        run: |
+          mkdir -p .cargo
+          cat >> .cargo/config.toml << 'EOF'
+          [target.wasm32-wasip1]
+          runner = ["wasmtime", "run", "--allow-unknown-experimental-proposals", "--"]
+          EOF
 
       # ── Confirm what the runner and compiler actually have ──────────────────
       - name: Confirm CPU and compiler features
@@ -47,27 +80,35 @@ jobs:
             echo ""
             echo "| | |"
             echo "|---|---|"
-            echo "| Runner        | \`ubuntu-latest\` |"
+            echo "| Runner        | \`${{ inputs.target_cpu == 'neon' && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}\` |"
             echo "| target-cpu    | \`${{ inputs.target_cpu }}\` |"
-            echo "| RUSTFLAGS     | \`-C target-cpu=${{ inputs.target_cpu }}\` |"
+            echo "| RUSTFLAGS     | \`$RUSTFLAGS\` |"
             echo "| Rust          | \`$(rustc --version)\` |"
             echo "| Branch        | \`${{ github.ref_name }}\` |"
             echo "| Commit        | \`${GITHUB_SHA:0:8}\` |"
             echo ""
             echo "### Hardware SIMD flags (/proc/cpuinfo)"
             echo '```'
-            grep -m1 '^flags' /proc/cpuinfo \
-              | tr ' ' '\n' \
-              | grep -E '^(sse|avx|fma|bmi|aes|sha|vpclm)' \
-              | sort \
-              | paste - - - - - - -
+            if grep -q '^Features' /proc/cpuinfo; then
+              grep -m1 '^Features' /proc/cpuinfo | tr ' ' '\n' | grep -E '(neon|fp|asimd|sve)' | sort
+            elif grep -q '^flags' /proc/cpuinfo; then
+              grep -m1 '^flags' /proc/cpuinfo \
+                | tr ' ' '\n' \
+                | grep -E '^(sse|avx|fma|bmi|aes|sha|vpclm)' \
+                | sort \
+                | paste - - - - - - -
+            else
+              echo "No standard CPU flags found"
+            fi
             echo '```'
             echo ""
-            echo "### Rustc target_feature cfg for \`-C target-cpu=${{ inputs.target_cpu }}\`"
+            echo "### Rustc target_feature cfg"
             echo '```'
-            rustc --print cfg -C "target-cpu=${{ inputs.target_cpu }}" 2>&1 \
-              | grep '^target_feature' \
-              | sort
+            if [ "${{ inputs.target_cpu }}" = "wasm" ]; then
+              rustc --print cfg --target wasm32-wasip1 $RUSTFLAGS 2>&1 | grep '^target_feature' | sort
+            else
+              rustc --print cfg $RUSTFLAGS 2>&1 | grep -E '^target_(arch|feature)' | sort
+            fi
             echo '```'
             echo ""
           } >> "$GITHUB_STEP_SUMMARY"
@@ -86,21 +127,18 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ runner.os }}-bench-${{ inputs.target_cpu }}-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-${{ runner.arch }}-bench-${{ inputs.target_cpu }}-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-bench-${{ inputs.target_cpu }}-
-            ${{ runner.os }}-bench-
+            ${{ runner.os }}-${{ runner.arch }}-bench-${{ inputs.target_cpu }}-
+            ${{ runner.os }}-${{ runner.arch }}-bench-
 
       # ── Run the benchmark suite ─────────────────────────────────────────────
       - name: Run vs_all benchmarks
         run: |
-          cargo bench --bench vs_all -p mid-math \
-            2>&1 | tee bench-vs-all-raw.txt
+          cargo bench --bench vs_all -p mid-math $BENCH_TARGET 2>&1 | tee bench-vs-all-raw.txt
           echo "Bench exit code: $?" >> "$GITHUB_STEP_SUMMARY"
 
       # ── Parse and publish results ───────────────────────────────────────────
-      # scripts/bench_vs_all.py reads bench-vs-all-raw.txt (default) and
-      # prints markdown tables to stdout — we append that to the summary.
       - name: Publish bench summary
         run: |
           {
@@ -109,6 +147,9 @@ jobs:
             echo "Build: #${{ github.run_number }} &nbsp;|&nbsp; Rust: \`$(rustc --version | cut -d' ' -f2)\` &nbsp;|&nbsp; target-cpu: \`${{ inputs.target_cpu }}\`"
             echo ""
             echo "> Note: manual benchmark run"
+            if [ "${{ inputs.target_cpu }}" = "wasm" ]; then
+              echo "> Warning: Criterion process timing constraints may impact accuracy inside wasmtime runtime."
+            fi
             echo ""
             echo "Lower is faster. Gaps vs mid-math show what to borrow."
             echo ""
@@ -119,6 +160,6 @@ jobs:
       - name: Upload raw bench output
         uses: actions/upload-artifact@v4
         with:
-          name: bench-vs-all-${{ github.run_number }}
+          name: bench-vs-all-${{ github.run_number }}-${{ inputs.target_cpu }}
           path: bench-vs-all-raw.txt
           retention-days: 90
