@@ -1,8 +1,8 @@
-// crates/mid-math/src/f32/mod.rs  — full replacement
+// crates/mid-math/src/f32/mod.rs  — updated for Build 27: new platform stubs
 pub(crate) mod math;
 
 mod vec2;
-pub mod mat2;    // scalar fallback — always compiled, exported on non-x86 targets
+pub mod mat2;
 pub mod mat3;
 pub mod affine2;
 pub mod affine3;
@@ -25,15 +25,26 @@ pub(crate) mod sse2;
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 pub use sse2::{Vec3, Vec4, Quat, Mat4, Mat2};
 
-// AVX + FMA fast paths — compiled when hardware and RUSTFLAGS support it.
-// Currently provides: Mul<Mat4> for Mat4 (~3.2 ns vs 6.5 ns SSE2).
-// Gating is symmetric: avx/mat4.rs has cfg(avx+fma), sse2/mat4.rs has cfg(not(avx+fma)).
+// AVX + FMA fast path — Mat4::mul only (~4.0 ns vs 7.0 ns SSE2).
+// Gate: avx+fma present AND avx512f absent (avx512 supersedes when implemented).
+// TODO: add `not(target_feature = "avx512f")` once avx512/mat4.rs has Mul<Mat4>.
 #[cfg(all(
     any(target_arch = "x86", target_arch = "x86_64"),
     target_feature = "avx",
     target_feature = "fma",
 ))]
 pub(crate) mod avx;
+
+// AVX-512 fast paths — STUB (no Mul<Mat4> yet, no conflict with avx/).
+// Compiled when avx512f is present (CI ubuntu-latest has it).
+// When avx512/mat4.rs implements Mul<Mat4>:
+//   1. Gate avx/mat4.rs Mul<Mat4> with: not(target_feature = "avx512f")
+//   2. Add "x86-64-v4" to bench-vs-all workflow target_cpu choices.
+#[cfg(all(
+    any(target_arch = "x86", target_arch = "x86_64"),
+    target_feature = "avx512f",
+))]
+pub(crate) mod avx512;
 
 // ── aarch64 ──────────────────────────────────────────────────────────────────
 
@@ -46,6 +57,19 @@ pub use neon::{Vec3, Vec4, Quat, Mat4};
 /// aarch64 uses the scalar Mat2 until a NEON Mat2 is implemented.
 #[cfg(target_arch = "aarch64")]
 pub use mat2::Mat2;
+
+// SVE / SVE2 fast paths — STUB (nightly Rust only as of 2026-06).
+// This cfg never fires on stable Rust. Wire-up is safe.
+// When Rust SVE stabilizes + GitHub has SVE runners:
+//   Extend to vec3/vec4/quat/mat4 submodules parallel to neon/.
+#[cfg(all(target_arch = "aarch64", target_feature = "sve"))]
+pub(crate) mod sve;
+
+// SME (Scalable Matrix Extension) — STUB (no Rust support as of 2026-06).
+// Requires: Rust SME intrinsics + macOS Sequoia/Linux 6.1 ZA context save.
+// Hardware: Apple M4, Cortex-X4. This cfg never fires on any current toolchain.
+#[cfg(all(target_arch = "aarch64", target_feature = "sme"))]
+pub(crate) mod sme;
 
 // ── WASM SIMD128 ─────────────────────────────────────────────────────────────
 
