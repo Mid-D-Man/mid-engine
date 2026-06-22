@@ -219,37 +219,41 @@ impl Mat4 {
 
     // ── View matrices ─────────────────────────────────────────────────────────
 
-    /// Right-handed look-at.
+    /// Right-handed look-at view matrix.
     ///
-    /// Build 20: SoA w-dot replaces 3 sequential dot3 calls.
-    /// After unpack/movelh/movehl transpose the w translation is computed as
-    /// one matrix-vector multiply (3 broadcast-muls + 2 adds). Result: ~12.9 ns
-    /// vs glam 18.0 ns.
+    /// Build 21: Two-path strategy.
+    ///   AVX+FMA active → unpack/movelh/movehl transpose + SoA dot (fast on Intel/AMD+AVX).
+    ///   SSE2-only       → scalar Vec4::new + three dot3 calls (matches glam's approach,
+    ///                      avoids LLVM SSE4.1 scheduler regression on AMD without AVX).
+    ///
+    /// The AVX gate uses the fact that avx/mat4.rs already gate-checks (avx+fma).
+    /// On SSE4.1 targets without AVX (x86-64-v2), LLVM's scheduling of the shuffle
+    /// chain underperforms relative to glam's scalar path — scalar is immune to this.
     pub fn look_at_rh(eye: Vec3, center: Vec3, up: Vec3) -> Self {
         let f  = (center - eye).normalize();
         let r  = f.cross(up).normalize();
         let u  = r.cross(f);
-        let nf = -f;
+
+        #[cfg(all(target_feature = "avx", target_feature = "fma"))]
         unsafe {
+            let nf   = -f;
             let zero = _mm_setzero_ps();
             let tmp0 = _mm_unpacklo_ps(r.0, u.0);
             let tmp1 = _mm_unpacklo_ps(nf.0, zero);
             let tmp2 = _mm_unpackhi_ps(r.0, u.0);
             let tmp3 = _mm_unpackhi_ps(nf.0, zero);
 
-            let xc = _mm_movelh_ps(tmp0, tmp1); // [r.x,  u.x,  -f.x, 0]
-            let yc = _mm_movehl_ps(tmp1, tmp0); // [r.y,  u.y,  -f.y, 0]
-            let zc = _mm_movelh_ps(tmp2, tmp3); // [r.z,  u.z,  -f.z, 0]
+            let xc = _mm_movelh_ps(tmp0, tmp1);
+            let yc = _mm_movehl_ps(tmp1, tmp0);
+            let zc = _mm_movelh_ps(tmp2, tmp3);
 
-            // SoA dot: dot_xyz = [r·eye, u·eye, -f·eye, 0]
-            let bx = _mm_shuffle_ps::<0b00_00_00_00>(eye.0, eye.0);
-            let by = _mm_shuffle_ps::<0b01_01_01_01>(eye.0, eye.0);
-            let bz = _mm_shuffle_ps::<0b10_10_10_10>(eye.0, eye.0);
+            let bx      = _mm_shuffle_ps::<0b00_00_00_00>(eye.0, eye.0);
+            let by      = _mm_shuffle_ps::<0b01_01_01_01>(eye.0, eye.0);
+            let bz      = _mm_shuffle_ps::<0b10_10_10_10>(eye.0, eye.0);
             let dot_xyz = _mm_add_ps(
                 _mm_add_ps(_mm_mul_ps(xc, bx), _mm_mul_ps(yc, by)),
                 _mm_mul_ps(zc, bz),
             );
-            // negate xyz, set w=1: [-r·eye, -u·eye, f·eye, 1]
             let wc = _mm_or_ps(_mm_xor_ps(dot_xyz, NEG_XYZ), W_ONE);
 
             Self {
@@ -257,13 +261,27 @@ impl Mat4 {
                 z_axis: Vec4(zc), w_axis: Vec4(wc),
             }
         }
+
+        // SSE2 / SSE4.x without AVX — scalar column construction.
+        // Matches glam's look_to_rh strategy; consistent on all AMD+Intel SSE4 variants.
+        #[cfg(not(all(target_feature = "avx", target_feature = "fma")))]
+        {
+            Self {
+                x_axis: Vec4::new( r.x,  u.x, -f.x, 0.0),
+                y_axis: Vec4::new( r.y,  u.y, -f.y, 0.0),
+                z_axis: Vec4::new( r.z,  u.z, -f.z, 0.0),
+                w_axis: Vec4::new(-r.dot(eye), -u.dot(eye), f.dot(eye), 1.0),
+            }
+        }
     }
 
-    /// Left-handed look-at. Same SoA w-dot as look_at_rh.
+    /// Left-handed look-at view matrix. Same two-path strategy as look_at_rh.
     pub fn look_at_lh(eye: Vec3, center: Vec3, up: Vec3) -> Self {
         let f = (center - eye).normalize();
         let r = up.cross(f).normalize();
         let u = f.cross(r);
+
+        #[cfg(all(target_feature = "avx", target_feature = "fma"))]
         unsafe {
             let zero = _mm_setzero_ps();
             let tmp0 = _mm_unpacklo_ps(r.0, u.0);
@@ -275,9 +293,9 @@ impl Mat4 {
             let yc = _mm_movehl_ps(tmp1, tmp0);
             let zc = _mm_movelh_ps(tmp2, tmp3);
 
-            let bx = _mm_shuffle_ps::<0b00_00_00_00>(eye.0, eye.0);
-            let by = _mm_shuffle_ps::<0b01_01_01_01>(eye.0, eye.0);
-            let bz = _mm_shuffle_ps::<0b10_10_10_10>(eye.0, eye.0);
+            let bx      = _mm_shuffle_ps::<0b00_00_00_00>(eye.0, eye.0);
+            let by      = _mm_shuffle_ps::<0b01_01_01_01>(eye.0, eye.0);
+            let bz      = _mm_shuffle_ps::<0b10_10_10_10>(eye.0, eye.0);
             let dot_xyz = _mm_add_ps(
                 _mm_add_ps(_mm_mul_ps(xc, bx), _mm_mul_ps(yc, by)),
                 _mm_mul_ps(zc, bz),
@@ -289,7 +307,17 @@ impl Mat4 {
                 z_axis: Vec4(zc), w_axis: Vec4(wc),
             }
         }
-    }
+
+        #[cfg(not(all(target_feature = "avx", target_feature = "fma")))]
+        {
+            Self {
+                x_axis: Vec4::new( r.x,  u.x,  f.x, 0.0),
+                y_axis: Vec4::new( r.y,  u.y,  f.y, 0.0),
+                z_axis: Vec4::new( r.z,  u.z,  f.z, 0.0),
+                w_axis: Vec4::new(-r.dot(eye), -u.dot(eye), -f.dot(eye), 1.0),
+            }
+        }
+        }
 
     // ── Projection matrices ───────────────────────────────────────────────────
 
