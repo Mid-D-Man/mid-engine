@@ -1,0 +1,89 @@
+# .github/workflows/mid-math-test-wasm.yml
+name: mid-math — test WASM (simd128)
+
+on:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: never
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  test-wasm-simd128:
+    name: test wasm32-wasip1 + simd128
+    runs-on: ubuntu-latest
+
+    env:
+      RUSTFLAGS: "-C target-feature=+simd128"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Rust stable
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+          override: true
+          # wasm32-wasip1 is the stable WASM+WASI target (renamed from wasm32-wasi in Rust 1.78)
+          target: wasm32-wasip1
+
+      # wasmtime: WASM runtime that implements WASI — runs test binaries directly
+      - name: Install wasmtime
+        uses: bytecodealliance/actions/wasmtime/setup@v1
+        with:
+          version: v25.0.2   # pin for reproducibility; update as needed
+
+      # Tell cargo to use wasmtime as the test runner for the WASM target.
+      # --allow-unknown-experimental-proposals needed for simd128 in older wasmtime.
+      - name: Configure WASM test runner
+        run: |
+          mkdir -p .cargo
+          cat >> .cargo/config.toml << 'EOF'
+          [target.wasm32-wasip1]
+          runner = ["wasmtime", "run", "--allow-unknown-experimental-proposals", "--"]
+          EOF
+
+      - name: Confirm WASM target
+        run: |
+          {
+            echo "## WASM CI — wasm32-wasip1 + simd128"
+            echo ""
+            echo "| | |"
+            echo "|---|---|"
+            echo "| Target  | \`wasm32-wasip1\` |"
+            echo "| RUSTFLAGS | \`$RUSTFLAGS\` |"
+            echo "| Rust    | \`$(rustc --version)\` |"
+            echo "| wasmtime | \`$(wasmtime --version)\` |"
+            echo ""
+            echo "### WASM target features (what rustc will emit)"
+            echo '```'
+            rustc --print cfg --target wasm32-wasip1 \
+              -C target-feature=+simd128 2>&1 \
+              | grep '^target_feature' | sort
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-wasm-simd128-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-wasm-simd128-
+
+      # Note: --release required — wasmtime JITs release code well,
+      # debug WASM is extremely slow for test timeouts.
+      - name: cargo test (WASM simd128, release)
+        run: cargo test -p mid-math --target wasm32-wasip1 --release
+
+      - name: Report results
+        if: always()
+        run: |
+          echo "## WASM test complete" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "> Benchmarks are not run in WASM CI — criterion uses process" >> "$GITHUB_STEP_SUMMARY"
+          echo "> timing that doesn't work in wasmtime. Use this job for" >> "$GITHUB_STEP_SUMMARY"
+          echo "> correctness only. For WASM perf, profile in-browser." >> "$GITHUB_STEP_SUMMARY"
