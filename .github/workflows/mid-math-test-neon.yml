@@ -1,0 +1,106 @@
+# .github/workflows/mid-math-test-neon.yml
+name: mid-math — test NEON (aarch64)
+
+on:
+  workflow_dispatch:
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  test-neon-linux:
+    name: test NEON · ubuntu-24.04-arm
+    runs-on: ubuntu-24.04-arm    # Native aarch64 Linux — public repos free tier
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Rust stable
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+          override: true
+
+      - name: Confirm architecture and NEON
+        run: |
+          {
+            echo "## NEON CI — aarch64 Linux"
+            echo ""
+            echo "| | |"
+            echo "|---|---|"
+            echo "| Runner | \`ubuntu-24.04-arm\` |"
+            echo "| Arch   | \`$(uname -m)\` |"
+            echo "| Rust   | \`$(rustc --version)\` |"
+            echo ""
+            echo "### aarch64 target features"
+            echo '```'
+            rustc --print cfg 2>&1 | grep -E '^target_(arch|feature)' | sort
+            echo '```'
+            echo ""
+            echo "### /proc/cpuinfo flags"
+            echo '```'
+            grep -m1 '^Features' /proc/cpuinfo | tr ' ' '\n' | grep -E '(neon|fp|asimd|sve)' | sort
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-${{ runner.arch }}-neon-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ runner.arch }}-neon-
+
+      - name: cargo test --release (NEON)
+        run: cargo test -p mid-math --release
+
+      - name: cargo test debug (NEON)
+        run: cargo test -p mid-math
+
+  test-neon-apple:
+    name: test NEON · macos-14 (Apple Silicon)
+    runs-on: macos-14             # M1 — public repos free tier
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Rust stable
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+          override: true
+
+      - name: Confirm architecture
+        run: |
+          {
+            echo "## NEON CI — Apple Silicon (macos-14)"
+            echo ""
+            echo "| | |"
+            echo "|---|---|"
+            echo "| Runner | \`macos-14\` (M1) |"
+            echo "| Arch   | \`$(uname -m)\` |"
+            echo "| Rust   | \`$(rustc --version)\` |"
+            echo ""
+            echo "### aarch64 target features"
+            echo '```'
+            rustc --print cfg 2>&1 | grep -E '^target_(arch|feature)' | sort
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-${{ runner.arch }}-neon-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: cargo test --release (NEON + Apple Silicon)
+        run: cargo test -p mid-math --release
+
+      - name: cargo test debug (NEON + Apple Silicon)
+        run: cargo test -p mid-math
