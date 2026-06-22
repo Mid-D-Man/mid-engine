@@ -17,8 +17,18 @@ glam             = { version = "0.28", features = [] }
 nalgebra         = { version = "0.33" }
 ultraviolet      = { version = "0.9" }
 matrixmultiply   = { version = "0.3" }
-faer             = { version = "0.22" }
 vek              = { version = "0.17", features = ["repr_simd"] }
+
+# faer defaults to a rayon-backed parallel path, and rayon's native-thread
+# spawning isn't supported on wasm32-wasip1 ("Rayon cannot be used when
+# targeting wasi32"). Dev-dependencies are compiled for every bench/test
+# target in this package regardless of which one is actually built, so
+# faer was getting pulled into the wasm build even though no bench here
+# uses it directly. Restricting it to non-wasm targets keeps it (with
+# rayon, full speed) for native + neon runners and drops it entirely from
+# wasm32/wasm64 builds.
+[target.'cfg(not(any(target_arch = "wasm32", target_arch = "wasm64")))'.dev-dependencies]
+faer = { version = "0.22" }
 
 [[bench]]
 name    = "vs_glam"
