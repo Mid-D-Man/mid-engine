@@ -6,8 +6,9 @@ on:
       target_cpu:
         description: >
           Compiler target-cpu or architecture configuration. Controls which SIMD instructions rustc emits.
-          native     = all hardware features the runner has (AVX2+FMA on GitHub-hosted).
-          x86-64-v3  = AVX2+FMA+BMI2 guaranteed (Haswell+) — use for OPT-7 AVX2 work.
+          native     = all hardware features the runner has (AVX-512+AVX2+FMA on GitHub-hosted).
+          x86-64-v4  = AVX-512F+BW+CD+DQ+VL — activates avx512/mat4.rs Mul<Mat4>, target ~2.0 ns.
+          x86-64-v3  = AVX2+FMA+BMI2 guaranteed (Haswell+) — use for OPT-7 AVX2 work, target ~4.0 ns.
           x86-64-v2  = SSE4.2 baseline — no AVX.
           x86-64     = SSE2 only — baseline numbers before AVX2 work lands.
           neon       = ARM NEON acceleration (runs on native aarch64 runner).
@@ -17,6 +18,7 @@ on:
         type: choice
         options:
           - native
+          - x86-64-v4
           - x86-64-v3
           - x86-64-v2
           - x86-64
@@ -94,7 +96,7 @@ jobs:
             elif grep -q '^flags' /proc/cpuinfo; then
               grep -m1 '^flags' /proc/cpuinfo \
                 | tr ' ' '\n' \
-                | grep -E '^(sse|avx|fma|bmi|aes|sha|vpclm)' \
+                | grep -E '^(sse|avx|fma|bmi|aes|sha|vpclm|avx512)' \
                 | sort \
                 | paste - - - - - - -
             else
@@ -111,13 +113,32 @@ jobs:
             fi
             echo '```'
             echo ""
+            
+            # Note which SIMD path is active for x86 runs
+            if [ "${{ inputs.target_cpu }}" != "wasm" ] && [ "${{ inputs.target_cpu }}" != "neon" ]; then
+              AVX512=$(rustc --print cfg $RUSTFLAGS 2>&1 | grep -c 'target_feature="avx512f"' || true)
+              AVXFMA=$(rustc --print cfg $RUSTFLAGS 2>&1 | grep -c 'target_feature="avx"' || true)
+              if [ "$AVX512" -gt 0 ]; then
+                echo "> **Active path:** avx512/mat4.rs (target ~2.0 ns mat4/mul)" >> "$GITHUB_STEP_SUMMARY"
+              elif [ "$AVXFMA" -gt 0 ]; then
+                echo "> **Active path:** avx/mat4.rs AVX2+FMA (target ~4.0 ns mat4/mul)" >> "$GITHUB_STEP_SUMMARY"
+              else
+                echo "> **Active path:** sse2/mat4.rs (target ~7.0 ns mat4/mul)" >> "$GITHUB_STEP_SUMMARY"
+              fi
+            fi
           } >> "$GITHUB_STEP_SUMMARY"
 
-          # Warn (don't fail) if x86-64-v3 selected but AVX2 isn't confirmed
+          # Warnings for requested instructions not found
           if [ "${{ inputs.target_cpu }}" = "x86-64-v3" ]; then
             rustc --print cfg -C target-cpu=x86-64-v3 2>&1 \
               | grep -q 'target_feature="avx2"' \
               || echo "::warning::x86-64-v3 selected but avx2 not found in rustc output — verify hardware"
+          fi
+
+          if [ "${{ inputs.target_cpu }}" = "x86-64-v4" ]; then
+            rustc --print cfg -C target-cpu=x86-64-v4 2>&1 \
+              | grep -q 'target_feature="avx512f"' \
+              || echo "::warning::x86-64-v4 selected but avx512f not found — runner may not support AVX-512"
           fi
 
       - name: Cache cargo registry + build artifacts
