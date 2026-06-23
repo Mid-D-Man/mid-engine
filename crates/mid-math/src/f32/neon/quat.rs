@@ -38,10 +38,22 @@ impl Quat {
     #[inline(always)]
     pub fn from_xyzw(x: f32, y: f32, z: f32, w: f32) -> Self { Self::new(x, y, z, w) }
 
+    /// Build from axis-angle.
+    ///
+    /// **Precondition: `axis` must already be a unit vector** — this matches
+    /// glam's contract (and your own SSE2 `Mat4::from_trs` contract) instead
+    /// of defensively re-normalizing on every call. The old version called
+    /// `axis.normalize()` unconditionally here, which on NEON meant paying
+    /// for a full normalize (rsqrt+NR, now; sqrt+div, before the vec3.rs fix)
+    /// on top of the 3 multiplies that actually do the work — that redundant
+    /// call was the single biggest contributor to this function's gap vs
+    /// glam. If you need the old auto-normalizing behavior for a call site
+    /// that can't guarantee a unit axis, normalize at that call site instead
+    /// (`Quat::from_axis_angle(axis.normalize(), angle)`).
     pub fn from_axis_angle(axis: Vec3, angle_rad: f32) -> Self {
+        debug_assert!(axis.is_normalized(), "from_axis_angle: axis must be normalized");
         let (s, c) = math::sin_cos(angle_rad * 0.5);
-        let n = axis.normalize();
-        Self::new(n.x * s, n.y * s, n.z * s, c)
+        Self::new(axis.x * s, axis.y * s, axis.z * s, c)
     }
 
     pub fn from_euler(roll: f32, pitch: f32, yaw: f32) -> Self {
@@ -77,12 +89,18 @@ impl Quat {
     #[inline] pub fn length(self)    -> f32 { self.length_sq().sqrt() }
 
     /// Normalize. Returns IDENTITY for near-zero-length input.
+    ///
+    /// Uses `rsqrt_nr_f32` instead of `vsqrtq_f32` + `vdivq_f32` — the
+    /// near-zero guard stays a cheap, branch-predictor-friendly scalar
+    /// compare (same contract as before), but the hot path no longer pays
+    /// for two non-pipelined vector ops. See `crate::neon::rsqrt_nr_f32`.
     #[inline]
     pub fn normalize(self) -> Self {
         unsafe {
             let dot = vaddvq_f32(vmulq_f32(self.0, self.0));
             if dot < EPSILON { return Self::IDENTITY; }
-            Self(vdivq_f32(self.0, vsqrtq_f32(vdupq_n_f32(dot))))
+            let inv = crate::neon::rsqrt_nr_f32(vdupq_n_f32(dot));
+            Self(vmulq_f32(self.0, inv))
         }
     }
 
@@ -93,8 +111,9 @@ impl Quat {
     #[inline(always)]
     pub(crate) fn normalize_fast(self) -> Self {
         unsafe {
-            let dot = vaddvq_f32(vmulq_f32(self.0, self.0));
-            Self(vdivq_f32(self.0, vsqrtq_f32(vdupq_n_f32(dot))))
+            let dot = vdupq_n_f32(vaddvq_f32(vmulq_f32(self.0, self.0)));
+            let inv = crate::neon::rsqrt_nr_f32(dot);
+            Self(vmulq_f32(self.0, inv))
         }
     }
 
@@ -116,11 +135,21 @@ impl Quat {
         Self(unsafe { vmulq_n_f32(self.conjugate().0, 1.0 / sq) })
     }
 
+    /// Rotate a vector by this quaternion.
+    ///
+    /// Uses the closed-form conjugation identity
+    /// `v' = v*(w² - b·b) + b*2(b·v) + (b×v)*2w` (b = quaternion vector part)
+    /// — **one** cross product + two dot products, matching glam's NEON
+    /// path. The previous version (`t = 2(qv×v); v + w*t + qv×t`) called
+    /// `cross()` twice; even after vectorizing `Vec3::cross` itself, this
+    /// identity halves the cross-product count, which is the more expensive
+    /// op relative to a dot product (dot collapses to a horizontal add,
+    /// cross needs the full shuffle sequence).
     #[inline]
     pub fn rotate(self, v: Vec3) -> Vec3 {
-        let qv = Vec3::new(self.x, self.y, self.z);
-        let t  = 2.0 * qv.cross(v);
-        v + self.w * t + qv.cross(t)
+        let b  = Vec3::new(self.x, self.y, self.z);
+        let b2 = b.dot(b);
+        v * (self.w * self.w - b2) + b * (v.dot(b) * 2.0) + b.cross(v) * (self.w * 2.0)
     }
 
     pub fn mul_quat(self, rhs: Self) -> Self {
@@ -179,9 +208,17 @@ impl Quat {
         }
     }
 
+    /// Convert to a rotation matrix.
+    ///
+    /// **Precondition: `self` must already be normalized** — matches glam's
+    /// `quat_to_axes` contract (`glam_assert!(rotation.is_normalized())`,
+    /// no actual renormalize) and your own SSE2 `Mat4::from_trs` contract.
+    /// The old version called `self.normalize()` unconditionally, paying for
+    /// a full quaternion normalize on every conversion even though the
+    /// overwhelming majority of call sites already hold a unit quaternion.
     pub fn to_mat4(self) -> Mat4 {
-        let q = self.normalize();
-        let (x, y, z, w) = (q.x, q.y, q.z, q.w);
+        debug_assert!(self.is_normalized(), "to_mat4: quaternion must be normalized");
+        let (x, y, z, w) = (self.x, self.y, self.z, self.w);
         let (x2, y2, z2) = (x+x, y+y, z+z);
         let (xx, yy, zz) = (x*x2, y*y2, z*z2);
         let (xy, xz, yz) = (x*y2, x*z2, y*z2);
@@ -239,4 +276,4 @@ impl fmt::Display for Quat {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "Quat({:.4}, {:.4}, {:.4}, {:.4})", self.x, self.y, self.z, self.w)
     }
-    }
+}
