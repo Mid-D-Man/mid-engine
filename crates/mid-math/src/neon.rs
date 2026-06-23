@@ -5,8 +5,15 @@
 //! has richer primitives (vaddvq_f32, mandatory FMA, direct vabsq_f32) that
 //! need no abstraction shims unlike SSE2.
 //!
-//! This module exists for f64 NEON (float64x2_t), where a few centralized
-//! helpers avoid copy-paste across dvec2/dvec4/dquat:
+//! One primitive NEON does *not* give you for free: a fast reciprocal square
+//! root. `vsqrtq_f32` + `vdivq_f32` (the naive `normalize` path) are both
+//! non-pipelined, double-digit-cycle instructions on most AArch64 cores.
+//! `rsqrt_nr_f32` below mirrors `crate::sse2::rsqrt_nr` — NEON's `vrsqrteq_f32`
+//! estimate (~8-bit) + one `vrsqrtsq_f32` Newton–Raphson step (~23-bit) is a
+//! couple of fast multiply-class instructions instead.
+//!
+//! This module also holds f64 NEON (float64x2_t) helpers, where a few
+//! centralized helpers avoid copy-paste across dvec2/dvec4/dquat:
 //!   - Const init helper (float64x2_t cannot be built in const context)
 //!   - 4-lane dot product from two (lo, hi) float64x2_t pairs
 //!   - 2-lane dot product
@@ -14,6 +21,27 @@
 //! All functions are `pub(crate) unsafe`.
 
 use core::arch::aarch64::*;
+
+// ── f32 reciprocal square root ────────────────────────────────────────────────
+
+/// Reciprocal square root: `vrsqrteq_f32` (NEON RSQRTE, ~8-bit estimate) +
+/// one Newton–Raphson step via `vrsqrtsq_f32` (NEON RSQRTS) → ~23-bit precision.
+///
+/// Replaces the expensive `vsqrtq_f32` + `vdivq_f32` pair used in `normalize`.
+/// On AArch64 the estimate+refine sequence is two pipelined multiply-class
+/// instructions vs. two non-pipelined ~10+ cycle ops.
+///
+/// Formula: `r1 = r0 * vrsqrtsq_f32(v, r0*r0)`, where `vrsqrtsq_f32(v, x)`
+/// computes the standard NR correction term `(3 - v*x) / 2`.
+///
+/// `v` should be a broadcast — typically all 4 lanes hold the same
+/// squared-length value (from `vdupq_n_f32(dot)`), so all 4 output lanes
+/// receive the same refined reciprocal sqrt.
+#[inline(always)]
+pub(crate) unsafe fn rsqrt_nr_f32(v: float32x4_t) -> float32x4_t {
+    let r0 = vrsqrteq_f32(v);
+    vmulq_f32(r0, vrsqrtsq_f32(v, vmulq_f32(r0, r0)))
+}
 
 // ── Compile-time constant helper ──────────────────────────────────────────────
 
@@ -63,4 +91,4 @@ pub(crate) unsafe fn dot4d_neon_into_f64x2(
     lo_b: float64x2_t, hi_b: float64x2_t,
 ) -> float64x2_t {
     vdupq_n_f64(dot4d_neon(lo_a, hi_a, lo_b, hi_b))
-  }
+}
