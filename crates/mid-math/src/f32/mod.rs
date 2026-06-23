@@ -1,4 +1,4 @@
-// crates/mid-math/src/f32/mod.rs  — updated for Build 27: new platform stubs
+// crates/mid-math/src/f32/mod.rs
 pub(crate) mod math;
 
 mod vec2;
@@ -21,25 +21,30 @@ pub(crate) mod scalar;
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 pub(crate) mod sse2;
 
-/// On x86/x86_64: SSE2-backed Vec3, Vec4, Quat, Mat4, and Mat2.
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 pub use sse2::{Vec3, Vec4, Quat, Mat4, Mat2};
 
 // AVX + FMA fast path — Mat4::mul only (~4.0 ns vs 7.0 ns SSE2).
-// Gate: avx+fma present AND avx512f absent (avx512 supersedes when implemented).
-// TODO: add `not(target_feature = "avx512f")` once avx512/mat4.rs has Mul<Mat4>.
+// Excluded when avx512f is present: avx512/mat4.rs supersedes with
+// all-4-columns-in-one-ZMM approach (~2.0 ns).
 #[cfg(all(
     any(target_arch = "x86", target_arch = "x86_64"),
     target_feature = "avx",
     target_feature = "fma",
+    not(target_feature = "avx512f"),
 ))]
 pub(crate) mod avx;
 
-// AVX-512 fast paths — STUB (no Mul<Mat4> yet, no conflict with avx/).
-// Compiled when avx512f is present (CI ubuntu-latest has it).
-// When avx512/mat4.rs implements Mul<Mat4>:
-//   1. Gate avx/mat4.rs Mul<Mat4> with: not(target_feature = "avx512f")
-//   2. Add "x86-64-v4" to bench-vs-all workflow target_cpu choices.
+// AVX-512 fast paths — avx512f required.
+// Currently provides: Mat4::mul via _mm512_fmadd_ps (~2.0 ns target).
+// Activate: RUSTFLAGS="-C target-cpu=x86-64-v4" or "-C target-cpu=native"
+// (GitHub Actions ubuntu-latest runners have avx512f hardware).
+//
+// Gating chain:
+//   avx512f active → avx512/mat4.rs provides Mul<Mat4>
+//   avx+fma but no avx512f → avx/mat4.rs provides Mul<Mat4>
+//   SSE2 only → sse2/mat4.rs provides Mul<Mat4>
+// MulAssign is ungated in sse2/mat4.rs and delegates to whichever is active.
 #[cfg(all(
     any(target_arch = "x86", target_arch = "x86_64"),
     target_feature = "avx512f",
@@ -54,20 +59,16 @@ pub(crate) mod neon;
 #[cfg(target_arch = "aarch64")]
 pub use neon::{Vec3, Vec4, Quat, Mat4};
 
-/// aarch64 uses the scalar Mat2 until a NEON Mat2 is implemented.
 #[cfg(target_arch = "aarch64")]
 pub use mat2::Mat2;
 
-// SVE / SVE2 fast paths — STUB (nightly Rust only as of 2026-06).
-// This cfg never fires on stable Rust. Wire-up is safe.
-// When Rust SVE stabilizes + GitHub has SVE runners:
-//   Extend to vec3/vec4/quat/mat4 submodules parallel to neon/.
+// SVE / SVE2 — STUB. cfg never fires on stable Rust (nightly-only as of 2026-06).
+// Hardware: Apple M4, Neoverse N2 (AWS Graviton3), Snapdragon 8 Gen 3, X Elite.
 #[cfg(all(target_arch = "aarch64", target_feature = "sve"))]
 pub(crate) mod sve;
 
-// SME (Scalable Matrix Extension) — STUB (no Rust support as of 2026-06).
-// Requires: Rust SME intrinsics + macOS Sequoia/Linux 6.1 ZA context save.
-// Hardware: Apple M4, Cortex-X4. This cfg never fires on any current toolchain.
+// SME (Scalable Matrix Extension) — STUB. No Rust support as of 2026-06.
+// Hardware: Apple M4, Cortex-X4.
 #[cfg(all(target_arch = "aarch64", target_feature = "sme"))]
 pub(crate) mod sme;
 
@@ -79,7 +80,6 @@ pub(crate) mod wasm;
 #[cfg(all(any(target_arch = "wasm32", target_arch = "wasm64"), target_feature = "simd128"))]
 pub use wasm::{Vec3, Vec4, Quat, Mat4};
 
-/// WASM uses the scalar Mat2 until a v128 Mat2 is implemented.
 #[cfg(all(any(target_arch = "wasm32", target_arch = "wasm64"), target_feature = "simd128"))]
 pub use mat2::Mat2;
 
