@@ -26,8 +26,8 @@ on:
           - wasm
 
 env:
-  CARGO_TERM_COLOR: never                     # keep bench-vs-all-raw.txt ANSI-free
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true    # opt into Node.js 24 before forced cutover
+  CARGO_TERM_COLOR: never
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
   bench:
@@ -43,12 +43,20 @@ jobs:
           if [ "${{ inputs.target_cpu }}" = "wasm" ]; then
             echo "RUSTFLAGS=-C target-feature=+simd128" >> $GITHUB_ENV
             echo "BENCH_TARGET=--target wasm32-wasip1" >> $GITHUB_ENV
+            echo "ACTIVE_CPU_FLAGS=-C target-feature=+simd128" >> $GITHUB_ENV
           elif [ "${{ inputs.target_cpu }}" = "neon" ]; then
-            echo "RUSTFLAGS=" >> $GITHUB_ENV
             echo "BENCH_TARGET=" >> $GITHUB_ENV
+            echo "ACTIVE_CPU_FLAGS=" >> $GITHUB_ENV
           else
-            echo "RUSTFLAGS=-C target-cpu=${{ inputs.target_cpu }}" >> $GITHUB_ENV
+            # IMPORTANT: use CARGO_TARGET_<TRIPLE>_RUSTFLAGS, NOT RUSTFLAGS.
+            # RUSTFLAGS bleeds into build scripts (num-traits, zerocopy etc) which
+            # are compiled for the HOST. If the runner lacks the requested ISA
+            # (e.g. AVX-512 on AMD EPYC), those build scripts SIGILL at compile time.
+            # CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS applies only to the
+            # TARGET binary (the bench), never to host/build-script compilations.
+            echo "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS=-C target-cpu=${{ inputs.target_cpu }}" >> $GITHUB_ENV
             echo "BENCH_TARGET=" >> $GITHUB_ENV
+            echo "ACTIVE_CPU_FLAGS=-C target-cpu=${{ inputs.target_cpu }}" >> $GITHUB_ENV
           fi
 
       - name: Set up Rust stable
@@ -58,7 +66,6 @@ jobs:
           override: true
           target: ${{ inputs.target_cpu == 'wasm' && 'wasm32-wasip1' || '' }}
 
-      # ── Extra setup steps required for WebAssembly execution ────────────────
       - name: Install wasmtime
         if: inputs.target_cpu == 'wasm'
         uses: bytecodealliance/actions/wasmtime/setup@v1
@@ -84,7 +91,7 @@ jobs:
             echo "|---|---|"
             echo "| Runner        | \`${{ inputs.target_cpu == 'neon' && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}\` |"
             echo "| target-cpu    | \`${{ inputs.target_cpu }}\` |"
-            echo "| RUSTFLAGS     | \`$RUSTFLAGS\` |"
+            echo "| ACTIVE_CPU_FLAGS | \`$ACTIVE_CPU_FLAGS\` |"
             echo "| Rust          | \`$(rustc --version)\` |"
             echo "| Branch        | \`${{ github.ref_name }}\` |"
             echo "| Commit        | \`${GITHUB_SHA:0:8}\` |"
@@ -109,15 +116,14 @@ jobs:
             if [ "${{ inputs.target_cpu }}" = "wasm" ]; then
               rustc --print cfg --target wasm32-wasip1 $RUSTFLAGS 2>&1 | grep '^target_feature' | sort
             else
-              rustc --print cfg $RUSTFLAGS 2>&1 | grep -E '^target_(arch|feature)' | sort
+              rustc --print cfg $ACTIVE_CPU_FLAGS 2>&1 | grep -E '^target_(arch|feature)' | sort
             fi
             echo '```'
             echo ""
-            
-            # Note which SIMD path is active for x86 runs
+
             if [ "${{ inputs.target_cpu }}" != "wasm" ] && [ "${{ inputs.target_cpu }}" != "neon" ]; then
-              AVX512=$(rustc --print cfg $RUSTFLAGS 2>&1 | grep -c 'target_feature="avx512f"' || true)
-              AVXFMA=$(rustc --print cfg $RUSTFLAGS 2>&1 | grep -c 'target_feature="avx"' || true)
+              AVX512=$(rustc --print cfg $ACTIVE_CPU_FLAGS 2>&1 | grep -c 'target_feature="avx512f"' || true)
+              AVXFMA=$(rustc --print cfg $ACTIVE_CPU_FLAGS 2>&1 | grep -c 'target_feature="avx"' || true)
               if [ "$AVX512" -gt 0 ]; then
                 echo "> **Active path:** avx512/mat4.rs (target ~2.0 ns mat4/mul)" >> "$GITHUB_STEP_SUMMARY"
               elif [ "$AVXFMA" -gt 0 ]; then
@@ -128,7 +134,6 @@ jobs:
             fi
           } >> "$GITHUB_STEP_SUMMARY"
 
-          # Warnings for requested instructions not found
           if [ "${{ inputs.target_cpu }}" = "x86-64-v3" ]; then
             rustc --print cfg -C target-cpu=x86-64-v3 2>&1 \
               | grep -q 'target_feature="avx2"' \
@@ -153,13 +158,11 @@ jobs:
             ${{ runner.os }}-${{ runner.arch }}-bench-${{ inputs.target_cpu }}-
             ${{ runner.os }}-${{ runner.arch }}-bench-
 
-      # ── Run the benchmark suite ─────────────────────────────────────────────
       - name: Run vs_all benchmarks
         run: |
           cargo bench --bench vs_all -p mid-math $BENCH_TARGET 2>&1 | tee bench-vs-all-raw.txt
           echo "Bench exit code: $?" >> "$GITHUB_STEP_SUMMARY"
 
-      # ── Parse and publish results ───────────────────────────────────────────
       - name: Publish bench summary
         run: |
           {
@@ -177,7 +180,6 @@ jobs:
             python3 scripts/bench_vs_all.py
           } >> "$GITHUB_STEP_SUMMARY"
 
-      # ── Upload raw criterion output ─────────────────────────────────────────
       - name: Upload raw bench output
         uses: actions/upload-artifact@v4
         with:
