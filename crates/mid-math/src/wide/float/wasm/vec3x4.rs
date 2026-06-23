@@ -22,7 +22,7 @@ use core::arch::wasm32::{
     f32x4_add, f32x4_sub, f32x4_mul, f32x4_div,
     f32x4_abs, f32x4_sqrt,
     f32x4_min, f32x4_max,
-    f32x4_eq, f32x4_gt,
+    f32x4_eq, f32x4_gt, f32x4_lt,
     f32x4_splat,f32x4_neg,
 };
 #[cfg(target_arch = "wasm64")]
@@ -33,7 +33,7 @@ use core::arch::wasm64::{
     f32x4_add, f32x4_sub, f32x4_mul, f32x4_div,
     f32x4_abs, f32x4_sqrt,
     f32x4_min, f32x4_max,
-    f32x4_eq, f32x4_gt,
+    f32x4_eq, f32x4_gt, f32x4_lt,
     f32x4_splat,f32x4_neg,
 };
 
