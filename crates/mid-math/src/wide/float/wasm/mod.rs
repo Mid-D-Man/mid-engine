@@ -1,17 +1,16 @@
 // crates/mid-math/src/wide/float/wasm/mod.rs
 //! WASM SIMD128 wide float backend.
 //!
-//! Mirrors the SSE2 backend conceptually:
-//!   - `v128` plays the role of `__m128`
-//!   - No dedicated rsqrt/rcp instructions; we use Newton-Raphson on top of
-//!     `f32x4_sqrt` for `recip_sqrt`, and division for `recip`
-//!   - No `movemask`; we use `i32x4_bitmask` for mask extraction
-//!   - AoS→SoA transpose uses the same 7-shuffle pattern as SSE2,
-//!     mapped to `i32x4_shuffle` (compile-time-constant lane indices)
-//!   - FMA: WASM relaxed-simd adds `f32x4_relaxed_madd`, but baseline
-//!     simd128 doesn't have it — we emit two ops and let LLVM fuse if able
+//! Mirrors SSE2 layout:
+//!   v128         ↔  __m128
+//!   f32x4_*      ↔  _mm_*_ps
+//!   i32x4_shuffle↔  _mm_shuffle_ps / movelh / movehl / unpack*
 //!
-//! Build with: RUSTFLAGS="-C target-feature=+simd128"
+//! Differences from SSE2:
+//!   v128_andnot(a, b)  = a & !b   (SSE2 _mm_andnot_ps(a,b) = !a & b)
+//!   no rsqrt/rcp hardware — use sqrt+div+NR
+//!   no movemask — use i32x4_bitmask / i32x4_all_true
+//!   AoS↔SoA transpose via i32x4_shuffle (same 7-op algorithm as SSE2)
 
 pub mod mask4;
 pub mod f32x4;
