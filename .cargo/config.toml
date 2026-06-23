@@ -1,0 +1,9 @@
+# .cargo/config.toml
+
+# Build scripts and proc-macros run on the HOST machine.
+# Clearing host rustflags here prevents RUSTFLAGS="-C target-cpu=x86-64-v4"
+# (set by CI for the bench) from bleeding into build script compilation.
+# Build scripts compiled with AVX-512 codegen will SIGILL on AMD EPYC runners
+# (Zen 3 has no AVX-512). The bench binary itself still gets the full flags.
+[host]
+rustflags = []
