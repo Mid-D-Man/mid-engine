@@ -53,13 +53,37 @@ impl Vec3 {
     #[inline]
     pub fn dot_into_vec(self, rhs: Self) -> Self { Self::splat(self.dot(rhs)) }
 
+    /// Vectorized cross product (no scalar lane extraction).
+    ///
+    /// `cross(a,b) = (a.yzx * b.zxy) - (a.zxy * b.yzx)`, built via `vextq_f32`
+    /// rotates + single-lane `vsetq_lane_f32` swaps, same algorithm as glam's
+    /// NEON `Vec3A::cross`. Previous version read `.x/.y/.z` (6 lane extracts
+    /// + 3 scalar muls + 3 scalar subs) — this is 2 vector muls + 1 vmlsq_f32
+    /// fused multiply-subtract, no scalar detour.
+    ///
+    /// Lane 3 of the result is explicitly zeroed to preserve the "w is always
+    /// 0" invariant every other Vec3 ctor/op maintains (the shuffle leaves
+    /// it as don't-care garbage otherwise).
     #[inline(always)]
     pub fn cross(self, rhs: Self) -> Self {
-        Self::new(
-            self.y * rhs.z - self.z * rhs.y,
-            self.z * rhs.x - self.x * rhs.z,
-            self.x * rhs.y - self.y * rhs.x,
-        )
+        unsafe {
+            let lhs = self.0;
+            let rhs = rhs.0;
+
+            let lhs_yzwx = vextq_f32::<1>(lhs, lhs);
+            let rhs_wxyz = vextq_f32::<3>(rhs, rhs);
+            let lhs_yzx  = vsetq_lane_f32::<2>(vgetq_lane_f32::<0>(lhs), lhs_yzwx);
+            let rhs_zxy  = vsetq_lane_f32::<0>(vgetq_lane_f32::<2>(rhs), rhs_wxyz);
+            let part_a   = vmulq_f32(lhs_yzx, rhs_zxy);
+
+            let lhs_wxyz = vextq_f32::<3>(lhs, lhs);
+            let rhs_yzwx = vextq_f32::<1>(rhs, rhs);
+            let lhs_zxy  = vsetq_lane_f32::<0>(vgetq_lane_f32::<2>(lhs), lhs_wxyz);
+            let rhs_yzx  = vsetq_lane_f32::<2>(vgetq_lane_f32::<0>(rhs), rhs_yzwx);
+
+            let result = vmlsq_f32(part_a, lhs_zxy, rhs_yzx); // part_a - lhs_zxy*rhs_yzx
+            Self(vsetq_lane_f32::<3>(0.0, result))
+        }
     }
 
     #[inline(always)] pub fn length_sq(self) -> f32 { self.dot(self) }
@@ -73,17 +97,21 @@ impl Vec3 {
         if l < EPSILON { 0.0 } else { 1.0 / l }
     }
 
+    /// Returns `Self::ZERO` if `self` is near-zero-length (same contract as
+    /// before). Uses `rsqrt_nr_f32` (estimate + 1 Newton-Raphson step)
+    /// instead of `vsqrtq_f32` + `vdivq_f32` — avoids two non-pipelined
+    /// vector ops for a value where only the broadcast result matters.
+    /// Threshold compares squared length against `EPSILON²`, algebraically
+    /// identical to the old `length() > EPSILON` check but skips computing
+    /// an actual sqrt just for the branch.
     #[inline]
     pub fn normalize(self) -> Self {
         unsafe {
-            let len_sq_v = vdupq_n_f32(self.dot(self));
-            let len_v    = vsqrtq_f32(len_sq_v);
-            let normalized = Self(vdivq_f32(self.0, len_v));
-            let eps  = vdupq_n_f32(EPSILON);
-            let ok   = vcgtq_f32(len_v, eps);
-            Self(vreinterpretq_f32_u32(vandq_u32(
-                vreinterpretq_u32_f32(normalized.0), ok,
-            )))
+            let dot = vdupq_n_f32(self.dot(self));
+            let ok  = vcgtq_f32(dot, vdupq_n_f32(EPSILON * EPSILON));
+            let inv = crate::neon::rsqrt_nr_f32(dot);
+            let n   = vmulq_f32(self.0, inv);
+            Self(vreinterpretq_f32_u32(vandq_u32(vreinterpretq_u32_f32(n), ok)))
         }
     }
 
