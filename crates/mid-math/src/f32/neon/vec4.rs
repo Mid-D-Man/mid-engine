@@ -82,16 +82,19 @@ impl Vec4 {
     }
 
     /// Normalise to unit length. Returns ZERO for near-zero-length vectors.
+    ///
+    /// Uses `rsqrt_nr_f32` (estimate + 1 NR step) instead of `vsqrtq_f32` +
+    /// `vdivq_f32` — see `crate::neon::rsqrt_nr_f32`. Threshold compares
+    /// squared length against `EPSILON²` (algebraically identical to the old
+    /// `length() > EPSILON` check) so no actual sqrt is needed for the branch.
     #[inline]
     pub fn normalize(self) -> Self {
         unsafe {
-            let dot_v  = vdupq_n_f32(vaddvq_f32(vmulq_f32(self.0, self.0)));
-            let len_v  = vsqrtq_f32(dot_v);
-            let norm   = Self(vdivq_f32(self.0, len_v));
-            let ok     = vcgtq_f32(len_v, vdupq_n_f32(EPSILON));
-            Self(vreinterpretq_f32_u32(vandq_u32(
-                vreinterpretq_u32_f32(norm.0), ok,
-            )))
+            let dot = vdupq_n_f32(vaddvq_f32(vmulq_f32(self.0, self.0)));
+            let ok  = vcgtq_f32(dot, vdupq_n_f32(EPSILON * EPSILON));
+            let inv = crate::neon::rsqrt_nr_f32(dot);
+            let n   = vmulq_f32(self.0, inv);
+            Self(vreinterpretq_f32_u32(vandq_u32(vreinterpretq_u32_f32(n), ok)))
         }
     }
 
