@@ -13,6 +13,9 @@ use crate::f32::neon::vec4::Vec4;
 use crate::f32::neon::quat::Quat;
 use crate::EPSILON;
 
+#[repr(C)]
+union SignCast { f: [f32; 4], v: float32x4_t }
+
 /// 4×4 column-major matrix. 64 bytes, 16-byte aligned.
 /// Columns are `float32x4_t` fields via Vec4 — zero vld1q_f32 for LHS of multiply.
 #[derive(Clone, Copy)]
@@ -66,10 +69,18 @@ impl Mat4 {
 
     #[inline] pub fn from_rotation(q: Quat) -> Self { q.to_mat4() }
 
+    /// Full TRS — scale, then rotate, then translate.
+    ///
+    /// **Precondition: `r` must already be normalized** — same contract as
+    /// your SSE2 `Mat4::from_trs` (which already does exactly this: assert,
+    /// don't renormalize). The NEON path hadn't gotten the same treatment —
+    /// it was calling `r.normalize()` unconditionally, which is most of why
+    /// `mat4_construction/from_trs` was ~2x slower than glam here despite
+    /// SSE2 already beating/matching glam on the same benchmark.
     #[inline]
     pub fn from_trs(t: Vec3, r: Quat, s: Vec3) -> Self {
-        let q = r.normalize();
-        let (x,y,z,w) = (q.x,q.y,q.z,q.w);
+        debug_assert!(r.is_normalized(), "from_trs: r must be normalized");
+        let (x,y,z,w) = (r.x,r.y,r.z,r.w);
         let (x2,y2,z2) = (x+x,y+y,z+z);
         let (xx,yy,zz) = (x*x2,y*y2,z*z2);
         let (xy,xz,yz) = (x*y2,x*z2,y*z2);
@@ -221,10 +232,164 @@ impl Mat4 {
         (t, r, Vec3::new(sx, sy, sz))
     }
 
-    // ── Inverse (scalar cofactor) ─────────────────────────────────────────────
+    // ── Inverse ────────────────────────────────────────────────────────────────
 
-    pub fn inverse(self) -> Option<Self> { self.inverse_scalar() }
+    /// Inverse via vectorized cofactor expansion — see `inverse_raw` below.
+    /// `inverse_scalar` is kept as a reference/fallback implementation; it's
+    /// the one that was wired up here before (pure scalar, ~3x slower on
+    /// this bench — 48ns vs glam's 16ns for `mat4/inverse_general`).
+    pub fn inverse(self) -> Option<Self> {
+        let (m, det) = self.inverse_raw();
+        if det.abs() < EPSILON { return None; }
+        let rcp = 1.0 / det;
+        unsafe {
+            Some(Self {
+                x_axis: Vec4(vmulq_n_f32(m.x_axis.0, rcp)),
+                y_axis: Vec4(vmulq_n_f32(m.y_axis.0, rcp)),
+                z_axis: Vec4(vmulq_n_f32(m.z_axis.0, rcp)),
+                w_axis: Vec4(vmulq_n_f32(m.w_axis.0, rcp)),
+            })
+        }
+    }
 
+    /// Vectorized cofactor-expansion inverse. Ported from glam's NEON
+    /// `Mat4::inverse_checked` (itself based on g-truc/glm's
+    /// `glm_mat4_inverse`) — adapted to mid-math's `Vec4`/`Mat4` field
+    /// layout and const-generic intrinsic call style.
+    ///
+    /// Returns the *unscaled* cofactor matrix plus the raw determinant
+    /// (`a[0]*row2[0] + a[1]*row2[1] + ...` via `self.x_axis · row2`) —
+    /// the caller divides by `det` once at the end. This is the same
+    /// split `inverse_scalar` uses (`inv[]` array computed first, `det`
+    /// from a handful of its entries, then one division pass at the end),
+    /// just done with zero scalar lane extraction until that final dot.
+    ///
+    /// `swizzle0266`'s single-lane patch (`vsetq_lane_f32::<2>`) is the one
+    /// spot that touches an individual lane rather than shuffling whole
+    /// vectors — everything else here is full-width vector ops.
+    fn inverse_raw(self) -> (Self, f32) {
+        unsafe {
+            let swizzle3377 = |a: float32x4_t, b: float32x4_t| -> float32x4_t {
+                let r = vuzp2q_f32(a, b);
+                vtrn2q_f32(r, r)
+            };
+            let swizzle2266 = |a: float32x4_t, b: float32x4_t| -> float32x4_t {
+                let r = vuzp1q_f32(a, b);
+                vtrn2q_f32(r, r)
+            };
+            let swizzle0046 = |a: float32x4_t, b: float32x4_t| -> float32x4_t {
+                let r = vuzp1q_f32(a, a);
+                vuzp1q_f32(r, b)
+            };
+            let swizzle1155 = |a: float32x4_t, b: float32x4_t| -> float32x4_t {
+                let r = vzip1q_f32(a, b);
+                vzip2q_f32(r, r)
+            };
+            let swizzle0044 = |a: float32x4_t, b: float32x4_t| -> float32x4_t {
+                let r = vuzp1q_f32(a, b);
+                vtrn1q_f32(r, r)
+            };
+            let swizzle0266 = |a: float32x4_t, b: float32x4_t| -> float32x4_t {
+                let r = vuzp1q_f32(a, b);
+                vsetq_lane_f32::<2>(vgetq_lane_f32::<2>(b), r)
+            };
+            let swizzle0246 = |a: float32x4_t, b: float32x4_t| -> float32x4_t { vuzp1q_f32(a, b) };
+
+            let fac0 = {
+                let swp0a = swizzle3377(self.w_axis.0, self.z_axis.0);
+                let swp0b = swizzle2266(self.w_axis.0, self.z_axis.0);
+                let swp00 = swizzle2266(self.z_axis.0, self.y_axis.0);
+                let swp01 = swizzle0046(swp0a, swp0a);
+                let swp02 = swizzle0046(swp0b, swp0b);
+                let swp03 = swizzle3377(self.z_axis.0, self.y_axis.0);
+                vsubq_f32(vmulq_f32(swp00, swp01), vmulq_f32(swp02, swp03))
+            };
+            let fac1 = {
+                let swp0a = swizzle3377(self.w_axis.0, self.z_axis.0);
+                let swp0b = swizzle1155(self.w_axis.0, self.z_axis.0);
+                let swp00 = swizzle1155(self.z_axis.0, self.y_axis.0);
+                let swp01 = swizzle0046(swp0a, swp0a);
+                let swp02 = swizzle0046(swp0b, swp0b);
+                let swp03 = swizzle3377(self.z_axis.0, self.y_axis.0);
+                vsubq_f32(vmulq_f32(swp00, swp01), vmulq_f32(swp02, swp03))
+            };
+            let fac2 = {
+                let swp0a = swizzle2266(self.w_axis.0, self.z_axis.0);
+                let swp0b = swizzle1155(self.w_axis.0, self.z_axis.0);
+                let swp00 = swizzle1155(self.z_axis.0, self.y_axis.0);
+                let swp01 = swizzle0046(swp0a, swp0a);
+                let swp02 = swizzle0046(swp0b, swp0b);
+                let swp03 = swizzle2266(self.z_axis.0, self.y_axis.0);
+                vsubq_f32(vmulq_f32(swp00, swp01), vmulq_f32(swp02, swp03))
+            };
+            let fac3 = {
+                let swp0a = swizzle3377(self.w_axis.0, self.z_axis.0);
+                let swp0b = swizzle0044(self.w_axis.0, self.z_axis.0);
+                let swp00 = swizzle0044(self.z_axis.0, self.y_axis.0);
+                let swp01 = swizzle0046(swp0a, swp0a);
+                let swp02 = swizzle0046(swp0b, swp0b);
+                let swp03 = swizzle3377(self.z_axis.0, self.y_axis.0);
+                vsubq_f32(vmulq_f32(swp00, swp01), vmulq_f32(swp02, swp03))
+            };
+            let fac4 = {
+                let swp0a = swizzle2266(self.w_axis.0, self.z_axis.0);
+                let swp0b = swizzle0044(self.w_axis.0, self.z_axis.0);
+                let swp00 = swizzle0044(self.z_axis.0, self.y_axis.0);
+                let swp01 = swizzle0046(swp0a, swp0a);
+                let swp02 = swizzle0046(swp0b, swp0b);
+                let swp03 = swizzle2266(self.z_axis.0, self.y_axis.0);
+                vsubq_f32(vmulq_f32(swp00, swp01), vmulq_f32(swp02, swp03))
+            };
+            let fac5 = {
+                let swp0a = swizzle1155(self.w_axis.0, self.z_axis.0);
+                let swp0b = swizzle0044(self.w_axis.0, self.z_axis.0);
+                let swp00 = swizzle0044(self.z_axis.0, self.y_axis.0);
+                let swp01 = swizzle0046(swp0a, swp0a);
+                let swp02 = swizzle0046(swp0b, swp0b);
+                let swp03 = swizzle1155(self.z_axis.0, self.y_axis.0);
+                vsubq_f32(vmulq_f32(swp00, swp01), vmulq_f32(swp02, swp03))
+            };
+
+            const SIGN_A: float32x4_t = unsafe { SignCast { f: [-1.0, 1.0, -1.0, 1.0] }.v };
+            const SIGN_B: float32x4_t = unsafe { SignCast { f: [1.0, -1.0, 1.0, -1.0] }.v };
+
+            let temp0 = swizzle0044(self.y_axis.0, self.x_axis.0);
+            let vec0  = swizzle0266(temp0, temp0);
+            let temp1 = swizzle1155(self.y_axis.0, self.x_axis.0);
+            let vec1  = swizzle0266(temp1, temp1);
+            let temp2 = swizzle2266(self.y_axis.0, self.x_axis.0);
+            let vec2  = swizzle0266(temp2, temp2);
+            let temp3 = swizzle3377(self.y_axis.0, self.x_axis.0);
+            let vec3  = swizzle0266(temp3, temp3);
+
+            let inv0 = vmulq_f32(SIGN_B, vaddq_f32(
+                vsubq_f32(vmulq_f32(vec1, fac0), vmulq_f32(vec2, fac1)), vmulq_f32(vec3, fac2),
+            ));
+            let inv1 = vmulq_f32(SIGN_A, vaddq_f32(
+                vsubq_f32(vmulq_f32(vec0, fac0), vmulq_f32(vec2, fac3)), vmulq_f32(vec3, fac4),
+            ));
+            let inv2 = vmulq_f32(SIGN_B, vaddq_f32(
+                vsubq_f32(vmulq_f32(vec0, fac1), vmulq_f32(vec1, fac3)), vmulq_f32(vec3, fac5),
+            ));
+            let inv3 = vmulq_f32(SIGN_A, vaddq_f32(
+                vsubq_f32(vmulq_f32(vec0, fac2), vmulq_f32(vec1, fac4)), vmulq_f32(vec2, fac5),
+            ));
+
+            let row0 = swizzle0044(inv0, inv1);
+            let row1 = swizzle0044(inv2, inv3);
+            let row2 = swizzle0246(row0, row1);
+
+            let det = vaddvq_f32(vmulq_f32(self.x_axis.0, row2));
+
+            (Self {
+                x_axis: Vec4(inv0), y_axis: Vec4(inv1),
+                z_axis: Vec4(inv2), w_axis: Vec4(inv3),
+            }, det)
+        }
+    }
+
+    /// Pure-scalar cofactor inverse. Kept for reference/fallback — see
+    /// `inverse_raw` for the vectorized path `inverse()` actually uses now.
     pub fn inverse_scalar(self) -> Option<Self> {
         let a = [
             self.x_axis.x, self.x_axis.y, self.x_axis.z, self.x_axis.w,
@@ -345,4 +510,4 @@ impl fmt::Display for Mat4 {
         }
         Ok(())
     }
-                          }
+    }
