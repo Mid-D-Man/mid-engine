@@ -59,10 +59,12 @@ impl i8x16 {
         i8x16(core::array::from_fn(|i| if mask.0[i] != 0 { t.0[i] } else { f.0[i] }))
     }
 
+    /// Rearrange bytes of `self` using `indices` as lane selectors — mirrors `pshufb`.
+    /// Lane result: `0` if `indices.0[i] < 0`, else `self.0[indices.0[i] & 0x0F]`.
     #[inline] pub fn shuffle_bytes(self, indices: Self) -> Self {
         let mut out = [0i8; 16];
         for i in 0..16 {
-            let ix = self.0[i];
+            let ix = indices.0[i]; // use indices, not self
             out[i] = if ix < 0 { 0 } else { self.0[(ix & 0x0F) as usize] };
         }
         i8x16(out)
