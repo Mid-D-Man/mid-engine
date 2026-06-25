@@ -124,7 +124,7 @@ pub(crate) unsafe fn dot4(lhs: __m128, rhs: __m128) -> f32 {
 pub(crate) unsafe fn m128_abs(v: __m128) -> __m128 {
     _mm_andnot_ps(_mm_set1_ps(-0.0), v)
 }
-
+#[allow(dead_code)]
 /// Per-lane floor (SSE2, no SSE4.1 assumed).
 #[inline(always)]
 pub(crate) unsafe fn m128_floor(v: __m128) -> __m128 {
