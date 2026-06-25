@@ -1,5 +1,9 @@
 // crates/mid-math/src/wide/int/scalar/mod.rs
 // Scalar fallback integer wide types — non-x86 platforms.
+// Under x86-64-v4 the SSE2/AVX int wide types supersede these, making
+// the IMask re-exports dead.
+#![allow(unused_imports, dead_code)]
+
 //
 // NOTE: module names (i32x4, u32x4, …) match their contained type names.
 // Re-exporting the type here would clash with the module in the same namespace.
