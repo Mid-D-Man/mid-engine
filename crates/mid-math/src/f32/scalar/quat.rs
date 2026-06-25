@@ -1,5 +1,6 @@
 // crates/mid-math/src/f32/scalar/quat.rs
 //! Scalar Quat — fallback for non-SIMD targets and correctness reference.
+#![allow(dead_code)]
 
 use core::fmt;
 use core::ops::{Mul, MulAssign, Neg, Add, Sub};
