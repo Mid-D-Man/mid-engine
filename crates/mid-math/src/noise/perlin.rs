@@ -81,6 +81,7 @@ impl Perlin {
         let wi = w.floor() as i32 as usize & 255;
         let xf = x - x.floor(); let yf = y - y.floor();
         let zf = z - z.floor(); let wf = w - w.floor();
+        // u=x fade, v=y fade, s=z fade, t=w fade
         let u = fade(xf); let v = fade(yf); let s = fade(zf); let t = fade(wf);
 
         // 16 corners of the 4D hypercube — index[w][z][y][x]
@@ -102,18 +103,28 @@ impl Perlin {
             );
         }
 
-        // Quadrilinear interpolation: index w*8 + z*4 + y*2 + x
+        // Quadrilinear interpolation across all 16 corners.
+        // index layout: wo*8 + zo*4 + yo*2 + xo
         let q = |xo: usize, yo: usize, zo: usize, wo: usize| -> f32 {
             corners[wo * 8 + zo * 4 + yo * 2 + xo]
         };
-        // Replace the broken 3D sample block (around lines 109-115) with:
-lerp(t,
-    lerp(v,
-        lerp(u, q(0,0,0,0), q(1,0,0,0)),
-        lerp(u, q(0,1,0,0), q(1,1,0,0))),
-    lerp(v,
-        lerp(u, q(0,0,1,0), q(1,0,1,0)),
-        lerp(u, q(0,1,1,0), q(1,1,1,0))))
+
+        // Innermost: x (u), then y (v), then z (s), then w (t).
+        lerp(t,
+            lerp(s,
+                lerp(v,
+                    lerp(u, q(0,0,0,0), q(1,0,0,0)),
+                    lerp(u, q(0,1,0,0), q(1,1,0,0))),
+                lerp(v,
+                    lerp(u, q(0,0,1,0), q(1,0,1,0)),
+                    lerp(u, q(0,1,1,0), q(1,1,1,0)))),
+            lerp(s,
+                lerp(v,
+                    lerp(u, q(0,0,0,1), q(1,0,0,1)),
+                    lerp(u, q(0,1,0,1), q(1,1,0,1))),
+                lerp(v,
+                    lerp(u, q(0,0,1,1), q(1,0,1,1)),
+                    lerp(u, q(0,1,1,1), q(1,1,1,1)))))
     }
 }
 
@@ -178,4 +189,4 @@ fn grad4d(hash: usize, x: f32, y: f32, z: f32, w: f32) -> f32 {
     let sb = if h & 2 != 0 { -1.0 } else { 1.0 };
     let sc = if h & 4 != 0 { -1.0 } else { 1.0 };
     sa * a + sb * b + sc * c
-                                                                  }
+    }
