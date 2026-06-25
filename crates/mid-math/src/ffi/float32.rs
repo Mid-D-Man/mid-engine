@@ -6,9 +6,6 @@
 //! and Mat4's new Vec4-field layout.
 
 use crate::{Affine3, Mat3, Mat4, Quat, Vec2, Vec3, Vec4};
-use crate::f64::dvec2::DVec2 as ScalarDVec2;
-use crate::f64::dquat::DQuat as ScalarDQuat;
-use crate::f64::dvec3::DVec3 as ScalarDVec3;
 
 // ═══════════════════════════════════════════════════════════════════════════
 //  C types
