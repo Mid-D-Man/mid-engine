@@ -8,11 +8,11 @@
 
 use crate::fixed::{
     Fixed8,  Fixed12,  Fixed16,
-    FixedVec2, FixedVec3,
+    
     Fixed8Vec2,  Fixed12Vec2,  Fixed16Vec2,
     Fixed8Vec3,  Fixed12Vec3,  Fixed16Vec3,
 };
-use crate::fixed::fixed::Fixed;
+
 
 // ═══════════════════════════════════════════════════════════════════════════
 //  C scalar types (transparent i64)
