@@ -19,7 +19,7 @@ use core::arch::x86::*;
 #[cfg(target_arch = "x86_64")]
 use core::arch::x86_64::*;
 
-use crate::sse2::{dot4d, dot4d_into_m128d, m128d_abs, m128d_from_f64x2};
+use crate::sse2::{dot4d, dot4d_into_m128d, m128d_from_f64x2};
 use crate::impl_dvec4_deref;
 use crate::f64::dvec3::DVec3;
 use crate::f64::dmat4::DMat4;
