@@ -1,6 +1,6 @@
 // crates/mid-math/src/f32/sse2/vec3.rs
 
-use core::fmt;
+
 use core::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAssign};
 
 #[cfg(target_arch = "x86")]
