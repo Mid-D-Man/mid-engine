@@ -14,7 +14,7 @@ use crate::{
     camera::{
         Frustum, Visibility,
         projection::{
-            PerspectiveParams,
+            
             csm_split_depths, perspective_decompose, perspective_infinite_rh,
             perspective_resize, perspective_reversed_z_rh, picking_ray,
             sub_frustum_corners, unproject,
