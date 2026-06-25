@@ -45,7 +45,7 @@ const XYZ_MASK: __m128 = m128_from_f32x4([
 
 /// [0, 0, 0, 1] — OR into a translation-zeroed column to set w = 1.
 const W_ONE: __m128 = m128_from_f32x4([0.0, 0.0, 0.0, 1.0]);
-
+#[allow(dead_code)]
 /// Negate xyz, keep w unchanged (for look_at w-dot negation).
 const NEG_XYZ: __m128 = m128_from_f32x4([-0.0, -0.0, -0.0, 0.0]);
 
