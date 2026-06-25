@@ -25,6 +25,7 @@ impl Mask4 {
         })
     }
 
+    #[allow(dead_code)]
     #[inline(always)]
     pub(crate) fn from_bools(a: bool, b: bool, c: bool, d: bool) -> Self {
         let lane = |v: bool| if v { u32::MAX } else { 0 };
@@ -45,4 +46,4 @@ impl fmt::Debug for Mask4 {
         let b = self.bitmask();
         write!(f, "Mask4({},{},{},{})", b&1!=0, b>>1&1!=0, b>>2&1!=0, b>>3&1!=0)
     }
-      }
+                                                                    }
