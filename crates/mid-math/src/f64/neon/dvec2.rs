@@ -15,7 +15,7 @@ use core::fmt;
 use core::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAssign};
 use core::arch::aarch64::*;
 
-use crate::neon::{dot2d_neon, dot2d_neon_into_f64x2, f64x2_from_f64x2};
+use crate::neon::{dot2d_neon, dot2d_neon_into_f64x2};
 use crate::impl_dvec2_deref;
 use crate::DEPSILON;
 
