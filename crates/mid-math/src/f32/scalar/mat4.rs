@@ -3,7 +3,7 @@
 //! Build 8: storage changed from [[f32;4];4] to four Vec4 fields.
 //! No SIMD benefit here (scalar Vec4), but API is consistent with all backends
 //! and LLVM can still auto-vectorise the hot paths.
-
+#![allow(dead_code)]
 use core::fmt;
 use core::ops::Mul;
 use crate::f32::scalar::vec3::Vec3;
