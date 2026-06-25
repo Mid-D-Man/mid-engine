@@ -37,6 +37,8 @@ impl Mask4 {
     pub fn none(self) -> bool { unsafe { _mm_movemask_ps(self.0) == 0 } }
     #[inline]
     pub fn bitmask(self) -> u32 { unsafe { _mm_movemask_ps(self.0) as u32 } }
+
+    #[allow(dead_code)]
     #[inline(always)]
     pub(crate) fn from_m128(m: __m128) -> Self { Mask4(m) }
 }
