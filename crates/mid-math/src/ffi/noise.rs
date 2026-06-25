@@ -16,7 +16,7 @@
 //!   Non-null, valid for stated element count, caller owns memory.
 
 use crate::noise::{
-    DomainWarp, Fbm, NoiseSource2d, NoiseSource3d, NoiseSource4d,
+    DomainWarp, Fbm, 
     Perlin, Simplex, Value, Worley,
     worley::{DistanceMode, DistanceMetric},
 };
