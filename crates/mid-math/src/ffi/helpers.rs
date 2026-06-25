@@ -6,7 +6,7 @@ use crate::{
     Degrees, DualQuat, PackedTangent, Quat, Radians, Rotor3,
     SpatialForce, SpatialInertia, SpatialVelocity, TangentFrame, Vec2, Vec3,
 };
-use crate::ffi::float32::{CQuat, CVec2, CVec3};
+use crate::ffi::float32::{CQuat, CVec3};
 
 // ═══════════════════════════════════════════════════════════════════════════
 //  C types
@@ -249,8 +249,8 @@ fn sf_from_c(c: CSpatialForce) -> SpatialForce {
     CRotor3 { s: r.s, b_yz: r.b_yz, b_xz: r.b_xz, b_xy: r.b_xy }
 }
 #[no_mangle] pub extern "C" fn mid_rotor3_mul(a: CRotor3, b: CRotor3) -> CRotor3 {
-    let r = (Rotor3::new(a.s,a.b_yz,a.b_xz,a.b_xy)
-           * Rotor3::new(b.s,b.b_yz,b.b_xz,b.b_xy));
+    let r = Rotor3::new(a.s,a.b_yz,a.b_xz,a.b_xy)
+           * Rotor3::new(b.s,b.b_yz,b.b_xz,b.b_xy);
     CRotor3 { s: r.s, b_yz: r.b_yz, b_xz: r.b_xz, b_xy: r.b_xy }
 }
 #[no_mangle] pub extern "C" fn mid_rotor3_to_quat(cr: CRotor3) -> CQuat {
