@@ -4,6 +4,10 @@
 //! Keeping these in one place lets us swap in `libm` for `no_std` targets
 //! later without touching every call site.
 
+// These helpers are used by scalar/SSE2 paths but become dead when
+// AVX-512 (or any other non-scalar) path is the active target.
+#![allow(dead_code)]
+
 /// Sine and cosine simultaneously (cheaper than calling both separately on
 /// most targets — the compiler can emit a single `fsincos` or use the
 /// intrinsic pair).
@@ -59,4 +63,4 @@ pub(crate) fn acos_approx(v: f32) -> f32 {
     r =  r * x + 1.570_796_327_f32; // ≈ π/2
     r *= (1.0 - x).sqrt();
     if v < 0.0 { core::f32::consts::PI - r } else { r }
-}
+                                                    }
