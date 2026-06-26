@@ -295,8 +295,23 @@ impl Mat3 {
     /// Matrix × matrix.
     #[inline]
     pub fn mul_mat3(self, rhs: Self) -> Self {
-        Self::from_cols(self.mul_vec3(rhs.col(0)), self.mul_vec3(rhs.col(1)), self.mul_vec3(rhs.col(2)))
-    }
+        // AVX + FMA path: 2 output columns per YMM pass, ~2× fewer SIMD ops.
+        #[cfg(all(
+            any(target_arch = "x86", target_arch = "x86_64"),
+            target_feature = "avx",
+            target_feature = "fma",
+        ))]
+        {
+            // SAFETY: cfg gate proves avx+fma are available at compile time.
+            return unsafe { crate::f32::avx::mat3::mat3_mul_avx(self, rhs) };
+        }
+        // Scalar fallback — three matrix-vector products.
+        Self::from_cols(
+            self.mul_vec3(rhs.col(0)),
+            self.mul_vec3(rhs.col(1)),
+            self.mul_vec3(rhs.col(2)),
+        )
+              }
 
     /// Scale every element by `s`.
     #[inline]
