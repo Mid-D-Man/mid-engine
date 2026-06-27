@@ -144,9 +144,9 @@ impl DMat3 {
     /// Lossy cast to single-precision `Mat3`.
     pub fn as_mat3(self) -> crate::Mat3 {
         crate::Mat3::from_cols(
-            [self.cols[0][0] as f32, self.cols[0][1] as f32, self.cols[0][2] as f32],
-            [self.cols[1][0] as f32, self.cols[1][1] as f32, self.cols[1][2] as f32],
-            [self.cols[2][0] as f32, self.cols[2][1] as f32, self.cols[2][2] as f32],
+            [self.cols[0][0] as f32, self.cols[0][1] as f32, self.cols[0][2] as f32].into(),
+            [self.cols[1][0] as f32, self.cols[1][1] as f32, self.cols[1][2] as f32].into(),
+            [self.cols[2][0] as f32, self.cols[2][1] as f32, self.cols[2][2] as f32].into(),
         )
     }
 }
@@ -192,4 +192,4 @@ impl fmt::Display for DMat3 {
         }
         Ok(())
     }
-                                     }
+                           }
