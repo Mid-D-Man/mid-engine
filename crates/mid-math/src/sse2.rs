@@ -124,8 +124,9 @@ pub(crate) unsafe fn dot4(lhs: __m128, rhs: __m128) -> f32 {
 pub(crate) unsafe fn m128_abs(v: __m128) -> __m128 {
     _mm_andnot_ps(_mm_set1_ps(-0.0), v)
 }
-#[allow(dead_code)]
+
 /// Per-lane floor (SSE2, no SSE4.1 assumed).
+#[allow(dead_code)]
 #[inline(always)]
 pub(crate) unsafe fn m128_floor(v: __m128) -> __m128 {
     let i    = _mm_cvttps_epi32(v);
@@ -136,6 +137,7 @@ pub(crate) unsafe fn m128_floor(v: __m128) -> __m128 {
 }
 
 /// Per-lane ceil (SSE2).
+#[allow(dead_code)]
 #[inline(always)]
 pub(crate) unsafe fn m128_ceil(v: __m128) -> __m128 {
     let i    = _mm_cvttps_epi32(v);
@@ -146,12 +148,14 @@ pub(crate) unsafe fn m128_ceil(v: __m128) -> __m128 {
 }
 
 /// Per-lane truncation toward zero.
+#[allow(dead_code)]
 #[inline(always)]
 pub(crate) unsafe fn m128_trunc(v: __m128) -> __m128 {
     _mm_cvtepi32_ps(_mm_cvttps_epi32(v))
 }
 
 /// Per-lane round-to-nearest (half-away-from-zero).
+#[allow(dead_code)]
 #[inline(always)]
 pub(crate) unsafe fn m128_round(v: __m128) -> __m128 {
     let sign_mask = _mm_set1_ps(-0.0);
@@ -191,7 +195,7 @@ pub(crate) unsafe fn rsqrt_nr(v: __m128) -> __m128 {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// ── F64 (__m128d) helpers ────────────────────────────────────────────────────
+// ── F64 (__m128d) helpers ────────────────────────────────────════════════════
 // ═══════════════════════════════════════════════════════════════════════════════
 
 /// Build a `__m128d` from `[f64; 2]` at compile time via transmute.
@@ -261,4 +265,4 @@ pub(crate) unsafe fn dot4d_into_m128d(lo_a: __m128d, hi_a: __m128d,
 #[inline(always)]
 pub(crate) unsafe fn m128d_abs(v: __m128d) -> __m128d {
     _mm_andnot_pd(_mm_set1_pd(-0.0), v)
-}
+    }
