@@ -144,7 +144,7 @@ impl TangentFrame {
     /// Build the 3×3 TBN matrix: columns are T, B, N.
     #[inline]
     pub fn to_mat3(self) -> Mat3 {
-        Mat3::from_vecs(self.tangent, self.bitangent, self.normal)
+        Mat3::from_cols(self.tangent, self.bitangent, self.normal)
     }
 }
 
@@ -152,4 +152,4 @@ impl fmt::Display for TangentFrame {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "TBN(n={}, t={}, b={})", self.normal, self.tangent, self.bitangent)
     }
-}
+    }
