@@ -65,6 +65,10 @@ jobs:
           toolchain: stable
           override: true
           target: ${{ inputs.target_cpu == 'wasm' && 'wasm32-wasip1' || '' }}
+          # Disable the default `-D warnings` that setup-rust-toolchain injects.
+          # Bench runs should not fail on dead-code or other style warnings —
+          # those belong in CI lint/test jobs, not perf measurement workflows.
+          rustflags: ""
 
       - name: Install wasmtime
         if: inputs.target_cpu == 'wasm'
