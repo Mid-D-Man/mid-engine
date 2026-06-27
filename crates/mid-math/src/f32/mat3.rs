@@ -216,7 +216,7 @@ impl Mat3 {
     #[inline]
     pub fn diagonal(&self) -> Vec3 { Vec3::new(self.cols[0][0], self.cols[1][1], self.cols[2][2]) }
 
-    // ── Core matrix operations ────────────────────────────────────────────────
+    // ── Core matrix operations ─────────────────────────────────────────────────
 
     #[inline]
     pub fn transpose(self) -> Self {
@@ -268,6 +268,19 @@ impl Mat3 {
     #[inline] pub fn inverse(self) -> Option<Self> { self.try_inverse() }
     #[inline] pub fn inverse_or_zero(self) -> Self { self.try_inverse().unwrap_or(Self::ZERO) }
 
+    /// Normal matrix — inverse-transpose of the upper-left 3×3 of a model Mat4.
+    ///
+    /// Used every frame in shaders to correctly transform surface normals when
+    /// the model matrix contains non-uniform scale. Returns `None` if the 3×3
+    /// sub-matrix is singular (i.e. a degenerate transform with zero scale on
+    /// any axis).
+    ///
+    /// Equivalent to `Mat3::from_mat4(model).inverse().map(|m| m.transpose())`.
+    #[inline]
+    pub fn normal_matrix(model: &crate::Mat4) -> Option<Self> {
+        Self::from_mat4(*model).try_inverse().map(|m| m.transpose())
+    }
+
     // ── Transform ─────────────────────────────────────────────────────────────
 
     /// `M * v` — column vector transform.
@@ -280,6 +293,11 @@ impl Mat3 {
             c[0][2]*v.x + c[1][2]*v.y + c[2][2]*v.z,
         )
     }
+
+    /// Alias for `mul_vec3`. Matches the naming convention used in the bench
+    /// harness and mirrors `DMat3::transform`.
+    #[inline]
+    pub fn transform(self, v: Vec3) -> Vec3 { self.mul_vec3(v) }
 
     /// `M^T * v` — cheaper than `.transpose().mul_vec3(v)`.
     #[inline]
@@ -311,7 +329,7 @@ impl Mat3 {
             self.mul_vec3(rhs.col(1)),
             self.mul_vec3(rhs.col(2)),
         )
-              }
+    }
 
     /// Scale every element by `s`.
     #[inline]
