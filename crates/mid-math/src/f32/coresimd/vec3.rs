@@ -30,6 +30,7 @@ impl Vec3 {
     pub const NEG_X: Self = Self(f32x4::from_array([-1.0,  0.0,  0.0, 0.0]));
     pub const NEG_Y: Self = Self(f32x4::from_array([ 0.0, -1.0,  0.0, 0.0]));
     pub const NEG_Z: Self = Self(f32x4::from_array([ 0.0,  0.0, -1.0, 0.0]));
+    pub const NAN:   Self = Self(f32x4::from_array([f32::NAN, f32::NAN, f32::NAN, f32::NAN]));
 
     #[inline(always)]
     pub fn new(x: f32, y: f32, z: f32) -> Self {
@@ -119,6 +120,11 @@ impl Vec3 {
     }
     #[inline] pub fn approx_eq(self, rhs: Self) -> bool {
         (self - rhs).abs().length_sq() < EPSILON * EPSILON
+    }
+    #[inline] pub fn abs_diff_eq(self, rhs: Self, max_abs_diff: f32) -> bool {
+        (self.x - rhs.x).abs() < max_abs_diff
+            && (self.y - rhs.y).abs() < max_abs_diff
+            && (self.z - rhs.z).abs() < max_abs_diff
     }
     #[inline] pub fn approx_eq_eps(self, rhs: Self, eps: f32) -> bool {
         (self.x - rhs.x).abs() < eps
