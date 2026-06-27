@@ -174,9 +174,9 @@ impl Affine2 {
     #[inline]
     pub fn to_mat3(self) -> Mat3 {
         Mat3::from_cols(
-            [self.x_axis.x, self.x_axis.y, 0.0],
-            [self.y_axis.x, self.y_axis.y, 0.0],
-            [self.translation.x, self.translation.y, 1.0],
+            [self.x_axis.x, self.x_axis.y, 0.0].into(),
+            [self.y_axis.x, self.y_axis.y, 0.0].into(),
+            [self.translation.x, self.translation.y, 1.0].into(),
         )
     }
 
@@ -330,4 +330,4 @@ impl From<Mat3> for Affine2 {
 
 impl From<Affine2> for Mat3 {
     #[inline] fn from(a: Affine2) -> Self { a.to_mat3() }
-            }
+}
