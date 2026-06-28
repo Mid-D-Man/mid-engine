@@ -81,20 +81,20 @@ impl Vec4 {
         if l < EPSILON { 0.0 } else { 1.0 / l }
     }
 
-    /// Normalise to unit length. Returns ZERO for near-zero-length vectors.
+    /// Normalize to unit length.
     ///
-    /// Uses `rsqrt_nr_f32` (estimate + 1 NR step) instead of `vsqrtq_f32` +
-    /// `vdivq_f32` — see `crate::neon::rsqrt_nr_f32`. Threshold compares
-    /// squared length against `EPSILON²` (algebraically identical to the old
-    /// `length() > EPSILON` check) so no actual sqrt is needed for the branch.
+    /// **Undefined (NaN in practice) for zero-length input.**
+    /// Use [`Self::normalize_or_zero()`] for safe behaviour.
+    ///
+    /// NEON-OPT (Build 22): `vcgtq_f32` + `vandq_u32` zero-guard removed,
+    /// matching glam's `normalize()` contract. Saves 3 NEON ops on every
+    /// non-zero input. Safe path: `normalize_or_zero()`.
     #[inline]
     pub fn normalize(self) -> Self {
         unsafe {
             let dot = vdupq_n_f32(vaddvq_f32(vmulq_f32(self.0, self.0)));
-            let ok  = vcgtq_f32(dot, vdupq_n_f32(EPSILON * EPSILON));
             let inv = crate::neon::rsqrt_nr_f32(dot);
-            let n   = vmulq_f32(self.0, inv);
-            Self(vreinterpretq_f32_u32(vandq_u32(vreinterpretq_u32_f32(n), ok)))
+            Self(vmulq_f32(self.0, inv))
         }
     }
 
@@ -141,7 +141,6 @@ impl Vec4 {
             let diff = vabsq_f32(vsubq_f32(self.0, rhs.0));
             let eps  = vdupq_n_f32(EPSILON);
             let ok   = vcltq_f32(diff, eps);
-            // All 4 lanes must pass
             vgetq_lane_u32::<0>(ok) != 0
                 && vgetq_lane_u32::<1>(ok) != 0
                 && vgetq_lane_u32::<2>(ok) != 0
@@ -237,4 +236,4 @@ impl From<(f32, f32, f32, f32)> for Vec4 {
 }
 impl From<Vec4> for (f32, f32, f32, f32) {
     #[inline] fn from(v: Vec4) -> Self { (v.x, v.y, v.z, v.w) }
-}
+                        }
