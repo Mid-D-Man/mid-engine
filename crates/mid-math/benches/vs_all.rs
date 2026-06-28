@@ -38,9 +38,11 @@ use glam::{
 };
 
 // ── nalgebra ──────────────────────────────────────────────────────────────────
+#[cfg(not(target_arch = "wasm32"))]
 use nalgebra::{Matrix2, Matrix3, Matrix4, Point3, Unit, UnitQuaternion, Vector2, Vector3, Vector4};
 
 // ── ultraviolet ───────────────────────────────────────────────────────────────
+#[cfg(not(target_arch = "wasm32"))]
 use ultraviolet::{Mat2 as UMat2, Mat3 as UMat3, Mat4 as UMat4, Rotor3, Slerp, Vec2 as UVec2, Vec3 as UVec3, Vec4 as UVec4};
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -63,6 +65,7 @@ fn glam_trs(tx: f32, angle_deg: f32, sx: f32) -> GMat4 {
     )
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn na_trs(tx: f32, angle_deg: f32, sx: f32) -> Matrix4<f32> {
     use nalgebra::{Isometry3, Translation3};
     let iso = Isometry3::from_parts(
@@ -72,6 +75,7 @@ fn na_trs(tx: f32, angle_deg: f32, sx: f32) -> Matrix4<f32> {
     iso.to_homogeneous() * Matrix4::new_scaling(sx)
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn uv_trs(tx: f32, angle_deg: f32, sx: f32) -> UMat4 {
     let t = UMat4::from_translation(ultraviolet::Vec3::new(tx, 0.0, 0.0));
     let r = UMat4::from_rotation_y(angle_deg.to_radians());
@@ -90,30 +94,38 @@ fn bench_vec3(c: &mut Criterion) {
     let mm_b = Vec3::new(4.0, 5.0, 6.0);
     let gl_a = GVec3::new(1.0, 2.0, 3.0);
     let gl_b = GVec3::new(4.0, 5.0, 6.0);
-    let na_a = Vector3::new(1.0f32, 2.0, 3.0);
-    let na_b = Vector3::new(4.0f32, 5.0, 6.0);
-    let uv_a = UVec3::new(1.0, 2.0, 3.0);
-    let uv_b = UVec3::new(4.0, 5.0, 6.0);
+    #[cfg(not(target_arch = "wasm32"))] let na_a = Vector3::new(1.0f32, 2.0, 3.0);
+    #[cfg(not(target_arch = "wasm32"))] let na_b = Vector3::new(4.0f32, 5.0, 6.0);
+    #[cfg(not(target_arch = "wasm32"))] let uv_a = UVec3::new(1.0, 2.0, 3.0);
+    #[cfg(not(target_arch = "wasm32"))] let uv_b = UVec3::new(4.0, 5.0, 6.0);
 
     g.bench_function("add/mid-math",    |b| b.iter(|| black_box(mm_a) + black_box(mm_b)));
     g.bench_function("add/glam",        |b| b.iter(|| black_box(gl_a) + black_box(gl_b)));
+    #[cfg(not(target_arch = "wasm32"))]
     g.bench_function("add/nalgebra",    |b| b.iter(|| black_box(na_a) + black_box(na_b)));
+    #[cfg(not(target_arch = "wasm32"))]
     g.bench_function("add/ultraviolet", |b| b.iter(|| black_box(uv_a) + black_box(uv_b)));
 
     g.bench_function("dot/mid-math",    |b| b.iter(|| black_box(mm_a).dot(black_box(mm_b))));
     g.bench_function("dot/glam",        |b| b.iter(|| black_box(gl_a).dot(black_box(gl_b))));
+    #[cfg(not(target_arch = "wasm32"))]
     g.bench_function("dot/nalgebra",    |b| b.iter(|| black_box(na_a).dot(&black_box(na_b))));
+    #[cfg(not(target_arch = "wasm32"))]
     g.bench_function("dot/ultraviolet", |b| b.iter(|| black_box(uv_a).dot(black_box(uv_b))));
 
     g.bench_function("cross/mid-math",    |b| b.iter(|| black_box(mm_a).cross(black_box(mm_b))));
     g.bench_function("cross/glam",        |b| b.iter(|| black_box(gl_a).cross(black_box(gl_b))));
+    #[cfg(not(target_arch = "wasm32"))]
     g.bench_function("cross/nalgebra",    |b| b.iter(|| black_box(na_a).cross(&black_box(na_b))));
+    #[cfg(not(target_arch = "wasm32"))]
     g.bench_function("cross/ultraviolet", |b| b.iter(|| black_box(uv_a).cross(black_box(uv_b))));
 
     // Build 7: 2.62 ns — WE BEAT GLAM (2.92 ns). Guard removal + rsqrt_nr.
     g.bench_function("normalize/mid-math",    |b| b.iter(|| black_box(mm_a).normalize()));
     g.bench_function("normalize/glam",        |b| b.iter(|| black_box(gl_a).normalize()));
+    #[cfg(not(target_arch = "wasm32"))]
     g.bench_function("normalize/nalgebra",    |b| b.iter(|| black_box(na_a).normalize()));
+    #[cfg(not(target_arch = "wasm32"))]
     g.bench_function("normalize/ultraviolet", |b| b.iter(|| black_box(uv_a).normalized()));
 
     g.bench_function("normalize_or_zero/mid-math", |b| b.iter(|| black_box(mm_a).normalize_or_zero()));
@@ -121,7 +133,9 @@ fn bench_vec3(c: &mut Criterion) {
 
     g.bench_function("lerp/mid-math",    |b| b.iter(|| black_box(mm_a).lerp(black_box(mm_b), 0.5)));
     g.bench_function("lerp/glam",        |b| b.iter(|| black_box(gl_a).lerp(black_box(gl_b), 0.5)));
+    #[cfg(not(target_arch = "wasm32"))]
     g.bench_function("lerp/nalgebra",    |b| b.iter(|| black_box(na_a).lerp(&black_box(na_b), 0.5)));
+    #[cfg(not(target_arch = "wasm32"))]
     g.bench_function("lerp/ultraviolet", |b| b.iter(|| {
         let t = 0.5f32;
         black_box(uv_a) + (black_box(uv_b) - black_box(uv_a)) * t
@@ -129,7 +143,9 @@ fn bench_vec3(c: &mut Criterion) {
 
     g.bench_function("length/mid-math",    |b| b.iter(|| black_box(mm_a).length()));
     g.bench_function("length/glam",        |b| b.iter(|| black_box(gl_a).length()));
+    #[cfg(not(target_arch = "wasm32"))]
     g.bench_function("length/nalgebra",    |b| b.iter(|| black_box(na_a).norm()));
+    #[cfg(not(target_arch = "wasm32"))]
     g.bench_function("length/ultraviolet", |b| b.iter(|| black_box(uv_a).mag()));
 
     g.finish();
@@ -144,17 +160,21 @@ fn bench_vec4(c: &mut Criterion) {
 
     let mm = Vec4::new(1.0, 2.0, 3.0, 4.0);
     let gl = GVec4::new(1.0, 2.0, 3.0, 4.0);
-    let na = Vector4::new(1.0f32, 2.0, 3.0, 4.0);
-    let uv = UVec4::new(1.0, 2.0, 3.0, 4.0);
+    #[cfg(not(target_arch = "wasm32"))] let na = Vector4::new(1.0f32, 2.0, 3.0, 4.0);
+    #[cfg(not(target_arch = "wasm32"))] let uv = UVec4::new(1.0, 2.0, 3.0, 4.0);
 
     g.bench_function("dot/mid-math",    |b| b.iter(|| black_box(mm).dot(black_box(mm))));
     g.bench_function("dot/glam",        |b| b.iter(|| black_box(gl).dot(black_box(gl))));
+    #[cfg(not(target_arch = "wasm32"))]
     g.bench_function("dot/nalgebra",    |b| b.iter(|| black_box(na).dot(&black_box(na))));
+    #[cfg(not(target_arch = "wasm32"))]
     g.bench_function("dot/ultraviolet", |b| b.iter(|| black_box(uv).dot(black_box(uv))));
 
     g.bench_function("normalize/mid-math",    |b| b.iter(|| black_box(mm).normalize()));
     g.bench_function("normalize/glam",        |b| b.iter(|| black_box(gl).normalize()));
+    #[cfg(not(target_arch = "wasm32"))]
     g.bench_function("normalize/nalgebra",    |b| b.iter(|| black_box(na).normalize()));
+    #[cfg(not(target_arch = "wasm32"))]
     g.bench_function("normalize/ultraviolet", |b| b.iter(|| black_box(uv).normalized()));
 
     g.bench_function("lerp/mid-math", |b| b.iter(|| black_box(mm).lerp(black_box(mm), 0.5)));
@@ -178,36 +198,49 @@ fn bench_rotation(c: &mut Criterion) {
     let gl_q2 = GQuat::from_axis_angle(glam::Vec3::new(1.0, 1.0, 0.0).normalize(), 30_f32.to_radians());
     let gl_v  = glam::Vec3::X;
 
+    #[cfg(not(target_arch = "wasm32"))]
     let na_q1 = UnitQuaternion::from_axis_angle(&Vector3::y_axis(), 45_f32.to_radians());
+    #[cfg(not(target_arch = "wasm32"))]
     let na_q2 = UnitQuaternion::from_axis_angle(
         &Unit::new_normalize(Vector3::new(1.0f32, 1.0, 0.0)),
         30_f32.to_radians(),
     );
+    #[cfg(not(target_arch = "wasm32"))]
     let na_v = Vector3::new(1.0f32, 0.0, 0.0);
 
+    #[cfg(not(target_arch = "wasm32"))]
     let uv_r1 = Rotor3::from_rotation_between(UVec3::unit_x(), UVec3::unit_y());
+    #[cfg(not(target_arch = "wasm32"))]
     let uv_r2 = Rotor3::from_rotation_between(UVec3::unit_y(), UVec3::unit_z());
+    #[cfg(not(target_arch = "wasm32"))]
     let uv_v  = UVec3::unit_x();
 
     g.bench_function("mul/mid-math-quat",     |b| b.iter(|| black_box(mm_q1) * black_box(mm_q2)));
     g.bench_function("mul/glam-quat",         |b| b.iter(|| black_box(gl_q1) * black_box(gl_q2)));
+    #[cfg(not(target_arch = "wasm32"))]
     g.bench_function("mul/nalgebra-unitquat", |b| b.iter(|| black_box(na_q1) * black_box(na_q2)));
+    #[cfg(not(target_arch = "wasm32"))]
     g.bench_function("mul/ultraviolet-rotor", |b| b.iter(|| black_box(uv_r1) * black_box(uv_r2)));
 
     // mid-math 1.9× faster than glam — architectural win from our rotate impl.
     g.bench_function("rotate/mid-math-quat",     |b| b.iter(|| black_box(mm_q1).rotate(black_box(mm_v))));
     g.bench_function("rotate/glam-quat",         |b| b.iter(|| black_box(gl_q1) * black_box(gl_v)));
+    #[cfg(not(target_arch = "wasm32"))]
     g.bench_function("rotate/nalgebra-unitquat", |b| b.iter(|| black_box(na_q1) * black_box(na_v)));
+    #[cfg(not(target_arch = "wasm32"))]
     g.bench_function("rotate/ultraviolet-rotor", |b| b.iter(|| black_box(uv_r1) * black_box(uv_v)));
 
     g.bench_function("slerp/mid-math-quat",     |b| b.iter(|| black_box(mm_q1).slerp(black_box(mm_q2), 0.5)));
     g.bench_function("slerp/glam-quat",         |b| b.iter(|| black_box(gl_q1).slerp(black_box(gl_q2), 0.5)));
+    #[cfg(not(target_arch = "wasm32"))]
     g.bench_function("slerp/nalgebra-unitquat", |b| b.iter(|| black_box(na_q1).slerp(&black_box(na_q2), 0.5)));
+    #[cfg(not(target_arch = "wasm32"))]
     g.bench_function("slerp/ultraviolet-rotor", |b| b.iter(|| black_box(uv_r1).slerp(black_box(uv_r2), 0.5)));
 
     // Build 8: dot4_into_m128 eliminates scalar round-trip. Target: ~4.2 ns.
     g.bench_function("nlerp/mid-math-quat",     |b| b.iter(|| black_box(mm_q1).nlerp(black_box(mm_q2), 0.5)));
     g.bench_function("nlerp/glam-quat",         |b| b.iter(|| black_box(gl_q1).lerp(black_box(gl_q2), 0.5)));
+    #[cfg(not(target_arch = "wasm32"))]
     g.bench_function("nlerp/nalgebra-unitquat", |b| b.iter(|| black_box(na_q1).nlerp(&black_box(na_q2), 0.5)));
 
     g.bench_function("from_axis_angle/mid-math", |b| b.iter(|| {
@@ -235,23 +268,27 @@ fn bench_mat4(c: &mut Criterion) {
     let gl_b = glam_trs(0.5, 30.0, 1.5);
     let gl_p = glam::Vec3::new(1.0, 2.0, 3.0);
 
-    let na_a = na_trs(1.0, 45.0, 2.0);
-    let na_b = na_trs(0.5, 30.0, 1.5);
-    let na_p = Point3::new(1.0f32, 2.0, 3.0);
+    #[cfg(not(target_arch = "wasm32"))] let na_a = na_trs(1.0, 45.0, 2.0);
+    #[cfg(not(target_arch = "wasm32"))] let na_b = na_trs(0.5, 30.0, 1.5);
+    #[cfg(not(target_arch = "wasm32"))] let na_p = Point3::new(1.0f32, 2.0, 3.0);
 
-    let uv_a = uv_trs(1.0, 45.0, 2.0);
-    let uv_b = uv_trs(0.5, 30.0, 1.5);
-    let uv_p = UVec3::new(1.0, 2.0, 3.0);
+    #[cfg(not(target_arch = "wasm32"))] let uv_a = uv_trs(1.0, 45.0, 2.0);
+    #[cfg(not(target_arch = "wasm32"))] let uv_b = uv_trs(0.5, 30.0, 1.5);
+    #[cfg(not(target_arch = "wasm32"))] let uv_p = UVec3::new(1.0, 2.0, 3.0);
 
     // Build 8: Vec4 field storage → target ~7 ns (parity glam).
     g.bench_function("mul/mid-math",    |b| b.iter(|| black_box(mm_a) * black_box(mm_b)));
     g.bench_function("mul/glam",        |b| b.iter(|| black_box(gl_a) * black_box(gl_b)));
+    #[cfg(not(target_arch = "wasm32"))]
     g.bench_function("mul/nalgebra",    |b| b.iter(|| black_box(na_a) * black_box(na_b)));
+    #[cfg(not(target_arch = "wasm32"))]
     g.bench_function("mul/ultraviolet", |b| b.iter(|| black_box(uv_a) * black_box(uv_b)));
 
     g.bench_function("transform_point/mid-math",    |b| b.iter(|| black_box(mm_a).transform_point(black_box(mm_p))));
     g.bench_function("transform_point/glam",        |b| b.iter(|| black_box(gl_a).transform_point3(black_box(gl_p))));
+    #[cfg(not(target_arch = "wasm32"))]
     g.bench_function("transform_point/nalgebra",    |b| b.iter(|| black_box(na_a).transform_point(&black_box(na_p))));
+    #[cfg(not(target_arch = "wasm32"))]
     g.bench_function("transform_point/ultraviolet", |b| b.iter(|| black_box(uv_a).transform_point3(black_box(uv_p))));
 
     g.bench_function("transpose/mid-math", |b| b.iter(|| black_box(mm_a).transpose()));
@@ -259,7 +296,9 @@ fn bench_mat4(c: &mut Criterion) {
 
     g.bench_function("inverse_general/mid-math",    |b| b.iter(|| black_box(mm_a).inverse()));
     g.bench_function("inverse_general/glam",        |b| b.iter(|| black_box(gl_a).inverse()));
+    #[cfg(not(target_arch = "wasm32"))]
     g.bench_function("inverse_general/nalgebra",    |b| b.iter(|| black_box(na_a).try_inverse()));
+    #[cfg(not(target_arch = "wasm32"))]
     g.bench_function("inverse_general/ultraviolet", |b| b.iter(|| black_box(uv_a).inversed()));
 
     g.bench_function("inverse_trs/mid-math",          |b| b.iter(|| black_box(mm_a).inverse_trs()));
@@ -267,6 +306,7 @@ fn bench_mat4(c: &mut Criterion) {
         let aff = GAffine3A::from_mat4(gl_a);
         b.iter(|| black_box(aff).inverse())
     });
+    #[cfg(not(target_arch = "wasm32"))]
     g.bench_function("inverse_trs/nalgebra-isometry", |b| {
         let iso = nalgebra::Isometry3::<f32>::from_parts(
             nalgebra::Translation3::new(1.0, 0.0, 0.0),
@@ -302,6 +342,7 @@ fn bench_mat4_construction(c: &mut Criterion) {
             black_box(glam::Vec3::new(1.0, 2.0, 3.0)),
         )
     }));
+    #[cfg(not(target_arch = "wasm32"))]
     g.bench_function("from_trs/nalgebra", |b| b.iter(|| {
         use nalgebra::{Isometry3, Translation3};
         let iso = Isometry3::from_parts(
@@ -370,6 +411,7 @@ fn bench_affine3(c: &mut Criterion) {
 // Group 7: Mat4 vs matrixmultiply
 // ─────────────────────────────────────────────────────────────────────────────
 
+#[cfg(not(target_arch = "wasm32"))]
 fn bench_mat4_vs_matrixmultiply(c: &mut Criterion) {
     let mut g = c.benchmark_group("mat4_vs_matrixmultiply");
 
@@ -445,12 +487,14 @@ fn bench_100k_entities(c: &mut Criterion) {
 
     let mm_t = mid_trs(1.0, 45.0, 1.0);
     let gl_t = glam_trs(1.0, 45.0, 1.0);
-    let na_t = na_trs(1.0, 45.0, 1.0);
-    let uv_t = uv_trs(1.0, 45.0, 1.0);
+    #[cfg(not(target_arch = "wasm32"))] let na_t = na_trs(1.0, 45.0, 1.0);
+    #[cfg(not(target_arch = "wasm32"))] let uv_t = uv_trs(1.0, 45.0, 1.0);
 
     let pos_mm: Vec<Vec3>        = (0..N).map(|i| Vec3::new(i as f32 * 0.01, 0.0, 0.0)).collect();
     let pos_gl: Vec<glam::Vec3>  = (0..N).map(|i| glam::Vec3::new(i as f32 * 0.01, 0.0, 0.0)).collect();
+    #[cfg(not(target_arch = "wasm32"))]
     let pos_na: Vec<Point3<f32>> = (0..N).map(|i| Point3::new(i as f32 * 0.01, 0.0, 0.0)).collect();
+    #[cfg(not(target_arch = "wasm32"))]
     let pos_uv: Vec<UVec3>       = (0..N).map(|i| UVec3::new(i as f32 * 0.01, 0.0, 0.0)).collect();
 
     g.bench_function("mid-math", |b| b.iter_batched(
@@ -463,11 +507,13 @@ fn bench_100k_entities(c: &mut Criterion) {
         |mut p| { for v in p.iter_mut() { *v = gl_t.transform_point3(black_box(*v)); } black_box(p) },
         BatchSize::LargeInput,
     ));
+    #[cfg(not(target_arch = "wasm32"))]
     g.bench_function("nalgebra", |b| b.iter_batched(
         || pos_na.clone(),
         |mut p| { for v in p.iter_mut() { *v = black_box(na_t).transform_point(&black_box(*v)); } black_box(p) },
         BatchSize::LargeInput,
     ));
+    #[cfg(not(target_arch = "wasm32"))]
     g.bench_function("ultraviolet", |b| b.iter_batched(
         || pos_uv.clone(),
         |mut p| { for v in p.iter_mut() { *v = black_box(uv_t).transform_point3(black_box(*v)); } black_box(p) },
@@ -567,12 +613,16 @@ fn bench_5k_inverse(c: &mut Criterion) {
 
     let mats_mm: Vec<Mat4>         = (0..N).map(|i| mid_trs(i as f32 * 0.1, i as f32, 1.0 + i as f32 * 0.001)).collect();
     let mats_gl: Vec<GMat4>        = (0..N).map(|i| glam_trs(i as f32 * 0.1, i as f32, 1.0 + i as f32 * 0.001)).collect();
+    #[cfg(not(target_arch = "wasm32"))]
     let mats_na: Vec<Matrix4<f32>> = (0..N).map(|i| na_trs(i as f32 * 0.1, i as f32, 1.0 + i as f32 * 0.001)).collect();
+    #[cfg(not(target_arch = "wasm32"))]
     let mats_uv: Vec<UMat4>        = (0..N).map(|i| uv_trs(i as f32 * 0.1, i as f32, 1.0 + i as f32 * 0.001)).collect();
 
     g.bench_function("mid-math",    |b| b.iter_batched(|| mats_mm.clone(), |m| { for v in &m { black_box(v.inverse()); } black_box(m) }, BatchSize::LargeInput));
     g.bench_function("glam",        |b| b.iter_batched(|| mats_gl.clone(), |m| { for v in &m { black_box(v.inverse()); } black_box(m) }, BatchSize::LargeInput));
+    #[cfg(not(target_arch = "wasm32"))]
     g.bench_function("nalgebra",    |b| b.iter_batched(|| mats_na.clone(), |m| { for v in &m { black_box(v.try_inverse()); } black_box(m) }, BatchSize::LargeInput));
+    #[cfg(not(target_arch = "wasm32"))]
     g.bench_function("ultraviolet", |b| b.iter_batched(|| mats_uv.clone(), |m| { for v in &m { black_box(v.inversed()); } black_box(m) }, BatchSize::LargeInput));
 
     g.finish();
@@ -598,19 +648,23 @@ fn bench_mat2(c: &mut Criterion) {
     let gl_b = GMat2::from_scale_angle(glam::Vec2::new(2.0, 1.5), 0.0);
     let gl_v = GVec2::new(1.0, 2.0);
 
+    #[cfg(not(target_arch = "wasm32"))]
     let na_a = Matrix2::new(
         0.785_f32.cos(), -0.785_f32.sin(),
         0.785_f32.sin(),  0.785_f32.cos(),
     );
+    #[cfg(not(target_arch = "wasm32"))]
     let na_b: Matrix2<f32> = Matrix2::new_scaling(2.0);
 
     // ultraviolet Mat2 has no from_rotation constructor; build it manually.
-    // ultraviolet Mat2 has no from_rotation constructor; build it manually.
+    #[cfg(not(target_arch = "wasm32"))]
     let (sin_uv, cos_uv) = (0.785_f32).sin_cos();
+    #[cfg(not(target_arch = "wasm32"))]
     let uv_a = UMat2::new(
         ultraviolet::Vec2::new(cos_uv,  sin_uv),
         ultraviolet::Vec2::new(-sin_uv, cos_uv),
     );
+    #[cfg(not(target_arch = "wasm32"))]
     let uv_b = UMat2::new(
         ultraviolet::Vec2::new(2.0, 0.0),
         ultraviolet::Vec2::new(0.0, 1.5),
@@ -619,17 +673,21 @@ fn bench_mat2(c: &mut Criterion) {
     // Matrix multiply — 2×2 = 8 scalar multiplies + 4 adds
     g.bench_function("mul/mid-math",    |b| b.iter(|| black_box(mm_a).mul_mat2(black_box(mm_b))));
     g.bench_function("mul/glam",        |b| b.iter(|| black_box(gl_a) * black_box(gl_b)));
+    #[cfg(not(target_arch = "wasm32"))]
     g.bench_function("mul/nalgebra",    |b| b.iter(|| black_box(na_a) * black_box(na_b)));
+    #[cfg(not(target_arch = "wasm32"))]
     g.bench_function("mul/ultraviolet", |b| b.iter(|| black_box(uv_a) * black_box(uv_b)));
 
     // Determinant
     g.bench_function("determinant/mid-math", |b| b.iter(|| black_box(mm_a).determinant()));
     g.bench_function("determinant/glam",     |b| b.iter(|| black_box(gl_a).determinant()));
+    #[cfg(not(target_arch = "wasm32"))]
     g.bench_function("determinant/nalgebra", |b| b.iter(|| black_box(na_a).determinant()));
 
     // Inverse (2×2 adjugate — 5 muls + 1 div)
     g.bench_function("inverse/mid-math", |b| b.iter(|| black_box(mm_a).inverse()));
     g.bench_function("inverse/glam",     |b| b.iter(|| black_box(gl_a).inverse()));
+    #[cfg(not(target_arch = "wasm32"))]
     g.bench_function("inverse/nalgebra", |b| b.iter(|| black_box(na_a).try_inverse()));
 
     // Transform vector (mat × vec2)
@@ -668,39 +726,46 @@ fn bench_mat3(c: &mut Criterion) {
     let gl_b = GMat3::from_scale(glam::Vec2::new(2.0, 1.5));
     let gl_v = glam::Vec3::new(1.0, 2.0, 0.0);
 
-    let na_a = Matrix3::new_rotation(angle);
-    let na_b: Matrix3<f32> = Matrix3::new_scaling(2.0);
-    let na_v = Vector3::new(1.0f32, 2.0, 3.0);
+    #[cfg(not(target_arch = "wasm32"))] let na_a = Matrix3::new_rotation(angle);
+    #[cfg(not(target_arch = "wasm32"))] let na_b: Matrix3<f32> = Matrix3::new_scaling(2.0);
+    #[cfg(not(target_arch = "wasm32"))] let na_v = Vector3::new(1.0f32, 2.0, 3.0);
 
-    let uv_a = UMat3::from_rotation_z(angle);
-    let uv_v = UVec3::new(1.0, 2.0, 3.0);
+    #[cfg(not(target_arch = "wasm32"))] let uv_a = UMat3::from_rotation_z(angle);
+    #[cfg(not(target_arch = "wasm32"))] let uv_v = UVec3::new(1.0, 2.0, 3.0);
 
     // Matrix multiply — 3×3 = 27 scalar multiplies + 18 adds
     g.bench_function("mul/mid-math",    |b| b.iter(|| black_box(mm_a) * black_box(mm_b)));
     g.bench_function("mul/glam",        |b| b.iter(|| black_box(gl_a) * black_box(gl_b)));
+    #[cfg(not(target_arch = "wasm32"))]
     g.bench_function("mul/nalgebra",    |b| b.iter(|| black_box(na_a) * black_box(na_b)));
+    #[cfg(not(target_arch = "wasm32"))]
     g.bench_function("mul/ultraviolet", |b| b.iter(|| black_box(uv_a) * black_box(uv_a)));
 
     // Transform vector (3×3 × Vec3 — no translation)
     // glam::Mat3 transforms a Vec3 via mul_vec3 (or the * operator).
     g.bench_function("transform/mid-math",    |b| b.iter(|| black_box(mm_a).transform(black_box(mm_v))));
     g.bench_function("transform/glam",        |b| b.iter(|| black_box(gl_a).mul_vec3(black_box(gl_v))));
+    #[cfg(not(target_arch = "wasm32"))]
     g.bench_function("transform/nalgebra",    |b| b.iter(|| black_box(na_a) * black_box(na_v)));
+    #[cfg(not(target_arch = "wasm32"))]
     g.bench_function("transform/ultraviolet", |b| b.iter(|| black_box(uv_a) * black_box(uv_v)));
 
     // Transpose
     g.bench_function("transpose/mid-math", |b| b.iter(|| black_box(mm_a).transpose()));
     g.bench_function("transpose/glam",     |b| b.iter(|| black_box(gl_a).transpose()));
+    #[cfg(not(target_arch = "wasm32"))]
     g.bench_function("transpose/nalgebra", |b| b.iter(|| black_box(na_a).transpose()));
 
     // Determinant
     g.bench_function("determinant/mid-math", |b| b.iter(|| black_box(mm_a).determinant()));
     g.bench_function("determinant/glam",     |b| b.iter(|| black_box(gl_a).determinant()));
+    #[cfg(not(target_arch = "wasm32"))]
     g.bench_function("determinant/nalgebra", |b| b.iter(|| black_box(na_a).determinant()));
 
     // Inverse (3×3 cofactor — more expensive than 2×2)
     g.bench_function("inverse/mid-math", |b| b.iter(|| black_box(mm_a).inverse()));
     g.bench_function("inverse/glam",     |b| b.iter(|| black_box(gl_a).inverse()));
+    #[cfg(not(target_arch = "wasm32"))]
     g.bench_function("inverse/nalgebra", |b| b.iter(|| black_box(na_a).try_inverse()));
 
     // Construction: from_rotation_z (sin+cos → 9 element fills)
@@ -722,6 +787,7 @@ fn bench_mat3(c: &mut Criterion) {
 
 // ─────────────────────────────────────────────────────────────────────────────
 
+#[cfg(not(target_arch = "wasm32"))]
 criterion_group!(
     benches,
     bench_vec3,
@@ -731,6 +797,23 @@ criterion_group!(
     bench_mat4_construction,
     bench_affine3,
     bench_mat4_vs_matrixmultiply,
+    bench_chain_mat4,
+    bench_100k_entities,
+    bench_1m_entities,
+    bench_100k_quat_slerp,
+    bench_5k_inverse,
+    bench_mat2,
+    bench_mat3,
+);
+#[cfg(target_arch = "wasm32")]
+criterion_group!(
+    benches,
+    bench_vec3,
+    bench_vec4,
+    bench_rotation,
+    bench_mat4,
+    bench_mat4_construction,
+    bench_affine3,
     bench_chain_mat4,
     bench_100k_entities,
     bench_1m_entities,
