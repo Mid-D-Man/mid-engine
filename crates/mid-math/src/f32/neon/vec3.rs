@@ -46,9 +46,17 @@ impl Vec3 {
     #[inline(always)]
     pub fn truncate(self) -> Vec2 { Vec2::new(self.x, self.y) }
 
+    /// NEON vectorized 3D dot product.
+    ///
+    /// `vmulq_f32` multiplies all 4 lanes in parallel; `vaddvq_f32` (NEON ADDV)
+    /// horizontally sums them. Vec3's w lane is always 0, so the sum equals
+    /// x·rx + y·ry + z·rz + 0 — correct without any masking.
+    ///
+    /// Replaces the previous scalar path (6 lane-extract `vgetq_lane_f32` +
+    /// 3 fmul + 2 fadd), which stalled the pipeline crossing the SIMD/GP boundary.
     #[inline(always)]
     pub fn dot(self, rhs: Self) -> f32 {
-        self.x * rhs.x + self.y * rhs.y + self.z * rhs.z
+        unsafe { vaddvq_f32(vmulq_f32(self.0, rhs.0)) }
     }
 
     #[inline]
@@ -98,21 +106,28 @@ impl Vec3 {
         if l < EPSILON { 0.0 } else { 1.0 / l }
     }
 
-    /// Returns `Self::ZERO` if `self` is near-zero-length (same contract as
-    /// before). Uses `rsqrt_nr_f32` (estimate + 1 Newton-Raphson step)
-    /// instead of `vsqrtq_f32` + `vdivq_f32` — avoids two non-pipelined
-    /// vector ops for a value where only the broadcast result matters.
-    /// Threshold compares squared length against `EPSILON²`, algebraically
-    /// identical to the old `length() > EPSILON` check but skips computing
-    /// an actual sqrt just for the branch.
+    /// Normalize to unit length.
+    ///
+    /// **Undefined (NaN in practice) for zero-length input.**
+    /// Use [`Self::normalize_or_zero()`] for safe behaviour.
+    ///
+    /// NEON-OPT (Build 22): two fixes vs the previous version:
+    ///
+    /// 1. Squared-length now uses `vmulq_f32` + `vaddvq_f32` (NEON ADDV.4S)
+    ///    to stay fully in SIMD registers. The old path called `self.dot(self)`
+    ///    which was scalar (6 lane-extract + 5 scalar ops + `vdupq_n_f32`),
+    ///    paying a SIMD→GP→SIMD round-trip penalty every call.
+    ///
+    /// 2. The `vcgtq_f32` + `vandq_u32` zero-guard is removed, matching
+    ///    glam's `normalize()` contract (equivalent of SSE2 OPT-3 in Build 7).
+    ///    Safe callers use `normalize_or_zero()`.
     #[inline]
     pub fn normalize(self) -> Self {
         unsafe {
-            let dot = vdupq_n_f32(self.dot(self));
-            let ok  = vcgtq_f32(dot, vdupq_n_f32(EPSILON * EPSILON));
+            // w lane is 0 → vaddvq gives x²+y²+z²+0 = correct ‖self‖²
+            let dot = vdupq_n_f32(vaddvq_f32(vmulq_f32(self.0, self.0)));
             let inv = crate::neon::rsqrt_nr_f32(dot);
-            let n   = vmulq_f32(self.0, inv);
-            Self(vreinterpretq_f32_u32(vandq_u32(vreinterpretq_u32_f32(n), ok)))
+            Self(vmulq_f32(self.0, inv))
         }
     }
 
