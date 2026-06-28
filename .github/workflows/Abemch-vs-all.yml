@@ -145,9 +145,17 @@ jobs:
           fi
 
           if [ "${{ inputs.target_cpu }}" = "x86-64-v4" ]; then
-            rustc --print cfg -C target-cpu=x86-64-v4 2>&1 \
-              | grep -q 'target_feature="avx512f"' \
-              || echo "::warning::x86-64-v4 selected but avx512f not found — runner may not support AVX-512"
+            # Check actual CPU hardware flags in /proc/cpuinfo, NOT rustc output.
+            # rustc always reports avx512f when asked for x86-64-v4 regardless of
+            # real hardware. The GitHub ubuntu-latest runner (AMD EPYC) has no
+            # AVX-512; the bench binary would SIGILL when run.
+            if ! grep -qw 'avx512f' /proc/cpuinfo; then
+              echo "::error::x86-64-v4 selected but the runner CPU does not have AVX-512F."
+              echo "::error::GitHub-hosted ubuntu-latest uses AMD EPYC without AVX-512."
+              echo "::error::Use a bare-metal AVX-512 host or drop x86-64-v4 for now."
+              echo "AVX-512 hardware not present — skipping bench to avoid SIGILL." >> "$GITHUB_STEP_SUMMARY"
+              exit 1
+            fi
           fi
 
       - name: Cache cargo registry + build artifacts
@@ -157,10 +165,12 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ runner.os }}-${{ runner.arch }}-bench-${{ inputs.target_cpu }}-${{ hashFiles('**/Cargo.lock') }}
+          # v2: bumped to bust caches built before the RUSTFLAGS→CARGO_TARGET_*
+          # migration. Old caches may contain build-script binaries compiled with
+          # AVX-512 flags that SIGILL on non-AVX-512 runners.
+          key: ${{ runner.os }}-${{ runner.arch }}-bench-${{ inputs.target_cpu }}-v2-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-${{ runner.arch }}-bench-${{ inputs.target_cpu }}-
-            ${{ runner.os }}-${{ runner.arch }}-bench-
+            ${{ runner.os }}-${{ runner.arch }}-bench-${{ inputs.target_cpu }}-v2-
 
       - name: Run vs_all benchmarks
         run: |
