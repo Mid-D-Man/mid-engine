@@ -13,6 +13,9 @@ pub(crate) mod neon;
 ))]
 pub(crate) mod wasm;
 
+// ── Storage / low-precision types ─────────────────────────────────────────────
+pub mod storage;
+
 // ── Core math ─────────────────────────────────────────────────────────────────
 pub mod bvec;
 pub mod deref;
@@ -38,6 +41,49 @@ pub mod camera;
 pub mod geom;
 
 pub use constants::*;
+
+// ── Storage — low-precision boundary types ────────────────────────────────────
+// Rule: store compressed → unpack to f32 only for arithmetic.
+// BitMask* : compact bit-packed booleans (NOT SIMD masks — those are in `wide`).
+
+// f16 — IEEE half-precision (GPU normals, HDR, bone transforms)
+#[allow(non_camel_case_types)]
+pub use storage::f16;
+pub use storage::{
+    f32x4_to_f16x4, f16x4_to_f32x4,
+    f32x8_to_f16x8, f16x8_to_f32x8,
+    f32_slice_to_f16, f16_slice_to_f32,
+};
+
+// bf16 — bfloat16 (ML training; same exponent range as f32, no overflow risk)
+#[allow(non_camel_case_types)]
+pub use storage::bf16;
+pub use storage::{
+    f32x4_to_bf16x4, bf16x4_to_f32x4,
+    f32x8_to_bf16x8, bf16x8_to_f32x8,
+    f32_slice_to_bf16, bf16_slice_to_f32,
+};
+
+// f8 — 8-bit floats (ML weights / activations / gradients)
+pub use storage::{F8Norm, F8E4M3, F8E5M2};
+pub use storage::{
+    f32x4_to_f8e4m3x4, f8e4m3x4_to_f32x4,
+    f32x4_to_f8e5m2x4, f8e5m2x4_to_f32x4,
+};
+
+// f4 — 4-bit floats (ultra-compressed ML weights; two values per byte)
+pub use storage::{F4E2M1, F4E3M0, F4E2M1Pair, F4E3M0Pair};
+pub use storage::{
+    f32x8_to_f4e2m1x4pairs, f4e2m1x4pairs_to_f32x8,
+    f32x8_to_f4e3m0x4pairs, f4e3m0x4pairs_to_f32x8,
+    f32_slice_to_f4e2m1_packed, f4e2m1_packed_to_f32_slice,
+};
+
+// Storage masks — 1 bit per boolean (ECS queries, bone flags, visibility)
+pub use storage::{
+    BitMask8, BitMask16, BitMask32, BitMask64,
+    BitMask128, BitMask256,
+};
 
 // ── Bool masks ────────────────────────────────────────────────────────────────
 pub use bvec::{BVec2, BVec3, BVec4};
