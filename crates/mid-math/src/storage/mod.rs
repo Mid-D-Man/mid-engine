@@ -1,4 +1,3 @@
-// crates/mid-math/src/storage/mod.rs
 //! Low-precision storage types — the boundary layer of Mid-Engine.
 //!
 //! ## Purpose
@@ -53,16 +52,20 @@
 //! belongs in `mid-quant`, which imports these primitives.
 //! `mid-math` stays zero-dependency.
 
-pub mod bf16;
-pub mod f16;
+#[path = "bf16.rs"]
+mod bf16_impl;
+
+#[path = "f16.rs"]
+mod f16_impl;
+
 pub mod f4;
 pub mod f8;
 pub mod storage_mask;
 
 // ── f16 ───────────────────────────────────────────────────────────────────────
 #[allow(non_camel_case_types)]
-pub use f16::f16;
-pub use f16::{
+pub use f16_impl::f16;
+pub use f16_impl::{
     f32x4_to_f16x4, f16x4_to_f32x4,
     f32x8_to_f16x8, f16x8_to_f32x8,
     f32_slice_to_f16, f16_slice_to_f32,
@@ -70,8 +73,8 @@ pub use f16::{
 
 // ── bf16 ──────────────────────────────────────────────────────────────────────
 #[allow(non_camel_case_types)]
-pub use bf16::bf16;
-pub use bf16::{
+pub use bf16_impl::bf16;
+pub use bf16_impl::{
     f32x4_to_bf16x4, bf16x4_to_f32x4,
     f32x8_to_bf16x8, bf16x8_to_f32x8,
     f32_slice_to_bf16, bf16_slice_to_f32,
