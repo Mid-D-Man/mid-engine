@@ -57,10 +57,7 @@ pub(crate) mod avx512;
 pub(crate) mod neon;
 
 #[cfg(target_arch = "aarch64")]
-pub use neon::{Vec3, Vec4, Quat, Mat4};
-
-#[cfg(target_arch = "aarch64")]
-pub use mat2::Mat2;
+pub use neon::{Vec3, Vec4, Quat, Mat4, Mat2};
 
 // SVE / SVE2 — STUB. cfg never fires on stable Rust (nightly-only as of 2026-06).
 // Hardware: Apple M4, Neoverse N2 (AWS Graviton3), Snapdragon 8 Gen 3, X Elite.
