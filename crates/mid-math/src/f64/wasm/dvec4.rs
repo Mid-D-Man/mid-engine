@@ -10,6 +10,16 @@
 //! Same 2×v128 pattern as SSE2 DVec4. All ops process both registers in parallel.
 //!
 //! Note: v128_andnot(a, b) = a & ~b  (WASM — reversed from SSE2 _mm_andnot_pd)
+//!
+//! ## A note on `unsafe`
+//! `core::arch::wasm32`/`wasm64` SIMD intrinsics (`f64x2_*`, `u64x2_*`, `v128_*`)
+//! are SAFE functions — unlike x86/ARM intrinsics, WASM SIMD instructions can't
+//! cause memory unsafety; a module either validates with simd128 support at
+//! load time or fails to load at all, there's no "runs on unsupported hardware
+//! and crashes" risk to gate behind `unsafe`. Only two things in this file
+//! genuinely need `unsafe`: reading a `union` field (always unsafe in Rust,
+//! regardless of payload), and calls to `dot4d`/`dot4d_into_v128` from
+//! `crate::wasm`, which ARE declared as `unsafe fn`.
 
 #[cfg(target_arch = "wasm32")]
 use core::arch::wasm32::*;
@@ -45,6 +55,7 @@ pub struct DVec4 {
 impl_dvec4_deref!(DVec4);
 
 // ── Constants ─────────────────────────────────────────────────────────────────
+// Union field read — genuinely unsafe, kept.
 
 impl DVec4 {
     pub const ZERO: Self = unsafe { UnionCast { f: [0.0; 4] }.v };
@@ -58,12 +69,13 @@ impl DVec4 {
 
     #[inline(always)]
     pub fn new(x: f64, y: f64, z: f64, w: f64) -> Self {
+        // Union field read — genuinely unsafe, kept.
         unsafe { UnionCast { f: [x, y, z, w] }.v }
     }
 
     #[inline(always)]
     pub fn splat(v: f64) -> Self {
-        let r = unsafe { f64x2_splat(v) };
+        let r = f64x2_splat(v);
         Self { lo: r, hi: r }
     }
 
@@ -81,6 +93,7 @@ impl DVec4 {
     /// 4-lane f64 dot product from two v128 pairs.
     #[inline(always)]
     pub fn dot(self, rhs: Self) -> f64 {
+        // dot4d is an unsafe fn (crate::wasm) — kept.
         unsafe { dot4d(self.lo, self.hi, rhs.lo, rhs.hi) }
     }
 
@@ -101,6 +114,8 @@ impl DVec4 {
     /// both lo and hi registers simultaneously. Guard mask zeroes degenerate lanes.
     #[inline]
     pub fn normalize(self) -> Self {
+        // dot4d_into_v128 is an unsafe fn (crate::wasm) — kept; the rest of
+        // this block is safe wasm32 intrinsics riding along inside it.
         unsafe {
             let len_v  = f64x2_sqrt(dot4d_into_v128(self.lo, self.hi, self.lo, self.hi));
             let lo_n   = f64x2_div(self.lo, len_v);
@@ -129,14 +144,12 @@ impl DVec4 {
     /// Applied to both lo and hi registers in parallel.
     #[inline]
     pub fn lerp(self, rhs: Self, t: f64) -> Self {
-        unsafe {
-            let tt      = f64x2_splat(t);
-            let lo_diff = f64x2_sub(rhs.lo, self.lo);
-            let hi_diff = f64x2_sub(rhs.hi, self.hi);
-            Self {
-                lo: f64x2_add(self.lo, f64x2_mul(lo_diff, tt)),
-                hi: f64x2_add(self.hi, f64x2_mul(hi_diff, tt)),
-            }
+        let tt      = f64x2_splat(t);
+        let lo_diff = f64x2_sub(rhs.lo, self.lo);
+        let hi_diff = f64x2_sub(rhs.hi, self.hi);
+        Self {
+            lo: f64x2_add(self.lo, f64x2_mul(lo_diff, tt)),
+            hi: f64x2_add(self.hi, f64x2_mul(hi_diff, tt)),
         }
     }
 
@@ -148,15 +161,15 @@ impl DVec4 {
     #[inline]
     pub fn min(self, r: Self) -> Self {
         Self {
-            lo: unsafe { f64x2_min(self.lo, r.lo) },
-            hi: unsafe { f64x2_min(self.hi, r.hi) },
+            lo: f64x2_min(self.lo, r.lo),
+            hi: f64x2_min(self.hi, r.hi),
         }
     }
     #[inline]
     pub fn max(self, r: Self) -> Self {
         Self {
-            lo: unsafe { f64x2_max(self.lo, r.lo) },
-            hi: unsafe { f64x2_max(self.hi, r.hi) },
+            lo: f64x2_max(self.lo, r.lo),
+            hi: f64x2_max(self.hi, r.hi),
         }
     }
     #[inline] pub fn clamp(self, lo: Self, hi: Self) -> Self { self.max(lo).min(hi) }
@@ -164,8 +177,8 @@ impl DVec4 {
     #[inline]
     pub fn abs(self) -> Self {
         Self {
-            lo: unsafe { f64x2_abs(self.lo) },
-            hi: unsafe { f64x2_abs(self.hi) },
+            lo: f64x2_abs(self.lo),
+            hi: f64x2_abs(self.hi),
         }
     }
 
@@ -182,15 +195,13 @@ impl DVec4 {
 
     #[inline]
     pub fn approx_eq(self, rhs: Self) -> bool {
-        unsafe {
-            let lo_diff = f64x2_abs(f64x2_sub(self.lo, rhs.lo));
-            let hi_diff = f64x2_abs(f64x2_sub(self.hi, rhs.hi));
-            let eps     = f64x2_splat(DEPSILON);
-            let lo_ok   = f64x2_lt(lo_diff, eps);
-            let hi_ok   = f64x2_lt(hi_diff, eps);
-            (u64x2_bitmask(lo_ok) & 0b11) == 0b11
-                && (u64x2_bitmask(hi_ok) & 0b11) == 0b11
-        }
+        let lo_diff = f64x2_abs(f64x2_sub(self.lo, rhs.lo));
+        let hi_diff = f64x2_abs(f64x2_sub(self.hi, rhs.hi));
+        let eps     = f64x2_splat(DEPSILON);
+        let lo_ok   = f64x2_lt(lo_diff, eps);
+        let hi_ok   = f64x2_lt(hi_diff, eps);
+        (u64x2_bitmask(lo_ok) & 0b11) == 0b11
+            && (u64x2_bitmask(hi_ok) & 0b11) == 0b11
     }
 
     /// Lossy cast to single-precision `Vec4`.
@@ -207,8 +218,8 @@ impl Add for DVec4 {
     #[inline(always)]
     fn add(self, r: Self) -> Self {
         Self {
-            lo: unsafe { f64x2_add(self.lo, r.lo) },
-            hi: unsafe { f64x2_add(self.hi, r.hi) },
+            lo: f64x2_add(self.lo, r.lo),
+            hi: f64x2_add(self.hi, r.hi),
         }
     }
 }
@@ -217,8 +228,8 @@ impl Sub for DVec4 {
     #[inline(always)]
     fn sub(self, r: Self) -> Self {
         Self {
-            lo: unsafe { f64x2_sub(self.lo, r.lo) },
-            hi: unsafe { f64x2_sub(self.hi, r.hi) },
+            lo: f64x2_sub(self.lo, r.lo),
+            hi: f64x2_sub(self.hi, r.hi),
         }
     }
 }
@@ -227,8 +238,8 @@ impl Mul for DVec4 {
     #[inline(always)]
     fn mul(self, r: Self) -> Self {
         Self {
-            lo: unsafe { f64x2_mul(self.lo, r.lo) },
-            hi: unsafe { f64x2_mul(self.hi, r.hi) },
+            lo: f64x2_mul(self.lo, r.lo),
+            hi: f64x2_mul(self.hi, r.hi),
         }
     }
 }
@@ -237,8 +248,8 @@ impl Div for DVec4 {
     #[inline(always)]
     fn div(self, r: Self) -> Self {
         Self {
-            lo: unsafe { f64x2_div(self.lo, r.lo) },
-            hi: unsafe { f64x2_div(self.hi, r.hi) },
+            lo: f64x2_div(self.lo, r.lo),
+            hi: f64x2_div(self.hi, r.hi),
         }
     }
 }
@@ -246,10 +257,8 @@ impl Mul<f64> for DVec4 {
     type Output = Self;
     #[inline(always)]
     fn mul(self, s: f64) -> Self {
-        unsafe {
-            let sv = f64x2_splat(s);
-            Self { lo: f64x2_mul(self.lo, sv), hi: f64x2_mul(self.hi, sv) }
-        }
+        let sv = f64x2_splat(s);
+        Self { lo: f64x2_mul(self.lo, sv), hi: f64x2_mul(self.hi, sv) }
     }
 }
 impl Mul<DVec4> for f64 {
@@ -260,10 +269,8 @@ impl Div<f64> for DVec4 {
     type Output = Self;
     #[inline(always)]
     fn div(self, s: f64) -> Self {
-        unsafe {
-            let sv = f64x2_splat(s);
-            Self { lo: f64x2_div(self.lo, sv), hi: f64x2_div(self.hi, sv) }
-        }
+        let sv = f64x2_splat(s);
+        Self { lo: f64x2_div(self.lo, sv), hi: f64x2_div(self.hi, sv) }
     }
 }
 /// Direct f64x2_neg on both registers.
@@ -272,8 +279,8 @@ impl Neg for DVec4 {
     #[inline(always)]
     fn neg(self) -> Self {
         Self {
-            lo: unsafe { f64x2_neg(self.lo) },
-            hi: unsafe { f64x2_neg(self.hi) },
+            lo: f64x2_neg(self.lo),
+            hi: f64x2_neg(self.hi),
         }
     }
 }
@@ -281,35 +288,31 @@ impl Neg for DVec4 {
 impl AddAssign for DVec4 {
     #[inline(always)]
     fn add_assign(&mut self, r: Self) {
-        self.lo = unsafe { f64x2_add(self.lo, r.lo) };
-        self.hi = unsafe { f64x2_add(self.hi, r.hi) };
+        self.lo = f64x2_add(self.lo, r.lo);
+        self.hi = f64x2_add(self.hi, r.hi);
     }
 }
 impl SubAssign for DVec4 {
     #[inline(always)]
     fn sub_assign(&mut self, r: Self) {
-        self.lo = unsafe { f64x2_sub(self.lo, r.lo) };
-        self.hi = unsafe { f64x2_sub(self.hi, r.hi) };
+        self.lo = f64x2_sub(self.lo, r.lo);
+        self.hi = f64x2_sub(self.hi, r.hi);
     }
 }
 impl MulAssign<f64> for DVec4 {
     #[inline(always)]
     fn mul_assign(&mut self, s: f64) {
-        unsafe {
-            let sv = f64x2_splat(s);
-            self.lo = f64x2_mul(self.lo, sv);
-            self.hi = f64x2_mul(self.hi, sv);
-        }
+        let sv = f64x2_splat(s);
+        self.lo = f64x2_mul(self.lo, sv);
+        self.hi = f64x2_mul(self.hi, sv);
     }
 }
 impl DivAssign<f64> for DVec4 {
     #[inline(always)]
     fn div_assign(&mut self, s: f64) {
-        unsafe {
-            let sv = f64x2_splat(s);
-            self.lo = f64x2_div(self.lo, sv);
-            self.hi = f64x2_div(self.hi, sv);
-        }
+        let sv = f64x2_splat(s);
+        self.lo = f64x2_div(self.lo, sv);
+        self.hi = f64x2_div(self.hi, sv);
     }
 }
 
@@ -318,11 +321,9 @@ impl DivAssign<f64> for DVec4 {
 impl PartialEq for DVec4 {
     #[inline]
     fn eq(&self, rhs: &Self) -> bool {
-        unsafe {
-            let lo_eq = u64x2_bitmask(f64x2_eq(self.lo, rhs.lo));
-            let hi_eq = u64x2_bitmask(f64x2_eq(self.hi, rhs.hi));
-            (lo_eq & 0b11) == 0b11 && (hi_eq & 0b11) == 0b11
-        }
+        let lo_eq = u64x2_bitmask(f64x2_eq(self.lo, rhs.lo));
+        let hi_eq = u64x2_bitmask(f64x2_eq(self.hi, rhs.hi));
+        (lo_eq & 0b11) == 0b11 && (hi_eq & 0b11) == 0b11
     }
 }
 
