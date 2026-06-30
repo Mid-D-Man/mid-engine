@@ -6,7 +6,7 @@
 //! SIMD used for: arithmetic operators, dot, length, normalize, conjugate,
 //!                nlerp (blend), slerp (scalar blend with SIMD lerp).
 //!
-//! Scalar for: Hamilton product — 28 mixed-sign ops on 2-lane f64 gives
+//! Scalar for: Hamilton product — 28 mixed-sign ops on 2-lane f64x2 gives
 //!             no win. The scalar path is ~5 ns and isn't a hot loop.
 //!
 //! WASM vs SSE2 notes:
@@ -15,6 +15,15 @@
 //!   v128_andnot(a, b) = a & ~b  ← WASM (reversed from SSE2 _mm_andnot_pd)
 //!   u64x2_bitmask — extracts MSB of each 64-bit lane (2-bit result)
 //!   No FMA in SIMD128 baseline — lerp is 2 muls + 1 add per component
+//!
+//! ## A note on `unsafe`
+//! `core::arch::wasm32`/`wasm64` SIMD intrinsics (`f64x2_*`, `u64x2_*`, `v128_*`)
+//! are SAFE functions — unlike x86/ARM intrinsics, WASM SIMD instructions can't
+//! cause memory unsafety; a module either validates with simd128 support at
+//! load time or fails to load at all. Only two things in this file genuinely
+//! need `unsafe`: reading a `union` field (always unsafe in Rust, regardless
+//! of payload), and calls to `dot4d`/`dot4d_into_v128` from `crate::wasm`,
+//! which ARE declared as `unsafe fn`.
 
 #[cfg(target_arch = "wasm32")]
 use core::arch::wasm32::*;
@@ -63,6 +72,7 @@ pub struct DQuat {
 impl_dvec4_deref!(DQuat);
 
 // ── Constants ─────────────────────────────────────────────────────────────────
+// Union field read — genuinely unsafe, kept.
 
 impl DQuat {
     pub const IDENTITY: Self = unsafe { UnionCast { f: [0.0, 0.0, 0.0, 1.0] }.v };
@@ -72,6 +82,7 @@ impl DQuat {
 
     #[inline(always)]
     pub fn new(x: f64, y: f64, z: f64, w: f64) -> Self {
+        // Union field read — genuinely unsafe, kept.
         unsafe { UnionCast { f: [x, y, z, w] }.v }
     }
 
@@ -112,6 +123,7 @@ impl DQuat {
 
     #[inline(always)]
     pub fn dot(self, rhs: Self) -> f64 {
+        // dot4d is an unsafe fn (crate::wasm) — kept.
         unsafe { dot4d(self.lo, self.hi, rhs.lo, rhs.hi) }
     }
 
@@ -129,6 +141,8 @@ impl DQuat {
     /// Note: v128_andnot(a, b) = a & ~b  (WASM convention — reversed from SSE2).
     #[inline]
     pub fn normalize(self) -> Self {
+        // dot4d_into_v128 is an unsafe fn (crate::wasm) — kept; the rest of
+        // this block is safe wasm32 intrinsics riding along inside it.
         unsafe {
             let len_v = f64x2_sqrt(dot4d_into_v128(self.lo, self.hi, self.lo, self.hi));
             let lo_n  = f64x2_div(self.lo, len_v);
@@ -151,8 +165,8 @@ impl DQuat {
     #[inline]
     pub fn conjugate(self) -> Self {
         Self {
-            lo: unsafe { v128_xor(self.lo, CONJ_SIGN_LO) },
-            hi: unsafe { v128_xor(self.hi, CONJ_SIGN_HI) },
+            lo: v128_xor(self.lo, CONJ_SIGN_LO),
+            hi: v128_xor(self.hi, CONJ_SIGN_HI),
         }
     }
 
@@ -162,10 +176,8 @@ impl DQuat {
         if sq < DEPSILON { return Self::IDENTITY; }
         let rcp = 1.0 / sq;
         let c = self.conjugate();
-        unsafe {
-            let r = f64x2_splat(rcp);
-            Self { lo: f64x2_mul(c.lo, r), hi: f64x2_mul(c.hi, r) }
-        }
+        let r = f64x2_splat(rcp);
+        Self { lo: f64x2_mul(c.lo, r), hi: f64x2_mul(c.hi, r) }
     }
 
     #[inline]
@@ -205,19 +217,21 @@ impl DQuat {
         let dot = self.dot(rhs);
         let sign_bit = dot.to_bits() & 0x8000_0000_0000_0000u64;
         let flip = |x: f64| f64::from_bits(x.to_bits() ^ sign_bit);
-        unsafe {
-            let rhs_adj = UnionCast {
-                f: [flip(rhs.x), flip(rhs.y), flip(rhs.z), flip(rhs.w)]
-            }.v;
-            let tt    = f64x2_splat(t);
-            let lo_d  = f64x2_sub(rhs_adj.lo, self.lo);
-            let hi_d  = f64x2_sub(rhs_adj.hi, self.hi);
-            let lerped = Self {
-                lo: f64x2_add(self.lo, f64x2_mul(lo_d, tt)),
-                hi: f64x2_add(self.hi, f64x2_mul(hi_d, tt)),
-            };
-            lerped.normalize()
-        }
+
+        // Only the union field read genuinely needs `unsafe` — everything
+        // after it is safe wasm32 intrinsics / a safe `.normalize()` call.
+        let rhs_adj = unsafe {
+            UnionCast { f: [flip(rhs.x), flip(rhs.y), flip(rhs.z), flip(rhs.w)] }.v
+        };
+
+        let tt    = f64x2_splat(t);
+        let lo_d  = f64x2_sub(rhs_adj.lo, self.lo);
+        let hi_d  = f64x2_sub(rhs_adj.hi, self.hi);
+        let lerped = Self {
+            lo: f64x2_add(self.lo, f64x2_mul(lo_d, tt)),
+            hi: f64x2_add(self.hi, f64x2_mul(hi_d, tt)),
+        };
+        lerped.normalize()
     }
 
     pub fn slerp(self, mut rhs: Self, t: f64) -> Self {
@@ -229,13 +243,11 @@ impl DQuat {
         let (sin_t, cos_t) = (t * angle).sin_cos();
         let s1 = sin_t / sin_theta;
         let s0 = cos_t - cos_theta * s1; // algebraic — avoids 3rd transcendental
-        unsafe {
-            let v0 = f64x2_splat(s0);
-            let v1 = f64x2_splat(s1);
-            Self {
-                lo: f64x2_add(f64x2_mul(self.lo, v0), f64x2_mul(rhs.lo, v1)),
-                hi: f64x2_add(f64x2_mul(self.hi, v0), f64x2_mul(rhs.hi, v1)),
-            }
+        let v0 = f64x2_splat(s0);
+        let v1 = f64x2_splat(s1);
+        Self {
+            lo: f64x2_add(f64x2_mul(self.lo, v0), f64x2_mul(rhs.lo, v1)),
+            hi: f64x2_add(f64x2_mul(self.hi, v0), f64x2_mul(rhs.hi, v1)),
         }
     }
 
@@ -284,8 +296,8 @@ impl Neg for DQuat {
     #[inline]
     fn neg(self) -> Self {
         Self {
-            lo: unsafe { f64x2_neg(self.lo) },
-            hi: unsafe { f64x2_neg(self.hi) },
+            lo: f64x2_neg(self.lo),
+            hi: f64x2_neg(self.hi),
         }
     }
 }
@@ -295,8 +307,8 @@ impl Add for DQuat {
     #[inline]
     fn add(self, r: Self) -> Self {
         Self {
-            lo: unsafe { f64x2_add(self.lo, r.lo) },
-            hi: unsafe { f64x2_add(self.hi, r.hi) },
+            lo: f64x2_add(self.lo, r.lo),
+            hi: f64x2_add(self.hi, r.hi),
         }
     }
 }
@@ -306,8 +318,8 @@ impl Sub for DQuat {
     #[inline]
     fn sub(self, r: Self) -> Self {
         Self {
-            lo: unsafe { f64x2_sub(self.lo, r.lo) },
-            hi: unsafe { f64x2_sub(self.hi, r.hi) },
+            lo: f64x2_sub(self.lo, r.lo),
+            hi: f64x2_sub(self.hi, r.hi),
         }
     }
 }
@@ -316,21 +328,17 @@ impl Mul<f64> for DQuat {
     type Output = Self;
     #[inline]
     fn mul(self, s: f64) -> Self {
-        unsafe {
-            let sv = f64x2_splat(s);
-            Self { lo: f64x2_mul(self.lo, sv), hi: f64x2_mul(self.hi, sv) }
-        }
+        let sv = f64x2_splat(s);
+        Self { lo: f64x2_mul(self.lo, sv), hi: f64x2_mul(self.hi, sv) }
     }
 }
 
 impl PartialEq for DQuat {
     #[inline]
     fn eq(&self, rhs: &Self) -> bool {
-        unsafe {
-            let lo_ok = (u64x2_bitmask(f64x2_eq(self.lo, rhs.lo)) & 0b11) == 0b11;
-            let hi_ok = (u64x2_bitmask(f64x2_eq(self.hi, rhs.hi)) & 0b11) == 0b11;
-            lo_ok && hi_ok
-        }
+        let lo_ok = (u64x2_bitmask(f64x2_eq(self.lo, rhs.lo)) & 0b11) == 0b11;
+        let hi_ok = (u64x2_bitmask(f64x2_eq(self.hi, rhs.hi)) & 0b11) == 0b11;
+        lo_ok && hi_ok
     }
 }
 
@@ -346,4 +354,4 @@ impl fmt::Display for DQuat {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "DQuat({:.6}, {:.6}, {:.6}, {:.6})", self.x, self.y, self.z, self.w)
     }
-  }
+    }
