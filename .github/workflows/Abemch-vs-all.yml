@@ -105,7 +105,12 @@ jobs:
           version: v25.0.2
 
       # ── WASM runner config ───────────────────────────────────────────────────
-      # Two additions vs before:
+      # NOTE: --allow-unknown-experimental-proposals was removed from wasmtime's
+      # CLI by (at latest) v25.0.2 — SIMD has been stable/non-experimental for a
+      # long time, so the allowlist flag became dead weight and was deleted
+      # upstream. wasmtime now auto-detects SIMD directly from the binary's own
+      # wasm-features section; no flag is needed for that anymore.
+      # Two real additions vs before:
       #   --dir .              preopens the cwd so criterion's (mostly optional,
       #                        gracefully-degrading) disk writes actually work
       #                        under WASI instead of silently failing every time.
@@ -131,7 +136,7 @@ jobs:
           mkdir -p .cargo
           cat >> .cargo/config.toml << 'EOF'
           [target.wasm32-wasip1]
-          runner = ["wasmtime", "run", "--allow-unknown-experimental-proposals", "--dir", ".", "--env", "CRITERION_DEBUG=1", "--"]
+          runner = ["wasmtime", "run", "--dir", ".", "--env", "CRITERION_DEBUG=1", "--"]
           EOF
 
       # ── Confirm what the runner and compiler actually have ──────────────────
