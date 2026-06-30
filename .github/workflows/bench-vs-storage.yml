@@ -1,0 +1,137 @@
+# .github/workflows/bench-vs-storage.yml
+# Run: Actions → "mid-math: bench storage types" → Run workflow
+# DO NOT add push/pull_request triggers — benchmarks take 5-10 minutes.
+
+name: mid-math — bench storage types
+
+on:
+  workflow_dispatch:
+    inputs:
+      baseline_note:
+        description: 'Why are you running this? (e.g. "post f4 pair-pack rewrite")'
+        required: false
+        default: 'manual benchmark run'
+
+permissions:
+  contents: read
+  actions:  read
+
+jobs:
+  bench:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Get Rust version
+        id: rustver
+        run: echo "ver=$(rustc --version)" >> $GITHUB_OUTPUT
+
+      - name: Cache cargo registry
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+          key: cargo-registry-bench-${{ hashFiles('crates/mid-math/Cargo.toml') }}
+          restore-keys: cargo-registry-
+
+      # ── Bench: vs_storage (f16, bf16, f8, f4, BitMask) ──────────────────────
+      - name: Run vs_storage criterion benchmarks
+        run: |
+          echo "Running: cargo bench --bench vs_storage -p mid-math"
+          echo "Note: ${{ inputs.baseline_note }}"
+          cargo bench --bench vs_storage -p mid-math 2>&1 | tee bench-vs-storage-raw.txt
+
+      # ── Publish summary ──────────────────────────────────────────────────────
+      - name: Publish benchmark summary
+        run: |
+          {
+            echo "## mid-math storage types — Criterion Benchmarks"
+            echo ""
+            echo "**Build:** #${{ github.run_number }} &nbsp; **Rust:** \`${{ steps.rustver.outputs.ver }}\`"
+            echo ""
+            echo "**Note:** ${{ inputs.baseline_note }}"
+            echo ""
+            echo "Covers: \`f16\`, \`bf16\`, \`F8Norm\`/\`F8E4M3\`/\`F8E5M2\`, \`F4E2M1\`/\`F4E3M0\` (+ packed pairs), \`BitMask8\`–\`BitMask256\`."
+            echo ""
+            echo "> Lower is faster. Each group shows related operations side by side."
+            echo "> Throughput groups (batch_x4/x8, slice_1k, ecs_query_10k) also report elements/sec."
+            echo ""
+
+            python3 - << 'PYEOF'
+          import re, sys
+
+          RE_ANSI  = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
+          RE_RESULT = re.compile(
+              r'^(\S[^\n]+?)\s+time:\s+\[\s*([\d.]+\s+\S+)\s+([\d.]+\s+\S+)\s+([\d.]+\s+\S+)\s*\]',
+              re.MULTILINE,
+          )
+          RE_THROUGHPUT = re.compile(
+              r'^(\S[^\n]+?)\s+thrpt:\s+\[\s*([\d.]+\s+\S+/s)\s+([\d.]+\s+\S+/s)\s+([\d.]+\s+\S+/s)\s*\]',
+              re.MULTILINE,
+          )
+
+          def parse_bench_file(path, title):
+              try:
+                  raw = open(path, encoding='utf-8', errors='replace').read()
+              except FileNotFoundError:
+                  print(f"*({path} not found)*")
+                  return
+
+              text = RE_ANSI.sub('', raw)
+              throughputs = {m.group(1).strip(): m.group(3).strip() for m in RE_THROUGHPUT.finditer(text)}
+              current_group = None
+
+              print(f"\n---\n\n### {title}\n")
+
+              for m in RE_RESULT.finditer(text):
+                  name = m.group(1).strip()
+                  mean = m.group(3).strip()
+                  thrpt = throughputs.get(name, '')
+
+                  parts = name.split('/')
+                  if len(parts) >= 2:
+                      group   = '/'.join(parts[:-1])
+                      variant = parts[-1]
+                  else:
+                      group   = name
+                      variant = ''
+
+                  if group != current_group:
+                      if current_group is not None:
+                          print()
+                      print(f"#### {group}")
+                      if thrpt:
+                          print("| Op | Mean | Throughput |")
+                          print("|---|---|---|")
+                      else:
+                          print("| Op | Mean |")
+                          print("|---|---|")
+                      current_group = group
+
+                  if thrpt:
+                      print(f"| {variant} | {mean} | {thrpt} |")
+                  else:
+                      print(f"| {variant} | {mean} |")
+
+          parse_bench_file('bench-vs-storage-raw.txt', 'vs_storage — f16 / bf16 / F8 / F4 / BitMask')
+          PYEOF
+
+          } >> $GITHUB_STEP_SUMMARY
+
+      # ── Upload raw logs and criterion HTML ────────────────────────────────────
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: bench-storage-results-${{ github.run_number }}
+          path: |
+            bench-vs-storage-raw.txt
+            target/criterion/
+          retention-days: 30
