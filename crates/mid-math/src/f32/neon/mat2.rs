@@ -98,6 +98,11 @@ impl Mat2 {
     }
 
     #[inline]
+    pub fn from_scale(scale: Vec2) -> Self {
+        Self::new(scale.x, 0.0, 0.0, scale.y)
+    }
+
+    #[inline]
     pub fn from_scale_angle(scale: Vec2, angle: f32) -> Self {
         let (sin, cos) = angle.sin_cos();
         Self::new(cos * scale.x, sin * scale.x, -sin * scale.y, cos * scale.y)
@@ -411,4 +416,4 @@ impl fmt::Display for Mat2 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "[{}, {}]", self.x_axis, self.y_axis)
     }
-  }
+}
