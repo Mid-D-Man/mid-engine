@@ -33,7 +33,7 @@ use mid_math::{to_radians, Affine3, Mat2, Mat3, Mat4, Quat, Vec2, Vec3, Vec4};
 // ── glam ─────────────────────────────────────────────────────────────────────
 use glam::{
     Affine3A as GAffine3A, Mat2 as GMat2, Mat3 as GMat3,
-    Mat4 as GMat4, Quat as GQuat, Vec2 as GVec2, Vec3 as GVec3A,
+    Mat4 as GMat4, Quat as GQuat, Vec2 as GVec2,
     Vec3A as GVec3, Vec4 as GVec4,
 };
 
