@@ -1,6 +1,6 @@
 # scripts/bench_vs_all.py
 # Parses bench-vs-all-raw.txt (criterion output) and prints a markdown summary.
-# Called from .github/workflows/bemch-vs-all.yml:
+# Called from .github/workflows/Abemch-vs-all.yml:
 #   python3 scripts/bench_vs_all.py >> $GITHUB_STEP_SUMMARY
 #
 # Env vars:
@@ -19,6 +19,16 @@ RE_ANSI = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
 RE_RESULT = re.compile(
     r'^(\S[^\n]+?)\s+time:\s+\[\s*([\d.]+\s+\S+)\s+([\d.]+\s+\S+)\s+([\d.]+\s+\S+)\s*\]',
     re.MULTILINE,
+)
+
+# Patterns indicating criterion itself skipped printing a result for a given
+# benchmark — none of these cause a non-zero process exit, so a clean
+# "Bench exit code: 0" does not guarantee every benchmark produced a row.
+# See criterion 0.5.1 src/analysis/mod.rs: `times.iter().any(|&f| f == 0.0)`
+# returns early (logs via the `error!` macro) before the print call that
+# RE_RESULT matches against.
+RE_DIAGNOSTIC = re.compile(
+    r'(took zero time per iteration|Unable to complete \d+ samples|panicked at)',
 )
 
 raw_file = os.environ.get('BENCH_RAW_FILE', 'bench-vs-all-raw.txt')
@@ -59,3 +69,14 @@ for m in RE_RESULT.finditer(text):
 
 if row_count == 0:
     print('*(no benchmark results parsed — check bench-vs-all-raw.txt)*')
+
+    diag_hits = RE_DIAGNOSTIC.findall(text)
+    if diag_hits:
+        print()
+        print('*Criterion itself reported issues that explain the missing rows '
+              '(see Diagnostics section above) — this is not a parser bug.*')
+    else:
+        print()
+        print('*No matching criterion diagnostic strings found either — if this '
+              'is a WASM run, check that the runner forwards `CRITERION_DEBUG=1` '
+              'and re-run to capture per-benchmark warm-up timing.*')
