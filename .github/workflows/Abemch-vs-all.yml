@@ -59,6 +59,34 @@ jobs:
             echo "ACTIVE_CPU_FLAGS=-C target-cpu=${{ inputs.target_cpu }}" >> $GITHUB_ENV
           fi
 
+      # ── Soft hardware gate for x86-64-v4 ─────────────────────────────────────
+      # Runs ONLY for x86-64-v4. Never exits non-zero — sets an output flag
+      # that later steps check. This turns "job fails red every single time
+      # on GitHub-hosted runners" into "job succeeds green, clearly marked
+      # skipped, with a reason". rustc always reports avx512f as present when
+      # asked for x86-64-v4 regardless of real hardware, so we check actual
+      # /proc/cpuinfo flags instead of trusting rustc's cfg output.
+      - name: Check AVX-512 hardware availability
+        id: hwcheck
+        if: inputs.target_cpu == 'x86-64-v4'
+        run: |
+          if grep -qw 'avx512f' /proc/cpuinfo; then
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            {
+              echo "## bench (x86-64-v4) — skipped"
+              echo ""
+              echo "> GitHub-hosted \`ubuntu-latest\` runners use AMD EPYC CPUs without AVX-512."
+              echo "> rustc will happily emit AVX-512 instructions for \`-C target-cpu=x86-64-v4\`"
+              echo "> regardless of the host's real capabilities — running the resulting binary"
+              echo "> here would SIGILL. This run is marked successful (skipped, not failed)."
+              echo ">"
+              echo "> To get real x86-64-v4 numbers, this workflow needs a self-hosted runner"
+              echo "> on actual AVX-512-capable hardware (Ice Lake / Zen 4 or newer)."
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
       - name: Set up Rust stable
         uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
@@ -76,13 +104,34 @@ jobs:
         with:
           version: v25.0.2
 
+      # ── WASM runner config ───────────────────────────────────────────────────
+      # Two additions vs before:
+      #   --dir .              preopens the cwd so criterion's (mostly optional,
+      #                        gracefully-degrading) disk writes actually work
+      #                        under WASI instead of silently failing every time.
+      #   --env CRITERION_DEBUG=1
+      #                        forwards this var into the WASI guest. Without
+      #                        --env, wasmtime does NOT pass through ANY host
+      #                        env vars by default — CRITERION_DEBUG, CARGO,
+      #                        CARGO_TARGET_DIR were all invisible to criterion
+      #                        before this. With it set, criterion prints, for
+      #                        EVERY benchmark, the literal warm-up measurement:
+      #                          "Completed N iterations in N nanoseconds,
+      #                           estimated execution time is N ns"
+      #                        This tells us directly whether wasmtime's WASI
+      #                        clock is resolving our ns-scale ops correctly,
+      #                        or whether it's the cause of the empty results
+      #                        (criterion silently skips printing for any
+      #                        benchmark whose measured elapsed time hits
+      #                        exactly 0.0 — see src/analysis/mod.rs in
+      #                        criterion 0.5.1, no panic, no error code).
       - name: Configure WASM test runner
         if: inputs.target_cpu == 'wasm'
         run: |
           mkdir -p .cargo
           cat >> .cargo/config.toml << 'EOF'
           [target.wasm32-wasip1]
-          runner = ["wasmtime", "run", "--allow-unknown-experimental-proposals", "--"]
+          runner = ["wasmtime", "run", "--allow-unknown-experimental-proposals", "--dir", ".", "--env", "CRITERION_DEBUG=1", "--"]
           EOF
 
       # ── Confirm what the runner and compiler actually have ──────────────────
@@ -144,21 +193,8 @@ jobs:
               || echo "::warning::x86-64-v3 selected but avx2 not found in rustc output — verify hardware"
           fi
 
-          if [ "${{ inputs.target_cpu }}" = "x86-64-v4" ]; then
-            # Check actual CPU hardware flags in /proc/cpuinfo, NOT rustc output.
-            # rustc always reports avx512f when asked for x86-64-v4 regardless of
-            # real hardware. The GitHub ubuntu-latest runner (AMD EPYC) has no
-            # AVX-512; the bench binary would SIGILL when run.
-            if ! grep -qw 'avx512f' /proc/cpuinfo; then
-              echo "::error::x86-64-v4 selected but the runner CPU does not have AVX-512F."
-              echo "::error::GitHub-hosted ubuntu-latest uses AMD EPYC without AVX-512."
-              echo "::error::Use a bare-metal AVX-512 host or drop x86-64-v4 for now."
-              echo "AVX-512 hardware not present — skipping bench to avoid SIGILL." >> "$GITHUB_STEP_SUMMARY"
-              exit 1
-            fi
-          fi
-
       - name: Cache cargo registry + build artifacts
+        if: steps.hwcheck.outputs.skip != 'true'
         uses: actions/cache@v4
         with:
           path: |
@@ -173,11 +209,37 @@ jobs:
             ${{ runner.os }}-${{ runner.arch }}-bench-${{ inputs.target_cpu }}-v2-
 
       - name: Run vs_all benchmarks
+        if: steps.hwcheck.outputs.skip != 'true'
         run: |
+          # GitHub Actions' default Linux shell is already
+          # `bash --noprofile --norc -eo pipefail {0}`, so `$?` below already
+          # reflects cargo's real exit status, not tee's — pipefail makes that
+          # true without extra plumbing. Confirmed: a clean "Bench exit code: 0"
+          # really does mean cargo/criterion ran to completion without error;
+          # it does NOT by itself mean every benchmark printed a result line
+          # (criterion can legitimately skip printing one bench's line without
+          # erroring — see the WASM diagnostics step below for why).
           cargo bench --bench vs_all -p mid-math $BENCH_TARGET 2>&1 | tee bench-vs-all-raw.txt
           echo "Bench exit code: $?" >> "$GITHUB_STEP_SUMMARY"
 
+      # ── Surface criterion's own diagnostics directly in the summary ─────────
+      # Pulls forward anything criterion itself flagged (zero-time warnings,
+      # "unable to complete N samples" messages, and — for WASM specifically —
+      # the CRITERION_DEBUG warm-up lines) so the root cause is visible at a
+      # glance instead of requiring a download of the raw artifact.
+      - name: Surface bench diagnostics
+        if: steps.hwcheck.outputs.skip != 'true'
+        run: |
+          {
+            echo "### Diagnostics"
+            echo '```'
+            grep -E 'took zero time|Unable to complete|Warning:|panicked|Completed [0-9]+ iterations' \
+              bench-vs-all-raw.txt | head -60 || echo "(none found)"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
       - name: Publish bench summary
+        if: steps.hwcheck.outputs.skip != 'true'
         run: |
           {
             echo "## bench summary mid-math vs glam vs nalgebra vs ultraviolet"
@@ -195,6 +257,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload raw bench output
+        if: steps.hwcheck.outputs.skip != 'true'
         uses: actions/upload-artifact@v4
         with:
           name: bench-vs-all-${{ github.run_number }}-${{ inputs.target_cpu }}
