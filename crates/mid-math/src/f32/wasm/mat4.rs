@@ -157,14 +157,23 @@ impl Mat4 {
     }
 
     // ── Transpose ─────────────────────────────────────────────────────────────
+    // Was scalar field-by-field (16 lane extracts) despite v128 storage — that's
+    // the 19.7ns vs glam's 2.86ns gap in build #34. This is the DirectXMath
+    // XMMatrixTranspose block-shuffle: two rounds of i32x4_shuffle, zero scalar
+    // touches. Ported from glam's f32/wasm/mat4.rs.
 
     pub fn transpose(self) -> Self {
-        Self::from_cols(
-            [self.x_axis.x, self.y_axis.x, self.z_axis.x, self.w_axis.x],
-            [self.x_axis.y, self.y_axis.y, self.z_axis.y, self.w_axis.y],
-            [self.x_axis.z, self.y_axis.z, self.z_axis.z, self.w_axis.z],
-            [self.x_axis.w, self.y_axis.w, self.z_axis.w, self.w_axis.w],
-        )
+        let tmp0 = i32x4_shuffle::<0, 1, 4, 5>(self.x_axis.0, self.y_axis.0);
+        let tmp1 = i32x4_shuffle::<2, 3, 6, 7>(self.x_axis.0, self.y_axis.0);
+        let tmp2 = i32x4_shuffle::<0, 1, 4, 5>(self.z_axis.0, self.w_axis.0);
+        let tmp3 = i32x4_shuffle::<2, 3, 6, 7>(self.z_axis.0, self.w_axis.0);
+
+        Self {
+            x_axis: Vec4(i32x4_shuffle::<0, 2, 4, 6>(tmp0, tmp2)),
+            y_axis: Vec4(i32x4_shuffle::<1, 3, 5, 7>(tmp0, tmp2)),
+            z_axis: Vec4(i32x4_shuffle::<0, 2, 4, 6>(tmp1, tmp3)),
+            w_axis: Vec4(i32x4_shuffle::<1, 3, 5, 7>(tmp1, tmp3)),
+        }
     }
 
     // ── Transform helpers ─────────────────────────────────────────────────────
@@ -440,4 +449,4 @@ unsafe fn wasm_inverse_general(m: &Mat4) -> Option<Mat4> {
         z_axis: Vec4(f32x4_mul(inv2, rcp)),
         w_axis: Vec4(f32x4_mul(inv3, rcp)),
     })
-            }
+                              }
