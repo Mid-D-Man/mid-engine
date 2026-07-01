@@ -1,0 +1,773 @@
+   Compiling proc-macro2 v1.0.106
+   Compiling quote v1.0.46
+   Compiling unicode-ident v1.0.24
+   Compiling autocfg v1.5.1
+   Compiling libc v0.2.186
+   Compiling libm v0.2.16
+   Compiling zerocopy v0.8.52
+   Compiling num-traits v0.2.19
+   Compiling cfg-if v1.0.4
+   Compiling bytemuck v1.25.0
+   Compiling crossbeam-utils v0.8.21
+   Compiling syn v2.0.118
+   Compiling getrandom v0.2.17
+   Compiling rand_core v0.6.4
+   Compiling crossbeam-epoch v0.9.18
+   Compiling nano-gemm-codegen v0.1.0
+   Compiling crossbeam-deque v0.8.6
+   Compiling either v1.16.0
+   Compiling rayon-core v1.13.0
+   Compiling version_check v0.9.5
+   Compiling paste v1.0.15
+   Compiling pulp v0.21.5
+   Compiling reborrow v0.5.5
+   Compiling dyn-stack-macros v0.1.3
+   Compiling rayon v1.12.0
+   Compiling bitflags v2.13.0
+   Compiling raw-cpuid v11.6.0
+   Compiling dyn-stack v0.13.2
+   Compiling serde_core v1.0.228
+   Compiling once_cell v1.21.4
+   Compiling num-integer v0.1.46
+   Compiling seq-macro v0.3.6
+   Compiling memchr v2.8.2
+   Compiling syn v1.0.109
+   Compiling ucd-trie v0.1.7
+   Compiling nano-gemm-core v0.1.0
+   Compiling serde v1.0.228
+   Compiling pest v2.8.6
+   Compiling zerocopy-derive v0.8.52
+   Compiling serde_derive v1.0.228
+   Compiling pest_meta v2.8.6
+   Compiling zmij v1.0.21
+   Compiling pest_generator v2.8.6
+   Compiling equator-macro v0.4.2
+   Compiling nano-gemm-f32 v0.1.0
+   Compiling nano-gemm-c64 v0.1.0
+   Compiling nano-gemm-f64 v0.1.0
+   Compiling nano-gemm-c32 v0.1.0
+   Compiling crossbeam-channel v0.5.15
+   Compiling crossbeam-queue v0.3.12
+   Compiling safe_arch v0.7.4
+   Compiling defer v0.2.1
+   Compiling serde_json v1.0.150
+   Compiling semver v1.0.28
+   Compiling rustc_version v0.4.1
+   Compiling wide v0.7.33
+   Compiling ppv-lite86 v0.2.21
+   Compiling rand_chacha v0.3.1
+   Compiling interpol v0.2.1
+   Compiling rand v0.8.6
+   Compiling private-gemm-x86 v0.1.20
+   Compiling half v2.7.1
+   Compiling crossbeam v0.8.4
+   Compiling equator v0.4.2
+   Compiling num-complex v0.4.6
+   Compiling pest_derive v2.8.6
+   Compiling equator-macro v0.2.1
+   Compiling num-bigint v0.4.6
+   Compiling approx v0.5.1
+   Compiling atomic-wait v1.1.0
+   Compiling matrixmultiply v0.3.10
+   Compiling ciborium-io v0.2.2
+   Compiling anstyle v1.0.14
+   Compiling plotters-backend v0.3.7
+   Compiling itoa v1.0.18
+   Compiling regex-syntax v0.8.11
+   Compiling clap_lex v1.1.0
+   Compiling py_literal v0.4.0
+   Compiling regex-automata v0.4.14
+   Compiling gemm-common v0.18.2
+   Compiling gemm-c32 v0.18.2
+   Compiling gemm-f32 v0.18.2
+   Compiling gemm-c64 v0.18.2
+   Compiling gemm-f64 v0.18.2
+   Compiling qd v0.7.7
+   Compiling clap_builder v4.6.0
+   Compiling plotters-svg v0.3.7
+   Compiling ciborium-ll v0.2.2
+   Compiling spindle v0.2.6
+   Compiling equator v0.2.2
+   Compiling vek v0.17.2
+   Compiling faer-macros v0.21.0
+   Compiling itertools v0.10.5
+   Compiling num_cpus v1.17.0
+   Compiling same-file v1.0.6
+   Compiling generativity v1.2.1
+   Compiling rawpointer v0.2.1
+   Compiling cast v0.3.0
+   Compiling byteorder v1.5.0
+   Compiling npyz v0.8.4
+   Compiling criterion-plot v0.5.0
+   Compiling faer-traits v0.22.1
+   Compiling walkdir v2.5.0
+   Compiling nano-gemm v0.1.3
+   Compiling clap v4.6.1
+   Compiling tinytemplate v1.2.1
+   Compiling ciborium v0.2.2
+   Compiling plotters v0.3.7
+   Compiling gemm v0.18.2
+   Compiling regex v1.12.4
+   Compiling simba v0.9.1
+   Compiling rand_distr v0.4.3
+   Compiling nalgebra-macros v0.2.2
+   Compiling num-rational v0.4.2
+   Compiling is-terminal v0.4.17
+   Compiling anes v0.1.6
+   Compiling typenum v1.20.1
+   Compiling oorandom v11.1.5
+   Compiling criterion v0.5.1
+   Compiling faer v0.22.6
+   Compiling nalgebra v0.33.3
+   Compiling ultraviolet v0.9.2
+   Compiling glam v0.28.0
+   Compiling mid-math v0.2.0 (/home/runner/work/mid-engine/mid-engine/crates/mid-math)
+warning: unused import: `EPSILON`
+ --> crates/mid-math/src/tests/vec_tests.rs:4:46
+  |
+4 |     use crate::{Vec2, Vec3, Vec4, approx_eq, EPSILON};
+  |                                              ^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused imports: `EPSILON` and `Mat4`
+ --> crates/mid-math/src/tests/quat_tests.rs:4:29
+  |
+4 |     use crate::{Quat, Vec3, Mat4, approx_eq, to_radians, EPSILON};
+  |                             ^^^^                         ^^^^^^^
+
+warning: unused imports: `Vec4` and `approx_eq`
+ --> crates/mid-math/src/tests/stress_tests.rs:5:23
+  |
+5 |     use crate::{Vec3, Vec4, Quat, Mat4, to_radians, lerp, smoothstep, approx_eq, EPSILON};
+  |                       ^^^^                                            ^^^^^^^^^
+
+warning: unused import: `DEPSILON`
+  --> crates/mid-math/src/tests/f64_tests.rs:10:68
+   |
+10 |         DAffine3, DMat2, DMat3, DMat4, DQuat, DVec2, DVec3, DVec4, DEPSILON,
+   |                                                                    ^^^^^^^^
+
+warning: unused imports: `IMask16` and `IMask8`
+  --> crates/mid-math/src/tests/wide_tests.rs:12:17
+   |
+12 |         IMask4, IMask8, IMask16,
+   |                 ^^^^^^  ^^^^^^^
+
+warning: unused imports: `EPSILON` and `approx_eq`
+  --> crates/mid-math/src/tests/wide_tests.rs:22:21
+   |
+22 |         to_radians, approx_eq, EPSILON,
+   |                     ^^^^^^^^^  ^^^^^^^
+
+warning: unused import: `Fixed`
+ --> crates/mid-math/src/tests/fixed.rs:7:65
+  |
+7 | use crate::{Fixed16, Fixed8, Fixed12, Fixed16Vec2, Fixed16Vec3, Fixed};
+  |                                                                 ^^^^^
+
+warning: unused import: `PerspectiveParams`
+ --> crates/mid-math/src/tests/camera.rs:8:5
+  |
+8 |     PerspectiveParams,
+  |     ^^^^^^^^^^^^^^^^^
+
+error[E0609]: no field `cols` on type `f32::sse2::mat4::Mat4`
+  --> crates/mid-math/src/tests/quat_tests.rs:76:28
+   |
+76 |                 assert!((m.cols[c][r] - exp).abs() < 1e-5,
+   |                            ^^^^ unknown field
+   |
+   = note: available fields are: `x_axis`, `y_axis`, `z_axis`, `w_axis`
+
+error[E0609]: no field `cols` on type `f32::sse2::mat4::Mat4`
+  --> crates/mid-math/src/tests/quat_tests.rs:77:56
+   |
+77 |                     "col={} row={}: {} != {}", c, r, m.cols[c][r], exp);
+   |                                                        ^^^^ unknown field
+   |
+   = note: available fields are: `x_axis`, `y_axis`, `z_axis`, `w_axis`
+
+error[E0308]: arguments to this function are incorrect
+  --> crates/mid-math/src/tests/mat_tests.rs:26:19
+   |
+26 |         let m   = Mat3::from_cols([2.0,0.0,0.0],[0.0,3.0,0.0],[0.0,0.0,4.0]);
+   |                   ^^^^^^^^^^^^^^^ ------------- ------------- ------------- expected `Vec3`, found `[{float}; 3]`
+   |                                   |             |
+   |                                   |             expected `Vec3`, found `[{float}; 3]`
+   |                                   expected `Vec3`, found `[{float}; 3]`
+   |
+note: associated function defined here
+  --> crates/mid-math/src/f32/mat3.rs:30:12
+   |
+30 |     pub fn from_cols(x: Vec3, y: Vec3, z: Vec3) -> Self {
+   |            ^^^^^^^^^ -------  -------  -------
+help: call `Into::into` on this expression to convert `[{float}; 3]` into `f32::sse2::vec3::Vec3`
+   |
+26 |         let m   = Mat3::from_cols([2.0,0.0,0.0].into(),[0.0,3.0,0.0],[0.0,0.0,4.0]);
+   |                                                +++++++
+help: call `Into::into` on this expression to convert `[{float}; 3]` into `f32::sse2::vec3::Vec3`
+   |
+26 |         let m   = Mat3::from_cols([2.0,0.0,0.0],[0.0,3.0,0.0].into(),[0.0,0.0,4.0]);
+   |                                                              +++++++
+help: call `Into::into` on this expression to convert `[{float}; 3]` into `f32::sse2::vec3::Vec3`
+   |
+26 |         let m   = Mat3::from_cols([2.0,0.0,0.0],[0.0,3.0,0.0],[0.0,0.0,4.0].into());
+   |                                                                            +++++++
+
+error[E0609]: no field `cols` on type `f32::sse2::mat4::Mat4`
+  --> crates/mid-math/src/tests/mat_tests.rs:90:26
+   |
+90 |             assert!((eye.cols[c][r]-exp).abs()<1e-4,
+   |                          ^^^^ unknown field
+   |
+   = note: available fields are: `x_axis`, `y_axis`, `z_axis`, `w_axis`
+
+error[E0609]: no field `cols` on type `f32::sse2::mat4::Mat4`
+  --> crates/mid-math/src/tests/mat_tests.rs:91:52
+   |
+91 |                 "m*inv[{}][{}] = {:.6}", c, r, eye.cols[c][r]);
+   |                                                    ^^^^ unknown field
+   |
+   = note: available fields are: `x_axis`, `y_axis`, `z_axis`, `w_axis`
+
+error[E0609]: no field `cols` on type `f32::sse2::mat4::Mat4`
+   --> crates/mid-math/src/tests/mat_tests.rs:103:29
+    |
+103 |         assert!(approx_eq(m.cols[2][3], -1.0), "cols[2][3] = {}", m.cols[2][3]);
+    |                             ^^^^ unknown field
+    |
+    = note: available fields are: `x_axis`, `y_axis`, `z_axis`, `w_axis`
+
+error[E0609]: no field `cols` on type `f32::sse2::mat4::Mat4`
+   --> crates/mid-math/src/tests/mat_tests.rs:103:69
+    |
+103 |         assert!(approx_eq(m.cols[2][3], -1.0), "cols[2][3] = {}", m.cols[2][3]);
+    |                                                                     ^^^^ unknown field
+    |
+    = note: available fields are: `x_axis`, `y_axis`, `z_axis`, `w_axis`
+
+error[E0609]: no field `cols` on type `f32::sse2::mat4::Mat4`
+   --> crates/mid-math/src/tests/mat_tests.rs:139:31
+    |
+139 |             let diff = (inv_g.cols[c][r] - inv_t.cols[c][r]).abs();
+    |                               ^^^^ unknown field
+    |
+    = note: available fields are: `x_axis`, `y_axis`, `z_axis`, `w_axis`
+
+error[E0609]: no field `cols` on type `f32::sse2::mat4::Mat4`
+   --> crates/mid-math/src/tests/mat_tests.rs:139:50
+    |
+139 |             let diff = (inv_g.cols[c][r] - inv_t.cols[c][r]).abs();
+    |                                                  ^^^^ unknown field
+    |
+    = note: available fields are: `x_axis`, `y_axis`, `z_axis`, `w_axis`
+
+error[E0609]: no field `cols` on type `f32::sse2::mat4::Mat4`
+   --> crates/mid-math/src/tests/mat_tests.rs:142:29
+    |
+142 |                 c, r, inv_g.cols[c][r], inv_t.cols[c][r]);
+    |                             ^^^^ unknown field
+    |
+    = note: available fields are: `x_axis`, `y_axis`, `z_axis`, `w_axis`
+
+error[E0609]: no field `cols` on type `f32::sse2::mat4::Mat4`
+   --> crates/mid-math/src/tests/mat_tests.rs:142:47
+    |
+142 |                 c, r, inv_g.cols[c][r], inv_t.cols[c][r]);
+    |                                               ^^^^ unknown field
+    |
+    = note: available fields are: `x_axis`, `y_axis`, `z_axis`, `w_axis`
+
+error[E0609]: no field `cols` on type `f32::sse2::mat4::Mat4`
+   --> crates/mid-math/src/tests/mat_tests.rs:177:37
+    |
+177 |                         let d = (s2.cols[c][r] - sc.cols[c][r]).abs();
+    |                                     ^^^^ unknown field
+    |
+    = note: available fields are: `x_axis`, `y_axis`, `z_axis`, `w_axis`
+
+error[E0609]: no field `cols` on type `f32::sse2::mat4::Mat4`
+   --> crates/mid-math/src/tests/mat_tests.rs:177:53
+    |
+177 |                         let d = (s2.cols[c][r] - sc.cols[c][r]).abs();
+    |                                                     ^^^^ unknown field
+    |
+    = note: available fields are: `x_axis`, `y_axis`, `z_axis`, `w_axis`
+
+error[E0609]: no field `cols` on type `f32::sse2::mat4::Mat4`
+   --> crates/mid-math/src/tests/mat_tests.rs:180:41
+    |
+180 | ...                   i, c, r, s2.cols[c][r], sc.cols[c][r]);
+    |                                   ^^^^ unknown field
+    |
+    = note: available fields are: `x_axis`, `y_axis`, `z_axis`, `w_axis`
+
+error[E0609]: no field `cols` on type `f32::sse2::mat4::Mat4`
+   --> crates/mid-math/src/tests/mat_tests.rs:180:56
+    |
+180 | ...                   i, c, r, s2.cols[c][r], sc.cols[c][r]);
+    |                                                  ^^^^ unknown field
+    |
+    = note: available fields are: `x_axis`, `y_axis`, `z_axis`, `w_axis`
+
+error[E0609]: no field `cols` on type `f32::sse2::mat4::Mat4`
+   --> crates/mid-math/src/tests/mat_tests.rs:259:24
+    |
+259 |             let d = (m.cols[c][row] - m2.cols[c][row]).abs();
+    |                        ^^^^ unknown field
+    |
+    = note: available fields are: `x_axis`, `y_axis`, `z_axis`, `w_axis`
+
+error[E0609]: no field `cols` on type `f32::sse2::mat4::Mat4`
+   --> crates/mid-math/src/tests/mat_tests.rs:259:42
+    |
+259 |             let d = (m.cols[c][row] - m2.cols[c][row]).abs();
+    |                                          ^^^^ unknown field
+    |
+    = note: available fields are: `x_axis`, `y_axis`, `z_axis`, `w_axis`
+
+error[E0609]: no field `cols` on type `f32::sse2::mat4::Mat4`
+   --> crates/mid-math/src/tests/mat_tests.rs:260:74
+    |
+260 |             assert!(d < 1e-5, "col={} row={}: {:.7} vs {:.7}", c, row, m.cols[c][row], m2.cols[c][row]);
+    |                                                                          ^^^^ unknown field
+    |
+    = note: available fields are: `x_axis`, `y_axis`, `z_axis`, `w_axis`
+
+error[E0609]: no field `cols` on type `f32::sse2::mat4::Mat4`
+   --> crates/mid-math/src/tests/mat_tests.rs:260:91
+    |
+260 |             assert!(d < 1e-5, "col={} row={}: {:.7} vs {:.7}", c, row, m.cols[c][row], m2.cols[c][row]);
+    |                                                                                           ^^^^ unknown field
+    |
+    = note: available fields are: `x_axis`, `y_axis`, `z_axis`, `w_axis`
+
+error[E0609]: no field `cols` on type `f32::sse2::mat4::Mat4`
+   --> crates/mid-math/src/tests/mat_tests.rs:315:27
+    |
+315 |             let d = (ainv.cols[c][row] - minv.cols[c][row]).abs();
+    |                           ^^^^ unknown field
+    |
+    = note: available fields are: `x_axis`, `y_axis`, `z_axis`, `w_axis`
+
+error[E0609]: no field `cols` on type `f32::sse2::mat4::Mat4`
+   --> crates/mid-math/src/tests/mat_tests.rs:315:47
+    |
+315 |             let d = (ainv.cols[c][row] - minv.cols[c][row]).abs();
+    |                                               ^^^^ unknown field
+    |
+    = note: available fields are: `x_axis`, `y_axis`, `z_axis`, `w_axis`
+
+error[E0609]: no field `cols` on type `f32::sse2::mat4::Mat4`
+   --> crates/mid-math/src/tests/mat_tests.rs:318:30
+    |
+318 |                 c, row, ainv.cols[c][row], minv.cols[c][row]);
+    |                              ^^^^ unknown field
+    |
+    = note: available fields are: `x_axis`, `y_axis`, `z_axis`, `w_axis`
+
+error[E0609]: no field `cols` on type `f32::sse2::mat4::Mat4`
+   --> crates/mid-math/src/tests/mat_tests.rs:318:49
+    |
+318 |                 c, row, ainv.cols[c][row], minv.cols[c][row]);
+    |                                                 ^^^^ unknown field
+    |
+    = note: available fields are: `x_axis`, `y_axis`, `z_axis`, `w_axis`
+
+error[E0609]: no field `cols` on type `f32::sse2::mat4::Mat4`
+   --> crates/mid-math/src/tests/stress_tests.rs:189:21
+    |
+189 |         assert!(acc.cols[0][0].is_finite());
+    |                     ^^^^ unknown field
+    |
+    = note: available fields are: `x_axis`, `y_axis`, `z_axis`, `w_axis`
+
+error[E0308]: mismatched types
+   --> crates/mid-math/src/tests/f64_tests.rs:290:42
+    |
+290 |         let r = DMat2::IDENTITY.mul_vec2(v);
+    |                                 -------- ^ expected `f64::dvec2::DVec2`, found `f64::sse2::dvec2::DVec2`
+    |                                 |
+    |                                 arguments to this method are incorrect
+    |
+    = note: `f64::sse2::dvec2::DVec2` and `f64::dvec2::DVec2` have similar names, but are actually distinct types
+note: `f64::sse2::dvec2::DVec2` is defined in module `crate::f64::sse2::dvec2` of the current crate
+   --> crates/mid-math/src/f64/sse2/dvec2.rs:48:1
+    |
+ 48 | pub struct DVec2(pub(crate) __m128d);
+    | ^^^^^^^^^^^^^^^^
+note: `f64::dvec2::DVec2` is defined in module `crate::f64::dvec2` of the current crate
+   --> crates/mid-math/src/f64/dvec2.rs:12:1
+    |
+ 12 | pub struct DVec2 {
+    | ^^^^^^^^^^^^^^^^
+note: method defined here
+   --> crates/mid-math/src/f64/dmat2.rs:87:12
+    |
+ 87 |     pub fn mul_vec2(self, v: DVec2) -> DVec2 {
+    |            ^^^^^^^^       --------
+
+error[E0308]: mismatched types
+   --> crates/mid-math/src/tests/f64_tests.rs:291:23
+    |
+291 |         assert_eq!(r, v);
+    |                       ^ expected `f64::dvec2::DVec2`, found `f64::sse2::dvec2::DVec2`
+    |
+    = note: `f64::sse2::dvec2::DVec2` and `f64::dvec2::DVec2` have similar names, but are actually distinct types
+note: `f64::sse2::dvec2::DVec2` is defined in module `crate::f64::sse2::dvec2` of the current crate
+   --> crates/mid-math/src/f64/sse2/dvec2.rs:48:1
+    |
+ 48 | pub struct DVec2(pub(crate) __m128d);
+    | ^^^^^^^^^^^^^^^^
+note: `f64::dvec2::DVec2` is defined in module `crate::f64::dvec2` of the current crate
+   --> crates/mid-math/src/f64/dvec2.rs:12:1
+    |
+ 12 | pub struct DVec2 {
+    | ^^^^^^^^^^^^^^^^
+
+error[E0308]: mismatched types
+   --> crates/mid-math/src/tests/f64_tests.rs:394:13
+    |
+392 |         let m = DMat4::from_trs(
+    |                 --------------- arguments to this function are incorrect
+393 |             DVec3::new(1.0, 2.0, 3.0),
+394 |             DQuat::from_axis_angle(DVec3::Y, 45.0f64.to_radians()),
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `f64::dquat::DQuat`, found `f64::sse2::dquat::DQuat`
+    |
+    = note: `f64::sse2::dquat::DQuat` and `f64::dquat::DQuat` have similar names, but are actually distinct types
+note: `f64::sse2::dquat::DQuat` is defined in module `crate::f64::sse2::dquat` of the current crate
+   --> crates/mid-math/src/f64/sse2/dquat.rs:46:1
+    |
+ 46 | pub struct DQuat {
+    | ^^^^^^^^^^^^^^^^
+note: `f64::dquat::DQuat` is defined in module `crate::f64::dquat` of the current crate
+   --> crates/mid-math/src/f64/dquat.rs:23:1
+    |
+ 23 | pub struct DQuat {
+    | ^^^^^^^^^^^^^^^^
+note: associated function defined here
+   --> crates/mid-math/src/f64/dmat4.rs:59:12
+    |
+ 59 |     pub fn from_trs(t: DVec3, r: DQuat, s: DVec3) -> Self {
+    |            ^^^^^^^^           --------
+
+error[E0308]: mismatched types
+   --> crates/mid-math/src/tests/f64_tests.rs:429:13
+    |
+427 |           let m = DMat4::from_trs(
+    |                   --------------- arguments to this function are incorrect
+428 |               DVec3::new(3.0, -1.0, 5.0),
+429 | /             DQuat::from_axis_angle(
+430 | |                 DVec3::new(1.0, 1.0, 0.0).normalize(), 37.0f64.to_radians()),
+    | |____________________________________________________________________________^ expected `f64::dquat::DQuat`, found `f64::sse2::dquat::DQuat`
+    |
+    = note: `f64::sse2::dquat::DQuat` and `f64::dquat::DQuat` have similar names, but are actually distinct types
+note: `f64::sse2::dquat::DQuat` is defined in module `crate::f64::sse2::dquat` of the current crate
+   --> crates/mid-math/src/f64/sse2/dquat.rs:46:1
+    |
+ 46 | pub struct DQuat {
+    | ^^^^^^^^^^^^^^^^
+note: `f64::dquat::DQuat` is defined in module `crate::f64::dquat` of the current crate
+   --> crates/mid-math/src/f64/dquat.rs:23:1
+    |
+ 23 | pub struct DQuat {
+    | ^^^^^^^^^^^^^^^^
+note: associated function defined here
+   --> crates/mid-math/src/f64/dmat4.rs:59:12
+    |
+ 59 |     pub fn from_trs(t: DVec3, r: DQuat, s: DVec3) -> Self {
+    |            ^^^^^^^^           --------
+
+error[E0308]: mismatched types
+   --> crates/mid-math/src/tests/f64_tests.rs:503:39
+    |
+503 |         let a = DAffine3::from_trs(t, r, s);
+    |                 ------------------    ^ expected `f64::dquat::DQuat`, found `f64::sse2::dquat::DQuat`
+    |                 |
+    |                 arguments to this function are incorrect
+    |
+    = note: `f64::sse2::dquat::DQuat` and `f64::dquat::DQuat` have similar names, but are actually distinct types
+note: `f64::sse2::dquat::DQuat` is defined in module `crate::f64::sse2::dquat` of the current crate
+   --> crates/mid-math/src/f64/sse2/dquat.rs:46:1
+    |
+ 46 | pub struct DQuat {
+    | ^^^^^^^^^^^^^^^^
+note: `f64::dquat::DQuat` is defined in module `crate::f64::dquat` of the current crate
+   --> crates/mid-math/src/f64/dquat.rs:23:1
+    |
+ 23 | pub struct DQuat {
+    | ^^^^^^^^^^^^^^^^
+note: associated function defined here
+   --> crates/mid-math/src/f64/daffine3.rs:84:12
+    |
+ 84 |     pub fn from_trs(t: DVec3, r: DQuat, s: DVec3) -> Self {
+    |            ^^^^^^^^           --------
+
+error[E0308]: mismatched types
+   --> crates/mid-math/src/tests/f64_tests.rs:504:36
+    |
+504 |         let m = DMat4::from_trs(t, r, s);
+    |                 ---------------    ^ expected `f64::dquat::DQuat`, found `f64::sse2::dquat::DQuat`
+    |                 |
+    |                 arguments to this function are incorrect
+    |
+    = note: `f64::sse2::dquat::DQuat` and `f64::dquat::DQuat` have similar names, but are actually distinct types
+note: `f64::sse2::dquat::DQuat` is defined in module `crate::f64::sse2::dquat` of the current crate
+   --> crates/mid-math/src/f64/sse2/dquat.rs:46:1
+    |
+ 46 | pub struct DQuat {
+    | ^^^^^^^^^^^^^^^^
+note: `f64::dquat::DQuat` is defined in module `crate::f64::dquat` of the current crate
+   --> crates/mid-math/src/f64/dquat.rs:23:1
+    |
+ 23 | pub struct DQuat {
+    | ^^^^^^^^^^^^^^^^
+note: associated function defined here
+   --> crates/mid-math/src/f64/dmat4.rs:59:12
+    |
+ 59 |     pub fn from_trs(t: DVec3, r: DQuat, s: DVec3) -> Self {
+    |            ^^^^^^^^           --------
+
+error[E0308]: mismatched types
+   --> crates/mid-math/src/tests/f64_tests.rs:540:13
+    |
+538 |           let a = DAffine3::from_trs(
+    |                   ------------------ arguments to this function are incorrect
+539 |               DVec3::new(3.0, -1.0, 5.0),
+540 | /             DQuat::from_axis_angle(
+541 | |                 DVec3::new(1.0, 1.0, 0.0).normalize(), 37.0f64.to_radians()),
+    | |____________________________________________________________________________^ expected `f64::dquat::DQuat`, found `f64::sse2::dquat::DQuat`
+    |
+    = note: `f64::sse2::dquat::DQuat` and `f64::dquat::DQuat` have similar names, but are actually distinct types
+note: `f64::sse2::dquat::DQuat` is defined in module `crate::f64::sse2::dquat` of the current crate
+   --> crates/mid-math/src/f64/sse2/dquat.rs:46:1
+    |
+ 46 | pub struct DQuat {
+    | ^^^^^^^^^^^^^^^^
+note: `f64::dquat::DQuat` is defined in module `crate::f64::dquat` of the current crate
+   --> crates/mid-math/src/f64/dquat.rs:23:1
+    |
+ 23 | pub struct DQuat {
+    | ^^^^^^^^^^^^^^^^
+note: associated function defined here
+   --> crates/mid-math/src/f64/daffine3.rs:84:12
+    |
+ 84 |     pub fn from_trs(t: DVec3, r: DQuat, s: DVec3) -> Self {
+    |            ^^^^^^^^           --------
+
+error[E0308]: mismatched types
+   --> crates/mid-math/src/tests/f64_tests.rs:558:42
+    |
+558 |         let a    = DAffine3::from_trs(t, r, s);
+    |                    ------------------    ^ expected `f64::dquat::DQuat`, found `f64::sse2::dquat::DQuat`
+    |                    |
+    |                    arguments to this function are incorrect
+    |
+    = note: `f64::sse2::dquat::DQuat` and `f64::dquat::DQuat` have similar names, but are actually distinct types
+note: `f64::sse2::dquat::DQuat` is defined in module `crate::f64::sse2::dquat` of the current crate
+   --> crates/mid-math/src/f64/sse2/dquat.rs:46:1
+    |
+ 46 | pub struct DQuat {
+    | ^^^^^^^^^^^^^^^^
+note: `f64::dquat::DQuat` is defined in module `crate::f64::dquat` of the current crate
+   --> crates/mid-math/src/f64/dquat.rs:23:1
+    |
+ 23 | pub struct DQuat {
+    | ^^^^^^^^^^^^^^^^
+note: associated function defined here
+   --> crates/mid-math/src/f64/daffine3.rs:84:12
+    |
+ 84 |     pub fn from_trs(t: DVec3, r: DQuat, s: DVec3) -> Self {
+    |            ^^^^^^^^           --------
+
+error[E0308]: mismatched types
+   --> crates/mid-math/src/tests/f64_tests.rs:559:39
+    |
+559 |         let m    = DMat4::from_trs(t, r, s);
+    |                    ---------------    ^ expected `f64::dquat::DQuat`, found `f64::sse2::dquat::DQuat`
+    |                    |
+    |                    arguments to this function are incorrect
+    |
+    = note: `f64::sse2::dquat::DQuat` and `f64::dquat::DQuat` have similar names, but are actually distinct types
+note: `f64::sse2::dquat::DQuat` is defined in module `crate::f64::sse2::dquat` of the current crate
+   --> crates/mid-math/src/f64/sse2/dquat.rs:46:1
+    |
+ 46 | pub struct DQuat {
+    | ^^^^^^^^^^^^^^^^
+note: `f64::dquat::DQuat` is defined in module `crate::f64::dquat` of the current crate
+   --> crates/mid-math/src/f64/dquat.rs:23:1
+    |
+ 23 | pub struct DQuat {
+    | ^^^^^^^^^^^^^^^^
+note: associated function defined here
+   --> crates/mid-math/src/f64/dmat4.rs:59:12
+    |
+ 59 |     pub fn from_trs(t: DVec3, r: DQuat, s: DVec3) -> Self {
+    |            ^^^^^^^^           --------
+
+error[E0308]: mismatched types
+   --> crates/mid-math/src/tests/f64_tests.rs:575:13
+    |
+573 |         let a = DAffine3::from_trs(
+    |                 ------------------ arguments to this function are incorrect
+574 |             DVec3::new(1.0, 0.0, 0.0),
+575 |             DQuat::from_axis_angle(DVec3::Y, 45.0f64.to_radians()),
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `f64::dquat::DQuat`, found `f64::sse2::dquat::DQuat`
+    |
+    = note: `f64::sse2::dquat::DQuat` and `f64::dquat::DQuat` have similar names, but are actually distinct types
+note: `f64::sse2::dquat::DQuat` is defined in module `crate::f64::sse2::dquat` of the current crate
+   --> crates/mid-math/src/f64/sse2/dquat.rs:46:1
+    |
+ 46 | pub struct DQuat {
+    | ^^^^^^^^^^^^^^^^
+note: `f64::dquat::DQuat` is defined in module `crate::f64::dquat` of the current crate
+   --> crates/mid-math/src/f64/dquat.rs:23:1
+    |
+ 23 | pub struct DQuat {
+    | ^^^^^^^^^^^^^^^^
+note: associated function defined here
+   --> crates/mid-math/src/f64/daffine3.rs:84:12
+    |
+ 84 |     pub fn from_trs(t: DVec3, r: DQuat, s: DVec3) -> Self {
+    |            ^^^^^^^^           --------
+
+error[E0308]: mismatched types
+   --> crates/mid-math/src/tests/f64_tests.rs:580:13
+    |
+578 |         let b = DAffine3::from_trs(
+    |                 ------------------ arguments to this function are incorrect
+579 |             DVec3::new(0.0, 1.0, 0.0),
+580 |             DQuat::from_axis_angle(DVec3::X, 30.0f64.to_radians()),
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `f64::dquat::DQuat`, found `f64::sse2::dquat::DQuat`
+    |
+    = note: `f64::sse2::dquat::DQuat` and `f64::dquat::DQuat` have similar names, but are actually distinct types
+note: `f64::sse2::dquat::DQuat` is defined in module `crate::f64::sse2::dquat` of the current crate
+   --> crates/mid-math/src/f64/sse2/dquat.rs:46:1
+    |
+ 46 | pub struct DQuat {
+    | ^^^^^^^^^^^^^^^^
+note: `f64::dquat::DQuat` is defined in module `crate::f64::dquat` of the current crate
+   --> crates/mid-math/src/f64/dquat.rs:23:1
+    |
+ 23 | pub struct DQuat {
+    | ^^^^^^^^^^^^^^^^
+note: associated function defined here
+   --> crates/mid-math/src/f64/daffine3.rs:84:12
+    |
+ 84 |     pub fn from_trs(t: DVec3, r: DQuat, s: DVec3) -> Self {
+    |            ^^^^^^^^           --------
+
+error[E0308]: mismatched types
+   --> crates/mid-math/src/tests/f64_tests.rs:602:13
+    |
+600 |         let m = DMat4::from_trs(
+    |                 --------------- arguments to this function are incorrect
+601 |             DVec3::new(3.0, -1.0, 5.0),
+602 |             DQuat::from_axis_angle(DVec3::new(1.0,1.0,0.0).normalize(), 37.0f64.to_radians()),
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `f64::dquat::DQuat`, found `f64::sse2::dquat::DQuat`
+    |
+    = note: `f64::sse2::dquat::DQuat` and `f64::dquat::DQuat` have similar names, but are actually distinct types
+note: `f64::sse2::dquat::DQuat` is defined in module `crate::f64::sse2::dquat` of the current crate
+   --> crates/mid-math/src/f64/sse2/dquat.rs:46:1
+    |
+ 46 | pub struct DQuat {
+    | ^^^^^^^^^^^^^^^^
+note: `f64::dquat::DQuat` is defined in module `crate::f64::dquat` of the current crate
+   --> crates/mid-math/src/f64/dquat.rs:23:1
+    |
+ 23 | pub struct DQuat {
+    | ^^^^^^^^^^^^^^^^
+note: associated function defined here
+   --> crates/mid-math/src/f64/dmat4.rs:59:12
+    |
+ 59 |     pub fn from_trs(t: DVec3, r: DQuat, s: DVec3) -> Self {
+    |            ^^^^^^^^           --------
+
+error[E0308]: mismatched types
+   --> crates/mid-math/src/tests/f64_tests.rs:644:13
+    |
+642 |         let m  = DMat4::from_trs(
+    |                  --------------- arguments to this function are incorrect
+643 |             DVec3::new(1.0, 2.0, 3.0),
+644 |             DQuat::from_axis_angle(DVec3::Y, 0.5),
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `f64::dquat::DQuat`, found `f64::sse2::dquat::DQuat`
+    |
+    = note: `f64::sse2::dquat::DQuat` and `f64::dquat::DQuat` have similar names, but are actually distinct types
+note: `f64::sse2::dquat::DQuat` is defined in module `crate::f64::sse2::dquat` of the current crate
+   --> crates/mid-math/src/f64/sse2/dquat.rs:46:1
+    |
+ 46 | pub struct DQuat {
+    | ^^^^^^^^^^^^^^^^
+note: `f64::dquat::DQuat` is defined in module `crate::f64::dquat` of the current crate
+   --> crates/mid-math/src/f64/dquat.rs:23:1
+    |
+ 23 | pub struct DQuat {
+    | ^^^^^^^^^^^^^^^^
+note: associated function defined here
+   --> crates/mid-math/src/f64/dmat4.rs:59:12
+    |
+ 59 |     pub fn from_trs(t: DVec3, r: DQuat, s: DVec3) -> Self {
+    |            ^^^^^^^^           --------
+
+error[E0308]: mismatched types
+   --> crates/mid-math/src/tests/f64_tests.rs:657:13
+    |
+655 |         let a  = DAffine3::from_trs(
+    |                  ------------------ arguments to this function are incorrect
+656 |             DVec3::new(1.0, 2.0, 3.0),
+657 |             DQuat::from_axis_angle(DVec3::Y, 0.5),
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `f64::dquat::DQuat`, found `f64::sse2::dquat::DQuat`
+    |
+    = note: `f64::sse2::dquat::DQuat` and `f64::dquat::DQuat` have similar names, but are actually distinct types
+note: `f64::sse2::dquat::DQuat` is defined in module `crate::f64::sse2::dquat` of the current crate
+   --> crates/mid-math/src/f64/sse2/dquat.rs:46:1
+    |
+ 46 | pub struct DQuat {
+    | ^^^^^^^^^^^^^^^^
+note: `f64::dquat::DQuat` is defined in module `crate::f64::dquat` of the current crate
+   --> crates/mid-math/src/f64/dquat.rs:23:1
+    |
+ 23 | pub struct DQuat {
+    | ^^^^^^^^^^^^^^^^
+note: associated function defined here
+   --> crates/mid-math/src/f64/daffine3.rs:84:12
+    |
+ 84 |     pub fn from_trs(t: DVec3, r: DQuat, s: DVec3) -> Self {
+    |            ^^^^^^^^           --------
+
+error[E0277]: the trait bound `Worley: NoiseSource3d` is not satisfied
+   --> crates/mid-math/src/tests/noise.rs:267:21
+    |
+267 |     assert_range_3d(&w, 0.0, 1.0, "Worley3D");
+    |     --------------- ^^ unsatisfied trait bound
+    |     |
+    |     required by a bound introduced by this call
+    |
+help: the trait `NoiseSource3d` is not implemented for `Worley`
+   --> crates/mid-math/src/noise/worley.rs:44:1
+    |
+ 44 | pub struct Worley {
+    | ^^^^^^^^^^^^^^^^^
+    = help: the following other types implement trait `NoiseSource3d`:
+              DomainWarp<N>
+              Fbm<N>
+              Perlin
+              Simplex
+              Value
+note: required by a bound in `assert_range_3d`
+   --> crates/mid-math/src/tests/noise.rs:39:23
+    |
+ 39 | fn assert_range_3d<N: NoiseSource3d>(src: &N, lo: f32, hi: f32, name: &str) {
+    |                       ^^^^^^^^^^^^^ required by this bound in `assert_range_3d`
+
+warning: unused import: `NoiseSource4d`
+  --> crates/mid-math/src/tests/noise.rs:14:52
+   |
+14 |     DomainWarp, Fbm, NoiseSource2d, NoiseSource3d, NoiseSource4d,
+   |                                                    ^^^^^^^^^^^^^
+
+Some errors have detailed explanations: E0277, E0308, E0609.
+For more information about an error, try `rustc --explain E0277`.
+warning: `mid-math` (lib test) generated 9 warnings
+error: could not compile `mid-math` (lib test) due to 39 previous errors; 9 warnings emitted
