@@ -74,11 +74,13 @@ pub(crate) mod sme;
 #[cfg(all(any(target_arch = "wasm32", target_arch = "wasm64"), target_feature = "simd128"))]
 pub(crate) mod wasm;
 
+// Mat2 now comes from wasm::mat2 (v128-backed). Previously this block only
+// exported {Vec3, Vec4, Quat, Mat4} and Mat2 fell through to the scalar
+// `pub use mat2::Mat2;` in the fallback section below — that's the entire
+// cause of the mat2/mul, transpose, determinant, inverse gaps vs glam in
+// bench build #34. See wasm/mat2.rs header for the numbers.
 #[cfg(all(any(target_arch = "wasm32", target_arch = "wasm64"), target_feature = "simd128"))]
-pub use wasm::{Vec3, Vec4, Quat, Mat4};
-
-#[cfg(all(any(target_arch = "wasm32", target_arch = "wasm64"), target_feature = "simd128"))]
-pub use mat2::Mat2;
+pub use wasm::{Vec3, Vec4, Quat, Mat4, Mat2};
 
 // ── Portable SIMD (coresimd) ──────────────────────────────────────────────────
 
