@@ -15,6 +15,18 @@
 //!   mul_vec2   = 4 NEON instructions (vs 4 scalar muls + 2 scalar adds)
 //!
 //! Algorithm taken from glam's neon/mat2.rs (MIT/Apache-2.0).
+//!
+//! ## Receiver convention (fixed — see CI build #35)
+//! Every operation here now takes `self`/`rhs` BY VALUE, matching
+//! `scalar::Mat2` and `sse2::Mat2` exactly. Mat2 is `Copy`, 16 bytes, fits
+//! in one register — there is no reason for any backend to take it by
+//! reference, and doing so silently breaks any generic call site (e.g.
+//! `vs_all.rs`) written against the by-value scalar/sse2 signature.
+//! Previously `mul_mat2`, `add_mat2`, and `sub_mat2` all took `&Self` for
+//! `rhs` (and most methods took `&self`) — that mismatch is what produced
+//! the `expected &Mat2, found Mat2` compile error. `col`/`row` stay `&self`
+//! since they only read a field (matches scalar); `col_mut` stays `&mut self`
+//! since it must hand back a mutable reference.
 
 use core::arch::aarch64::*;
 use core::fmt;
@@ -78,8 +90,8 @@ impl Mat2 {
     }
 
     #[inline]
-    pub const fn to_cols_array(&self) -> [f32; 4] {
-        unsafe { *(self as *const Self as *const [f32; 4]) }
+    pub fn to_cols_array(self) -> [f32; 4] {
+        [self.x_axis.x, self.x_axis.y, self.y_axis.x, self.y_axis.y]
     }
 
     #[inline]
@@ -88,8 +100,8 @@ impl Mat2 {
     }
 
     #[inline]
-    pub const fn to_cols_array_2d(&self) -> [[f32; 2]; 2] {
-        unsafe { *(self as *const Self as *const [[f32; 2]; 2]) }
+    pub fn to_cols_array_2d(self) -> [[f32; 2]; 2] {
+        [self.x_axis.to_array(), self.y_axis.to_array()]
     }
 
     #[inline]
@@ -143,11 +155,17 @@ impl Mat2 {
         }
     }
 
+    /// Diagonal elements `[m00, m11]`.
+    #[inline]
+    pub fn diagonal(self) -> Vec2 {
+        Vec2::new(self.x_axis.x, self.y_axis.y)
+    }
+
     // ── Core math ─────────────────────────────────────────────────────────────
 
     /// Transpose. 2 NEON instructions.
     #[inline]
-    pub fn transpose(&self) -> Self {
+    pub fn transpose(self) -> Self {
         // abcd → badc (vrev64) → cdab (vext 2) → then swap back
         // More precisely: we have [a, b, c, d] where a=m00, b=m01, c=m10, d=m11
         // Transpose means [a, c, b, d] (swap lanes 1 and 2)
@@ -161,15 +179,9 @@ impl Mat2 {
         })
     }
 
-    /// Diagonal elements `[m00, m11]`.
-    #[inline]
-    pub fn diagonal(&self) -> Vec2 {
-        Vec2::new(self.x_axis.x, self.y_axis.y)
-    }
-
     /// Determinant: `m00*m11 - m01*m10`. ~4 NEON instructions.
     #[inline]
-    pub fn determinant(&self) -> f32 {
+    pub fn determinant(self) -> f32 {
         unsafe {
             // abcd is [m00, m01, m10, m11]
             // badc = vrev64(abcd) = [m01, m00, m11, m10]
@@ -185,9 +197,9 @@ impl Mat2 {
         }
     }
 
-    /// Inverse. Returns `None` if singular (`|det| < ε`).
+    /// Try to invert. Returns `None` if singular (`|det| < ε`).
     #[inline]
-    pub fn try_inverse(&self) -> Option<Self> {
+    pub fn try_inverse(self) -> Option<Self> {
         let det = self.determinant();
         if det.abs() < EPSILON { return None; }
         Some(self.inverse_unchecked())
@@ -195,13 +207,13 @@ impl Mat2 {
 
     /// Inverse, returning `Mat2::ZERO` if singular.
     #[inline]
-    pub fn inverse_or_zero(&self) -> Self {
+    pub fn inverse_or_zero(self) -> Self {
         self.try_inverse().unwrap_or(Self::ZERO)
     }
 
     /// Inverse, assuming the matrix IS invertible. Undefined if singular.
     #[inline]
-    pub fn inverse_unchecked(&self) -> Self {
+    pub fn inverse_unchecked(self) -> Self {
         unsafe {
             // SIGN pattern for adjugate: [+1, -1, -1, +1]
             // Adjugate of [[a,b],[c,d]] = [[d,-b],[-c,a]]
@@ -228,7 +240,7 @@ impl Mat2 {
         }
     }
 
-    /// Alias for `inverse_unchecked` — kept for API compatibility.
+    /// Alias for `try_inverse` — kept for API compatibility.
     #[inline]
     pub fn inverse(self) -> Option<Self> { self.try_inverse() }
 
@@ -236,7 +248,7 @@ impl Mat2 {
 
     /// M × v. 4 NEON instructions.
     #[inline]
-    pub fn mul_vec2(&self, rhs: Vec2) -> Vec2 {
+    pub fn mul_vec2(self, rhs: Vec2) -> Vec2 {
         unsafe {
             // abcd = [m00, m01, m10, m11]
             // xxyy = [rhs.x, rhs.x, rhs.y, rhs.y]
@@ -255,13 +267,13 @@ impl Mat2 {
 
     /// M^T × v (cheaper than transposing first).
     #[inline]
-    pub fn mul_transpose_vec2(&self, rhs: Vec2) -> Vec2 {
+    pub fn mul_transpose_vec2(self, rhs: Vec2) -> Vec2 {
         Vec2::new(self.x_axis.dot(rhs), self.y_axis.dot(rhs))
     }
 
     /// M × N. 6 NEON instructions.
     #[inline]
-    pub fn mul_mat2(&self, rhs: &Self) -> Self {
+    pub fn mul_mat2(self, rhs: Self) -> Self {
         unsafe {
             let abcd = self.0;
             // Process both columns of rhs simultaneously
@@ -286,54 +298,54 @@ impl Mat2 {
     // ── Scalar operations ─────────────────────────────────────────────────────
 
     #[inline]
-    pub fn mul_scalar(&self, rhs: f32) -> Self {
+    pub fn mul_scalar(self, rhs: f32) -> Self {
         Self(unsafe { vmulq_n_f32(self.0, rhs) })
     }
 
     #[inline]
-    pub fn div_scalar(&self, rhs: f32) -> Self {
+    pub fn div_scalar(self, rhs: f32) -> Self {
         Self(unsafe { vdivq_f32(self.0, vdupq_n_f32(rhs)) })
     }
 
     #[inline]
-    pub fn mul_diagonal_scale(&self, scale: Vec2) -> Self {
+    pub fn mul_diagonal_scale(self, scale: Vec2) -> Self {
         Self::from_cols(self.x_axis * scale.x, self.y_axis * scale.y)
     }
 
     #[inline]
-    pub fn add_mat2(&self, rhs: &Self) -> Self {
+    pub fn add_mat2(self, rhs: Self) -> Self {
         Self(unsafe { vaddq_f32(self.0, rhs.0) })
     }
 
     #[inline]
-    pub fn sub_mat2(&self, rhs: &Self) -> Self {
+    pub fn sub_mat2(self, rhs: Self) -> Self {
         Self(unsafe { vsubq_f32(self.0, rhs.0) })
     }
 
     #[inline]
-    pub fn abs(&self) -> Self {
+    pub fn abs(self) -> Self {
         Self(unsafe { vabsq_f32(self.0) })
     }
 
     #[inline]
-    pub fn recip(&self) -> Self {
+    pub fn recip(self) -> Self {
         Self::from_cols(self.x_axis.recip(), self.y_axis.recip())
     }
 
     // ── Classification ────────────────────────────────────────────────────────
 
     #[inline]
-    pub fn is_finite(&self) -> bool {
+    pub fn is_finite(self) -> bool {
         self.x_axis.is_finite() && self.y_axis.is_finite()
     }
 
     #[inline]
-    pub fn is_nan(&self) -> bool {
+    pub fn is_nan(self) -> bool {
         self.x_axis.is_nan() || self.y_axis.is_nan()
     }
 
     #[inline]
-    pub fn abs_diff_eq(&self, rhs: Self, max_abs_diff: f32) -> bool {
+    pub fn abs_diff_eq(self, rhs: Self, max_abs_diff: f32) -> bool {
         self.x_axis.abs_diff_eq(rhs.x_axis, max_abs_diff)
             && self.y_axis.abs_diff_eq(rhs.y_axis, max_abs_diff)
     }
@@ -354,17 +366,17 @@ impl PartialEq for Mat2 {
 
 impl Add for Mat2 {
     type Output = Self;
-    #[inline] fn add(self, rhs: Self) -> Self { self.add_mat2(&rhs) }
+    #[inline] fn add(self, rhs: Self) -> Self { self.add_mat2(rhs) }
 }
 impl AddAssign for Mat2 {
-    #[inline] fn add_assign(&mut self, rhs: Self) { *self = self.add_mat2(&rhs); }
+    #[inline] fn add_assign(&mut self, rhs: Self) { *self = self.add_mat2(rhs); }
 }
 impl Sub for Mat2 {
     type Output = Self;
-    #[inline] fn sub(self, rhs: Self) -> Self { self.sub_mat2(&rhs) }
+    #[inline] fn sub(self, rhs: Self) -> Self { self.sub_mat2(rhs) }
 }
 impl SubAssign for Mat2 {
-    #[inline] fn sub_assign(&mut self, rhs: Self) { *self = self.sub_mat2(&rhs); }
+    #[inline] fn sub_assign(&mut self, rhs: Self) { *self = self.sub_mat2(rhs); }
 }
 impl Neg for Mat2 {
     type Output = Self;
@@ -372,10 +384,10 @@ impl Neg for Mat2 {
 }
 impl Mul for Mat2 {
     type Output = Self;
-    #[inline] fn mul(self, rhs: Self) -> Self { self.mul_mat2(&rhs) }
+    #[inline] fn mul(self, rhs: Self) -> Self { self.mul_mat2(rhs) }
 }
 impl MulAssign for Mat2 {
-    #[inline] fn mul_assign(&mut self, rhs: Self) { *self = self.mul_mat2(&rhs); }
+    #[inline] fn mul_assign(&mut self, rhs: Self) { *self = self.mul_mat2(rhs); }
 }
 impl Mul<Vec2> for Mat2 {
     type Output = Vec2;
@@ -416,4 +428,4 @@ impl fmt::Display for Mat2 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "[{}, {}]", self.x_axis, self.y_axis)
     }
-}
+                  }
