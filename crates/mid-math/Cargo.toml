@@ -103,7 +103,8 @@ name    = "geom"
 harness = false
 
 [features]
-default  = []
-simd     = []
-avx2     = []
-coresimd = []
+default      = []
+simd         = []
+avx2         = []
+coresimd     = []
+force-scalar = []
