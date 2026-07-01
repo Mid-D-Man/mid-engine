@@ -13,6 +13,10 @@ on:
           x86-64     = SSE2 only — baseline numbers before AVX2 work lands.
           neon       = ARM NEON acceleration (runs on native aarch64 runner).
           wasm       = WebAssembly wasm32-wasip1 target + simd128 via wasmtime.
+          scalar     = pure scalar fallback, no SIMD backend at all — needs
+                       --features force-scalar since sse2 is otherwise
+                       unconditional on any x86/x86_64 target_arch regardless
+                       of target-cpu. f32 only for now (f64/wide unaffected).
         required: true
         default: 'native'
         type: choice
@@ -24,6 +28,7 @@ on:
           - x86-64
           - neon
           - wasm
+          - scalar
 
 env:
   CARGO_TERM_COLOR: never
@@ -44,9 +49,19 @@ jobs:
             echo "RUSTFLAGS=-C target-feature=+simd128" >> $GITHUB_ENV
             echo "BENCH_TARGET=--target wasm32-wasip1" >> $GITHUB_ENV
             echo "ACTIVE_CPU_FLAGS=-C target-feature=+simd128" >> $GITHUB_ENV
+            echo "BENCH_FEATURES=" >> $GITHUB_ENV
           elif [ "${{ inputs.target_cpu }}" = "neon" ]; then
             echo "BENCH_TARGET=" >> $GITHUB_ENV
             echo "ACTIVE_CPU_FLAGS=" >> $GITHUB_ENV
+            echo "BENCH_FEATURES=" >> $GITHUB_ENV
+          elif [ "${{ inputs.target_cpu }}" = "scalar" ]; then
+            # No target-cpu flag needed — force-scalar bypasses the sse2 cfg
+            # entirely regardless of what instructions rustc would otherwise
+            # emit for this host. f32 only right now; f64/wide crates are
+            # unaffected and keep building/benching normally either way.
+            echo "BENCH_TARGET=" >> $GITHUB_ENV
+            echo "ACTIVE_CPU_FLAGS=" >> $GITHUB_ENV
+            echo "BENCH_FEATURES=--features force-scalar" >> $GITHUB_ENV
           else
             # IMPORTANT: use CARGO_TARGET_<TRIPLE>_RUSTFLAGS, NOT RUSTFLAGS.
             # RUSTFLAGS bleeds into build scripts (num-traits, zerocopy etc) which
@@ -57,6 +72,7 @@ jobs:
             echo "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS=-C target-cpu=${{ inputs.target_cpu }}" >> $GITHUB_ENV
             echo "BENCH_TARGET=" >> $GITHUB_ENV
             echo "ACTIVE_CPU_FLAGS=-C target-cpu=${{ inputs.target_cpu }}" >> $GITHUB_ENV
+            echo "BENCH_FEATURES=" >> $GITHUB_ENV
           fi
 
       # ── Soft hardware gate for x86-64-v4 ─────────────────────────────────────
@@ -179,7 +195,7 @@ jobs:
             echo '```'
             echo ""
 
-            if [ "${{ inputs.target_cpu }}" != "wasm" ] && [ "${{ inputs.target_cpu }}" != "neon" ]; then
+            if [ "${{ inputs.target_cpu }}" != "wasm" ] && [ "${{ inputs.target_cpu }}" != "neon" ] && [ "${{ inputs.target_cpu }}" != "scalar" ]; then
               AVX512=$(rustc --print cfg $ACTIVE_CPU_FLAGS 2>&1 | grep -c 'target_feature="avx512f"' || true)
               AVXFMA=$(rustc --print cfg $ACTIVE_CPU_FLAGS 2>&1 | grep -c 'target_feature="avx"' || true)
               if [ "$AVX512" -gt 0 ]; then
@@ -189,6 +205,8 @@ jobs:
               else
                 echo "> **Active path:** sse2/mat4.rs (target ~7.0 ns mat4/mul)" >> "$GITHUB_STEP_SUMMARY"
               fi
+            elif [ "${{ inputs.target_cpu }}" = "scalar" ]; then
+              echo "> **Active path:** scalar/mat4.rs (--features force-scalar, no SIMD backend, f32 only)" >> "$GITHUB_STEP_SUMMARY"
             fi
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -209,9 +227,9 @@ jobs:
           # v2: bumped to bust caches built before the RUSTFLAGS→CARGO_TARGET_*
           # migration. Old caches may contain build-script binaries compiled with
           # AVX-512 flags that SIGILL on non-AVX-512 runners.
-          key: ${{ runner.os }}-${{ runner.arch }}-bench-${{ inputs.target_cpu }}-v2-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-${{ runner.arch }}-bench-${{ inputs.target_cpu }}-v3-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-${{ runner.arch }}-bench-${{ inputs.target_cpu }}-v2-
+            ${{ runner.os }}-${{ runner.arch }}-bench-${{ inputs.target_cpu }}-v3-
 
       - name: Run vs_all benchmarks
         if: steps.hwcheck.outputs.skip != 'true'
@@ -224,7 +242,7 @@ jobs:
           # it does NOT by itself mean every benchmark printed a result line
           # (criterion can legitimately skip printing one bench's line without
           # erroring — see the WASM diagnostics step below for why).
-          cargo bench --bench vs_all -p mid-math $BENCH_TARGET 2>&1 | tee bench-vs-all-raw.txt
+          cargo bench --bench vs_all -p mid-math $BENCH_TARGET $BENCH_FEATURES 2>&1 | tee bench-vs-all-raw.txt
           echo "Bench exit code: $?" >> "$GITHUB_STEP_SUMMARY"
 
       # ── Surface criterion's own diagnostics directly in the summary ─────────
