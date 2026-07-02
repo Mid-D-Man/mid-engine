@@ -513,9 +513,9 @@ mod tests {
 
     #[test]
     fn e2m1_rounding() {
-        // 0.7 is between 0.5 and 1.0; midpoint is 0.75 → rounds to 1.0
-        let h = F4E2M1::from_f32(0.7);
-        assert_eq!(h.to_f32(), 1.0, "0.7 should round to 1.0");
+        // 0.8 is between 0.5 and 1.0; midpoint is 0.75, and 0.8 > 0.75 → rounds to 1.0
+        let h = F4E2M1::from_f32(0.8);
+        assert_eq!(h.to_f32(), 1.0, "0.8 should round to 1.0");
 
         // 0.6 < 0.75 → rounds to 0.5
         let h = F4E2M1::from_f32(0.6);
