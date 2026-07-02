@@ -16,7 +16,7 @@ use core::fmt;
 use core::ops::Mul;
 
 use super::dvec3::DVec3;
-use super::dquat::DQuat;
+use crate::DQuat;
 use super::dmat4::DMat4;
 use super::dvec2::DEPSILON;
 
@@ -262,4 +262,4 @@ impl From<DMat4> for DAffine3 {
 
 impl From<DAffine3> for DMat4 {
     #[inline] fn from(a: DAffine3) -> Self { a.to_mat4() }
-}
+       }
