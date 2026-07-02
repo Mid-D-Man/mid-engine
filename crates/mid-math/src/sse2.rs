@@ -183,6 +183,16 @@ pub(crate) unsafe fn m128_sin(v: __m128) -> __m128 {
 ///
 /// `v` must be a broadcast — all 4 lanes holding the same squared-length value.
 /// All 4 output lanes receive the same refined reciprocal sqrt.
+///
+/// Two implementations selected at compile time:
+/// - SSE2 baseline: `half·v·rr` as two muls, then a sub.
+/// - AVX+FMA: `half·v` folded, then `1.5 − half_v·rr` fused into one
+///   `_mm_fnmadd_ps` (negated multiply-add). Saves 1 instruction per call.
+///
+/// This sits underneath `normalize()`/`normalize_fast()` for Vec3, Vec4, and
+/// Quat, plus `Quat::nlerp` — the saving compounds across the whole hot path,
+/// same rationale as `dot4_into_m128` above.
+#[cfg(not(all(target_feature = "avx", target_feature = "fma")))]
 #[inline(always)]
 pub(crate) unsafe fn rsqrt_nr(v: __m128) -> __m128 {
     let r    = _mm_rsqrt_ps(v);
@@ -191,6 +201,19 @@ pub(crate) unsafe fn rsqrt_nr(v: __m128) -> __m128 {
     // r₁ = r₀ · (1.5 − 0.5 · v · r₀²)
     let rr   = _mm_mul_ps(r, r);
     let nr   = _mm_sub_ps(c, _mm_mul_ps(half, _mm_mul_ps(v, rr)));
+    _mm_mul_ps(r, nr)
+}
+
+/// FMA variant of [`rsqrt_nr`] — same formula, `1.5 − half_v·rr` fused via
+/// `_mm_fnmadd_ps(half_v, rr, 1.5)` instead of mul+sub.
+#[cfg(all(target_feature = "avx", target_feature = "fma"))]
+#[inline(always)]
+pub(crate) unsafe fn rsqrt_nr(v: __m128) -> __m128 {
+    let r      = _mm_rsqrt_ps(v);
+    let half_v = _mm_mul_ps(_mm_set1_ps(0.5_f32), v);
+    let rr     = _mm_mul_ps(r, r);
+    // nr = 1.5 - half_v * rr, in one instruction
+    let nr     = _mm_fnmadd_ps(half_v, rr, _mm_set1_ps(1.5_f32));
     _mm_mul_ps(r, nr)
 }
 
@@ -265,4 +288,4 @@ pub(crate) unsafe fn dot4d_into_m128d(lo_a: __m128d, hi_a: __m128d,
 #[inline(always)]
 pub(crate) unsafe fn m128d_abs(v: __m128d) -> __m128d {
     _mm_andnot_pd(_mm_set1_pd(-0.0), v)
-    }
+                         }
