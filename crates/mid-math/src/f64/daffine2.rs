@@ -12,7 +12,8 @@
 
 use core::fmt;
 use core::ops::Mul;
-use super::dvec2::{DVec2, DEPSILON};
+use crate::DVec2;
+use super::dvec2::DEPSILON;
 use super::dmat3::DMat3;
 
 /// Double-precision 2D affine transform.
@@ -278,4 +279,4 @@ impl From<DMat3> for DAffine2 {
 
 impl From<DAffine2> for DMat3 {
     #[inline] fn from(a: DAffine2) -> Self { a.to_mat3() }
-         }
+        }
