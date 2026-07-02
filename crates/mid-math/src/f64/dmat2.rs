@@ -8,7 +8,8 @@
 use core::fmt;
 use core::ops::{Add, Mul, Neg, Sub};
 
-use super::dvec2::{DVec2, DEPSILON};
+use crate::DVec2;
+use super::dvec2::DEPSILON;
 
 /// 2×2 column-major double-precision matrix. 32 bytes, align(16).
 ///
@@ -171,4 +172,4 @@ impl From<DMat2> for [[f64; 2]; 2] {
     fn from(m: DMat2) -> Self {
         [m.x_axis.to_array(), m.y_axis.to_array()]
     }
-}
+    }
