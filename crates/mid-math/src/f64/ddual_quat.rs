@@ -12,7 +12,7 @@
 
 use core::fmt;
 use core::ops::Mul;
-use super::dquat::DQuat;
+use crate::DQuat;
 use super::dvec3::DVec3;
 use super::dvec2::DEPSILON;
 
@@ -232,4 +232,4 @@ impl fmt::Display for DDualQuat {
         write!(f, "DDualQuat(rot={:?}, t=({:.6},{:.6},{:.6}))",
                self.real, t.x, t.y, t.z)
     }
-      }
+                             }
