@@ -29,13 +29,13 @@ impl DVec3 {
     #[inline(always)] pub fn to_array(self) -> [f64; 3] { [self.x, self.y, self.z] }
 
     #[inline(always)]
-    pub fn extend(self, w: f64) -> super::dvec4::DVec4 {
-        super::dvec4::DVec4::new(self.x, self.y, self.z, w)
+    pub fn extend(self, w: f64) -> crate::DVec4 {
+        crate::DVec4::new(self.x, self.y, self.z, w)
     }
 
     #[inline(always)]
-    pub fn truncate(self) -> super::dvec2::DVec2 {
-        super::dvec2::DVec2::new(self.x, self.y)
+    pub fn truncate(self) -> crate::DVec2 {
+        crate::DVec2::new(self.x, self.y)
     }
 
     #[inline(always)]
