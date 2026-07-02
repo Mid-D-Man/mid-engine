@@ -1,0 +1,1716 @@
+   Compiling proc-macro2 v1.0.106
+   Compiling unicode-ident v1.0.24
+   Compiling quote v1.0.46
+   Compiling autocfg v1.5.1
+   Compiling libc v0.2.186
+   Compiling libm v0.2.16
+   Compiling num-traits v0.2.19
+   Compiling zerocopy v0.8.52
+   Compiling cfg-if v1.0.4
+   Compiling bytemuck v1.25.0
+   Compiling crossbeam-utils v0.8.21
+   Compiling syn v2.0.118
+   Compiling getrandom v0.2.17
+   Compiling rand_core v0.6.4
+   Compiling crossbeam-epoch v0.9.18
+   Compiling nano-gemm-codegen v0.1.0
+   Compiling crossbeam-deque v0.8.6
+   Compiling rayon-core v1.13.0
+   Compiling either v1.16.0
+   Compiling version_check v0.9.5
+   Compiling paste v1.0.15
+   Compiling pulp v0.21.5
+   Compiling reborrow v0.5.5
+   Compiling bitflags v2.13.0
+   Compiling rayon v1.12.0
+   Compiling dyn-stack-macros v0.1.3
+   Compiling dyn-stack v0.13.2
+   Compiling raw-cpuid v11.6.0
+   Compiling serde_core v1.0.228
+   Compiling once_cell v1.21.4
+   Compiling num-integer v0.1.46
+   Compiling seq-macro v0.3.6
+   Compiling memchr v2.8.2
+   Compiling ucd-trie v0.1.7
+   Compiling syn v1.0.109
+   Compiling pest v2.8.6
+   Compiling nano-gemm-core v0.1.0
+   Compiling serde v1.0.228
+   Compiling zerocopy-derive v0.8.52
+   Compiling serde_derive v1.0.228
+   Compiling pest_meta v2.8.6
+   Compiling zmij v1.0.21
+   Compiling pest_generator v2.8.6
+   Compiling equator-macro v0.4.2
+   Compiling nano-gemm-c64 v0.1.0
+   Compiling nano-gemm-f64 v0.1.0
+   Compiling nano-gemm-f32 v0.1.0
+   Compiling nano-gemm-c32 v0.1.0
+   Compiling crossbeam-channel v0.5.15
+   Compiling crossbeam-queue v0.3.12
+   Compiling safe_arch v0.7.4
+   Compiling semver v1.0.28
+   Compiling defer v0.2.1
+   Compiling serde_json v1.0.150
+   Compiling rustc_version v0.4.1
+   Compiling wide v0.7.33
+   Compiling ppv-lite86 v0.2.21
+   Compiling interpol v0.2.1
+   Compiling rand_chacha v0.3.1
+   Compiling private-gemm-x86 v0.1.20
+   Compiling rand v0.8.6
+   Compiling half v2.7.1
+   Compiling crossbeam v0.8.4
+   Compiling equator v0.4.2
+   Compiling num-complex v0.4.6
+   Compiling pest_derive v2.8.6
+   Compiling equator-macro v0.2.1
+   Compiling num-bigint v0.4.6
+   Compiling approx v0.5.1
+   Compiling atomic-wait v1.1.0
+   Compiling matrixmultiply v0.3.10
+   Compiling regex-syntax v0.8.11
+   Compiling anstyle v1.0.14
+   Compiling ciborium-io v0.2.2
+   Compiling clap_lex v1.1.0
+   Compiling itoa v1.0.18
+   Compiling plotters-backend v0.3.7
+   Compiling plotters-svg v0.3.7
+   Compiling regex-automata v0.4.14
+   Compiling gemm-common v0.18.2
+   Compiling gemm-c32 v0.18.2
+   Compiling gemm-f64 v0.18.2
+   Compiling gemm-f32 v0.18.2
+   Compiling gemm-c64 v0.18.2
+   Compiling qd v0.7.7
+   Compiling py_literal v0.4.0
+   Compiling clap_builder v4.6.0
+   Compiling ciborium-ll v0.2.2
+   Compiling spindle v0.2.6
+   Compiling equator v0.2.2
+   Compiling vek v0.17.2
+   Compiling faer-macros v0.21.0
+   Compiling itertools v0.10.5
+   Compiling num_cpus v1.17.0
+   Compiling same-file v1.0.6
+   Compiling byteorder v1.5.0
+   Compiling generativity v1.2.1
+   Compiling rawpointer v0.2.1
+   Compiling cast v0.3.0
+   Compiling criterion-plot v0.5.0
+   Compiling nano-gemm v0.1.3
+   Compiling faer-traits v0.22.1
+   Compiling npyz v0.8.4
+   Compiling walkdir v2.5.0
+   Compiling clap v4.6.1
+   Compiling gemm v0.18.2
+   Compiling ciborium v0.2.2
+   Compiling regex v1.12.4
+   Compiling tinytemplate v1.2.1
+   Compiling plotters v0.3.7
+   Compiling simba v0.9.1
+   Compiling rand_distr v0.4.3
+   Compiling nalgebra-macros v0.2.2
+   Compiling num-rational v0.4.2
+   Compiling is-terminal v0.4.17
+   Compiling oorandom v11.1.5
+   Compiling anes v0.1.6
+   Compiling typenum v1.20.1
+   Compiling criterion v0.5.1
+   Compiling faer v0.22.6
+   Compiling nalgebra v0.33.3
+   Compiling ultraviolet v0.9.2
+   Compiling glam v0.28.0
+   Compiling mid-math v0.2.0 (/home/runner/work/mid-engine/mid-engine/crates/mid-math)
+warning: unused import: `EPSILON`
+ --> crates/mid-math/src/tests/vec_tests.rs:4:46
+  |
+4 |     use crate::{Vec2, Vec3, Vec4, approx_eq, EPSILON};
+  |                                              ^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `EPSILON`
+ --> crates/mid-math/src/tests/quat_tests.rs:4:58
+  |
+4 |     use crate::{Quat, Vec3, Mat4, approx_eq, to_radians, EPSILON};
+  |                                                          ^^^^^^^
+
+warning: unused imports: `Vec4` and `approx_eq`
+ --> crates/mid-math/src/tests/stress_tests.rs:5:23
+  |
+5 |     use crate::{Vec3, Vec4, Quat, Mat4, to_radians, lerp, smoothstep, approx_eq, EPSILON};
+  |                       ^^^^                                            ^^^^^^^^^
+
+warning: unused import: `DEPSILON`
+  --> crates/mid-math/src/tests/f64_tests.rs:10:68
+   |
+10 |         DAffine3, DMat2, DMat3, DMat4, DQuat, DVec2, DVec3, DVec4, DEPSILON,
+   |                                                                    ^^^^^^^^
+
+warning: unused imports: `IMask16` and `IMask8`
+  --> crates/mid-math/src/tests/wide_tests.rs:12:17
+   |
+12 |         IMask4, IMask8, IMask16,
+   |                 ^^^^^^  ^^^^^^^
+
+warning: unused imports: `EPSILON` and `approx_eq`
+  --> crates/mid-math/src/tests/wide_tests.rs:22:21
+   |
+22 |         to_radians, approx_eq, EPSILON,
+   |                     ^^^^^^^^^  ^^^^^^^
+
+warning: unused import: `Fixed`
+ --> crates/mid-math/src/tests/fixed.rs:7:65
+  |
+7 | use crate::{Fixed16, Fixed8, Fixed12, Fixed16Vec2, Fixed16Vec3, Fixed};
+  |                                                                 ^^^^^
+
+warning: unused import: `PerspectiveParams`
+ --> crates/mid-math/src/tests/camera.rs:8:5
+  |
+8 |     PerspectiveParams,
+  |     ^^^^^^^^^^^^^^^^^
+
+warning: unused import: `NoiseSource4d`
+  --> crates/mid-math/src/tests/noise.rs:14:52
+   |
+14 |     DomainWarp, Fbm, NoiseSource2d, NoiseSource3d, NoiseSource4d,
+   |                                                    ^^^^^^^^^^^^^
+
+warning: function `mat4_approx_loose` is never used
+  --> crates/mid-math/src/tests/f64_tests.rs:32:8
+   |
+32 |     fn mat4_approx_loose(a: DMat4, b: DMat4) -> bool {
+   |        ^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `mid-math` (lib test) generated 10 warnings (run `cargo fix --lib -p mid-math --tests` to apply 8 suggestions)
+    Finished `release` profile [optimized] target(s) in 1m 08s
+     Running unittests src/lib.rs (target/release/deps/mid_math-16b7bb75ab30d2c0)
+
+running 617 tests
+test storage::bf16_impl::tests::batch_x4 ... ok
+test storage::bf16_impl::tests::infinity_roundtrip ... ok
+test storage::bf16_impl::tests::nan_roundtrip ... ok
+test storage::bf16_impl::tests::neg_flip ... ok
+test storage::bf16_impl::tests::partial_eq_nan ... ok
+test storage::bf16_impl::tests::size ... ok
+test storage::bf16_impl::tests::no_overflow_from_large_f32 ... ok
+test storage::bf16_impl::tests::to_f32_is_free ... ok
+test storage::bf16_impl::tests::roundtrip_precision ... ok
+test storage::f16_impl::tests::abs_and_copysign ... ok
+test storage::f16_impl::tests::batch_x4 ... ok
+test storage::f16_impl::tests::batch_x8 ... ok
+test storage::f16_impl::tests::from_f64 ... ok
+test storage::f16_impl::tests::infinity_and_nan ... ok
+test storage::f16_impl::tests::neg_zero ... ok
+test storage::f16_impl::tests::neg_flip ... ok
+test storage::f16_impl::tests::neg_one ... ok
+test storage::f16_impl::tests::negative_roundtrip ... ok
+test storage::f16_impl::tests::one ... ok
+test storage::f16_impl::tests::pi_approx ... ok
+test storage::f16_impl::tests::overflow_to_infinity ... ok
+test storage::f16_impl::tests::partial_eq_nan ... ok
+test storage::f16_impl::tests::slice_conversion ... ok
+test storage::f16_impl::tests::storage_is_two_bytes ... ok
+test storage::f16_impl::tests::subnormal_positive ... ok
+test storage::f16_impl::tests::zero ... ok
+test storage::f4::tests::batch_8_to_4_pairs ... ok
+test storage::f4::tests::batch_e3m0_8_to_4_pairs ... ok
+test storage::f4::tests::e2m1_all_negative_values ... ok
+test storage::f4::tests::e2m1_all_positive_values ... ok
+test storage::f4::tests::e2m1_no_nan_output ... ok
+test storage::f4::tests::e2m1_overflow_clamps ... ok
+test storage::f4::tests::e2m1_pair_packs_two_nibbles ... ok
+test storage::f4::tests::e2m1_exact_roundtrip ... ok
+test storage::f4::tests::e2m1_rounding ... ok
+test storage::f4::tests::e2m1_pair_zero_pair_is_one_byte ... ok
+test storage::f4::tests::e2m1_sign ... ok
+test storage::f4::tests::e2m1_zero ... ok
+test storage::f4::tests::e3m0_all_positive_values ... ok
+test storage::f4::tests::e3m0_exact_roundtrip ... ok
+test storage::f4::tests::e3m0_pair_roundtrip ... ok
+test storage::f4::tests::e3m0_rounding_geometric ... ok
+test storage::f4::tests::memory_density ... ok
+test storage::f4::tests::slice_pack_unpack_roundtrip ... ok
+test storage::f4::tests::e3m0_overflow_clamps ... ok
+test storage::f4::tests::sizes ... ok
+test storage::f8::tests::e4m3_nan ... ok
+test storage::f8::tests::batch_f32x4_e4m3 ... ok
+test storage::f8::tests::e4m3_negative ... ok
+test storage::f8::tests::batch_f32x4_e5m2 ... ok
+test storage::f8::tests::e4m3_no_infinity ... ok
+test storage::f8::tests::e4m3_no_rounding_into_nan ... ok
+test storage::f8::tests::e4m3_one_roundtrip ... ok
+test storage::f8::tests::e4m3_overflow_clamps ... ok
+test storage::f8::tests::e4m3_size ... ok
+test storage::f8::tests::e4m3_representative_values ... ok
+test storage::f8::tests::e4m3_zero ... ok
+test storage::f8::tests::e4m3_subnormal_roundtrip ... ok
+test storage::f8::tests::e5m2_one_roundtrip ... ok
+test storage::f8::tests::e5m2_nan ... ok
+test storage::f8::tests::e5m2_infinity_roundtrip ... ok
+test storage::f8::tests::e5m2_overflow_to_inf ... ok
+test storage::f8::tests::e5m2_size ... ok
+test storage::f8::tests::e5m2_zero ... ok
+test storage::f8::tests::e5m2_subnormal_roundtrip ... ok
+test storage::f8::tests::e5m2_wider_range_than_e4m3 ... ok
+test storage::f8::tests::f8norm_clamp ... ok
+test storage::f8::tests::f8norm_roundtrip_all ... ok
+test storage::f8::tests::f8norm_size ... ok
+test storage::f8::tests::f8norm_zero_one ... ok
+test storage::storage_mask::tests::all_and_none ... ok
+test storage::storage_mask::tests::bitwise_ops ... ok
+test storage::storage_mask::tests::difference_op ... ok
+test storage::storage_mask::tests::disjoint_and_subset ... ok
+test storage::storage_mask::tests::ecs_archetype_matches ... ok
+test storage::storage_mask::tests::iter_ones_scalar_order ... ok
+test storage::storage_mask::tests::from_indices ... ok
+test storage::storage_mask::tests::iter_ones_wide_across_words ... ok
+test storage::storage_mask::tests::iter_ones_scalar_bit0_not_skipped ... ok
+test storage::storage_mask::tests::iter_ones_wide_sparse ... ok
+test storage::storage_mask::tests::iter_ones_wide_word0_not_skipped ... ok
+test storage::storage_mask::tests::set_get_clear ... ok
+test storage::storage_mask::tests::sizes ... ok
+test storage::storage_mask::tests::wide_count ... ok
+test storage::storage_mask::tests::wide_matches ... ok
+test storage::storage_mask::tests::wide_iter_256 ... ok
+test storage::storage_mask::tests::iter_ones_scalar_empty ... ok
+test tests::bool_tests::tests::bvec2_assign_ops ... ok
+test tests::bool_tests::tests::bvec2_constants ... ok
+test tests::bool_tests::tests::bvec2_bitmask ... ok
+test tests::bool_tests::tests::bvec2_bitops ... ok
+test tests::bool_tests::tests::bvec2_from_tuple_roundtrip ... ok
+test tests::bool_tests::tests::bvec2_splat ... ok
+test tests::bool_tests::tests::bvec2_test_indexed ... ok
+test tests::bool_tests::tests::bvec2_any_all ... ok
+test tests::bool_tests::tests::bvec2_test_oob_panics - should panic ... ok
+test tests::bool_tests::tests::bvec3_any_all ... ok
+test tests::bool_tests::tests::bvec3_bitmask ... ok
+test tests::bool_tests::tests::bvec3_bitops ... ok
+test tests::bool_tests::tests::bvec3_from_array_roundtrip ... ok
+test tests::bool_tests::tests::bvec3_size_align ... ok
+test tests::bool_tests::tests::bvec3_test_indexed ... ok
+test tests::bool_tests::tests::bvec3_test_oob_panics - should panic ... ok
+test tests::bool_tests::tests::bvec4_any_all ... ok
+test tests::bool_tests::tests::bvec2_from_array_roundtrip ... ok
+test tests::bool_tests::tests::bvec4_assign_ops ... ok
+test tests::bool_tests::tests::bvec2_size_align ... ok
+test tests::bool_tests::tests::bvec4_bitmask ... ok
+test tests::bool_tests::tests::bvec4_bitops ... ok
+test tests::bool_tests::tests::bvec4_from_array_roundtrip ... ok
+test tests::bool_tests::tests::bvec4_splat ... ok
+test tests::bool_tests::tests::bvec4_test_indexed ... ok
+test tests::bool_tests::tests::bvec4_test_oob_panics - should panic ... ok
+test tests::bool_tests::tests::bvec4_size_align ... ok
+test tests::camera::csm_split_depths_count ... ok
+test tests::camera::csm_split_depths_lambda_0_is_linear ... ok
+test tests::camera::csm_split_depths_one_cascade ... ok
+test tests::camera::csm_split_depths_sorted_ascending ... ok
+test tests::camera::frustum_aabb_visibility_classifications ... ok
+test tests::camera::frustum_behind_camera_is_outside ... ok
+test tests::camera::csm_split_depths_boundaries ... ok
+test tests::camera::frustum_far_behind_target_is_outside ... ok
+test tests::camera::frustum_sphere_visibility_origin ... ok
+test tests::camera::frustum_from_view_proj_has_six_planes ... ok
+test tests::camera::frustum_origin_is_inside ... ok
+test tests::camera::frustum_sphere_visibility_outside ... ok
+test tests::camera::frustum_test_aabb_far_box_invisible ... ok
+test tests::camera::frustum_test_aabb_origin_box_visible ... ok
+test tests::camera::frustum_test_sphere_large_sphere_visible ... ok
+test tests::camera::frustum_test_sphere_tiny_far_sphere_invisible ... ok
+test tests::camera::perspective_decompose_rejects_identity ... ok
+test tests::camera::frustum_world_corners_count_and_finite ... ok
+test tests::camera::frustum_world_aabb_contains_center ... ok
+test tests::camera::frustum_world_center_near_camera_target ... ok
+test tests::camera::perspective_decompose_rejects_orthographic ... ok
+test tests::camera::perspective_decompose_roundtrip ... ok
+test tests::camera::perspective_infinite_rh_no_far_clip ... ok
+test tests::camera::perspective_resize_changes_only_aspect ... ok
+test tests::camera::sub_frustum_corners_fails_for_non_perspective ... ok
+test tests::camera::perspective_reversed_z_far_maps_to_zero ... ok
+test tests::camera::picking_ray_direction_not_zero ... ok
+test tests::camera::sub_frustum_corners_returns_eight_finite_points ... ok
+test tests::camera::unproject_far_depth_is_far_from_eye ... ok
+test tests::camera::unproject_near_depth_is_near_plane ... ok
+test tests::f64_tests::tests::daffine3_compose_matches_dmat4_mul ... ok
+test tests::f64_tests::tests::daffine3_from_mat4_roundtrip ... ok
+test tests::f64_tests::tests::daffine3_identity_transform_point_unchanged ... ok
+test tests::f64_tests::tests::daffine3_from_trs_matches_dmat4_from_trs ... ok
+test tests::f64_tests::tests::daffine3_identity_is_default ... ok
+test tests::f64_tests::tests::daffine3_inverse_matches_dmat4_inverse_trs ... ok
+test tests::f64_tests::tests::daffine3_inverse_identity ... ok
+test tests::f64_tests::tests::daffine3_inverse_scale_only ... ok
+test tests::f64_tests::tests::daffine3_inverse_translation_only ... ok
+test tests::f64_tests::tests::daffine3_scale_scales_point ... ok
+test tests::f64_tests::tests::daffine3_size_align ... ok
+test tests::f64_tests::tests::daffine3_inverse_trs_roundtrip ... ok
+test tests::f64_tests::tests::daffine3_inverse_zero_scale_does_not_panic ... ok
+test tests::f64_tests::tests::daffine3_translation_does_not_affect_vectors ... ok
+test tests::f64_tests::tests::dmat2_rotation_inverse_roundtrip ... ok
+test tests::f64_tests::tests::daffine3_translation_moves_point ... ok
+test tests::f64_tests::tests::dmat2_identity_times_vec_is_vec ... ok
+test tests::f64_tests::tests::dmat2_inverse_identity_is_identity ... ok
+test tests::f64_tests::tests::dmat3_singular_inverse_returns_none ... ok
+test tests::f64_tests::tests::dmat2_singular_inverse_returns_none ... ok
+test tests::f64_tests::tests::dmat3_identity_times_vec_is_vec ... ok
+test tests::f64_tests::tests::dmat3_inverse_roundtrip ... ok
+test tests::f64_tests::tests::dmat4_inverse_trs_identity ... ok
+test tests::f64_tests::tests::dmat4_identity_transform_point_unchanged ... ok
+test tests::f64_tests::tests::dmat4_inverse_of_identity_is_identity ... ok
+test tests::f64_tests::tests::dmat4_inverse_roundtrip ... ok
+test tests::f64_tests::tests::dmat4_inverse_trs_roundtrip_matches_general_inverse ... ok
+test tests::f64_tests::tests::dmat4_multiply_identity_is_identity ... ok
+test tests::f64_tests::tests::dmat4_inverse_trs_translation_only ... ok
+test tests::f64_tests::tests::dmat4_look_at_target_on_neg_z ... ok
+test tests::f64_tests::tests::dmat4_perspective_has_neg_one_at_col2_row3 ... ok
+test tests::f64_tests::tests::dmat4_size_align ... ok
+test tests::f64_tests::tests::dmat4_scale_scales_point ... ok
+test tests::f64_tests::tests::dmat4_singular_inverse_returns_none ... ok
+test tests::f64_tests::tests::dquat_180deg_y_rotates_x_to_neg_x ... ok
+test tests::f64_tests::tests::dmat4_translation_moves_point ... ok
+test tests::f64_tests::tests::dmat4_translation_does_not_affect_vectors ... ok
+test tests::f64_tests::tests::dquat_90deg_y_rotates_x_to_neg_z ... ok
+test tests::f64_tests::tests::dquat_compose_90deg_twice_is_180deg ... ok
+test tests::f64_tests::tests::dquat_conjugate_inverse_for_unit ... ok
+test tests::f64_tests::tests::dquat_euler_roundtrip ... ok
+test tests::f64_tests::tests::dquat_identity_does_not_rotate ... ok
+test tests::f64_tests::tests::dquat_mul_matches_scalar_reference ... ok
+test tests::f64_tests::tests::dquat_slerp_midpoint_in_first_quadrant ... ok
+test tests::f64_tests::tests::dquat_nlerp_stays_normalized ... ok
+test tests::f64_tests::tests::dvec2_add_sub ... ok
+test tests::f64_tests::tests::dvec2_angle_roundtrip ... ok
+test tests::f64_tests::tests::dvec2_dot ... ok
+test tests::f64_tests::tests::dvec2_lerp_midpoint ... ok
+test tests::f64_tests::tests::dvec2_normalize_unit_length ... ok
+test tests::f64_tests::tests::dquat_to_mat4_identity_roundtrip ... ok
+test tests::f64_tests::tests::dvec2_perp_is_orthogonal ... ok
+test tests::f64_tests::tests::dvec2_size_align ... ok
+test tests::f64_tests::tests::dvec3_angle_between_parallel ... ok
+test tests::f64_tests::tests::dvec2_zero_normalize_returns_zero ... ok
+test tests::f64_tests::tests::dvec3_cross_anticommutative ... ok
+test tests::f64_tests::tests::dvec3_angle_between_orthogonal ... ok
+test tests::f64_tests::tests::dvec3_equality_ignores_pad ... ok
+test tests::f64_tests::tests::dvec3_reflect ... ok
+test tests::f64_tests::tests::dvec3_cross_basis ... ok
+test tests::f64_tests::tests::dvec3_normalize_unit_length ... ok
+test tests::f64_tests::tests::dvec3_extend_truncate_roundtrip ... ok
+test tests::f64_tests::tests::dvec3_size_align ... ok
+test tests::f64_tests::tests::dvec4_dot_with_self_is_length_sq ... ok
+test tests::f64_tests::tests::dvec4_normalize_unit_length ... ok
+test tests::f64_tests::tests::dvec4_size_align ... ok
+test tests::f64_tests::tests::ffi_dvec3_roundtrip ... ok
+test tests::f64_tests::tests::ffi_daffine3_roundtrip ... ok
+test tests::f64_tests::tests::ffi_dmat4_roundtrip ... ok
+test tests::f64_tests::tests::ffi_dquat_roundtrip ... ok
+test tests::fixed::add_commutativity ... ok
+test tests::fixed::ceil_exact_integer ... ok
+test tests::fixed::checked_mul_normal_returns_some ... ok
+test tests::fixed::ceil_negative ... ok
+test tests::fixed::ceil_positive ... ok
+test tests::fixed::fixed12_mul_precision ... ok
+test tests::fixed::division_exact ... ok
+test tests::fixed::checked_mul_overflow_returns_none ... ok
+test tests::fixed::division_fractional ... ok
+test tests::fixed::fixed8_resolution ... ok
+test tests::fixed::floor_exact_integer ... ok
+test tests::fixed::floor_negative ... ok
+test tests::fixed::fractional_mul ... ok
+test tests::fixed::fractional_mul_small ... ok
+test tests::fixed::from_to_i32_roundtrip ... ok
+test tests::fixed::floor_positive ... ok
+test tests::fixed::from_f32_precision ... ok
+test tests::fixed::integer_add_and_sub ... ok
+test tests::fixed::integer_mul_exact ... ok
+test tests::fixed::lerp_at_one ... ok
+test tests::fixed::lerp_at_zero ... ok
+test tests::fixed::lerp_midpoint ... ok
+test tests::fixed::neg_and_abs ... ok
+test tests::fixed::same_raw_same_value ... ok
+test tests::fixed::negative_ordering ... ok
+test tests::fixed::ordering ... ok
+test tests::fixed::saturating_add_clamps_at_max ... ok
+test tests::fixed::vec2_add_and_sub ... ok
+test tests::fixed::saturating_add_no_overflow ... ok
+test tests::fixed::saturating_sub_clamps_at_min ... ok
+test tests::fixed::vec2_dot_orthogonal ... ok
+test tests::fixed::vec2_lerp ... ok
+test tests::fixed::vec2_dot_product ... ok
+test tests::fixed::vec2_length_sq ... ok
+test tests::fixed::vec2_to_from_vec2_boundary ... ok
+test tests::fixed::vec2_neg ... ok
+test tests::fixed::vec2_perp_dot ... ok
+test tests::fixed::vec2_scale ... ok
+test tests::fixed::vec3_cross_anticommutativity ... ok
+test tests::fixed::vec3_dot_self ... ok
+test tests::fixed::vec3_cross_basic ... ok
+test tests::fixed::vec3_cross_parallel_is_zero ... ok
+test tests::fixed::vec3_to_from_vec3_boundary ... ok
+test tests::geom::bary_interpolate_f32_vertex_a ... ok
+test tests::geom::bary_interpolate_f32_vertex_b ... ok
+test tests::geom::bary_interpolate_f32_vertex_c ... ok
+test tests::geom::bary_interpolate_f32_centroid ... ok
+test tests::geom::bary_interpolate_vec3_vertex ... ok
+test tests::geom::bary_is_inside_false_for_outside ... ok
+test tests::geom::bary_is_inside_true_for_centroid ... ok
+test tests::geom::signed_area_2d_ccw_positive ... ok
+test tests::geom::bary_is_valid_false_for_nan ... ok
+test tests::geom::bary_is_valid_for_centroid ... ok
+test tests::geom::bary_on_edge_has_one_zero_weight ... ok
+test tests::geom::signed_area_2d_cw_negative ... ok
+test tests::geom::triangle2_bary_at_centroid ... ok
+test tests::geom::triangle2_area_equals_abs_signed_area ... ok
+test tests::geom::triangle2_area_unit_triangle ... ok
+test tests::geom::triangle2_bary_at_vertex_a ... ok
+test tests::geom::triangle2_bary_at_vertex_b ... ok
+test tests::geom::triangle2_bary_outside_returns_negative_weight ... ok
+test tests::geom::triangle2_bary_at_vertex_c ... ok
+test tests::geom::triangle2_bary_weights_sum_to_one ... ok
+test tests::geom::triangle2_bary_degenerate_returns_none ... ok
+test tests::geom::triangle2_centroid_correct ... ok
+test tests::geom::triangle2_circumcircle_contains_interior_point ... ok
+test tests::geom::triangle2_contains_centroid ... ok
+test tests::geom::triangle2_circumcircle_does_not_contain_far_point ... ok
+test tests::geom::triangle2_circumcircle_passes_through_vertices ... ok
+test tests::geom::triangle2_degenerate_circumcircle_returns_none ... ok
+test tests::geom::triangle2_not_contains_far_outside ... ok
+test tests::geom::triangle2_contains_vertex ... ok
+test tests::geom::triangle2_flip_winding_reverses_area_sign ... ok
+test tests::geom::triangle3_area_is_half ... ok
+test tests::geom::triangle2_not_contains_outside_point ... ok
+test tests::geom::triangle2_signed_area_negative_cw ... ok
+test tests::geom::triangle2_signed_area_positive_ccw ... ok
+test tests::geom::triangle3_bary_at_vertex_a ... ok
+test tests::geom::triangle3_centroid_correct ... ok
+test tests::geom::triangle3_bary_inside_for_interior_point ... ok
+test tests::geom::triangle3_bary_weights_sum_to_one ... ok
+test tests::geom::triangle3_closest_point_inside_projects_to_plane ... ok
+test tests::geom::triangle3_normal_is_unit_length ... ok
+test tests::geom::triangle3_closest_point_on_edge ... ok
+test tests::geom::triangle3_closest_point_to_vertex_a_is_vertex_a ... ok
+test tests::geom::triangle3_plane_distance_on_plane_is_zero ... ok
+test tests::geom::triangle3_normal_is_z_axis_for_xy_triangle ... ok
+test tests::geom::triangle3_plane_distance_above_is_positive ... ok
+test tests::geom::triangle3_plane_distance_below_is_negative ... ok
+test tests::geom::triangle3_plane_equation_correct ... ok
+test tests::geom::triangle3_ray_back_face_culling_rejects_back_hit ... ok
+test tests::geom::triangle3_ray_hit_from_above ... ok
+test tests::geom::triangle3_ray_hit_t_equals_geometric_distance ... ok
+test tests::geom::triangle3_ray_miss_parallel_to_plane ... ok
+test tests::geom::triangle3_ray_miss_behind_origin ... ok
+test tests::geom::triangle3_ray_miss_outside_triangle ... ok
+test tests::geom::triangle_area_3d_correct ... ok
+test tests::int64_tests::tests::ffi_ci64vec3_roundtrip_and_layout ... ok
+test tests::geom::triangle_area_3d_degenerate_is_zero ... ok
+test tests::int64_tests::tests::ffi_ci64vec4_roundtrip_and_layout ... ok
+test tests::int64_tests::tests::ffi_ci64vec2_roundtrip_and_layout ... ok
+test tests::int64_tests::tests::ffi_cu64vec4_roundtrip_and_layout ... ok
+test tests::int64_tests::tests::ffi_cu64vec2_roundtrip_and_layout ... ok
+test tests::int64_tests::tests::ffi_cu64vec3_roundtrip_and_layout ... ok
+test tests::int64_tests::tests::i64vec2_checked ... ok
+test tests::int64_tests::tests::i64vec2_abs ... ok
+test tests::int64_tests::tests::i64vec2_add_sub ... ok
+test tests::int64_tests::tests::i64vec2_casts ... ok
+test tests::int64_tests::tests::i64vec2_constants ... ok
+test tests::int64_tests::tests::i64vec2_cmp_ops ... ok
+test tests::int64_tests::tests::i64vec2_checked_manhattan_overflow ... ok
+test tests::int64_tests::tests::i64vec2_distance_sq ... ok
+test tests::int64_tests::tests::i64vec2_dot ... ok
+test tests::int64_tests::tests::i64vec2_element_ops ... ok
+test tests::int64_tests::tests::i64vec2_extend ... ok
+test tests::int64_tests::tests::i64vec2_from_array_roundtrip ... ok
+test tests::int64_tests::tests::i64vec2_index ... ok
+test tests::int64_tests::tests::i64vec2_index_oob_panics - should panic ... ok
+test tests::int64_tests::tests::i64vec2_manhattan_distance ... ok
+test tests::int64_tests::tests::i64vec2_min_max_clamp ... ok
+test tests::int64_tests::tests::i64vec2_mul_scale ... ok
+test tests::int64_tests::tests::i64vec2_neg ... ok
+test tests::int64_tests::tests::i64vec2_perp_and_perp_dot ... ok
+test tests::int64_tests::tests::i64vec2_saturating ... ok
+test tests::int64_tests::tests::i64vec2_select ... ok
+test tests::int64_tests::tests::i64vec2_length_sq ... ok
+test tests::int64_tests::tests::i64vec2_size_align ... ok
+test tests::int64_tests::tests::i64vec2_signum ... ok
+test tests::int64_tests::tests::i64vec2_wrapping ... ok
+test tests::int64_tests::tests::i64vec3_abs ... ok
+test tests::int64_tests::tests::i64vec3_add_sub_neg ... ok
+test tests::int64_tests::tests::i64vec3_casts ... ok
+test tests::int64_tests::tests::i64vec3_cmp_ops ... ok
+test tests::int64_tests::tests::i64vec3_constants ... ok
+test tests::int64_tests::tests::i64vec3_cross_anticommutative ... ok
+test tests::int64_tests::tests::i64vec3_cross_basis ... ok
+test tests::int64_tests::tests::i64vec3_dot ... ok
+test tests::int64_tests::tests::i64vec3_element_ops ... ok
+test tests::int64_tests::tests::i64vec3_extend_truncate ... ok
+test tests::int64_tests::tests::i64vec3_index_oob_panics - should panic ... ok
+test tests::int64_tests::tests::i64vec3_index ... ok
+test tests::int64_tests::tests::i64vec3_length_sq ... ok
+test tests::int64_tests::tests::i64vec3_manhattan_distance ... ok
+test tests::int64_tests::tests::i64vec3_size_align ... ok
+test tests::int64_tests::tests::i64vec3_min_max_clamp ... ok
+test tests::int64_tests::tests::i64vec3_wrapping_saturating ... ok
+test tests::int64_tests::tests::i64vec4_abs ... ok
+test tests::int64_tests::tests::i64vec3_select ... ok
+test tests::int64_tests::tests::i64vec4_add_sub_neg ... ok
+test tests::int64_tests::tests::i64vec4_casts ... ok
+test tests::int64_tests::tests::i64vec4_cmp_ops ... ok
+test tests::int64_tests::tests::i64vec4_element_ops ... ok
+test tests::int64_tests::tests::i64vec4_dot ... ok
+test tests::int64_tests::tests::i64vec4_length_sq ... ok
+test tests::int64_tests::tests::i64vec4_manhattan_distance ... ok
+test tests::int64_tests::tests::i64vec4_min_max_clamp ... ok
+test tests::int64_tests::tests::i64vec4_select ... ok
+test tests::int64_tests::tests::i64vec4_size_align ... ok
+test tests::int64_tests::tests::i64vec4_truncate_and_xy ... ok
+test tests::int64_tests::tests::i64vec4_wrapping_saturating ... ok
+test tests::int64_tests::tests::i64vec4_index ... ok
+test tests::int64_tests::tests::i64vec4_index_oob_panics - should panic ... ok
+test tests::int64_tests::tests::u64vec2_cmp_ops ... ok
+test tests::int64_tests::tests::u64vec2_dot ... ok
+test tests::int64_tests::tests::u64vec2_element_ops ... ok
+test tests::int64_tests::tests::u64vec2_extend ... ok
+test tests::int64_tests::tests::u64vec2_length_sq ... ok
+test tests::int64_tests::tests::u64vec2_min_max_clamp ... ok
+test tests::int64_tests::tests::u64vec2_saturating ... ok
+test tests::int64_tests::tests::u64vec2_select ... ok
+test tests::int64_tests::tests::u64vec2_wrapping ... ok
+test tests::int64_tests::tests::u64vec3_casts ... ok
+test tests::int64_tests::tests::u64vec3_cmp_ops ... ok
+test tests::int64_tests::tests::u64vec3_cross_basis ... ok
+test tests::int64_tests::tests::u64vec3_dot ... ok
+test tests::int64_tests::tests::u64vec3_element_ops ... ok
+test tests::int64_tests::tests::u64vec2_add_sub_mul ... ok
+test tests::int64_tests::tests::u64vec3_extend_truncate ... ok
+test tests::int64_tests::tests::u64vec2_size_align ... ok
+test tests::int64_tests::tests::u64vec3_index ... ok
+test tests::int64_tests::tests::u64vec2_casts ... ok
+test tests::int64_tests::tests::u64vec3_index_oob_panics - should panic ... ok
+test tests::int64_tests::tests::u64vec3_length_sq ... ok
+test tests::int64_tests::tests::u64vec3_min_max_clamp ... ok
+test tests::int64_tests::tests::u64vec3_size_align ... ok
+test tests::int64_tests::tests::u64vec4_casts ... ok
+test tests::int64_tests::tests::u64vec3_wrapping_saturating ... ok
+test tests::int64_tests::tests::u64vec4_dot ... ok
+test tests::int64_tests::tests::u64vec4_index ... ok
+test tests::int64_tests::tests::u64vec4_element_ops ... ok
+test tests::int64_tests::tests::u64vec4_length_sq ... ok
+test tests::int64_tests::tests::u64vec4_index_oob_panics - should panic ... ok
+test tests::int64_tests::tests::u64vec4_min_max_clamp ... ok
+test tests::int64_tests::tests::u64vec4_select ... ok
+test tests::int64_tests::tests::u64vec4_size_align ... ok
+test tests::int64_tests::tests::u64vec4_truncate_and_xy ... ok
+test tests::int64_tests::tests::u64vec4_wrapping_saturating ... ok
+test tests::mat_tests::tests::affine3_compose_matches_mat4_mul ... ok
+test tests::mat_tests::tests::affine3_from_mat4_roundtrip ... ok
+test tests::mat_tests::tests::affine3_from_trs_matches_mat4_from_trs ... ok
+test tests::mat_tests::tests::affine3_identity_is_default ... ok
+test tests::mat_tests::tests::affine3_identity_transform_point_unchanged ... ok
+test tests::mat_tests::tests::affine3_identity_transform_vector_unchanged ... ok
+test tests::mat_tests::tests::affine3_inverse_identity ... ok
+test tests::mat_tests::tests::affine3_inverse_scale_only ... ok
+test tests::mat_tests::tests::affine3_inverse_matches_mat4_inverse_trs ... ok
+test tests::mat_tests::tests::affine3_inverse_translation_only ... ok
+test tests::mat_tests::tests::affine3_inverse_trs_roundtrip ... ok
+test tests::int64_tests::tests::u64vec4_add_mul_scale ... ok
+test tests::int64_tests::tests::u64vec4_cmp_ops ... ok
+test tests::mat_tests::tests::affine3_inverse_zero_scale_does_not_panic ... ok
+test tests::mat_tests::tests::affine3_size_is_64_bytes ... ok
+test tests::mat_tests::tests::affine3_scale_scales_point ... ok
+test tests::mat_tests::tests::affine3_translation_does_not_affect_vectors ... ok
+test tests::mat_tests::tests::affine3_translation_moves_point ... ok
+test tests::mat_tests::tests::mat3_inverse_of_identity_is_identity ... ok
+test tests::mat_tests::tests::mat3_identity_times_vec_is_vec ... ok
+test tests::mat_tests::tests::mat3_inverse_roundtrip ... ok
+test tests::mat_tests::tests::mat3_multiply_identity_is_identity ... ok
+test tests::mat_tests::tests::mat4_inverse_general_sse2_matches_scalar ... ok
+test tests::mat_tests::tests::mat4_identity_transform_point_unchanged ... ok
+test tests::mat_tests::tests::mat4_inverse_of_identity_is_identity ... ok
+test tests::mat_tests::tests::mat4_inverse_trs_roundtrip_matches_general_inverse ... ok
+test tests::mat_tests::tests::mat4_inverse_trs_translation_only ... ok
+test tests::mat_tests::tests::mat4_inverse_trs_zero_scale_does_not_panic ... ok
+test tests::mat_tests::tests::mat4_look_at_z_axis_points_toward_target ... ok
+test tests::mat_tests::tests::mat4_multiply_identity_is_identity ... ok
+test tests::mat_tests::tests::mat4_perspective_has_negative_one_at_col3_row2 ... ok
+test tests::mat_tests::tests::mat4_singular_inverse_returns_none ... ok
+test tests::mat_tests::tests::mat4_inverse_roundtrip ... ok
+test tests::mat_tests::tests::mat4_inverse_trs_identity ... ok
+test tests::mat_tests::tests::mat4_translation_moves_point ... ok
+test tests::mat_tests::tests::mat4_scale_scales_point ... ok
+test tests::mat_tests::tests::mat4_size_is_64_bytes ... ok
+test tests::mat_tests::tests::mat4_translation_does_not_affect_vectors ... ok
+test tests::noise::domain_warp_2d_range ... ok
+test tests::noise::fbm_determinism ... ok
+test tests::noise::domain_warp_3d_range ... ok
+test tests::noise::domain_warp_double_differs_from_single ... ok
+test tests::noise::fbm_more_octaves_adds_detail ... ok
+test tests::noise::fbm_simplex_2d_range ... ok
+test tests::noise::fbm_perlin_3d_range ... ok
+test tests::noise::perlin_2d_range ... ok
+test tests::noise::perlin_4d_range ... ok
+test tests::noise::perlin_determinism_2d ... ok
+test tests::noise::perlin_different_seeds_differ ... ok
+test tests::noise::simplex_2d_range ... ok
+test tests::noise::simplex_3d_range ... ok
+test tests::noise::perlin_3d_range ... ok
+test tests::noise::perlin_continuity_2d ... ok
+test tests::noise::simplex_determinism_2d ... ok
+test tests::noise::simplex_no_directional_bias ... ok
+test tests::noise::perlin_determinism_3d ... ok
+test tests::noise::simplex_4d_range ... ok
+test tests::noise::simplex_continuity_2d ... ok
+test tests::noise::value_2d_range ... ok
+test tests::noise::value_3d_range ... ok
+test tests::noise::value_determinism ... ok
+test tests::noise::value_integer_coords_at_grid ... ok
+test tests::noise::worley_determinism ... ok
+test tests::noise::value_4d_range ... ok
+test tests::noise::worley_chebyshev_metric ... ok
+test tests::noise::worley_f2_range_2d ... ok
+test tests::noise::worley_f2_minus_f1_non_negative_2d ... ok
+test tests::quat_tests::tests::quat_90deg_around_y_rotates_x_to_neg_z ... ok
+test tests::quat_tests::tests::quat_conjugate_is_inverse_for_unit ... ok
+test tests::noise::worley_f1_range_2d ... ok
+test tests::quat_tests::tests::quat_identity_does_not_rotate_vector ... ok
+test tests::quat_tests::tests::quat_inverse_undoes_rotation ... ok
+test tests::quat_tests::tests::quat_mul_matches_scalar_reference ... ok
+test tests::quat_tests::tests::quat_multiply_composes_rotations ... ok
+test tests::quat_tests::tests::quat_nlerp_stays_normalized ... ok
+test tests::noise::worley_manhattan_metric ... ok
+test tests::quat_tests::tests::quat_slerp_midpoint_in_first_quadrant ... ok
+test tests::quat_tests::tests::quat_euler_round_trip ... ok
+test tests::stress_tests::tests::lerp_scalar_midpoint ... ok
+test tests::stress_tests::tests::smoothstep_clamps_outside_range ... ok
+test tests::noise::worley_3d_range ... ok
+test tests::quat_tests::tests::quat_to_mat4_identity_roundtrip ... ok
+test tests::stress_tests::tests::stress_100k_quat_rotate ... ok
+test tests::stress_tests::tests::smoothstep_midpoint_is_half ... ok
+test tests::stress_tests::tests::stress_100k_vec3_add ... ok
+test tests::stress_tests::tests::stress_100k_quat_mul ... ok
+test tests::stress_tests::tests::stress_100k_entity_transform_simulation ... ok
+test tests::stress_tests::tests::stress_100k_vec3_cross ... ok
+test tests::stress_tests::tests::stress_100k_vec3_dot ... ok
+test tests::stress_tests::tests::stress_100k_vec3_lerp ... ok
+test tests::stress_tests::tests::stress_10k_mat4_mul ... ok
+test tests::stress_tests::tests::stress_10k_mat4_transform_point ... ok
+test tests::stress_tests::tests::stress_100k_vec3_normalize ... ok
+test tests::stress_tests::tests::stress_50k_quat_slerp ... ok
+test tests::stress_tests::tests::stress_mixed_math_1k_frames_simulation ... ok
+test tests::stress_tests::tests::stress_5k_mat4_inverse_trs ... ok
+test tests::vec_tests::tests::vec2_addition ... ok
+test tests::vec_tests::tests::vec2_dot_product ... ok
+test tests::stress_tests::tests::stress_5k_mat4_inverse ... ok
+test tests::vec_tests::tests::vec2_lerp_midpoint ... ok
+test tests::vec_tests::tests::vec2_perpendicular_is_orthogonal ... ok
+test tests::vec_tests::tests::vec2_zero_normalize_returns_zero ... ok
+test tests::vec_tests::tests::vec3_align_is_16 ... ok
+test tests::vec_tests::tests::vec3_cross_anticommutative ... ok
+test tests::vec_tests::tests::vec3_cross_product_basis ... ok
+test tests::vec_tests::tests::vec3_equality_ignores_padding_lane ... ok
+test tests::vec_tests::tests::vec3_extend_and_truncate_roundtrip ... ok
+test tests::vec_tests::tests::vec2_normalize_unit_length ... ok
+test tests::vec_tests::tests::vec3_distance ... ok
+test tests::vec_tests::tests::vec3_normalize_unit_length ... ok
+test tests::vec_tests::tests::vec4_dot_with_self_is_length_sq ... ok
+test tests::vec_tests::tests::vec3_reflect ... ok
+test tests::vec_tests::tests::vec3_size_is_16_bytes ... ok
+test tests::vec_tests::tests::vec4_normalize_unit_length ... ok
+test tests::vec_tests::tests::vec4_size_is_16_bytes ... ok
+test tests::wide_tests::tests::f32x4_arithmetic ... ok
+test tests::wide_tests::tests::f32x4_blend_branchless ... ok
+test tests::wide_tests::tests::f32x4_is_finite ... ok
+test tests::wide_tests::tests::f32x4_min_max_abs ... ok
+test tests::wide_tests::tests::f32x4_new_and_array_roundtrip ... ok
+test tests::wide_tests::tests::f32x4_recip_accuracy ... ok
+test tests::wide_tests::tests::f32x4_recip_sqrt_accuracy ... ok
+test tests::wide_tests::tests::f32x4_size_align ... ok
+test tests::wide_tests::tests::f32x4_splat_and_get ... ok
+test tests::wide_tests::tests::f32x4_sqrt ... ok
+test tests::stress_tests::tests::stress_50k_euler_from_to_roundtrip ... ok
+test tests::wide_tests::tests::i16x8_add_sub ... ok
+test tests::wide_tests::tests::i16x8_cmpeq_bitmask ... ok
+test tests::wide_tests::tests::i16x8_element_sum ... ok
+test tests::wide_tests::tests::i16x8_saturating_add ... ok
+test tests::wide_tests::tests::i16x8_min_max ... ok
+test tests::wide_tests::tests::i16x8_mul_lo ... ok
+test tests::wide_tests::tests::i16x8_size_align ... ok
+test tests::wide_tests::tests::i16x8_saturating_sub ... ok
+test tests::wide_tests::tests::i32x4_abs ... ok
+test tests::wide_tests::tests::i16x8_splat_and_to_array ... ok
+test tests::wide_tests::tests::i16x8_widen_roundtrip ... ok
+test tests::wide_tests::tests::i32x4_add ... ok
+test tests::wide_tests::tests::i32x4_bitwise ... ok
+test tests::wide_tests::tests::i32x4_cmp_and_blend ... ok
+test tests::wide_tests::tests::i32x4_clamp ... ok
+test tests::wide_tests::tests::i32x4_from_array_roundtrip ... ok
+test tests::wide_tests::tests::i32x4_get_oob_panics - should panic ... ok
+test tests::wide_tests::tests::i32x4_min_max ... ok
+test tests::wide_tests::tests::i32x4_element_sum ... ok
+test tests::wide_tests::tests::i32x4_min_max_element ... ok
+test tests::wide_tests::tests::i32x4_neg ... ok
+test tests::wide_tests::tests::i32x4_new_roundtrip ... ok
+test tests::wide_tests::tests::i32x4_saturating ... ok
+test tests::wide_tests::tests::i32x4_shifts ... ok
+test tests::wide_tests::tests::i32x4_mul ... ok
+test tests::wide_tests::tests::i32x4_size_align ... ok
+test tests::wide_tests::tests::i32x4_splat_and_get ... ok
+test tests::wide_tests::tests::i32x4_sub ... ok
+test tests::wide_tests::tests::i32x4_wrapping ... ok
+test tests::wide_tests::tests::i8x16_abs ... ok
+test tests::wide_tests::tests::i8x16_cmpeq_and_count ... ok
+test tests::wide_tests::tests::i8x16_saturating ... ok
+test tests::wide_tests::tests::i8x16_size_align ... ok
+test tests::wide_tests::tests::imask16_from_i8x16_cmpeq ... ok
+test tests::wide_tests::tests::i8x16_splat_and_to_array ... ok
+test tests::wide_tests::tests::imask4_true_all_set ... ok
+test tests::wide_tests::tests::imask8_from_i16x8_cmpeq ... ok
+test tests::wide_tests::tests::mask4_bitops ... ok
+test tests::wide_tests::tests::mask4_false_true_constants ... ok
+test tests::wide_tests::tests::mask4_from_f32x4_comparison ... ok
+test tests::wide_tests::tests::quatx4_aos_soa_roundtrip ... ok
+test tests::wide_tests::tests::quatx4_4_different_rotations_simultaneously ... ok
+test tests::wide_tests::tests::quatx4_conjugate_is_inverse_for_unit ... ok
+test tests::wide_tests::tests::quatx4_dot_self_is_one_for_unit_quats ... ok
+test tests::wide_tests::tests::quatx4_identity_default ... ok
+test tests::wide_tests::tests::quatx4_mul_matches_scalar ... ok
+test tests::wide_tests::tests::quatx4_nlerp_stays_normalised ... ok
+test tests::wide_tests::tests::quatx4_normalize_unit_length ... ok
+test tests::wide_tests::tests::quatx4_rotate_matches_scalar ... ok
+test tests::wide_tests::tests::quatx4_rotate_x_by_90y_is_neg_z ... ok
+test tests::wide_tests::tests::imask4_bitops ... ok
+test tests::wide_tests::tests::imask4_false_all_zero ... ok
+test tests::wide_tests::tests::quatx4_size_align ... ok
+test tests::wide_tests::tests::u16x8_saturating_add ... ok
+test tests::wide_tests::tests::u16x8_saturating_sub ... ok
+test tests::wide_tests::tests::u16x8_unsigned_min_max ... ok
+test tests::wide_tests::tests::u32x4_min_max ... ok
+test tests::wide_tests::tests::u32x4_saturating_add_no_overflow ... ok
+test tests::wide_tests::tests::u8x16_contains_and_count ... ok
+test tests::wide_tests::tests::u32x4_saturating_sub_no_underflow ... ok
+test tests::wide_tests::tests::u8x16_element_sum_correct ... ok
+test tests::wide_tests::tests::u8x16_min_max_unsigned ... ok
+test tests::wide_tests::tests::u8x16_saturating_add ... ok
+test tests::wide_tests::tests::u8x16_saturating_sub ... ok
+test tests::wide_tests::tests::vec3x4_add ... ok
+test tests::wide_tests::tests::vec3x4_aos_soa_roundtrip ... ok
+test tests::wide_tests::tests::vec3x4_cross_anticommutative ... ok
+test tests::wide_tests::tests::vec3x4_cross_basis ... ok
+test tests::wide_tests::tests::vec3x4_dot_4_simultaneous ... ok
+test tests::wide_tests::tests::vec3x4_lerp_midpoint ... ok
+test tests::wide_tests::tests::vec3x4_matches_scalar_transform ... ok
+test tests::wide_tests::tests::vec3x4_normalize_degenerate_lane_safe ... ok
+test tests::wide_tests::tests::vec3x4_normalize_unit_length ... ok
+test tests::wide_tests::tests::vec3x4_select_branchless ... ok
+test tests::wide_tests::tests::vec3x4_size_align ... ok
+test tests::wide_tests::tests::vec3x4_splat ... ok
+test tests::wide_tests::tests::vec3x4_sub ... ok
+test tests::wide_tests::tests::u32x4_unsigned_comparison ... ok
+test tests::wide_tests::tests::vec3x4_lerp_per_lane_t ... ok
+test tests::wide_tests::tests::vec3x4_mat4_transform_matches_scalar ... ok
+
+successes:
+
+---- tests::bool_tests::tests::bvec2_test_oob_panics stdout ----
+
+thread 'tests::bool_tests::tests::bvec2_test_oob_panics' (6932) panicked at crates/mid-math/src/bvec/bvec2.rs:55:18:
+BVec2::test — index 2 out of bounds (max 1)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- tests::bool_tests::tests::bvec3_test_oob_panics stdout ----
+
+thread 'tests::bool_tests::tests::bvec3_test_oob_panics' (6939) panicked at crates/mid-math/src/bvec/bvec3.rs:53:18:
+BVec3::test — index 3 out of bounds (max 2)
+
+---- tests::bool_tests::tests::bvec4_test_oob_panics stdout ----
+
+thread 'tests::bool_tests::tests::bvec4_test_oob_panics' (6948) panicked at crates/mid-math/src/bvec/bvec4.rs:58:18:
+BVec4::test — index 4 out of bounds (max 3)
+
+---- tests::int64_tests::tests::i64vec2_index_oob_panics stdout ----
+
+thread 'tests::int64_tests::tests::i64vec2_index_oob_panics' (7166) panicked at crates/mid-math/src/tests/int64_tests.rs:195:18:
+I64Vec2 index 2 out of bounds
+
+---- tests::int64_tests::tests::i64vec3_index_oob_panics stdout ----
+
+thread 'tests::int64_tests::tests::i64vec3_index_oob_panics' (7195) panicked at crates/mid-math/src/tests/int64_tests.rs:345:30:
+I64Vec3 index 3 out of bounds
+
+---- tests::int64_tests::tests::i64vec4_index_oob_panics stdout ----
+
+thread 'tests::int64_tests::tests::i64vec4_index_oob_panics' (7209) panicked at crates/mid-math/src/tests/int64_tests.rs:458:30:
+I64Vec4 index 4 out of bounds
+
+---- tests::int64_tests::tests::u64vec3_index_oob_panics stdout ----
+
+thread 'tests::int64_tests::tests::u64vec3_index_oob_panics' (7236) panicked at crates/mid-math/src/tests/int64_tests.rs:647:30:
+U64Vec3 index 3 out of bounds
+
+---- tests::int64_tests::tests::u64vec4_index_oob_panics stdout ----
+
+thread 'tests::int64_tests::tests::u64vec4_index_oob_panics' (7247) panicked at crates/mid-math/src/tests/int64_tests.rs:746:30:
+U64Vec4 index 4 out of bounds
+
+---- tests::stress_tests::tests::stress_100k_quat_rotate stdout ----
+  100000 Quat rotations in 0.093ms  (0.9 ns/op)  [RELEASE]
+  ECS 60Hz budget=16.6ms — 100k rotations took 0.093ms (✓ within budget)
+
+---- tests::stress_tests::tests::stress_100k_vec3_add stdout ----
+  200000 Vec3 adds in 0.185ms  (0.9 ns/op)  final_x=110101  [RELEASE]
+
+---- tests::stress_tests::tests::stress_100k_quat_mul stdout ----
+  200000 Quat mul in 1.210ms  (6.1 ns/op)  [RELEASE]
+
+---- tests::stress_tests::tests::stress_100k_entity_transform_simulation stdout ----
+  100k entity transforms in 0.308ms  (3.1 ns/entity)  [RELEASE]
+  ECS 60Hz budget=16.6ms — (✓ within budget)
+
+---- tests::stress_tests::tests::stress_100k_vec3_cross stdout ----
+  100000 Vec3 cross in 0.093ms  (0.9 ns/op)  [RELEASE]
+
+---- tests::stress_tests::tests::stress_100k_vec3_dot stdout ----
+  100000 Vec3 dot products in 0.115ms  (1.1 ns/op)  [RELEASE]
+
+---- tests::stress_tests::tests::stress_100k_vec3_lerp stdout ----
+  100000 Vec3 lerp in 0.138ms  (1.4 ns/op)  [RELEASE]
+
+---- tests::stress_tests::tests::stress_10k_mat4_mul stdout ----
+  20000 Mat4 mul in 0.244ms  (12.2 ns/op)  [RELEASE]
+
+---- tests::stress_tests::tests::stress_10k_mat4_transform_point stdout ----
+  10000 Mat4 transform_point in 0.015ms  (1.5 ns/op)  [RELEASE]
+
+---- tests::stress_tests::tests::stress_100k_vec3_normalize stdout ----
+  100000 Vec3 normalize in 0.485ms  (4.9 ns/op)  [RELEASE]
+
+---- tests::stress_tests::tests::stress_50k_quat_slerp stdout ----
+  50000 Quat slerp in 1.291ms  (25.8 ns/op)  [RELEASE]
+
+---- tests::stress_tests::tests::stress_mixed_math_1k_frames_simulation stdout ----
+  1000 ticks × (TRS + 10 transforms + 10 lerps) in 0.062ms  (0.1 µs/tick)  [RELEASE]
+
+---- tests::stress_tests::tests::stress_5k_mat4_inverse_trs stdout ----
+  5000 Mat4 inverse_trs in 0.190ms  (38.0 ns/op)  [RELEASE]
+  Scalar baseline 81.8 ns/op — speedup: 2.2×
+
+---- tests::stress_tests::tests::stress_5k_mat4_inverse stdout ----
+  5000 Mat4 general inverse in 0.246ms  (49.2 ns/op)  [RELEASE]
+  Scalar baseline 117.1 ns/op — speedup: 2.4×
+
+---- tests::stress_tests::tests::stress_50k_euler_from_to_roundtrip stdout ----
+  50000 euler round-trips in 5.919ms  (118.4 ns/op)  [RELEASE]
+
+---- tests::wide_tests::tests::i32x4_get_oob_panics stdout ----
+
+thread 'tests::wide_tests::tests::i32x4_get_oob_panics' (7395) panicked at crates/mid-math/src/wide/int/sse2/i32x4.rs:57:9:
+i32x4::get — lane 4 out of bounds (max 3)
+
+
+successes:
+    storage::bf16_impl::tests::batch_x4
+    storage::bf16_impl::tests::infinity_roundtrip
+    storage::bf16_impl::tests::nan_roundtrip
+    storage::bf16_impl::tests::neg_flip
+    storage::bf16_impl::tests::no_overflow_from_large_f32
+    storage::bf16_impl::tests::partial_eq_nan
+    storage::bf16_impl::tests::roundtrip_precision
+    storage::bf16_impl::tests::size
+    storage::bf16_impl::tests::to_f32_is_free
+    storage::f16_impl::tests::abs_and_copysign
+    storage::f16_impl::tests::batch_x4
+    storage::f16_impl::tests::batch_x8
+    storage::f16_impl::tests::from_f64
+    storage::f16_impl::tests::infinity_and_nan
+    storage::f16_impl::tests::neg_flip
+    storage::f16_impl::tests::neg_one
+    storage::f16_impl::tests::neg_zero
+    storage::f16_impl::tests::negative_roundtrip
+    storage::f16_impl::tests::one
+    storage::f16_impl::tests::overflow_to_infinity
+    storage::f16_impl::tests::partial_eq_nan
+    storage::f16_impl::tests::pi_approx
+    storage::f16_impl::tests::slice_conversion
+    storage::f16_impl::tests::storage_is_two_bytes
+    storage::f16_impl::tests::subnormal_positive
+    storage::f16_impl::tests::zero
+    storage::f4::tests::batch_8_to_4_pairs
+    storage::f4::tests::batch_e3m0_8_to_4_pairs
+    storage::f4::tests::e2m1_all_negative_values
+    storage::f4::tests::e2m1_all_positive_values
+    storage::f4::tests::e2m1_exact_roundtrip
+    storage::f4::tests::e2m1_no_nan_output
+    storage::f4::tests::e2m1_overflow_clamps
+    storage::f4::tests::e2m1_pair_packs_two_nibbles
+    storage::f4::tests::e2m1_pair_zero_pair_is_one_byte
+    storage::f4::tests::e2m1_rounding
+    storage::f4::tests::e2m1_sign
+    storage::f4::tests::e2m1_zero
+    storage::f4::tests::e3m0_all_positive_values
+    storage::f4::tests::e3m0_exact_roundtrip
+    storage::f4::tests::e3m0_overflow_clamps
+    storage::f4::tests::e3m0_pair_roundtrip
+    storage::f4::tests::e3m0_rounding_geometric
+    storage::f4::tests::memory_density
+    storage::f4::tests::sizes
+    storage::f4::tests::slice_pack_unpack_roundtrip
+    storage::f8::tests::batch_f32x4_e4m3
+    storage::f8::tests::batch_f32x4_e5m2
+    storage::f8::tests::e4m3_nan
+    storage::f8::tests::e4m3_negative
+    storage::f8::tests::e4m3_no_infinity
+    storage::f8::tests::e4m3_no_rounding_into_nan
+    storage::f8::tests::e4m3_one_roundtrip
+    storage::f8::tests::e4m3_overflow_clamps
+    storage::f8::tests::e4m3_representative_values
+    storage::f8::tests::e4m3_size
+    storage::f8::tests::e4m3_subnormal_roundtrip
+    storage::f8::tests::e4m3_zero
+    storage::f8::tests::e5m2_infinity_roundtrip
+    storage::f8::tests::e5m2_nan
+    storage::f8::tests::e5m2_one_roundtrip
+    storage::f8::tests::e5m2_overflow_to_inf
+    storage::f8::tests::e5m2_size
+    storage::f8::tests::e5m2_subnormal_roundtrip
+    storage::f8::tests::e5m2_wider_range_than_e4m3
+    storage::f8::tests::e5m2_zero
+    storage::f8::tests::f8norm_clamp
+    storage::f8::tests::f8norm_roundtrip_all
+    storage::f8::tests::f8norm_size
+    storage::f8::tests::f8norm_zero_one
+    storage::storage_mask::tests::all_and_none
+    storage::storage_mask::tests::bitwise_ops
+    storage::storage_mask::tests::difference_op
+    storage::storage_mask::tests::disjoint_and_subset
+    storage::storage_mask::tests::ecs_archetype_matches
+    storage::storage_mask::tests::from_indices
+    storage::storage_mask::tests::iter_ones_scalar_bit0_not_skipped
+    storage::storage_mask::tests::iter_ones_scalar_empty
+    storage::storage_mask::tests::iter_ones_scalar_order
+    storage::storage_mask::tests::iter_ones_wide_across_words
+    storage::storage_mask::tests::iter_ones_wide_sparse
+    storage::storage_mask::tests::iter_ones_wide_word0_not_skipped
+    storage::storage_mask::tests::set_get_clear
+    storage::storage_mask::tests::sizes
+    storage::storage_mask::tests::wide_count
+    storage::storage_mask::tests::wide_iter_256
+    storage::storage_mask::tests::wide_matches
+    tests::bool_tests::tests::bvec2_any_all
+    tests::bool_tests::tests::bvec2_assign_ops
+    tests::bool_tests::tests::bvec2_bitmask
+    tests::bool_tests::tests::bvec2_bitops
+    tests::bool_tests::tests::bvec2_constants
+    tests::bool_tests::tests::bvec2_from_array_roundtrip
+    tests::bool_tests::tests::bvec2_from_tuple_roundtrip
+    tests::bool_tests::tests::bvec2_size_align
+    tests::bool_tests::tests::bvec2_splat
+    tests::bool_tests::tests::bvec2_test_indexed
+    tests::bool_tests::tests::bvec2_test_oob_panics
+    tests::bool_tests::tests::bvec3_any_all
+    tests::bool_tests::tests::bvec3_bitmask
+    tests::bool_tests::tests::bvec3_bitops
+    tests::bool_tests::tests::bvec3_from_array_roundtrip
+    tests::bool_tests::tests::bvec3_size_align
+    tests::bool_tests::tests::bvec3_test_indexed
+    tests::bool_tests::tests::bvec3_test_oob_panics
+    tests::bool_tests::tests::bvec4_any_all
+    tests::bool_tests::tests::bvec4_assign_ops
+    tests::bool_tests::tests::bvec4_bitmask
+    tests::bool_tests::tests::bvec4_bitops
+    tests::bool_tests::tests::bvec4_from_array_roundtrip
+    tests::bool_tests::tests::bvec4_size_align
+    tests::bool_tests::tests::bvec4_splat
+    tests::bool_tests::tests::bvec4_test_indexed
+    tests::bool_tests::tests::bvec4_test_oob_panics
+    tests::camera::csm_split_depths_boundaries
+    tests::camera::csm_split_depths_count
+    tests::camera::csm_split_depths_lambda_0_is_linear
+    tests::camera::csm_split_depths_one_cascade
+    tests::camera::csm_split_depths_sorted_ascending
+    tests::camera::frustum_aabb_visibility_classifications
+    tests::camera::frustum_behind_camera_is_outside
+    tests::camera::frustum_far_behind_target_is_outside
+    tests::camera::frustum_from_view_proj_has_six_planes
+    tests::camera::frustum_origin_is_inside
+    tests::camera::frustum_sphere_visibility_origin
+    tests::camera::frustum_sphere_visibility_outside
+    tests::camera::frustum_test_aabb_far_box_invisible
+    tests::camera::frustum_test_aabb_origin_box_visible
+    tests::camera::frustum_test_sphere_large_sphere_visible
+    tests::camera::frustum_test_sphere_tiny_far_sphere_invisible
+    tests::camera::frustum_world_aabb_contains_center
+    tests::camera::frustum_world_center_near_camera_target
+    tests::camera::frustum_world_corners_count_and_finite
+    tests::camera::perspective_decompose_rejects_identity
+    tests::camera::perspective_decompose_rejects_orthographic
+    tests::camera::perspective_decompose_roundtrip
+    tests::camera::perspective_infinite_rh_no_far_clip
+    tests::camera::perspective_resize_changes_only_aspect
+    tests::camera::perspective_reversed_z_far_maps_to_zero
+    tests::camera::picking_ray_direction_not_zero
+    tests::camera::sub_frustum_corners_fails_for_non_perspective
+    tests::camera::sub_frustum_corners_returns_eight_finite_points
+    tests::camera::unproject_far_depth_is_far_from_eye
+    tests::camera::unproject_near_depth_is_near_plane
+    tests::f64_tests::tests::daffine3_compose_matches_dmat4_mul
+    tests::f64_tests::tests::daffine3_from_mat4_roundtrip
+    tests::f64_tests::tests::daffine3_from_trs_matches_dmat4_from_trs
+    tests::f64_tests::tests::daffine3_identity_is_default
+    tests::f64_tests::tests::daffine3_identity_transform_point_unchanged
+    tests::f64_tests::tests::daffine3_inverse_identity
+    tests::f64_tests::tests::daffine3_inverse_matches_dmat4_inverse_trs
+    tests::f64_tests::tests::daffine3_inverse_scale_only
+    tests::f64_tests::tests::daffine3_inverse_translation_only
+    tests::f64_tests::tests::daffine3_inverse_trs_roundtrip
+    tests::f64_tests::tests::daffine3_inverse_zero_scale_does_not_panic
+    tests::f64_tests::tests::daffine3_scale_scales_point
+    tests::f64_tests::tests::daffine3_size_align
+    tests::f64_tests::tests::daffine3_translation_does_not_affect_vectors
+    tests::f64_tests::tests::daffine3_translation_moves_point
+    tests::f64_tests::tests::dmat2_identity_times_vec_is_vec
+    tests::f64_tests::tests::dmat2_inverse_identity_is_identity
+    tests::f64_tests::tests::dmat2_rotation_inverse_roundtrip
+    tests::f64_tests::tests::dmat2_singular_inverse_returns_none
+    tests::f64_tests::tests::dmat3_identity_times_vec_is_vec
+    tests::f64_tests::tests::dmat3_inverse_roundtrip
+    tests::f64_tests::tests::dmat3_singular_inverse_returns_none
+    tests::f64_tests::tests::dmat4_identity_transform_point_unchanged
+    tests::f64_tests::tests::dmat4_inverse_of_identity_is_identity
+    tests::f64_tests::tests::dmat4_inverse_roundtrip
+    tests::f64_tests::tests::dmat4_inverse_trs_identity
+    tests::f64_tests::tests::dmat4_inverse_trs_roundtrip_matches_general_inverse
+    tests::f64_tests::tests::dmat4_inverse_trs_translation_only
+    tests::f64_tests::tests::dmat4_look_at_target_on_neg_z
+    tests::f64_tests::tests::dmat4_multiply_identity_is_identity
+    tests::f64_tests::tests::dmat4_perspective_has_neg_one_at_col2_row3
+    tests::f64_tests::tests::dmat4_scale_scales_point
+    tests::f64_tests::tests::dmat4_singular_inverse_returns_none
+    tests::f64_tests::tests::dmat4_size_align
+    tests::f64_tests::tests::dmat4_translation_does_not_affect_vectors
+    tests::f64_tests::tests::dmat4_translation_moves_point
+    tests::f64_tests::tests::dquat_180deg_y_rotates_x_to_neg_x
+    tests::f64_tests::tests::dquat_90deg_y_rotates_x_to_neg_z
+    tests::f64_tests::tests::dquat_compose_90deg_twice_is_180deg
+    tests::f64_tests::tests::dquat_conjugate_inverse_for_unit
+    tests::f64_tests::tests::dquat_euler_roundtrip
+    tests::f64_tests::tests::dquat_identity_does_not_rotate
+    tests::f64_tests::tests::dquat_mul_matches_scalar_reference
+    tests::f64_tests::tests::dquat_nlerp_stays_normalized
+    tests::f64_tests::tests::dquat_slerp_midpoint_in_first_quadrant
+    tests::f64_tests::tests::dquat_to_mat4_identity_roundtrip
+    tests::f64_tests::tests::dvec2_add_sub
+    tests::f64_tests::tests::dvec2_angle_roundtrip
+    tests::f64_tests::tests::dvec2_dot
+    tests::f64_tests::tests::dvec2_lerp_midpoint
+    tests::f64_tests::tests::dvec2_normalize_unit_length
+    tests::f64_tests::tests::dvec2_perp_is_orthogonal
+    tests::f64_tests::tests::dvec2_size_align
+    tests::f64_tests::tests::dvec2_zero_normalize_returns_zero
+    tests::f64_tests::tests::dvec3_angle_between_orthogonal
+    tests::f64_tests::tests::dvec3_angle_between_parallel
+    tests::f64_tests::tests::dvec3_cross_anticommutative
+    tests::f64_tests::tests::dvec3_cross_basis
+    tests::f64_tests::tests::dvec3_equality_ignores_pad
+    tests::f64_tests::tests::dvec3_extend_truncate_roundtrip
+    tests::f64_tests::tests::dvec3_normalize_unit_length
+    tests::f64_tests::tests::dvec3_reflect
+    tests::f64_tests::tests::dvec3_size_align
+    tests::f64_tests::tests::dvec4_dot_with_self_is_length_sq
+    tests::f64_tests::tests::dvec4_normalize_unit_length
+    tests::f64_tests::tests::dvec4_size_align
+    tests::f64_tests::tests::ffi_daffine3_roundtrip
+    tests::f64_tests::tests::ffi_dmat4_roundtrip
+    tests::f64_tests::tests::ffi_dquat_roundtrip
+    tests::f64_tests::tests::ffi_dvec3_roundtrip
+    tests::fixed::add_commutativity
+    tests::fixed::ceil_exact_integer
+    tests::fixed::ceil_negative
+    tests::fixed::ceil_positive
+    tests::fixed::checked_mul_normal_returns_some
+    tests::fixed::checked_mul_overflow_returns_none
+    tests::fixed::division_exact
+    tests::fixed::division_fractional
+    tests::fixed::fixed12_mul_precision
+    tests::fixed::fixed8_resolution
+    tests::fixed::floor_exact_integer
+    tests::fixed::floor_negative
+    tests::fixed::floor_positive
+    tests::fixed::fractional_mul
+    tests::fixed::fractional_mul_small
+    tests::fixed::from_f32_precision
+    tests::fixed::from_to_i32_roundtrip
+    tests::fixed::integer_add_and_sub
+    tests::fixed::integer_mul_exact
+    tests::fixed::lerp_at_one
+    tests::fixed::lerp_at_zero
+    tests::fixed::lerp_midpoint
+    tests::fixed::neg_and_abs
+    tests::fixed::negative_ordering
+    tests::fixed::ordering
+    tests::fixed::same_raw_same_value
+    tests::fixed::saturating_add_clamps_at_max
+    tests::fixed::saturating_add_no_overflow
+    tests::fixed::saturating_sub_clamps_at_min
+    tests::fixed::vec2_add_and_sub
+    tests::fixed::vec2_dot_orthogonal
+    tests::fixed::vec2_dot_product
+    tests::fixed::vec2_length_sq
+    tests::fixed::vec2_lerp
+    tests::fixed::vec2_neg
+    tests::fixed::vec2_perp_dot
+    tests::fixed::vec2_scale
+    tests::fixed::vec2_to_from_vec2_boundary
+    tests::fixed::vec3_cross_anticommutativity
+    tests::fixed::vec3_cross_basic
+    tests::fixed::vec3_cross_parallel_is_zero
+    tests::fixed::vec3_dot_self
+    tests::fixed::vec3_to_from_vec3_boundary
+    tests::geom::bary_interpolate_f32_centroid
+    tests::geom::bary_interpolate_f32_vertex_a
+    tests::geom::bary_interpolate_f32_vertex_b
+    tests::geom::bary_interpolate_f32_vertex_c
+    tests::geom::bary_interpolate_vec3_vertex
+    tests::geom::bary_is_inside_false_for_outside
+    tests::geom::bary_is_inside_true_for_centroid
+    tests::geom::bary_is_valid_false_for_nan
+    tests::geom::bary_is_valid_for_centroid
+    tests::geom::bary_on_edge_has_one_zero_weight
+    tests::geom::signed_area_2d_ccw_positive
+    tests::geom::signed_area_2d_cw_negative
+    tests::geom::triangle2_area_equals_abs_signed_area
+    tests::geom::triangle2_area_unit_triangle
+    tests::geom::triangle2_bary_at_centroid
+    tests::geom::triangle2_bary_at_vertex_a
+    tests::geom::triangle2_bary_at_vertex_b
+    tests::geom::triangle2_bary_at_vertex_c
+    tests::geom::triangle2_bary_degenerate_returns_none
+    tests::geom::triangle2_bary_outside_returns_negative_weight
+    tests::geom::triangle2_bary_weights_sum_to_one
+    tests::geom::triangle2_centroid_correct
+    tests::geom::triangle2_circumcircle_contains_interior_point
+    tests::geom::triangle2_circumcircle_does_not_contain_far_point
+    tests::geom::triangle2_circumcircle_passes_through_vertices
+    tests::geom::triangle2_contains_centroid
+    tests::geom::triangle2_contains_vertex
+    tests::geom::triangle2_degenerate_circumcircle_returns_none
+    tests::geom::triangle2_flip_winding_reverses_area_sign
+    tests::geom::triangle2_not_contains_far_outside
+    tests::geom::triangle2_not_contains_outside_point
+    tests::geom::triangle2_signed_area_negative_cw
+    tests::geom::triangle2_signed_area_positive_ccw
+    tests::geom::triangle3_area_is_half
+    tests::geom::triangle3_bary_at_vertex_a
+    tests::geom::triangle3_bary_inside_for_interior_point
+    tests::geom::triangle3_bary_weights_sum_to_one
+    tests::geom::triangle3_centroid_correct
+    tests::geom::triangle3_closest_point_inside_projects_to_plane
+    tests::geom::triangle3_closest_point_on_edge
+    tests::geom::triangle3_closest_point_to_vertex_a_is_vertex_a
+    tests::geom::triangle3_normal_is_unit_length
+    tests::geom::triangle3_normal_is_z_axis_for_xy_triangle
+    tests::geom::triangle3_plane_distance_above_is_positive
+    tests::geom::triangle3_plane_distance_below_is_negative
+    tests::geom::triangle3_plane_distance_on_plane_is_zero
+    tests::geom::triangle3_plane_equation_correct
+    tests::geom::triangle3_ray_back_face_culling_rejects_back_hit
+    tests::geom::triangle3_ray_hit_from_above
+    tests::geom::triangle3_ray_hit_t_equals_geometric_distance
+    tests::geom::triangle3_ray_miss_behind_origin
+    tests::geom::triangle3_ray_miss_outside_triangle
+    tests::geom::triangle3_ray_miss_parallel_to_plane
+    tests::geom::triangle_area_3d_correct
+    tests::geom::triangle_area_3d_degenerate_is_zero
+    tests::int64_tests::tests::ffi_ci64vec2_roundtrip_and_layout
+    tests::int64_tests::tests::ffi_ci64vec3_roundtrip_and_layout
+    tests::int64_tests::tests::ffi_ci64vec4_roundtrip_and_layout
+    tests::int64_tests::tests::ffi_cu64vec2_roundtrip_and_layout
+    tests::int64_tests::tests::ffi_cu64vec3_roundtrip_and_layout
+    tests::int64_tests::tests::ffi_cu64vec4_roundtrip_and_layout
+    tests::int64_tests::tests::i64vec2_abs
+    tests::int64_tests::tests::i64vec2_add_sub
+    tests::int64_tests::tests::i64vec2_casts
+    tests::int64_tests::tests::i64vec2_checked
+    tests::int64_tests::tests::i64vec2_checked_manhattan_overflow
+    tests::int64_tests::tests::i64vec2_cmp_ops
+    tests::int64_tests::tests::i64vec2_constants
+    tests::int64_tests::tests::i64vec2_distance_sq
+    tests::int64_tests::tests::i64vec2_dot
+    tests::int64_tests::tests::i64vec2_element_ops
+    tests::int64_tests::tests::i64vec2_extend
+    tests::int64_tests::tests::i64vec2_from_array_roundtrip
+    tests::int64_tests::tests::i64vec2_index
+    tests::int64_tests::tests::i64vec2_index_oob_panics
+    tests::int64_tests::tests::i64vec2_length_sq
+    tests::int64_tests::tests::i64vec2_manhattan_distance
+    tests::int64_tests::tests::i64vec2_min_max_clamp
+    tests::int64_tests::tests::i64vec2_mul_scale
+    tests::int64_tests::tests::i64vec2_neg
+    tests::int64_tests::tests::i64vec2_perp_and_perp_dot
+    tests::int64_tests::tests::i64vec2_saturating
+    tests::int64_tests::tests::i64vec2_select
+    tests::int64_tests::tests::i64vec2_signum
+    tests::int64_tests::tests::i64vec2_size_align
+    tests::int64_tests::tests::i64vec2_wrapping
+    tests::int64_tests::tests::i64vec3_abs
+    tests::int64_tests::tests::i64vec3_add_sub_neg
+    tests::int64_tests::tests::i64vec3_casts
+    tests::int64_tests::tests::i64vec3_cmp_ops
+    tests::int64_tests::tests::i64vec3_constants
+    tests::int64_tests::tests::i64vec3_cross_anticommutative
+    tests::int64_tests::tests::i64vec3_cross_basis
+    tests::int64_tests::tests::i64vec3_dot
+    tests::int64_tests::tests::i64vec3_element_ops
+    tests::int64_tests::tests::i64vec3_extend_truncate
+    tests::int64_tests::tests::i64vec3_index
+    tests::int64_tests::tests::i64vec3_index_oob_panics
+    tests::int64_tests::tests::i64vec3_length_sq
+    tests::int64_tests::tests::i64vec3_manhattan_distance
+    tests::int64_tests::tests::i64vec3_min_max_clamp
+    tests::int64_tests::tests::i64vec3_select
+    tests::int64_tests::tests::i64vec3_size_align
+    tests::int64_tests::tests::i64vec3_wrapping_saturating
+    tests::int64_tests::tests::i64vec4_abs
+    tests::int64_tests::tests::i64vec4_add_sub_neg
+    tests::int64_tests::tests::i64vec4_casts
+    tests::int64_tests::tests::i64vec4_cmp_ops
+    tests::int64_tests::tests::i64vec4_dot
+    tests::int64_tests::tests::i64vec4_element_ops
+    tests::int64_tests::tests::i64vec4_index
+    tests::int64_tests::tests::i64vec4_index_oob_panics
+    tests::int64_tests::tests::i64vec4_length_sq
+    tests::int64_tests::tests::i64vec4_manhattan_distance
+    tests::int64_tests::tests::i64vec4_min_max_clamp
+    tests::int64_tests::tests::i64vec4_select
+    tests::int64_tests::tests::i64vec4_size_align
+    tests::int64_tests::tests::i64vec4_truncate_and_xy
+    tests::int64_tests::tests::i64vec4_wrapping_saturating
+    tests::int64_tests::tests::u64vec2_add_sub_mul
+    tests::int64_tests::tests::u64vec2_casts
+    tests::int64_tests::tests::u64vec2_cmp_ops
+    tests::int64_tests::tests::u64vec2_dot
+    tests::int64_tests::tests::u64vec2_element_ops
+    tests::int64_tests::tests::u64vec2_extend
+    tests::int64_tests::tests::u64vec2_length_sq
+    tests::int64_tests::tests::u64vec2_min_max_clamp
+    tests::int64_tests::tests::u64vec2_saturating
+    tests::int64_tests::tests::u64vec2_select
+    tests::int64_tests::tests::u64vec2_size_align
+    tests::int64_tests::tests::u64vec2_wrapping
+    tests::int64_tests::tests::u64vec3_casts
+    tests::int64_tests::tests::u64vec3_cmp_ops
+    tests::int64_tests::tests::u64vec3_cross_basis
+    tests::int64_tests::tests::u64vec3_dot
+    tests::int64_tests::tests::u64vec3_element_ops
+    tests::int64_tests::tests::u64vec3_extend_truncate
+    tests::int64_tests::tests::u64vec3_index
+    tests::int64_tests::tests::u64vec3_index_oob_panics
+    tests::int64_tests::tests::u64vec3_length_sq
+    tests::int64_tests::tests::u64vec3_min_max_clamp
+    tests::int64_tests::tests::u64vec3_size_align
+    tests::int64_tests::tests::u64vec3_wrapping_saturating
+    tests::int64_tests::tests::u64vec4_add_mul_scale
+    tests::int64_tests::tests::u64vec4_casts
+    tests::int64_tests::tests::u64vec4_cmp_ops
+    tests::int64_tests::tests::u64vec4_dot
+    tests::int64_tests::tests::u64vec4_element_ops
+    tests::int64_tests::tests::u64vec4_index
+    tests::int64_tests::tests::u64vec4_index_oob_panics
+    tests::int64_tests::tests::u64vec4_length_sq
+    tests::int64_tests::tests::u64vec4_min_max_clamp
+    tests::int64_tests::tests::u64vec4_select
+    tests::int64_tests::tests::u64vec4_size_align
+    tests::int64_tests::tests::u64vec4_truncate_and_xy
+    tests::int64_tests::tests::u64vec4_wrapping_saturating
+    tests::mat_tests::tests::affine3_compose_matches_mat4_mul
+    tests::mat_tests::tests::affine3_from_mat4_roundtrip
+    tests::mat_tests::tests::affine3_from_trs_matches_mat4_from_trs
+    tests::mat_tests::tests::affine3_identity_is_default
+    tests::mat_tests::tests::affine3_identity_transform_point_unchanged
+    tests::mat_tests::tests::affine3_identity_transform_vector_unchanged
+    tests::mat_tests::tests::affine3_inverse_identity
+    tests::mat_tests::tests::affine3_inverse_matches_mat4_inverse_trs
+    tests::mat_tests::tests::affine3_inverse_scale_only
+    tests::mat_tests::tests::affine3_inverse_translation_only
+    tests::mat_tests::tests::affine3_inverse_trs_roundtrip
+    tests::mat_tests::tests::affine3_inverse_zero_scale_does_not_panic
+    tests::mat_tests::tests::affine3_scale_scales_point
+    tests::mat_tests::tests::affine3_size_is_64_bytes
+    tests::mat_tests::tests::affine3_translation_does_not_affect_vectors
+    tests::mat_tests::tests::affine3_translation_moves_point
+    tests::mat_tests::tests::mat3_identity_times_vec_is_vec
+    tests::mat_tests::tests::mat3_inverse_of_identity_is_identity
+    tests::mat_tests::tests::mat3_inverse_roundtrip
+    tests::mat_tests::tests::mat3_multiply_identity_is_identity
+    tests::mat_tests::tests::mat4_identity_transform_point_unchanged
+    tests::mat_tests::tests::mat4_inverse_general_sse2_matches_scalar
+    tests::mat_tests::tests::mat4_inverse_of_identity_is_identity
+    tests::mat_tests::tests::mat4_inverse_roundtrip
+    tests::mat_tests::tests::mat4_inverse_trs_identity
+    tests::mat_tests::tests::mat4_inverse_trs_roundtrip_matches_general_inverse
+    tests::mat_tests::tests::mat4_inverse_trs_translation_only
+    tests::mat_tests::tests::mat4_inverse_trs_zero_scale_does_not_panic
+    tests::mat_tests::tests::mat4_look_at_z_axis_points_toward_target
+    tests::mat_tests::tests::mat4_multiply_identity_is_identity
+    tests::mat_tests::tests::mat4_perspective_has_negative_one_at_col3_row2
+    tests::mat_tests::tests::mat4_scale_scales_point
+    tests::mat_tests::tests::mat4_singular_inverse_returns_none
+    tests::mat_tests::tests::mat4_size_is_64_bytes
+    tests::mat_tests::tests::mat4_translation_does_not_affect_vectors
+    tests::mat_tests::tests::mat4_translation_moves_point
+    tests::noise::domain_warp_2d_range
+    tests::noise::domain_warp_3d_range
+    tests::noise::domain_warp_double_differs_from_single
+    tests::noise::fbm_determinism
+    tests::noise::fbm_more_octaves_adds_detail
+    tests::noise::fbm_perlin_3d_range
+    tests::noise::fbm_simplex_2d_range
+    tests::noise::perlin_2d_range
+    tests::noise::perlin_3d_range
+    tests::noise::perlin_4d_range
+    tests::noise::perlin_continuity_2d
+    tests::noise::perlin_determinism_2d
+    tests::noise::perlin_determinism_3d
+    tests::noise::perlin_different_seeds_differ
+    tests::noise::simplex_2d_range
+    tests::noise::simplex_3d_range
+    tests::noise::simplex_4d_range
+    tests::noise::simplex_continuity_2d
+    tests::noise::simplex_determinism_2d
+    tests::noise::simplex_no_directional_bias
+    tests::noise::value_2d_range
+    tests::noise::value_3d_range
+    tests::noise::value_4d_range
+    tests::noise::value_determinism
+    tests::noise::value_integer_coords_at_grid
+    tests::noise::worley_3d_range
+    tests::noise::worley_chebyshev_metric
+    tests::noise::worley_determinism
+    tests::noise::worley_f1_range_2d
+    tests::noise::worley_f2_minus_f1_non_negative_2d
+    tests::noise::worley_f2_range_2d
+    tests::noise::worley_manhattan_metric
+    tests::quat_tests::tests::quat_90deg_around_y_rotates_x_to_neg_z
+    tests::quat_tests::tests::quat_conjugate_is_inverse_for_unit
+    tests::quat_tests::tests::quat_euler_round_trip
+    tests::quat_tests::tests::quat_identity_does_not_rotate_vector
+    tests::quat_tests::tests::quat_inverse_undoes_rotation
+    tests::quat_tests::tests::quat_mul_matches_scalar_reference
+    tests::quat_tests::tests::quat_multiply_composes_rotations
+    tests::quat_tests::tests::quat_nlerp_stays_normalized
+    tests::quat_tests::tests::quat_slerp_midpoint_in_first_quadrant
+    tests::quat_tests::tests::quat_to_mat4_identity_roundtrip
+    tests::stress_tests::tests::lerp_scalar_midpoint
+    tests::stress_tests::tests::smoothstep_clamps_outside_range
+    tests::stress_tests::tests::smoothstep_midpoint_is_half
+    tests::stress_tests::tests::stress_100k_entity_transform_simulation
+    tests::stress_tests::tests::stress_100k_quat_mul
+    tests::stress_tests::tests::stress_100k_quat_rotate
+    tests::stress_tests::tests::stress_100k_vec3_add
+    tests::stress_tests::tests::stress_100k_vec3_cross
+    tests::stress_tests::tests::stress_100k_vec3_dot
+    tests::stress_tests::tests::stress_100k_vec3_lerp
+    tests::stress_tests::tests::stress_100k_vec3_normalize
+    tests::stress_tests::tests::stress_10k_mat4_mul
+    tests::stress_tests::tests::stress_10k_mat4_transform_point
+    tests::stress_tests::tests::stress_50k_euler_from_to_roundtrip
+    tests::stress_tests::tests::stress_50k_quat_slerp
+    tests::stress_tests::tests::stress_5k_mat4_inverse
+    tests::stress_tests::tests::stress_5k_mat4_inverse_trs
+    tests::stress_tests::tests::stress_mixed_math_1k_frames_simulation
+    tests::vec_tests::tests::vec2_addition
+    tests::vec_tests::tests::vec2_dot_product
+    tests::vec_tests::tests::vec2_lerp_midpoint
+    tests::vec_tests::tests::vec2_normalize_unit_length
+    tests::vec_tests::tests::vec2_perpendicular_is_orthogonal
+    tests::vec_tests::tests::vec2_zero_normalize_returns_zero
+    tests::vec_tests::tests::vec3_align_is_16
+    tests::vec_tests::tests::vec3_cross_anticommutative
+    tests::vec_tests::tests::vec3_cross_product_basis
+    tests::vec_tests::tests::vec3_distance
+    tests::vec_tests::tests::vec3_equality_ignores_padding_lane
+    tests::vec_tests::tests::vec3_extend_and_truncate_roundtrip
+    tests::vec_tests::tests::vec3_normalize_unit_length
+    tests::vec_tests::tests::vec3_reflect
+    tests::vec_tests::tests::vec3_size_is_16_bytes
+    tests::vec_tests::tests::vec4_dot_with_self_is_length_sq
+    tests::vec_tests::tests::vec4_normalize_unit_length
+    tests::vec_tests::tests::vec4_size_is_16_bytes
+    tests::wide_tests::tests::f32x4_arithmetic
+    tests::wide_tests::tests::f32x4_blend_branchless
+    tests::wide_tests::tests::f32x4_is_finite
+    tests::wide_tests::tests::f32x4_min_max_abs
+    tests::wide_tests::tests::f32x4_new_and_array_roundtrip
+    tests::wide_tests::tests::f32x4_recip_accuracy
+    tests::wide_tests::tests::f32x4_recip_sqrt_accuracy
+    tests::wide_tests::tests::f32x4_size_align
+    tests::wide_tests::tests::f32x4_splat_and_get
+    tests::wide_tests::tests::f32x4_sqrt
+    tests::wide_tests::tests::i16x8_add_sub
+    tests::wide_tests::tests::i16x8_cmpeq_bitmask
+    tests::wide_tests::tests::i16x8_element_sum
+    tests::wide_tests::tests::i16x8_min_max
+    tests::wide_tests::tests::i16x8_mul_lo
+    tests::wide_tests::tests::i16x8_saturating_add
+    tests::wide_tests::tests::i16x8_saturating_sub
+    tests::wide_tests::tests::i16x8_size_align
+    tests::wide_tests::tests::i16x8_splat_and_to_array
+    tests::wide_tests::tests::i16x8_widen_roundtrip
+    tests::wide_tests::tests::i32x4_abs
+    tests::wide_tests::tests::i32x4_add
+    tests::wide_tests::tests::i32x4_bitwise
+    tests::wide_tests::tests::i32x4_clamp
+    tests::wide_tests::tests::i32x4_cmp_and_blend
+    tests::wide_tests::tests::i32x4_element_sum
+    tests::wide_tests::tests::i32x4_from_array_roundtrip
+    tests::wide_tests::tests::i32x4_get_oob_panics
+    tests::wide_tests::tests::i32x4_min_max
+    tests::wide_tests::tests::i32x4_min_max_element
+    tests::wide_tests::tests::i32x4_mul
+    tests::wide_tests::tests::i32x4_neg
+    tests::wide_tests::tests::i32x4_new_roundtrip
+    tests::wide_tests::tests::i32x4_saturating
+    tests::wide_tests::tests::i32x4_shifts
+    tests::wide_tests::tests::i32x4_size_align
+    tests::wide_tests::tests::i32x4_splat_and_get
+    tests::wide_tests::tests::i32x4_sub
+    tests::wide_tests::tests::i32x4_wrapping
+    tests::wide_tests::tests::i8x16_abs
+    tests::wide_tests::tests::i8x16_cmpeq_and_count
+    tests::wide_tests::tests::i8x16_saturating
+    tests::wide_tests::tests::i8x16_size_align
+    tests::wide_tests::tests::i8x16_splat_and_to_array
+    tests::wide_tests::tests::imask16_from_i8x16_cmpeq
+    tests::wide_tests::tests::imask4_bitops
+    tests::wide_tests::tests::imask4_false_all_zero
+    tests::wide_tests::tests::imask4_true_all_set
+    tests::wide_tests::tests::imask8_from_i16x8_cmpeq
+    tests::wide_tests::tests::mask4_bitops
+    tests::wide_tests::tests::mask4_false_true_constants
+    tests::wide_tests::tests::mask4_from_f32x4_comparison
+    tests::wide_tests::tests::quatx4_4_different_rotations_simultaneously
+    tests::wide_tests::tests::quatx4_aos_soa_roundtrip
+    tests::wide_tests::tests::quatx4_conjugate_is_inverse_for_unit
+    tests::wide_tests::tests::quatx4_dot_self_is_one_for_unit_quats
+    tests::wide_tests::tests::quatx4_identity_default
+    tests::wide_tests::tests::quatx4_mul_matches_scalar
+    tests::wide_tests::tests::quatx4_nlerp_stays_normalised
+    tests::wide_tests::tests::quatx4_normalize_unit_length
+    tests::wide_tests::tests::quatx4_rotate_matches_scalar
+    tests::wide_tests::tests::quatx4_rotate_x_by_90y_is_neg_z
+    tests::wide_tests::tests::quatx4_size_align
+    tests::wide_tests::tests::u16x8_saturating_add
+    tests::wide_tests::tests::u16x8_saturating_sub
+    tests::wide_tests::tests::u16x8_unsigned_min_max
+    tests::wide_tests::tests::u32x4_min_max
+    tests::wide_tests::tests::u32x4_saturating_add_no_overflow
+    tests::wide_tests::tests::u32x4_saturating_sub_no_underflow
+    tests::wide_tests::tests::u32x4_unsigned_comparison
+    tests::wide_tests::tests::u8x16_contains_and_count
+    tests::wide_tests::tests::u8x16_element_sum_correct
+    tests::wide_tests::tests::u8x16_min_max_unsigned
+    tests::wide_tests::tests::u8x16_saturating_add
+    tests::wide_tests::tests::u8x16_saturating_sub
+    tests::wide_tests::tests::vec3x4_add
+    tests::wide_tests::tests::vec3x4_aos_soa_roundtrip
+    tests::wide_tests::tests::vec3x4_cross_anticommutative
+    tests::wide_tests::tests::vec3x4_cross_basis
+    tests::wide_tests::tests::vec3x4_dot_4_simultaneous
+    tests::wide_tests::tests::vec3x4_lerp_midpoint
+    tests::wide_tests::tests::vec3x4_lerp_per_lane_t
+    tests::wide_tests::tests::vec3x4_mat4_transform_matches_scalar
+    tests::wide_tests::tests::vec3x4_matches_scalar_transform
+    tests::wide_tests::tests::vec3x4_normalize_degenerate_lane_safe
+    tests::wide_tests::tests::vec3x4_normalize_unit_length
+    tests::wide_tests::tests::vec3x4_select_branchless
+    tests::wide_tests::tests::vec3x4_size_align
+    tests::wide_tests::tests::vec3x4_splat
+    tests::wide_tests::tests::vec3x4_sub
+
+test result: ok. 617 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+
+   Doc-tests mid_math
+
+running 10 tests
+test crates/mid-math/src/camera/frustum.rs - camera::frustum::Frustum::from_view_proj (line 74) ... FAILED
+test crates/mid-math/src/color/color32.rs - color::color32::Color32::from_hex_u32 (line 61) ... FAILED
+test crates/mid-math/src/fixed/mod.rs - fixed (line 10) ... FAILED
+test crates/mid-math/src/storage/f4.rs - storage::f4 (line 35) - compile ... ok
+test crates/mid-math/src/helpers/euler.rs - helpers::euler (line 12) ... FAILED
+test crates/mid-math/src/storage/f8.rs - storage::f8::F8Norm (line 37) - compile ... ok
+test crates/mid-math/src/noise/fbm.rs - noise::fbm (line 15) ... FAILED
+test crates/mid-math/src/string/string_id.rs - string::string_id::StringId (line 25) ... ok
+test crates/mid-math/src/helpers/octahedral.rs - helpers::octahedral (line 16) ... ok
+test crates/mid-math/src/string/string_id.rs - string::string_id::sid (line 70) ... ok
+
+successes:
+
+successes:
+    crates/mid-math/src/helpers/octahedral.rs - helpers::octahedral (line 16)
+    crates/mid-math/src/storage/f4.rs - storage::f4 (line 35)
+    crates/mid-math/src/storage/f8.rs - storage::f8::F8Norm (line 37)
+    crates/mid-math/src/string/string_id.rs - string::string_id::StringId (line 25)
+    crates/mid-math/src/string/string_id.rs - string::string_id::sid (line 70)
+
+failures:
+
+---- crates/mid-math/src/camera/frustum.rs - camera::frustum::Frustum::from_view_proj (line 74) stdout ----
+error[E0425]: cannot find value `proj` in this scope
+  --> crates/mid-math/src/camera/frustum.rs:75:17
+   |
+75 | let view_proj = proj * view;
+   |                 ^^^^ not found in this scope
+
+error[E0425]: cannot find value `view` in this scope
+  --> crates/mid-math/src/camera/frustum.rs:75:24
+   |
+75 | let view_proj = proj * view;
+   |                        ^^^^ not found in this scope
+
+error[E0433]: cannot find type `Frustum` in this scope
+  --> crates/mid-math/src/camera/frustum.rs:76:17
+   |
+76 | let frustum   = Frustum::from_view_proj(view_proj);
+   |                 ^^^^^^^ use of undeclared type `Frustum`
+
+error: aborting due to 3 previous errors
+
+Some errors have detailed explanations: E0425, E0433.
+For more information about an error, try `rustc --explain E0425`.
+Couldn't compile the test.
+---- crates/mid-math/src/color/color32.rs - color::color32::Color32::from_hex_u32 (line 61) stdout ----
+error[E0433]: cannot find type `Color32` in this scope
+  --> crates/mid-math/src/color/color32.rs:62:11
+   |
+62 | let red = Color32::from_hex_u32(0xFF0000FF);
+   |           ^^^^^^^ use of undeclared type `Color32`
+
+error[E0433]: cannot find type `Color32` in this scope
+  --> crates/mid-math/src/color/color32.rs:63:17
+   |
+63 | assert_eq!(red, Color32::RED);
+   |                 ^^^^^^^ use of undeclared type `Color32`
+
+error: aborting due to 2 previous errors
+
+For more information about this error, try `rustc --explain E0433`.
+Couldn't compile the test.
+---- crates/mid-math/src/fixed/mod.rs - fixed (line 10) stdout ----
+error[E0425]: cannot find value `dt` in this scope
+  --> crates/mid-math/src/fixed/mod.rs:14:49
+   |
+14 | let new_pos = pos + vel.scale(Fixed16::from_f32(dt));
+   |                                                 ^^ not found in this scope
+
+error[E0433]: cannot find type `FixedVec3_16` in this scope
+  --> crates/mid-math/src/fixed/mod.rs:12:11
+   |
+12 | let pos = FixedVec3_16::from_i32(10, 0, 0);
+   |           ^^^^^^^^^^^^ use of undeclared type `FixedVec3_16`
+
+error[E0433]: cannot find type `FixedVec3_16` in this scope
+  --> crates/mid-math/src/fixed/mod.rs:13:11
+   |
+13 | let vel = FixedVec3_16::from_f32(1.5, 0.0, 0.0); // f32 only at boundary
+   |           ^^^^^^^^^^^^ use of undeclared type `FixedVec3_16`
+
+error[E0433]: cannot find type `Fixed16` in this scope
+  --> crates/mid-math/src/fixed/mod.rs:14:31
+   |
+14 | let new_pos = pos + vel.scale(Fixed16::from_f32(dt));
+   |                               ^^^^^^^ use of undeclared type `Fixed16`
+
+error: aborting due to 4 previous errors
+
+Some errors have detailed explanations: E0425, E0433.
+For more information about an error, try `rustc --explain E0425`.
+Couldn't compile the test.
+---- crates/mid-math/src/helpers/euler.rs - helpers::euler (line 12) stdout ----
+error[E0425]: cannot find value `yaw` in this scope
+  --> crates/mid-math/src/helpers/euler.rs:17:41
+   |
+17 | let q = Quat::from_euler(EulerRot::ZYX, yaw, pitch, roll);
+   |                                         ^^^ not found in this scope
+
+error[E0425]: cannot find value `pitch` in this scope
+  --> crates/mid-math/src/helpers/euler.rs:17:46
+   |
+17 | let q = Quat::from_euler(EulerRot::ZYX, yaw, pitch, roll);
+   |                                              ^^^^^ not found in this scope
+
+error[E0425]: cannot find value `roll` in this scope
+  --> crates/mid-math/src/helpers/euler.rs:17:53
+   |
+17 | let q = Quat::from_euler(EulerRot::ZYX, yaw, pitch, roll);
+   |                                                     ^^^^ not found in this scope
+
+error[E0061]: this function takes 3 arguments but 4 arguments were supplied
+  --> crates/mid-math/src/helpers/euler.rs:17:9
+   |
+17 | let q = Quat::from_euler(EulerRot::ZYX, yaw, pitch, roll);
+   |         ^^^^^^^^^^^^^^^^ -------------              ---- unexpected argument #4
+   |                          |
+   |                          expected `f32`, found `EulerRot`
+   |
+note: associated function defined here
+  --> crates/mid-math/src/f32/sse2/quat.rs:91:12
+   |
+91 |     pub fn from_euler(roll: f32, pitch: f32, yaw: f32) -> Self {
+   |            ^^^^^^^^^^
+help: remove the extra argument
+   |
+17 - let q = Quat::from_euler(EulerRot::ZYX, yaw, pitch, roll);
+17 + let q = Quat::from_euler(/* f32 */, yaw, pitch);
+   |
+
+error[E0061]: this method takes 0 arguments but 1 argument was supplied
+   --> crates/mid-math/src/helpers/euler.rs:20:19
+    |
+ 20 | let (y, p, r) = q.to_euler(EulerRot::ZYX);
+    |                   ^^^^^^^^ ------------- unexpected argument of type `EulerRot`
+    |
+note: method defined here
+   --> crates/mid-math/src/f32/sse2/quat.rs:103:12
+    |
+103 |     pub fn to_euler(self) -> (f32, f32, f32) {
+    |            ^^^^^^^^
+help: remove the extra argument
+    |
+ 20 - let (y, p, r) = q.to_euler(EulerRot::ZYX);
+ 20 + let (y, p, r) = q.to_euler();
+    |
+
+error: aborting due to 5 previous errors
+
+Some errors have detailed explanations: E0061, E0425.
+For more information about an error, try `rustc --explain E0061`.
+Couldn't compile the test.
+---- crates/mid-math/src/noise/fbm.rs - noise::fbm (line 15) stdout ----
+error[E0425]: cannot find value `x` in this scope
+  --> crates/mid-math/src/noise/fbm.rs:25:28
+   |
+25 | let height = fbm.sample_2d(x * 0.01, z * 0.01);
+   |                            ^ not found in this scope
+
+error[E0425]: cannot find value `z` in this scope
+  --> crates/mid-math/src/noise/fbm.rs:25:38
+   |
+25 | let height = fbm.sample_2d(x * 0.01, z * 0.01);
+   |                                      ^ not found in this scope
+
+error: aborting due to 2 previous errors
+
+For more information about this error, try `rustc --explain E0425`.
+Couldn't compile the test.
+
+failures:
+    crates/mid-math/src/camera/frustum.rs - camera::frustum::Frustum::from_view_proj (line 74)
+    crates/mid-math/src/color/color32.rs - color::color32::Color32::from_hex_u32 (line 61)
+    crates/mid-math/src/fixed/mod.rs - fixed (line 10)
+    crates/mid-math/src/helpers/euler.rs - helpers::euler (line 12)
+    crates/mid-math/src/noise/fbm.rs - noise::fbm (line 15)
+
+test result: FAILED. 5 passed; 5 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.94s
+
+error: doctest failed, to rerun pass `-p mid-math --doc`
+error: 1 target failed:
+    `-p mid-math --doc`
