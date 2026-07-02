@@ -3,6 +3,21 @@
 mod tests {
     use crate::{Affine3, Mat3, Mat4, Quat, Vec3, approx_eq, to_radians};
 
+    /// `Mat4` stores columns as four named `Vec4` fields (x_axis/y_axis/
+    /// z_axis/w_axis), not an indexable `cols` array like `Mat3` does.
+    /// This helper gives tests the `m[c][r]` access pattern they want
+    /// without adding an indexing API to the hot-path Mat4 type itself.
+    fn m4(m: &Mat4, c: usize, r: usize) -> f32 {
+        let col = match c {
+            0 => m.x_axis, 1 => m.y_axis, 2 => m.z_axis, 3 => m.w_axis,
+            _ => panic!("column index {c} out of range"),
+        };
+        match r {
+            0 => col.x, 1 => col.y, 2 => col.z, 3 => col.w,
+            _ => panic!("row index {r} out of range"),
+        }
+    }
+
     // ── Mat3 ─────────────────────────────────────────────────────────────────
 
     #[test]
@@ -23,7 +38,8 @@ mod tests {
 
     #[test]
     fn mat3_inverse_roundtrip() {
-        let m   = Mat3::from_cols([2.0,0.0,0.0],[0.0,3.0,0.0],[0.0,0.0,4.0]);
+        let m   = Mat3::from_cols(
+            Vec3::new(2.0,0.0,0.0), Vec3::new(0.0,3.0,0.0), Vec3::new(0.0,0.0,4.0));
         let inv = m.inverse().expect("diagonal matrix is invertible");
         let p   = m * inv;
         for c in 0..3 { for r in 0..3 {
@@ -87,8 +103,8 @@ mod tests {
         let eye = m * inv;
         for c in 0..4 { for r in 0..4 {
             let exp = if c==r { 1.0 } else { 0.0 };
-            assert!((eye.cols[c][r]-exp).abs()<1e-4,
-                "m*inv[{}][{}] = {:.6}", c, r, eye.cols[c][r]);
+            assert!((m4(&eye,c,r)-exp).abs()<1e-4,
+                "m*inv[{}][{}] = {:.6}", c, r, m4(&eye,c,r));
         }}
     }
 
@@ -100,7 +116,7 @@ mod tests {
     #[test]
     fn mat4_perspective_has_negative_one_at_col3_row2() {
         let m = Mat4::perspective_rh(to_radians(60.0), 16.0/9.0, 0.1, 1000.0);
-        assert!(approx_eq(m.cols[2][3], -1.0), "cols[2][3] = {}", m.cols[2][3]);
+        assert!(approx_eq(m4(&m,2,3), -1.0), "cols[2][3] = {}", m4(&m,2,3));
     }
 
     #[test]
@@ -136,10 +152,10 @@ mod tests {
         let inv_g = m.inverse().expect("invertible");
         let inv_t = m.inverse_trs();
         for c in 0..4 { for r in 0..4 {
-            let diff = (inv_g.cols[c][r] - inv_t.cols[c][r]).abs();
+            let diff = (m4(&inv_g,c,r) - m4(&inv_t,c,r)).abs();
             assert!(diff < 1e-4,
                 "col={} row={}: general={:.6} trs={:.6}",
-                c, r, inv_g.cols[c][r], inv_t.cols[c][r]);
+                c, r, m4(&inv_g,c,r), m4(&inv_t,c,r));
         }}
     }
 
@@ -174,10 +190,10 @@ mod tests {
                 (None, None) => {}
                 (Some(s2), Some(sc)) => {
                     for c in 0..4 { for r in 0..4 {
-                        let d = (s2.cols[c][r] - sc.cols[c][r]).abs();
+                        let d = (m4(&s2,c,r) - m4(&sc,c,r)).abs();
                         assert!(d < 1e-4,
                             "case {} col={} row={}: sse2={:.6} scalar={:.6}",
-                            i, c, r, s2.cols[c][r], sc.cols[c][r]);
+                            i, c, r, m4(&s2,c,r), m4(&sc,c,r));
                     }}
                 }
                 _ => panic!("case {}: SSE2 and scalar disagree on singularity", i),
@@ -256,8 +272,8 @@ mod tests {
         let a = Affine3::from_mat4(m);
         let m2 = a.to_mat4();
         for c in 0..4 { for row in 0..4 {
-            let d = (m.cols[c][row] - m2.cols[c][row]).abs();
-            assert!(d < 1e-5, "col={} row={}: {:.7} vs {:.7}", c, row, m.cols[c][row], m2.cols[c][row]);
+            let d = (m4(&m,c,row) - m4(&m2,c,row)).abs();
+            assert!(d < 1e-5, "col={} row={}: {:.7} vs {:.7}", c, row, m4(&m,c,row), m4(&m2,c,row));
         }}
     }
 
@@ -312,10 +328,10 @@ mod tests {
         let minv = m.inverse_trs();
 
         for c in 0..4 { for row in 0..4 {
-            let d = (ainv.cols[c][row] - minv.cols[c][row]).abs();
+            let d = (m4(&ainv,c,row) - m4(&minv,c,row)).abs();
             assert!(d < 1e-4,
                 "col={} row={}: affine3={:.6} mat4_trs={:.6}",
-                c, row, ainv.cols[c][row], minv.cols[c][row]);
+                c, row, m4(&ainv,c,row), m4(&minv,c,row));
         }}
     }
 
@@ -345,4 +361,4 @@ mod tests {
         let a = Affine3::from_scale(Vec3::new(0.0, 1.0, 1.0));
         let _ = a.inverse();
     }
-}
+        }
