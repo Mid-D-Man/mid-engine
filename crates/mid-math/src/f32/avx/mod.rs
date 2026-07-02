@@ -6,3 +6,5 @@
 //! Only operations that benefit from 256-bit width live here.
 pub mod mat4;
 pub mod mat3;
+pub mod vec4;
+pub mod quat;
