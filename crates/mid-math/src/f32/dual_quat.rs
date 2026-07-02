@@ -209,17 +209,15 @@ impl DualQuat {
 /// Convert to f64 DDualQuat (lossless upcast).
 #[inline]
 pub fn as_ddual_quat(self) -> crate::DDualQuat {
-    use crate::f64::dquat::DQuat as ScalarDQuat;
-    use crate::f64::dvec3::DVec3 as ScalarDVec3;
     let t = self.translation();
     crate::DDualQuat::from_rotation_translation(
-        ScalarDQuat::new(
+        crate::DQuat::new(
             self.real.x as f64,
             self.real.y as f64,
             self.real.z as f64,
             self.real.w as f64,
         ),
-        ScalarDVec3::new(t.x as f64, t.y as f64, t.z as f64),
+        crate::DVec3::new(t.x as f64, t.y as f64, t.z as f64),
     )
 }
 
@@ -249,4 +247,4 @@ impl fmt::Display for DualQuat {
         write!(f, "DualQuat(rot={:?}, t=({:.4},{:.4},{:.4}))",
                self.real, t.x, t.y, t.z)
     }
-      }
+                   }
