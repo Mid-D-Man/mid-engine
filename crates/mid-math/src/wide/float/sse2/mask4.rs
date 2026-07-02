@@ -65,10 +65,13 @@ impl Not for Mask4 {
     type Output = Self;
     #[inline(always)]
     fn not(self) -> Self {
-        unsafe {
-            let ones = _mm_cmpeq_ps(self.0, self.0);
-            Mask4(_mm_xor_ps(self.0, ones))
-        }
+        // Do NOT derive "all-ones" via _mm_cmpeq_ps(self.0, self.0): a TRUE
+        // lane's bit pattern (0xFFFFFFFF) reinterpreted as f32 is NaN, and
+        // NaN != NaN even against itself. That silently flips the "ones"
+        // helper on exactly the lanes that are true, cancelling out the XOR
+        // and leaving every lane true regardless of input. XOR against the
+        // TRUE constant instead — plain bitwise, no float comparison.
+        unsafe { Mask4(_mm_xor_ps(self.0, Mask4::TRUE.0)) }
     }
 }
 
