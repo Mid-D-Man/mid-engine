@@ -98,6 +98,10 @@ impl Vec4 {
         self.try_normalize().unwrap_or(Self::ZERO)
     }
 
+    /// SSE2 baseline: `self + (rhs - self) * t` as separate mul+add.
+    /// AVX+FMA override lives in `avx/vec4.rs` — fuses the mul+add into one
+    /// `_mm_fmadd_ps`.
+    #[cfg(not(all(target_feature = "avx", target_feature = "fma")))]
     #[inline]
     pub fn lerp(self, rhs: Self, t: f32) -> Self {
         unsafe {
@@ -192,4 +196,4 @@ impl From<[f32; 4]> for Vec4 {
 }
 impl From<Vec4> for [f32; 4] {
     #[inline] fn from(v: Vec4) -> Self { [v.x, v.y, v.z, v.w] }
-}
+            }
