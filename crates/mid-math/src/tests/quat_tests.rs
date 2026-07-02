@@ -3,6 +3,19 @@
 mod tests {
     use crate::{Quat, Vec3, Mat4, approx_eq, to_radians, EPSILON};
 
+    /// See identical helper in `mat_tests.rs` — `Mat4` has no `cols` field,
+    /// just four named `Vec4` columns.
+    fn m4(m: &Mat4, c: usize, r: usize) -> f32 {
+        let col = match c {
+            0 => m.x_axis, 1 => m.y_axis, 2 => m.z_axis, 3 => m.w_axis,
+            _ => panic!("column index {c} out of range"),
+        };
+        match r {
+            0 => col.x, 1 => col.y, 2 => col.z, 3 => col.w,
+            _ => panic!("row index {r} out of range"),
+        }
+    }
+
     #[test]
     fn quat_identity_does_not_rotate_vector() {
         let v = Vec3::new(1.0,2.0,3.0);
@@ -73,8 +86,8 @@ mod tests {
         for c in 0..4 {
             for r in 0..4 {
                 let exp = if c == r { 1.0 } else { 0.0 };
-                assert!((m.cols[c][r] - exp).abs() < 1e-5,
-                    "col={} row={}: {} != {}", c, r, m.cols[c][r], exp);
+                assert!((m4(&m,c,r) - exp).abs() < 1e-5,
+                    "col={} row={}: {} != {}", c, r, m4(&m,c,r), exp);
             }
         }
     }
@@ -109,4 +122,4 @@ mod tests {
         assert!(approx_eq(simd.z, sz), "z: {} vs {}", simd.z, sz);
         assert!(approx_eq(simd.w, sw), "w: {} vs {}", simd.w, sw);
     }
-}
+            }
