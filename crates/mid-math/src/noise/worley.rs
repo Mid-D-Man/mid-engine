@@ -12,6 +12,7 @@
 //! control which distance combination is returned.
 
 use super::build_perm;
+use super::{NoiseSource2d, NoiseSource3d};
 
 /// Which distance combination the Worley sampler returns.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -170,3 +171,13 @@ impl Worley {
 }
 
 impl Default for Worley { fn default() -> Self { Self::new() } }
+
+impl NoiseSource2d for Worley {
+    #[inline]
+    fn sample_2d(&self, x: f32, y: f32) -> f32 { self.sample_2d(x, y) }
+}
+
+impl NoiseSource3d for Worley {
+    #[inline]
+    fn sample_3d(&self, x: f32, y: f32, z: f32) -> f32 { self.sample_3d(x, y, z) }
+        }
