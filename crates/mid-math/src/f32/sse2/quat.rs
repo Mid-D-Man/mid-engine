@@ -32,8 +32,13 @@ pub struct Quat(pub(crate) __m128);
 
 impl_vec4_deref!(Quat);
 
+// Only used by the SSE2 baseline `mul_quat` below — AVX+FMA builds use the
+// XOR sign-mask equivalents in `avx/quat.rs` instead.
+#[cfg(not(all(target_feature = "avx", target_feature = "fma")))]
 const CONTROL_WZYX: __m128 = m128_from_f32x4([ 1.0, -1.0,  1.0, -1.0]);
+#[cfg(not(all(target_feature = "avx", target_feature = "fma")))]
 const CONTROL_ZWXY: __m128 = m128_from_f32x4([ 1.0,  1.0, -1.0, -1.0]);
+#[cfg(not(all(target_feature = "avx", target_feature = "fma")))]
 const CONTROL_YXWZ: __m128 = m128_from_f32x4([-1.0,  1.0,  1.0, -1.0]);
 
 /// All-ones lanes 0-2, lane 3 = 0.  Used to zero the w/padding lane.
@@ -163,6 +168,11 @@ impl Quat {
         v + self.w * t + qv.cross(t)
     }
 
+    /// SSE2 baseline: 7 muls + 3 adds (shuffle-heavy Hamilton product).
+    /// AVX+FMA override lives in `avx/quat.rs` — folds the ±1 CONTROL
+    /// multiplies into XOR sign-flips and fuses the accumulation into 3
+    /// `_mm_fmadd_ps` calls.
+    #[cfg(not(all(target_feature = "avx", target_feature = "fma")))]
     #[inline]
     pub fn mul_quat(self, rhs: Self) -> Self {
         unsafe {
@@ -192,6 +202,8 @@ impl Quat {
 
     // ── Interpolation ─────────────────────────────────────────────────────────
 
+    /// SSE2 baseline lerp-blend. AVX+FMA override lives in `avx/quat.rs`.
+    #[cfg(not(all(target_feature = "avx", target_feature = "fma")))]
     #[inline]
     pub fn nlerp(self, rhs: Self, t: f32) -> Self {
         unsafe {
@@ -295,4 +307,4 @@ impl fmt::Display for Quat {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "Quat({:.4}, {:.4}, {:.4}, {:.4})", self.x, self.y, self.z, self.w)
     }
-                      }
+        }
