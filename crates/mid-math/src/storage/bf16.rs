@@ -125,6 +125,15 @@ impl bf16 {
             upper = upper.wrapping_add(1);
         }
         let _ = lower; // used structurally above
+        // A round-up can carry out of the mantissa into the exponent field,
+        // which for values near f32::MAX pushes the exponent to all-ones —
+        // i.e. rounding just turned a finite input into bf16 infinity. bf16
+        // has the same exponent range as f32, so no *finite* f32 should ever
+        // become non-finite here; saturate to the largest finite magnitude
+        // instead (same convention used by PyTorch/TF bf16 casts).
+        if v.is_finite() && (upper & 0x7F80) == 0x7F80 {
+            upper = (upper & 0x8000) | 0x7F7F;
+        }
         Self(upper)
     }
 
@@ -345,4 +354,4 @@ mod tests {
             assert!(rel < 0.02, "bf16 x4 batch [{i}]: {s} → {r}", s=src[i], r=rt[i]);
         }
     }
-}
+    }
