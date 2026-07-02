@@ -186,7 +186,7 @@ mod tests {
         for _ in 0..count { acc = acc * a * b; }
         let elapsed = start.elapsed();
         let acc = std::hint::black_box(acc);
-        assert!(acc.cols[0][0].is_finite());
+        assert!(acc.x_axis.x.is_finite());
         println!("  {} Mat4 mul in {:.3}ms  ({:.1} ns/op)  {}",
             count*2, elapsed.as_secs_f64()*1000.0,
             elapsed.as_nanos() as f64/(count*2) as f64, BUILD_MODE);
@@ -298,4 +298,4 @@ mod tests {
             ticks, elapsed.as_secs_f64()*1000.0,
             elapsed.as_secs_f64()*1_000_000.0/ticks as f64, BUILD_MODE);
     }
-}
+            }
