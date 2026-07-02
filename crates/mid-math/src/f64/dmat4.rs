@@ -7,8 +7,8 @@ use core::fmt;
 use core::ops::Mul;
 
 use super::dvec3::DVec3;
-use super::dvec4::DVec4;
-use super::dquat::DQuat;
+use crate::DVec4;
+use crate::DQuat;
 use super::dvec2::DEPSILON;
 
 /// 4×4 column-major double-precision matrix. 128 bytes, align(32).
@@ -416,4 +416,4 @@ impl fmt::Display for DMat4 {
         }
         Ok(())
     }
-            }
+        }
