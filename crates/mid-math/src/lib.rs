@@ -220,9 +220,9 @@ pub use camera::frustum::{
     FRUSTUM_LEFT, FRUSTUM_RIGHT, FRUSTUM_BOTTOM,
     FRUSTUM_TOP,  FRUSTUM_NEAR,  FRUSTUM_FAR,
 };
-pub use camera::projection::{
+pub use camera::{
     PerspectiveParams, unproject, unproject_separate, picking_ray,
-    perspective_infinite_rh, perspective_reversed_z_rh,
+    perspective_infinite_rh, perspective_infinite_rh_gl, perspective_reversed_z_rh,
     perspective_infinite_lh, perspective_reversed_z_lh,
     perspective_decompose, perspective_resize,
     csm_split_depths, sub_frustum_corners,
