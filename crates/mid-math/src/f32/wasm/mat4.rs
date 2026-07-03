@@ -114,48 +114,6 @@ impl Mat4 {
 
     // ── Projection matrices ───────────────────────────────────────────────────
 
-    pub fn perspective_rh(fov_y: f32, aspect: f32, near: f32, far: f32) -> Self {
-        let f = 1.0 / (fov_y * 0.5).tan();
-        let z = near - far;
-        Self {
-            x_axis: Vec4::new(f/aspect, 0.0, 0.0, 0.0),
-            y_axis: Vec4::new(0.0, f, 0.0, 0.0),
-            z_axis: Vec4::new(0.0, 0.0, (far+near)/z, -1.0),
-            w_axis: Vec4::new(0.0, 0.0, (2.0*far*near)/z, 0.0),
-        }
-    }
-
-    pub fn perspective_lh(fov_y: f32, aspect: f32, near: f32, far: f32) -> Self {
-        let f = 1.0 / (fov_y * 0.5).tan();
-        let z = far - near;
-        Self {
-            x_axis: Vec4::new(f/aspect, 0.0, 0.0, 0.0),
-            y_axis: Vec4::new(0.0, f, 0.0, 0.0),
-            z_axis: Vec4::new(0.0, 0.0, far/z, 1.0),
-            w_axis: Vec4::new(0.0, 0.0, -(far*near)/z, 0.0),
-        }
-    }
-
-    pub fn ortho_rh(left:f32, right:f32, bottom:f32, top:f32, near:f32, far:f32) -> Self {
-        let rl=right-left; let tb=top-bottom; let nf=far-near;
-        Self {
-            x_axis: Vec4::new(2.0/rl, 0.0, 0.0, 0.0),
-            y_axis: Vec4::new(0.0, 2.0/tb, 0.0, 0.0),
-            z_axis: Vec4::new(0.0, 0.0, -2.0/nf, 0.0),
-            w_axis: Vec4::new(-(right+left)/rl, -(top+bottom)/tb, -(far+near)/nf, 1.0),
-        }
-    }
-
-    pub fn ortho_lh(left: f32, right: f32, bottom: f32, top: f32, near: f32, far: f32) -> Self {
-        let rl=right-left; let tb=top-bottom; let nf=far-near;
-        Self {
-            x_axis: Vec4::new(2.0/rl, 0.0, 0.0, 0.0),
-            y_axis: Vec4::new(0.0, 2.0/tb, 0.0, 0.0),
-            z_axis: Vec4::new(0.0, 0.0, 1.0/nf, 0.0),
-            w_axis: Vec4::new(-(right+left)/rl, -(top+bottom)/tb, -near/nf, 1.0),
-        }
-    }
-
     // ── Transpose ─────────────────────────────────────────────────────────────
     // Was scalar field-by-field (16 lane extracts) despite v128 storage — that's
     // the 19.7ns vs glam's 2.86ns gap in build #34. This is the DirectXMath
@@ -449,4 +407,4 @@ unsafe fn wasm_inverse_general(m: &Mat4) -> Option<Mat4> {
         z_axis: Vec4(f32x4_mul(inv2, rcp)),
         w_axis: Vec4(f32x4_mul(inv3, rcp)),
     })
-                              }
+    }
