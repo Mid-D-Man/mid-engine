@@ -27,7 +27,6 @@ use core::arch::x86::*;
 use core::arch::x86_64::*;
 
 use crate::sse2::{dot4, m128_from_f32x4};
-use crate::f32::math;
 use crate::f32::sse2::vec3::Vec3;
 use crate::f32::sse2::vec4::Vec4;
 use crate::f32::sse2::quat::Quat;
@@ -321,53 +320,13 @@ impl Mat4 {
 
     // ── Projection matrices ───────────────────────────────────────────────────
 
-    pub fn perspective_rh(fov_y: f32, aspect: f32, near: f32, far: f32) -> Self {
-        let (sin_fov, cos_fov) = math::sin_cos(fov_y * 0.5);
-        let f = cos_fov / sin_fov;
-        let z = near - far;
-        Self {
-            x_axis: Vec4::new(f / aspect, 0.0, 0.0, 0.0),
-            y_axis: Vec4::new(0.0, f, 0.0, 0.0),
-            z_axis: Vec4::new(0.0, 0.0, (far + near) / z, -1.0),
-            w_axis: Vec4::new(0.0, 0.0, (2.0 * far * near) / z, 0.0),
-        }
-    }
 
-    pub fn perspective_lh(fov_y: f32, aspect: f32, near: f32, far: f32) -> Self {
-        let (sin_fov, cos_fov) = math::sin_cos(fov_y * 0.5);
-        let f = cos_fov / sin_fov;
-        let z = far - near;
-        Self {
-            x_axis: Vec4::new(f / aspect, 0.0, 0.0, 0.0),
-            y_axis: Vec4::new(0.0, f, 0.0, 0.0),
-            z_axis: Vec4::new(0.0, 0.0, far / z, 1.0),
-            w_axis: Vec4::new(0.0, 0.0, -(far * near) / z, 0.0),
-        }
-    }
 
-    pub fn ortho_rh(left: f32, right: f32, bottom: f32, top: f32, near: f32, far: f32) -> Self {
-        let rl = right - left; let tb = top - bottom; let nf = far - near;
-        Self {
-            x_axis: Vec4::new(2.0 / rl, 0.0, 0.0, 0.0),
-            y_axis: Vec4::new(0.0, 2.0 / tb, 0.0, 0.0),
-            z_axis: Vec4::new(0.0, 0.0, -2.0 / nf, 0.0),
-            w_axis: Vec4::new(
-                -(right + left) / rl, -(top + bottom) / tb, -(far + near) / nf, 1.0,
-            ),
-        }
-    }
 
-    pub fn ortho_lh(left: f32, right: f32, bottom: f32, top: f32, near: f32, far: f32) -> Self {
-        let rl = right - left; let tb = top - bottom; let nf = far - near;
-        Self {
-            x_axis: Vec4::new(2.0 / rl, 0.0, 0.0, 0.0),
-            y_axis: Vec4::new(0.0, 2.0 / tb, 0.0, 0.0),
-            z_axis: Vec4::new(0.0, 0.0, 1.0 / nf, 0.0),
-            w_axis: Vec4::new(
-                -(right + left) / rl, -(top + bottom) / tb, -near / nf, 1.0,
-            ),
-        }
-    }
+
+
+
+
 
     // ── Transpose ─────────────────────────────────────────────────────────────
 
@@ -814,4 +773,4 @@ impl fmt::Display for Mat4 {
         }
         Ok(())
     }
-        }
+    }
