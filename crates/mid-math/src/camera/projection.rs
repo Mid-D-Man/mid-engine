@@ -191,4 +191,4 @@ pub fn perspective_decompose(proj: Mat4) -> Option<PerspectiveParams> {
 pub fn perspective_resize(proj: &mut Mat4, new_aspect: f32) {
     if proj.x_axis.x == 0.0 || new_aspect == 0.0 { return; }
     proj.x_axis.x = proj.y_axis.y / new_aspect;
-            }
+    }
