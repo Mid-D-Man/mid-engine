@@ -283,42 +283,10 @@ impl Mat4 {
     }
 
     // ── Projection matrices ───────────────────────────────────────────────────
-
-    /// RH perspective, z ∈ [0,1] (Vulkan/Metal/DX12).
-    pub fn perspective_rh(fov_y: f32, aspect: f32, near: f32, far: f32) -> Self {
-        let f = 1.0 / (fov_y*0.5).tan();
-        let z = near - far;
-        Self {
-            x_axis: Vec4::new(f/aspect, 0.0, 0.0, 0.0),
-            y_axis: Vec4::new(0.0, f, 0.0, 0.0),
-            z_axis: Vec4::new(0.0, 0.0, (far+near)/z, -1.0),
-            w_axis: Vec4::new(0.0, 0.0, (2.0*far*near)/z, 0.0),
-        }
-    }
-
-    /// LH perspective, z ∈ [0,1].
-    pub fn perspective_lh(fov_y: f32, aspect: f32, near: f32, far: f32) -> Self {
-        let f = 1.0 / (fov_y*0.5).tan();
-        let z = far - near;
-        Self {
-            x_axis: Vec4::new(f/aspect, 0.0, 0.0, 0.0),
-            y_axis: Vec4::new(0.0, f, 0.0, 0.0),
-            z_axis: Vec4::new(0.0, 0.0, far/z, 1.0),
-            w_axis: Vec4::new(0.0, 0.0, -(far*near)/z, 0.0),
-        }
-    }
-
-    /// RH perspective, z ∈ [-1,1] (OpenGL convention).
-    pub fn perspective_rh_gl(fov_y: f32, aspect: f32, near: f32, far: f32) -> Self {
-        let f = 1.0 / (fov_y*0.5).tan();
-        let nf = near - far;
-        Self {
-            x_axis: Vec4::new(f/aspect, 0.0, 0.0, 0.0),
-            y_axis: Vec4::new(0.0, f, 0.0, 0.0),
-            z_axis: Vec4::new(0.0, 0.0, (far+near)/nf, -1.0),
-            w_axis: Vec4::new(0.0, 0.0, (2.0*far*near)/nf, 0.0),
-        }
-    }
+    // perspective_rh/lh, perspective_rh_gl/lh_gl, ortho_rh/lh, ortho_rh_gl/lh_gl,
+    // and frustum_rh/lh, frustum_rh_gl/lh_gl now live once in
+    // `f32/mat4_projection.rs` (see that file's doc comment for why — this used
+    // to be duplicated 5 times across every backend and had drifted).
 
     /// RH infinite perspective (no far plane), z ∈ [0,1].
     /// Near plane maps to 1, far approaches 0.
@@ -341,78 +309,6 @@ impl Mat4 {
             y_axis: Vec4::new(0.0, f, 0.0, 0.0),
             z_axis: Vec4::new(0.0, 0.0, 0.0, -1.0),
             w_axis: Vec4::new(0.0, 0.0, near, 0.0),
-        }
-    }
-
-    /// Asymmetric RH frustum, z ∈ [0,1].
-    pub fn frustum_rh(left: f32, right: f32, bottom: f32, top: f32, near: f32, far: f32) -> Self {
-        let rl = right - left; let tb = top - bottom; let nf = near - far;
-        Self {
-            x_axis: Vec4::new(2.0*near/rl,     0.0,            0.0, 0.0),
-            y_axis: Vec4::new(0.0,              2.0*near/tb,    0.0, 0.0),
-            z_axis: Vec4::new((right+left)/rl,  (top+bottom)/tb, far/nf, -1.0),
-            w_axis: Vec4::new(0.0,              0.0,            (far*near)/nf, 0.0),
-        }
-    }
-
-    /// Asymmetric LH frustum, z ∈ [0,1].
-    pub fn frustum_lh(left: f32, right: f32, bottom: f32, top: f32, near: f32, far: f32) -> Self {
-        let rl = right - left; let tb = top - bottom; let fn_ = far - near;
-        Self {
-            x_axis: Vec4::new(2.0*near/rl,     0.0,            0.0, 0.0),
-            y_axis: Vec4::new(0.0,              2.0*near/tb,    0.0, 0.0),
-            z_axis: Vec4::new(-(right+left)/rl, -(top+bottom)/tb, far/fn_, 1.0),
-            w_axis: Vec4::new(0.0,              0.0,            -(far*near)/fn_, 0.0),
-        }
-    }
-
-    /// Asymmetric RH frustum, z ∈ [-1,1] (OpenGL).
-    pub fn frustum_rh_gl(left: f32, right: f32, bottom: f32, top: f32, near: f32, far: f32) -> Self {
-        let rl = right-left; let tb = top-bottom; let nf = near-far;
-        Self {
-            x_axis: Vec4::new(2.0*near/rl,     0.0,            0.0, 0.0),
-            y_axis: Vec4::new(0.0,              2.0*near/tb,    0.0, 0.0),
-            z_axis: Vec4::new((right+left)/rl,  (top+bottom)/tb, (far+near)/nf, -1.0),
-            w_axis: Vec4::new(0.0,              0.0,            (2.0*far*near)/nf, 0.0),
-        }
-    }
-
-    /// RH orthographic, z ∈ [0,1].
-    pub fn orthographic_rh(left:f32,right:f32,bottom:f32,top:f32,near:f32,far:f32) -> Self {
-        Self::ortho_rh(left,right,bottom,top,near,far)
-    }
-    pub fn ortho_rh(left:f32,right:f32,bottom:f32,top:f32,near:f32,far:f32) -> Self {
-        let rl=right-left; let tb=top-bottom; let nf=far-near;
-        Self {
-            x_axis: Vec4::new(2.0/rl, 0.0, 0.0, 0.0),
-            y_axis: Vec4::new(0.0, 2.0/tb, 0.0, 0.0),
-            z_axis: Vec4::new(0.0, 0.0, -1.0/nf, 0.0),
-            w_axis: Vec4::new(-(right+left)/rl, -(top+bottom)/tb, -near/nf, 1.0),
-        }
-    }
-
-    /// LH orthographic, z ∈ [0,1].
-    pub fn orthographic_lh(left:f32,right:f32,bottom:f32,top:f32,near:f32,far:f32) -> Self {
-        Self::ortho_lh(left,right,bottom,top,near,far)
-    }
-    pub fn ortho_lh(left: f32, right: f32, bottom: f32, top: f32, near: f32, far: f32) -> Self {
-        let rl = right-left; let tb = top-bottom; let nf = far-near;
-        Self {
-            x_axis: Vec4::new(2.0/rl, 0.0, 0.0, 0.0),
-            y_axis: Vec4::new(0.0, 2.0/tb, 0.0, 0.0),
-            z_axis: Vec4::new(0.0, 0.0, 1.0/nf, 0.0),
-            w_axis: Vec4::new(-(right+left)/rl, -(top+bottom)/tb, -near/nf, 1.0),
-        }
-    }
-
-    /// RH orthographic, z ∈ [-1,1] (OpenGL).
-    pub fn orthographic_rh_gl(left:f32,right:f32,bottom:f32,top:f32,near:f32,far:f32) -> Self {
-        let rl=right-left; let tb=top-bottom; let nf=far-near;
-        Self {
-            x_axis: Vec4::new(2.0/rl, 0.0, 0.0, 0.0),
-            y_axis: Vec4::new(0.0, 2.0/tb, 0.0, 0.0),
-            z_axis: Vec4::new(0.0, 0.0, -2.0/nf, 0.0),
-            w_axis: Vec4::new(-(right+left)/rl, -(top+bottom)/tb, -(far+near)/nf, 1.0),
         }
     }
 
