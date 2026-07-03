@@ -7,6 +7,7 @@ pub mod mat3;
 pub mod affine2;
 pub mod affine3;
 pub mod dual_quat;
+pub mod mat4_projection;
 
 pub use vec2::Vec2;
 pub use mat3::Mat3;
