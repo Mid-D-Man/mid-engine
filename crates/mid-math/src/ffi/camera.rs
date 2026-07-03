@@ -13,12 +13,9 @@ use crate::{
     Mat4, Vec3, Vec4,
     camera::{
         Frustum, Visibility,
-        projection::{
-            
-            csm_split_depths, perspective_decompose, perspective_infinite_rh,
-            perspective_resize, perspective_reversed_z_rh, picking_ray,
-            sub_frustum_corners, unproject,
-        },
+        csm_split_depths, perspective_decompose, perspective_infinite_rh,
+        perspective_resize, perspective_reversed_z_rh, picking_ray,
+        sub_frustum_corners, unproject,
     },
 };
 use crate::ffi::float32::{CMat4, CVec3, CVec4};
@@ -379,4 +376,4 @@ pub unsafe extern "C" fn mid_camera_sub_frustum_corners(
         }
         None => 0,
     }
-          }
+    }
