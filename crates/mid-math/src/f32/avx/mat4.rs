@@ -87,6 +87,12 @@ unsafe fn col_pair(
 // implementation exists per target at all times.
 
 #[cfg(not(target_feature = "avx512f"))]
+// Steps aside when avx512f is present: avx512/mat4.rs supersedes this specific
+// impl with an all-4-columns-in-one-ZMM approach (~2.0 ns vs ~4.0 ns here).
+// This exclusion used to live on the whole `avx` module in f32/mod.rs, but
+// that incorrectly took vec4.rs/quat.rs down with it — they have no
+// avx512-specific replacement and should always be active under avx+fma.
+#[cfg(not(target_feature = "avx512f"))]
 impl Mul<Mat4> for Mat4 {
     type Output = Mat4;
 
