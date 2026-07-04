@@ -44,14 +44,17 @@ pub(crate) mod sse2;
 #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), not(feature = "force-scalar")))]
 pub use sse2::{Vec3, Vec4, Quat, Mat4, Mat2};
 
-// AVX + FMA fast path — Mat4::mul only (~4.0 ns vs 7.0 ns SSE2).
-// Excluded when avx512f is present: avx512/mat4.rs supersedes with
-// all-4-columns-in-one-ZMM approach (~2.0 ns).
+// AVX + FMA fast paths — Vec4/Quat FMA overrides always apply here; Mat4::mul
+// specifically steps aside for avx512/mat4.rs when avx512f is present (see
+// the #[cfg] directly on that impl in avx/mat4.rs, not here) — vec4.rs and
+// quat.rs have no avx512-specific replacement, so gating the whole module on
+// `not(avx512f)` incorrectly stranded them with NO implementation at all on
+// avx512f-capable hardware (sse2's fallback is also gated out whenever
+// avx+fma are present, which they always are when avx512f is present).
 #[cfg(all(
     any(target_arch = "x86", target_arch = "x86_64"),
     target_feature = "avx",
     target_feature = "fma",
-    not(target_feature = "avx512f"),
 ))]
 pub(crate) mod avx;
 
