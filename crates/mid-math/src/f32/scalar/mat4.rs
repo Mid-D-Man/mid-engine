@@ -239,24 +239,9 @@ impl Mat4 {
     }
 
     // ── View matrices ─────────────────────────────────────────────────────────
-
-    /// Right-hand look-to (full view matrix, includes translation for `eye`).
-    #[inline]
-    pub fn look_to_rh(eye: Vec3, dir: Vec3, up: Vec3) -> Self {
-        let f = dir.normalize();
-        let r = f.cross(up).normalize();
-        let u = r.cross(f);
-        Self {
-            x_axis: Vec4::new(r.x, u.x, -f.x, 0.0),
-            y_axis: Vec4::new(r.y, u.y, -f.y, 0.0),
-            z_axis: Vec4::new(r.z, u.z, -f.z, 0.0),
-            w_axis: Vec4::new(-r.dot(eye), -u.dot(eye), f.dot(eye), 1.0),
-        }
-    }
-
-    /// Left-hand look-to.
-    #[inline]
-    pub fn look_to_lh(eye: Vec3, dir: Vec3, up: Vec3) -> Self { Self::look_to_rh(eye, -dir, up) }
+    // look_to_rh/lh now live once in f32/mat4_projection.rs (same consolidation
+    // as perspective_rh/lh, ortho_rh/lh, frustum_rh/lh — see that file's doc
+    // comment). look_at_rh/lh stay here since no other backend duplicates them.
 
     pub fn look_at_rh(eye: Vec3, center: Vec3, up: Vec3) -> Self {
         let f = (center - eye).normalize();
