@@ -109,20 +109,33 @@ pub use f32::Affine3;
 pub use f32::DualQuat;
 
 // Platform dispatch: SSE2 → NEON → WASM → coresimd → scalar
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+//
+// NOTE: these conditions must mirror f32/mod.rs's internal aliasing exactly.
+// They used to omit `not(feature = "force-scalar")`/`feature = "force-scalar"`
+// entirely, which meant force-scalar had NO EFFECT on the actual public
+// Vec3/Vec4/Quat/Mat4 types (this block bypasses f32::mod's internal alias
+// with a direct path to f32::sse2/neon/wasm/scalar) — only Mat2 was ever
+// actually forced to scalar, since it re-exports via the correctly-gated
+// `pub use f32::Mat2;` above instead of a separate direct-path export like
+// this block. Confirmed via `mem::align_of`: Mat2 was 4 (scalar) under
+// force-scalar while Vec3/Vec4/Quat/Mat4 stayed 16 (still SSE2) — this is
+// why "scalar" CI benchmark runs looked like SSE2 for everything except Mat2.
+#[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), not(feature = "force-scalar")))]
 pub use f32::sse2::{Vec3, Vec4, Quat, Mat4};
 
-#[cfg(target_arch = "aarch64")]
+#[cfg(all(target_arch = "aarch64", not(feature = "force-scalar")))]
 pub use f32::neon::{Vec3, Vec4, Quat, Mat4};
 
 #[cfg(all(
     any(target_arch = "wasm32", target_arch = "wasm64"),
     target_feature = "simd128",
+    not(feature = "force-scalar"),
 ))]
 pub use f32::wasm::{Vec3, Vec4, Quat, Mat4};
 
 #[cfg(all(
     feature = "coresimd",
+    not(feature = "force-scalar"),
     not(any(
         target_arch = "x86",
         target_arch = "x86_64",
@@ -132,13 +145,16 @@ pub use f32::wasm::{Vec3, Vec4, Quat, Mat4};
 ))]
 pub use f32::coresimd::{Vec3, Vec4, Quat, Mat4};
 
-#[cfg(not(any(
-    target_arch = "x86",
-    target_arch = "x86_64",
-    target_arch = "aarch64",
-    all(any(target_arch = "wasm32", target_arch = "wasm64"), target_feature = "simd128"),
-    feature = "coresimd",
-)))]
+#[cfg(any(
+    feature = "force-scalar",
+    not(any(
+        target_arch = "x86",
+        target_arch = "x86_64",
+        target_arch = "aarch64",
+        all(any(target_arch = "wasm32", target_arch = "wasm64"), target_feature = "simd128"),
+        feature = "coresimd",
+    )),
+))]
 pub use f32::scalar::{Vec3, Vec4, Quat, Mat4};
 
 // ── f64 types ─────────────────────────────────────────────────────────────────
