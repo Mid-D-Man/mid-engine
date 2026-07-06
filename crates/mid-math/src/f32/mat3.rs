@@ -311,19 +311,18 @@ impl Mat3 {
     }
 
     /// Matrix × matrix.
+    ///
+    /// No hand-written SIMD dispatch here — there used to be an AVX+FMA
+    /// path (avx/mat3.rs) claiming ~2x fewer SIMD ops, but measured
+    /// throughput showed it was a net LOSS: 16.63ns vs 15.16ns for this
+    /// plain scalar version, under the identical AVX+FMA build. The
+    /// packing overhead of loading Mat3's plain `[[f32;3];3]` array into
+    /// SIMD registers (multiple `_mm_set_ps`/`_mm256_set_m128`/
+    /// `_mm_set1_ps` calls) costs more than the FMA savings buy back for
+    /// a matrix this small. LLVM's auto-vectorization of this straight
+    /// scalar form already does at least as well.
     #[inline]
     pub fn mul_mat3(self, rhs: Self) -> Self {
-        // AVX + FMA path: 2 output columns per YMM pass, ~2× fewer SIMD ops.
-        #[cfg(all(
-            any(target_arch = "x86", target_arch = "x86_64"),
-            target_feature = "avx",
-            target_feature = "fma",
-        ))]
-        {
-            // SAFETY: cfg gate proves avx+fma are available at compile time.
-            return unsafe { crate::f32::avx::mat3::mat3_mul_avx(self, rhs) };
-        }
-        // Scalar fallback — three matrix-vector products.
         Self::from_cols(
             self.mul_vec3(rhs.col(0)),
             self.mul_vec3(rhs.col(1)),
