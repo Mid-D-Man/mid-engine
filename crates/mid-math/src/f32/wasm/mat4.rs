@@ -159,6 +159,61 @@ impl Mat4 {
         }
     }
 
+    // ── Wide SIMD batch transforms ────────────────────────────────────────────
+    // Lane-by-lane via f32x4_extract_lane/f32x4 rather than
+    // to_array()/from_vec3s() — those route through crate::Vec3 (the
+    // dispatched alias), which this module can't assume matches its own
+    // local Vec3 (this module always compiles for cross-referencing
+    // regardless of which backend crate::Mat4 actually resolves to).
+
+    /// Transform 4 points packed in a `Vec3x4` (SoA layout) by this matrix.
+    #[inline]
+    pub fn transform_vec3x4(self, v: crate::wide::float::wasm::vec3x4::Vec3x4) -> crate::wide::float::wasm::vec3x4::Vec3x4 {
+        unsafe {
+            let xs = [f32x4_extract_lane::<0>(v.x), f32x4_extract_lane::<1>(v.x), f32x4_extract_lane::<2>(v.x), f32x4_extract_lane::<3>(v.x)];
+            let ys = [f32x4_extract_lane::<0>(v.y), f32x4_extract_lane::<1>(v.y), f32x4_extract_lane::<2>(v.y), f32x4_extract_lane::<3>(v.y)];
+            let zs = [f32x4_extract_lane::<0>(v.z), f32x4_extract_lane::<1>(v.z), f32x4_extract_lane::<2>(v.z), f32x4_extract_lane::<3>(v.z)];
+            let mut out_x = [0.0f32; 4];
+            let mut out_y = [0.0f32; 4];
+            let mut out_z = [0.0f32; 4];
+            for i in 0..4 {
+                let r = self.transform_point(Vec3::new(xs[i], ys[i], zs[i]));
+                out_x[i] = f32x4_extract_lane::<0>(r.0);
+                out_y[i] = f32x4_extract_lane::<1>(r.0);
+                out_z[i] = f32x4_extract_lane::<2>(r.0);
+            }
+            crate::wide::float::wasm::vec3x4::Vec3x4 {
+                x: v128_load(out_x.as_ptr() as *const v128),
+                y: v128_load(out_y.as_ptr() as *const v128),
+                z: v128_load(out_z.as_ptr() as *const v128),
+            }
+        }
+    }
+
+    /// Transform 4 direction vectors packed in a `Vec3x4` (ignores translation).
+    #[inline]
+    pub fn transform_vec3x4_dir(self, v: crate::wide::float::wasm::vec3x4::Vec3x4) -> crate::wide::float::wasm::vec3x4::Vec3x4 {
+        unsafe {
+            let xs = [f32x4_extract_lane::<0>(v.x), f32x4_extract_lane::<1>(v.x), f32x4_extract_lane::<2>(v.x), f32x4_extract_lane::<3>(v.x)];
+            let ys = [f32x4_extract_lane::<0>(v.y), f32x4_extract_lane::<1>(v.y), f32x4_extract_lane::<2>(v.y), f32x4_extract_lane::<3>(v.y)];
+            let zs = [f32x4_extract_lane::<0>(v.z), f32x4_extract_lane::<1>(v.z), f32x4_extract_lane::<2>(v.z), f32x4_extract_lane::<3>(v.z)];
+            let mut out_x = [0.0f32; 4];
+            let mut out_y = [0.0f32; 4];
+            let mut out_z = [0.0f32; 4];
+            for i in 0..4 {
+                let r = self.transform_vector(Vec3::new(xs[i], ys[i], zs[i]));
+                out_x[i] = f32x4_extract_lane::<0>(r.0);
+                out_y[i] = f32x4_extract_lane::<1>(r.0);
+                out_z[i] = f32x4_extract_lane::<2>(r.0);
+            }
+            crate::wide::float::wasm::vec3x4::Vec3x4 {
+                x: v128_load(out_x.as_ptr() as *const v128),
+                y: v128_load(out_y.as_ptr() as *const v128),
+                z: v128_load(out_z.as_ptr() as *const v128),
+            }
+        }
+    }
+
     // ── Decompose ─────────────────────────────────────────────────────────────
 
     pub fn decompose_trs(self) -> (Vec3, Quat, Vec3) {
@@ -177,8 +232,7 @@ impl Mat4 {
         let c0 = self.x_axis.truncate() * inv_sx;
         let c1 = self.y_axis.truncate() * inv_sy;
         let c2 = self.z_axis.truncate() * inv_sz;
-        use crate::helpers::euler::QuatExt as _;
-        let r = Quat::from_rotation_axes(c0, c1, c2);
+        let r = super::quat::quat_from_rotation_axes(c0, c1, c2);
         (t, r, Vec3::new(sx, sy, sz))
     }
 
@@ -407,4 +461,4 @@ unsafe fn wasm_inverse_general(m: &Mat4) -> Option<Mat4> {
         z_axis: Vec4(f32x4_mul(inv2, rcp)),
         w_axis: Vec4(f32x4_mul(inv3, rcp)),
     })
-    }
+        }
