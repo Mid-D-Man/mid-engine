@@ -307,4 +307,47 @@ impl fmt::Display for Quat {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "Quat({:.4}, {:.4}, {:.4}, {:.4})", self.x, self.y, self.z, self.w)
     }
+}
+
+/// Build a quaternion from three orthonormal rotation-matrix axis columns.
+///
+/// Same algorithm as `QuatExt::from_rotation_axes` (verified identical to
+/// glam's `Quat::from_rotation_axes`) — duplicated here as a plain function
+/// rather than implementing `QuatExt` for this backend's `Quat` directly,
+/// because doing so would conflict with the generic `impl QuatExt for
+/// crate::Quat` in helpers/euler.rs whenever `crate::Quat` happens to equal
+/// this backend's `Quat` (the normal, non-`force-scalar` case on this arch).
+/// Needed by `Mat4::decompose_trs` in this module, which must stay
+/// backend-consistent and return *this* backend's `Quat`, not whichever one
+/// `crate::Quat` currently resolves to.
+pub(crate) fn quat_from_rotation_axes(x_axis: Vec3, y_axis: Vec3, z_axis: Vec3) -> Quat {
+    let (m00, m10, m20) = (x_axis.x, x_axis.y, x_axis.z);
+    let (m01, m11, m21) = (y_axis.x, y_axis.y, y_axis.z);
+    let (m02, m12, m22) = (z_axis.x, z_axis.y, z_axis.z);
+
+    if m22 <= 0.0 {
+        let dif10 = m11 - m00;
+        let omm22 = 1.0 - m22;
+        if dif10 <= 0.0 {
+            let four_xsq = omm22 - dif10;
+            let inv4x = 0.5 / four_xsq.sqrt();
+            Quat::new(four_xsq * inv4x, (m10 + m01) * inv4x, (m20 + m02) * inv4x, (m21 - m12) * inv4x)
+        } else {
+            let four_ysq = omm22 + dif10;
+            let inv4y = 0.5 / four_ysq.sqrt();
+            Quat::new((m10 + m01) * inv4y, four_ysq * inv4y, (m21 + m12) * inv4y, (m02 - m20) * inv4y)
         }
+    } else {
+        let sum10 = m11 + m00;
+        let opm22 = 1.0 + m22;
+        if sum10 <= 0.0 {
+            let four_zsq = opm22 - sum10;
+            let inv4z = 0.5 / four_zsq.sqrt();
+            Quat::new((m20 + m02) * inv4z, (m21 + m12) * inv4z, four_zsq * inv4z, (m10 - m01) * inv4z)
+        } else {
+            let four_wsq = opm22 + sum10;
+            let inv4w = 0.5 / four_wsq.sqrt();
+            Quat::new((m21 - m12) * inv4w, (m02 - m20) * inv4w, (m10 - m01) * inv4w, four_wsq * inv4w)
+        }
+    }
+            }
