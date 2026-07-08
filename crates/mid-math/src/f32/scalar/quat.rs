@@ -176,30 +176,9 @@ impl Quat {
     }
 }
 
-// ── QuatExt impl for scalar Quat ─────────────────────────────────────────────
-
-impl crate::helpers::euler::QuatExt for Quat {
-    #[inline(always)]
-    fn from_xyzw(x: f32, y: f32, z: f32, w: f32) -> Self {
-        Self::new(x, y, z, w)
-    }
-
-    /// Extract the upper-left 3×3 rotation block from `self.to_mat4()`.
-    ///
-    /// Build 8: scalar Mat4 now uses named Vec4 fields (x_axis, y_axis, z_axis, w_axis).
-    /// Field layout: col N = {x_axis,y_axis,z_axis,w_axis}[N], row R = .{x,y,z,w}[R].
-    #[inline]
-    fn to_rotation_mat3(self) -> [[f32; 3]; 3] {
-        let m = self.to_mat4();
-        // col 0 = x_axis, col 1 = y_axis, col 2 = z_axis
-        // row 0 = .x,     row 1 = .y,     row 2 = .z
-        [
-            [m.x_axis.x, m.x_axis.y, m.x_axis.z],
-            [m.y_axis.x, m.y_axis.y, m.y_axis.z],
-            [m.z_axis.x, m.z_axis.y, m.z_axis.z],
-        ]
-    }
-}
+// QuatExt is implemented generically once for crate::Quat in
+// helpers/euler.rs (dispatches via Self::new/to_mat4, works for every
+// backend) — no per-backend duplicate needed here.
 
 // ── Operators ─────────────────────────────────────────────────────────────────
 
@@ -238,4 +217,4 @@ impl fmt::Display for Quat {
     fn fmt(&self, f:&mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "Quat({:.4}, {:.4}, {:.4}, {:.4})", self.x, self.y, self.z, self.w)
     }
-                                     }
+        }
