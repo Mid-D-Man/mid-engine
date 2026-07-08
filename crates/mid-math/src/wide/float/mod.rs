@@ -35,10 +35,10 @@ pub(crate) mod scalar;
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 pub(crate) mod sse2;
 
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), not(feature = "force-scalar")))]
 pub use sse2::{Mask4, Vec3x4, QuatX4};
 
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), not(feature = "force-scalar")))]
 #[allow(non_camel_case_types)]
 pub use sse2::f32x4::f32x4;
 
@@ -65,10 +65,10 @@ pub use avx2::Vec3x8;
 #[cfg(target_arch = "aarch64")]
 pub(crate) mod neon;
 
-#[cfg(target_arch = "aarch64")]
+#[cfg(all(target_arch = "aarch64", not(feature = "force-scalar")))]
 pub use neon::{Mask4, Vec3x4, QuatX4};
 
-#[cfg(target_arch = "aarch64")]
+#[cfg(all(target_arch = "aarch64", not(feature = "force-scalar")))]
 #[allow(non_camel_case_types)]
 pub use neon::f32x4::f32x4;
 
@@ -86,12 +86,14 @@ pub(crate) mod wasm;
 #[cfg(all(
     any(target_arch = "wasm32", target_arch = "wasm64"),
     target_feature = "simd128",
+    not(feature = "force-scalar"),
 ))]
 pub use wasm::{Mask4, Vec3x4, QuatX4};
 
 #[cfg(all(
     any(target_arch = "wasm32", target_arch = "wasm64"),
     target_feature = "simd128",
+    not(feature = "force-scalar"),
 ))]
 #[allow(non_camel_case_types)]
 pub use wasm::f32x4::f32x4;
@@ -100,25 +102,31 @@ pub use wasm::f32x4::f32x4;
 //
 // Active when no SIMD backend applies.
 
-#[cfg(not(any(
-    target_arch = "x86",
-    target_arch = "x86_64",
-    target_arch = "aarch64",
-    all(
-        any(target_arch = "wasm32", target_arch = "wasm64"),
-        target_feature = "simd128",
-    ),
-)))]
+#[cfg(any(
+    feature = "force-scalar",
+    not(any(
+        target_arch = "x86",
+        target_arch = "x86_64",
+        target_arch = "aarch64",
+        all(
+            any(target_arch = "wasm32", target_arch = "wasm64"),
+            target_feature = "simd128",
+        ),
+    )),
+))]
 pub use scalar::{Mask4, Vec3x4, QuatX4};
 
-#[cfg(not(any(
-    target_arch = "x86",
-    target_arch = "x86_64",
-    target_arch = "aarch64",
-    all(
-        any(target_arch = "wasm32", target_arch = "wasm64"),
-        target_feature = "simd128",
-    ),
-)))]
+#[cfg(any(
+    feature = "force-scalar",
+    not(any(
+        target_arch = "x86",
+        target_arch = "x86_64",
+        target_arch = "aarch64",
+        all(
+            any(target_arch = "wasm32", target_arch = "wasm64"),
+            target_feature = "simd128",
+        ),
+    )),
+))]
 #[allow(non_camel_case_types)]
 pub use scalar::f32x4::f32x4;
