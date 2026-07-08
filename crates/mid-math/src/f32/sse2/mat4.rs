@@ -430,8 +430,7 @@ impl Mat4 {
         let c0 = self.x_axis.truncate() * inv_sx;
         let c1 = self.y_axis.truncate() * inv_sy;
         let c2 = self.z_axis.truncate() * inv_sz;
-        use crate::helpers::euler::QuatExt as _;
-        let r = Quat::from_rotation_axes(c0, c1, c2);
+        let r = super::quat::quat_from_rotation_axes(c0, c1, c2);
         (t, r, Vec3::new(sx, sy, sz))
     }
 
@@ -773,4 +772,4 @@ impl fmt::Display for Mat4 {
         }
         Ok(())
     }
-    }
+        }
