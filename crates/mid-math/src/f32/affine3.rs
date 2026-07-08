@@ -257,7 +257,7 @@ impl Affine3 {
 
     /// Inverse of a TRS affine transform — SSE2 fast path on x86/x86_64.
     /// Valid for translation + rotation + non-zero scale. Does NOT handle shear.
-    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), not(feature = "force-scalar")))]
     #[inline]
     pub fn inverse(self) -> Self {
         unsafe {
@@ -318,8 +318,11 @@ impl Affine3 {
         }
     }
 
-    /// Inverse — portable scalar fallback (non-x86 targets).
-    #[cfg(not(any(target_arch = "x86", target_arch = "x86_64")))]
+    /// Inverse — portable scalar fallback (non-x86 targets, or force-scalar).
+    #[cfg(any(
+        not(any(target_arch = "x86", target_arch = "x86_64")),
+        feature = "force-scalar",
+    ))]
     #[inline]
     pub fn inverse(self) -> Self { self.inverse_scalar() }
 
