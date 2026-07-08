@@ -413,6 +413,45 @@ impl Mat4 {
     /// Alias for `transform_vector` (glam-compat name).
     #[inline] pub fn transform_vector3(self, v: Vec3) -> Vec3 { self.transform_vector(v) }
 
+    // ── Wide SIMD batch transforms ────────────────────────────────────────────
+    // Portable: per-lane transform_point/transform_vector rather than
+    // hand-tuned intrinsics (this backend has none to tune — see sse2/mat4.rs
+    // for the shuffle-based version used when SSE2 is actually active).
+
+    /// Transform 4 points packed in a `Vec3x4` (SoA layout) by this matrix.
+    #[inline]
+    pub fn transform_vec3x4(self, v: crate::wide::float::scalar::vec3x4::Vec3x4) -> crate::wide::float::scalar::vec3x4::Vec3x4 {
+        // Work directly on the raw [f32;4] SoA lanes rather than
+        // to_array()/from_vec3s() — those route through crate::Vec3 (the
+        // dispatched alias), which only equals this module's own local
+        // Vec3 when force-scalar is active. This module always compiles
+        // (for cross-referencing) regardless of which backend crate::Mat4
+        // actually resolves to, so it must type-check either way.
+        let mut out_x = [0.0f32; 4];
+        let mut out_y = [0.0f32; 4];
+        let mut out_z = [0.0f32; 4];
+        for i in 0..4 {
+            let p = Vec3::new(v.x[i], v.y[i], v.z[i]);
+            let r = self.transform_point(p);
+            out_x[i] = r.x; out_y[i] = r.y; out_z[i] = r.z;
+        }
+        crate::wide::float::scalar::vec3x4::Vec3x4 { x: out_x, y: out_y, z: out_z }
+    }
+
+    /// Transform 4 direction vectors packed in a `Vec3x4` (ignores translation).
+    #[inline]
+    pub fn transform_vec3x4_dir(self, v: crate::wide::float::scalar::vec3x4::Vec3x4) -> crate::wide::float::scalar::vec3x4::Vec3x4 {
+        let mut out_x = [0.0f32; 4];
+        let mut out_y = [0.0f32; 4];
+        let mut out_z = [0.0f32; 4];
+        for i in 0..4 {
+            let p = Vec3::new(v.x[i], v.y[i], v.z[i]);
+            let r = self.transform_vector(p);
+            out_x[i] = r.x; out_y[i] = r.y; out_z[i] = r.z;
+        }
+        crate::wide::float::scalar::vec3x4::Vec3x4 { x: out_x, y: out_y, z: out_z }
+    }
+
     /// Full perspective transform: transform then divide by w (for projection matrices).
     #[inline]
     pub fn project_point3(self, p: Vec3) -> Vec3 {
