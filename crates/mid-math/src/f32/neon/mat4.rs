@@ -162,6 +162,65 @@ impl Mat4 {
         }
     }
 
+    // ── Wide SIMD batch transforms ────────────────────────────────────────────
+    // Lane-by-lane via vgetq_lane_f32/vsetq_lane_f32 rather than
+    // to_array()/from_vec3s() — those route through crate::Vec3 (the
+    // dispatched alias), which this module can't assume matches its own
+    // local Vec3 (this module always compiles for cross-referencing
+    // regardless of which backend crate::Mat4 actually resolves to).
+
+    /// Transform 4 points packed in a `Vec3x4` (SoA layout) by this matrix.
+    #[inline]
+    pub fn transform_vec3x4(self, v: crate::wide::float::neon::vec3x4::Vec3x4) -> crate::wide::float::neon::vec3x4::Vec3x4 {
+        unsafe {
+            let mut out_x = [0.0f32; 4];
+            let mut out_y = [0.0f32; 4];
+            let mut out_z = [0.0f32; 4];
+            let (xs, ys, zs) = (
+                [vgetq_lane_f32::<0>(v.x), vgetq_lane_f32::<1>(v.x), vgetq_lane_f32::<2>(v.x), vgetq_lane_f32::<3>(v.x)],
+                [vgetq_lane_f32::<0>(v.y), vgetq_lane_f32::<1>(v.y), vgetq_lane_f32::<2>(v.y), vgetq_lane_f32::<3>(v.y)],
+                [vgetq_lane_f32::<0>(v.z), vgetq_lane_f32::<1>(v.z), vgetq_lane_f32::<2>(v.z), vgetq_lane_f32::<3>(v.z)],
+            );
+            for i in 0..4 {
+                let r = self.transform_point(Vec3::new(xs[i], ys[i], zs[i]));
+                out_x[i] = vgetq_lane_f32::<0>(r.0);
+                out_y[i] = vgetq_lane_f32::<1>(r.0);
+                out_z[i] = vgetq_lane_f32::<2>(r.0);
+            }
+            crate::wide::float::neon::vec3x4::Vec3x4 {
+                x: vld1q_f32(out_x.as_ptr()),
+                y: vld1q_f32(out_y.as_ptr()),
+                z: vld1q_f32(out_z.as_ptr()),
+            }
+        }
+    }
+
+    /// Transform 4 direction vectors packed in a `Vec3x4` (ignores translation).
+    #[inline]
+    pub fn transform_vec3x4_dir(self, v: crate::wide::float::neon::vec3x4::Vec3x4) -> crate::wide::float::neon::vec3x4::Vec3x4 {
+        unsafe {
+            let mut out_x = [0.0f32; 4];
+            let mut out_y = [0.0f32; 4];
+            let mut out_z = [0.0f32; 4];
+            let (xs, ys, zs) = (
+                [vgetq_lane_f32::<0>(v.x), vgetq_lane_f32::<1>(v.x), vgetq_lane_f32::<2>(v.x), vgetq_lane_f32::<3>(v.x)],
+                [vgetq_lane_f32::<0>(v.y), vgetq_lane_f32::<1>(v.y), vgetq_lane_f32::<2>(v.y), vgetq_lane_f32::<3>(v.y)],
+                [vgetq_lane_f32::<0>(v.z), vgetq_lane_f32::<1>(v.z), vgetq_lane_f32::<2>(v.z), vgetq_lane_f32::<3>(v.z)],
+            );
+            for i in 0..4 {
+                let r = self.transform_vector(Vec3::new(xs[i], ys[i], zs[i]));
+                out_x[i] = vgetq_lane_f32::<0>(r.0);
+                out_y[i] = vgetq_lane_f32::<1>(r.0);
+                out_z[i] = vgetq_lane_f32::<2>(r.0);
+            }
+            crate::wide::float::neon::vec3x4::Vec3x4 {
+                x: vld1q_f32(out_x.as_ptr()),
+                y: vld1q_f32(out_y.as_ptr()),
+                z: vld1q_f32(out_z.as_ptr()),
+            }
+        }
+    }
+
     // ── Decompose ─────────────────────────────────────────────────────────────
 
     pub fn decompose_trs(self) -> (Vec3, Quat, Vec3) {
@@ -185,8 +244,7 @@ impl Mat4 {
         let c1 = self.y_axis.truncate() * inv_sy;
         let c2 = self.z_axis.truncate() * inv_sz;
 
-        use crate::helpers::euler::QuatExt as _;
-        let r = Quat::from_rotation_axes(c0, c1, c2);
+        let r = super::quat::quat_from_rotation_axes(c0, c1, c2);
         (t, r, Vec3::new(sx, sy, sz))
     }
 
@@ -468,4 +526,4 @@ impl fmt::Display for Mat4 {
         }
         Ok(())
     }
-}
+                              }
