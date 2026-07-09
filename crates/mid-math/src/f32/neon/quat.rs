@@ -14,10 +14,15 @@ use crate::EPSILON;
 #[repr(C)] union UnionCast { f: [f32; 4], v: Quat }
 #[repr(C)] union SignCast  { f: [f32; 4], v: float32x4_t }
 
-const QMUL_WZYX: float32x4_t = unsafe { SignCast { f: [ 1.0, -1.0,  1.0, -1.0] }.v };
-const QMUL_ZWXY: float32x4_t = unsafe { SignCast { f: [ 1.0,  1.0, -1.0, -1.0] }.v };
-const QMUL_YXWZ: float32x4_t = unsafe { SignCast { f: [-1.0,  1.0,  1.0, -1.0] }.v };
+// XOR-mask sign constants for the FMA path in mul_quat below — same idiom
+// as CONJ_SIGN/conjugate() (single VEOR instead of a multiply-by-±1), which
+// additionally lets the accumulation collapse into a vfmaq_f32 chain
+// instead of separate mul+add steps. See f32/avx/quat.rs for the identical
+// derivation on the x86 side.
 const CONJ_SIGN: float32x4_t = unsafe { SignCast { f: [-0.0, -0.0, -0.0, 0.0] }.v };
+const QMUL_SIGN_WZYX: float32x4_t = unsafe { SignCast { f: [ 0.0, -0.0,  0.0, -0.0] }.v };
+const QMUL_SIGN_ZWXY: float32x4_t = unsafe { SignCast { f: [ 0.0,  0.0, -0.0, -0.0] }.v };
+const QMUL_SIGN_YXWZ: float32x4_t = unsafe { SignCast { f: [-0.0,  0.0,  0.0, -0.0] }.v };
 
 /// Quaternion. 16 bytes, 16-byte aligned. Lane layout: [x, y, z, w].
 #[derive(Clone, Copy)]
@@ -152,6 +157,12 @@ impl Quat {
         v * (self.w * self.w - b2) + b * (v.dot(b) * 2.0) + b.cross(v) * (self.w * 2.0)
     }
 
+    /// AVX-equivalent FMA derivation (see f32/avx/quat.rs for the full
+    /// component-by-component derivation): sign-flip via VEOR instead of
+    /// multiply-by-±1, accumulation via `vfmaq_f32` instead of separate
+    /// mul+add. 1 mul (base term) + 3 veor + 3 fma, vs the original's 7
+    /// muls + 3 adds.
+    #[inline]
     pub fn mul_quat(self, rhs: Self) -> Self {
         unsafe {
             let lhs = self.0;
@@ -168,12 +179,19 @@ impl Quat {
             let rev2   = vrev64q_f32(l_zwxy);
             let l_yxwz = vextq_f32::<2>(rev2, rev2);
 
-            let t1 = vmulq_f32(lw, r);
-            let t2 = vmulq_f32(vmulq_f32(lx, l_wzyx), QMUL_WZYX);
-            let t3 = vmulq_f32(vmulq_f32(ly, l_zwxy), QMUL_ZWXY);
-            let t4 = vmulq_f32(vmulq_f32(lz, l_yxwz), QMUL_YXWZ);
+            let signed_wzyx = vreinterpretq_f32_u32(veorq_u32(
+                vreinterpretq_u32_f32(l_wzyx), vreinterpretq_u32_f32(QMUL_SIGN_WZYX)));
+            let signed_zwxy = vreinterpretq_f32_u32(veorq_u32(
+                vreinterpretq_u32_f32(l_zwxy), vreinterpretq_u32_f32(QMUL_SIGN_ZWXY)));
+            let signed_yxwz = vreinterpretq_f32_u32(veorq_u32(
+                vreinterpretq_u32_f32(l_yxwz), vreinterpretq_u32_f32(QMUL_SIGN_YXWZ)));
 
-            Self(vaddq_f32(vaddq_f32(t1, t2), vaddq_f32(t3, t4)))
+            let acc = vmulq_f32(lw, r);
+            let acc = vfmaq_f32(acc, lx, signed_wzyx);
+            let acc = vfmaq_f32(acc, ly, signed_zwxy);
+            let acc = vfmaq_f32(acc, lz, signed_yxwz);
+
+            Self(acc)
         }
     }
 
