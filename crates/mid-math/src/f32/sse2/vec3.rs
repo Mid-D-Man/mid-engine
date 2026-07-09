@@ -69,6 +69,9 @@ impl Vec3 {
         Self(unsafe { dot3_into_m128(self.0, rhs.0) })
     }
 
+    /// SSE2 baseline: 2 muls + 1 sub. AVX+FMA override lives in
+    /// `avx/vec3.rs` — fuses into 1 mul + 1 fmsub.
+    #[cfg(not(all(target_feature = "avx", target_feature = "fma")))]
     #[inline]
     pub fn cross(self, rhs: Self) -> Self {
         unsafe {
