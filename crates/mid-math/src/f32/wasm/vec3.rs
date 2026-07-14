@@ -56,14 +56,12 @@ impl Vec3 {
 
     #[inline(always)]
     pub fn cross(self, rhs: Self) -> Self {
-        unsafe {
-            let lhszxy     = i32x4_shuffle::<2, 0, 1, 1>(self.0, self.0);
-            let rhszxy     = i32x4_shuffle::<2, 0, 1, 1>(rhs.0,  rhs.0);
-            let lhszxy_rhs = f32x4_mul(lhszxy, rhs.0);
-            let rhszxy_lhs = f32x4_mul(rhszxy, self.0);
-            let sub        = f32x4_sub(lhszxy_rhs, rhszxy_lhs);
-            Self(i32x4_shuffle::<2, 0, 1, 1>(sub, sub))
-        }
+        let lhszxy     = i32x4_shuffle::<2, 0, 1, 1>(self.0, self.0);
+        let rhszxy     = i32x4_shuffle::<2, 0, 1, 1>(rhs.0,  rhs.0);
+        let lhszxy_rhs = f32x4_mul(lhszxy, rhs.0);
+        let rhszxy_lhs = f32x4_mul(rhszxy, self.0);
+        let sub        = f32x4_sub(lhszxy_rhs, rhszxy_lhs);
+        Self(i32x4_shuffle::<2, 0, 1, 1>(sub, sub))
     }
 
     #[inline(always)] pub fn length_sq(self) -> f32 { self.dot(self) }
@@ -101,21 +99,19 @@ impl Vec3 {
 
     #[inline]
     pub fn lerp(self, rhs: Self, t: f32) -> Self {
-        unsafe {
-            let tt   = f32x4_splat(t);
-            let diff = f32x4_sub(rhs.0, self.0);
-            Self(f32x4_add(self.0, f32x4_mul(diff, tt)))
-        }
+        let tt   = f32x4_splat(t);
+        let diff = f32x4_sub(rhs.0, self.0);
+        Self(f32x4_add(self.0, f32x4_mul(diff, tt)))
     }
 
     #[inline] pub fn reflect(self, n: Self) -> Self { self - n * (2.0 * self.dot(n)) }
     #[inline] pub fn distance(self, rhs: Self)    -> f32 { (self - rhs).length() }
     #[inline] pub fn distance_sq(self, rhs: Self) -> f32 { (self - rhs).length_sq() }
 
-    #[inline] pub fn min(self, rhs: Self) -> Self { Self(unsafe { f32x4_pmin(self.0, rhs.0) }) }
-    #[inline] pub fn max(self, rhs: Self) -> Self { Self(unsafe { f32x4_pmax(self.0, rhs.0) }) }
+    #[inline] pub fn min(self, rhs: Self) -> Self { Self(f32x4_pmin(self.0, rhs.0)) }
+    #[inline] pub fn max(self, rhs: Self) -> Self { Self(f32x4_pmax(self.0, rhs.0)) }
     #[inline] pub fn clamp(self, lo: Self, hi: Self) -> Self { self.max(lo).min(hi) }
-    #[inline] pub fn abs(self) -> Self { Self(unsafe { f32x4_abs(self.0) }) }
+    #[inline] pub fn abs(self) -> Self { Self(f32x4_abs(self.0)) }
 
     #[inline] pub fn is_finite(self) -> bool {
         self.x.is_finite() && self.y.is_finite() && self.z.is_finite()
@@ -215,49 +211,49 @@ impl Vec3 {
 
 impl Add for Vec3 {
     type Output = Self;
-    #[inline(always)] fn add(self, r: Self) -> Self { Self(unsafe { f32x4_add(self.0, r.0) }) }
+    #[inline(always)] fn add(self, r: Self) -> Self { Self(f32x4_add(self.0, r.0)) }
 }
 impl Sub for Vec3 {
     type Output = Self;
-    #[inline(always)] fn sub(self, r: Self) -> Self { Self(unsafe { f32x4_sub(self.0, r.0) }) }
+    #[inline(always)] fn sub(self, r: Self) -> Self { Self(f32x4_sub(self.0, r.0)) }
 }
 impl Mul<f32> for Vec3 {
     type Output = Self;
-    #[inline(always)] fn mul(self, s: f32) -> Self { Self(unsafe { f32x4_mul(self.0, f32x4_splat(s)) }) }
+    #[inline(always)] fn mul(self, s: f32) -> Self { Self(f32x4_mul(self.0, f32x4_splat(s))) }
 }
 impl Mul<Vec3> for f32 {
     type Output = Vec3;
-    #[inline(always)] fn mul(self, v: Vec3) -> Vec3 { Vec3(unsafe { f32x4_mul(f32x4_splat(self), v.0) }) }
+    #[inline(always)] fn mul(self, v: Vec3) -> Vec3 { Vec3(f32x4_mul(f32x4_splat(self), v.0)) }
 }
 impl Mul for Vec3 {
     type Output = Self;
-    #[inline(always)] fn mul(self, r: Self) -> Self { Self(unsafe { f32x4_mul(self.0, r.0) }) }
+    #[inline(always)] fn mul(self, r: Self) -> Self { Self(f32x4_mul(self.0, r.0)) }
 }
 impl Div<f32> for Vec3 {
     type Output = Self;
-    #[inline(always)] fn div(self, s: f32) -> Self { Self(unsafe { f32x4_div(self.0, f32x4_splat(s)) }) }
+    #[inline(always)] fn div(self, s: f32) -> Self { Self(f32x4_div(self.0, f32x4_splat(s))) }
 }
 impl Neg for Vec3 {
     type Output = Self;
-    #[inline(always)] fn neg(self) -> Self { Self(unsafe { f32x4_neg(self.0) }) }
+    #[inline(always)] fn neg(self) -> Self { Self(f32x4_neg(self.0)) }
 }
 impl AddAssign for Vec3 {
-    #[inline(always)] fn add_assign(&mut self, r: Self) { self.0 = unsafe { f32x4_add(self.0, r.0) }; }
+    #[inline(always)] fn add_assign(&mut self, r: Self) { self.0 = f32x4_add(self.0, r.0); }
 }
 impl SubAssign for Vec3 {
-    #[inline(always)] fn sub_assign(&mut self, r: Self) { self.0 = unsafe { f32x4_sub(self.0, r.0) }; }
+    #[inline(always)] fn sub_assign(&mut self, r: Self) { self.0 = f32x4_sub(self.0, r.0); }
 }
 impl MulAssign<f32> for Vec3 {
-    #[inline(always)] fn mul_assign(&mut self, s: f32) { self.0 = unsafe { f32x4_mul(self.0, f32x4_splat(s)) }; }
+    #[inline(always)] fn mul_assign(&mut self, s: f32) { self.0 = f32x4_mul(self.0, f32x4_splat(s)); }
 }
 impl DivAssign<f32> for Vec3 {
-    #[inline(always)] fn div_assign(&mut self, s: f32) { self.0 = unsafe { f32x4_div(self.0, f32x4_splat(s)) }; }
+    #[inline(always)] fn div_assign(&mut self, s: f32) { self.0 = f32x4_div(self.0, f32x4_splat(s)); }
 }
 
 impl PartialEq for Vec3 {
     #[inline]
     fn eq(&self, rhs: &Self) -> bool {
-        unsafe { (u32x4_bitmask(f32x4_eq(self.0, rhs.0)) & 0b0111) == 0b0111 }
+        (u32x4_bitmask(f32x4_eq(self.0, rhs.0)) & 0b0111) == 0b0111
     }
 }
 
