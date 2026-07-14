@@ -12,7 +12,7 @@ use core::arch::wasm32::{
     f32x4_add, f32x4_sub, f32x4_mul, f32x4_div,
     f32x4_neg, f32x4_sqrt,
     f32x4_eq, f32x4_gt,
-    f32x4_splat,
+    f32x4_splat, f32x4_extract_lane,
 };
 #[cfg(target_arch = "wasm64")]
 use core::arch::wasm64::{
@@ -22,7 +22,7 @@ use core::arch::wasm64::{
     f32x4_add, f32x4_sub, f32x4_mul, f32x4_div,
     f32x4_neg, f32x4_sqrt,
     f32x4_eq, f32x4_gt,
-    f32x4_splat,
+    f32x4_splat, f32x4_extract_lane,
 };
 
 use crate::wasm::v128_from_f32x4;
@@ -79,10 +79,22 @@ impl QuatX4 {
 
     #[inline]
     pub fn to_array(self) -> [Quat; 4] {
-        let xs: [f32; 4] = unsafe { core::mem::transmute(self.x) };
-        let ys: [f32; 4] = unsafe { core::mem::transmute(self.y) };
-        let zs: [f32; 4] = unsafe { core::mem::transmute(self.z) };
-        let ws: [f32; 4] = unsafe { core::mem::transmute(self.w) };
+        let xs = [
+            f32x4_extract_lane::<0>(self.x), f32x4_extract_lane::<1>(self.x),
+            f32x4_extract_lane::<2>(self.x), f32x4_extract_lane::<3>(self.x),
+        ];
+        let ys = [
+            f32x4_extract_lane::<0>(self.y), f32x4_extract_lane::<1>(self.y),
+            f32x4_extract_lane::<2>(self.y), f32x4_extract_lane::<3>(self.y),
+        ];
+        let zs = [
+            f32x4_extract_lane::<0>(self.z), f32x4_extract_lane::<1>(self.z),
+            f32x4_extract_lane::<2>(self.z), f32x4_extract_lane::<3>(self.z),
+        ];
+        let ws = [
+            f32x4_extract_lane::<0>(self.w), f32x4_extract_lane::<1>(self.w),
+            f32x4_extract_lane::<2>(self.w), f32x4_extract_lane::<3>(self.w),
+        ];
         core::array::from_fn(|i| Quat::new(xs[i], ys[i], zs[i], ws[i]))
     }
 
