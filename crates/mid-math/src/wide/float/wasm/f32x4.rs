@@ -20,7 +20,7 @@ use core::arch::wasm32::{
     f32x4_neg, f32x4_abs, f32x4_sqrt,
     f32x4_min, f32x4_max,
     f32x4_eq, f32x4_ne, f32x4_lt, f32x4_le, f32x4_gt, f32x4_ge,
-    f32x4_splat,
+    f32x4_splat, f32x4_extract_lane,
 };
 #[cfg(target_arch = "wasm64")]
 use core::arch::wasm64::{
@@ -31,7 +31,7 @@ use core::arch::wasm64::{
     f32x4_neg, f32x4_abs, f32x4_sqrt,
     f32x4_min, f32x4_max,
     f32x4_eq, f32x4_ne, f32x4_lt, f32x4_le, f32x4_gt, f32x4_ge,
-    f32x4_splat,
+    f32x4_splat, f32x4_extract_lane,
 };
 
 use crate::wasm::v128_from_f32x4;
@@ -79,13 +79,15 @@ impl f32x4 {
 
     #[inline(always)]
     pub fn from_array(a: [f32; 4]) -> Self {
-        // [f32; 4] and v128 are both 16 bytes — transmute is safe.
-        Self(unsafe { core::mem::transmute(a) })
+        Self(v128_from_f32x4(a))
     }
 
     #[inline(always)]
     pub fn to_array(self) -> [f32; 4] {
-        unsafe { core::mem::transmute(self.0) }
+        [
+            f32x4_extract_lane::<0>(self.0), f32x4_extract_lane::<1>(self.0),
+            f32x4_extract_lane::<2>(self.0), f32x4_extract_lane::<3>(self.0),
+        ]
     }
 
     #[inline]
