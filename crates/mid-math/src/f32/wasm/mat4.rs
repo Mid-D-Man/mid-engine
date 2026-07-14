@@ -1,4 +1,4 @@
-// crates/mid-math/src/f32/wasm/mat4.rs
+                  // crates/mid-math/src/f32/wasm/mat4.rs
 //! Mat4 with WASM SIMD128 fast-paths on wasm32/wasm64.
 //! Build 8: storage changed to four Vec4 (v128) fields.
 //! Mul<Vec4> accesses self.x_axis.0 directly — no v128_load for LHS.
@@ -138,25 +138,21 @@ impl Mat4 {
 
     #[inline]
     pub fn transform_point(self, p: Vec3) -> Vec3 {
-        unsafe {
-            let vx = f32x4_splat(f32x4_extract_lane::<0>(p.0));
-            let vy = f32x4_splat(f32x4_extract_lane::<1>(p.0));
-            let vz = f32x4_splat(f32x4_extract_lane::<2>(p.0));
-            let res = f32x4_add(f32x4_mul(self.x_axis.0, vx), f32x4_mul(self.y_axis.0, vy));
-            let res = f32x4_add(res, f32x4_mul(self.z_axis.0, vz));
-            Vec3(f32x4_add(res, self.w_axis.0))
-        }
+        let vx = f32x4_splat(f32x4_extract_lane::<0>(p.0));
+        let vy = f32x4_splat(f32x4_extract_lane::<1>(p.0));
+        let vz = f32x4_splat(f32x4_extract_lane::<2>(p.0));
+        let res = f32x4_add(f32x4_mul(self.x_axis.0, vx), f32x4_mul(self.y_axis.0, vy));
+        let res = f32x4_add(res, f32x4_mul(self.z_axis.0, vz));
+        Vec3(f32x4_add(res, self.w_axis.0))
     }
 
     #[inline]
     pub fn transform_vector(self, v: Vec3) -> Vec3 {
-        unsafe {
-            let vx = f32x4_splat(f32x4_extract_lane::<0>(v.0));
-            let vy = f32x4_splat(f32x4_extract_lane::<1>(v.0));
-            let vz = f32x4_splat(f32x4_extract_lane::<2>(v.0));
-            let res = f32x4_add(f32x4_mul(self.x_axis.0, vx), f32x4_mul(self.y_axis.0, vy));
-            Vec3(f32x4_add(res, f32x4_mul(self.z_axis.0, vz)))
-        }
+        let vx = f32x4_splat(f32x4_extract_lane::<0>(v.0));
+        let vy = f32x4_splat(f32x4_extract_lane::<1>(v.0));
+        let vz = f32x4_splat(f32x4_extract_lane::<2>(v.0));
+        let res = f32x4_add(f32x4_mul(self.x_axis.0, vx), f32x4_mul(self.y_axis.0, vy));
+        Vec3(f32x4_add(res, f32x4_mul(self.z_axis.0, vz)))
     }
 
     // ── Wide SIMD batch transforms ────────────────────────────────────────────
@@ -305,15 +301,13 @@ impl Mul<Vec4> for Mat4 {
     type Output = Vec4;
     #[inline(always)]
     fn mul(self, v: Vec4) -> Vec4 {
-        unsafe {
-            let vx = f32x4_splat(f32x4_extract_lane::<0>(v.0));
-            let vy = f32x4_splat(f32x4_extract_lane::<1>(v.0));
-            let vz = f32x4_splat(f32x4_extract_lane::<2>(v.0));
-            let vw = f32x4_splat(f32x4_extract_lane::<3>(v.0));
-            let res = f32x4_add(f32x4_mul(self.x_axis.0, vx), f32x4_mul(self.y_axis.0, vy));
-            let res = f32x4_add(res, f32x4_mul(self.z_axis.0, vz));
-            Vec4(f32x4_add(res, f32x4_mul(self.w_axis.0, vw)))
-        }
+        let vx = f32x4_splat(f32x4_extract_lane::<0>(v.0));
+        let vy = f32x4_splat(f32x4_extract_lane::<1>(v.0));
+        let vz = f32x4_splat(f32x4_extract_lane::<2>(v.0));
+        let vw = f32x4_splat(f32x4_extract_lane::<3>(v.0));
+        let res = f32x4_add(f32x4_mul(self.x_axis.0, vx), f32x4_mul(self.y_axis.0, vy));
+        let res = f32x4_add(res, f32x4_mul(self.z_axis.0, vz));
+        Vec4(f32x4_add(res, f32x4_mul(self.w_axis.0, vw)))
     }
 }
 
@@ -461,4 +455,4 @@ unsafe fn wasm_inverse_general(m: &Mat4) -> Option<Mat4> {
         z_axis: Vec4(f32x4_mul(inv2, rcp)),
         w_axis: Vec4(f32x4_mul(inv3, rcp)),
     })
-        }
+}
