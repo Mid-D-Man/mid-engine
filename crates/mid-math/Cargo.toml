@@ -75,6 +75,10 @@ name    = "vs_curves"
 harness = false
 
 [[bench]]
+name    = "vs_mid_vec"
+harness = false
+
+[[bench]]
 name    = "vs_color"
 harness = false
 
