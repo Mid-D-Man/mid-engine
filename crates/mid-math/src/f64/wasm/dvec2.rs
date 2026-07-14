@@ -54,7 +54,7 @@ impl DVec2 {
     }
 
     #[inline(always)]
-    pub fn splat(v: f64) -> Self { Self(unsafe { f64x2_splat(v) }) }
+    pub fn splat(v: f64) -> Self { Self(f64x2_splat(v)) }
 
     #[inline(always)] pub fn from_array(a: [f64; 2]) -> Self { Self::new(a[0], a[1]) }
     #[inline(always)] pub fn to_array(self) -> [f64; 2] { [self.x, self.y] }
@@ -120,11 +120,9 @@ impl DVec2 {
     /// No FMA in WASM SIMD128 baseline — two instructions per component.
     #[inline]
     pub fn lerp(self, rhs: Self, t: f64) -> Self {
-        unsafe {
-            let tt   = f64x2_splat(t);
-            let diff = f64x2_sub(rhs.0, self.0);
-            Self(f64x2_add(self.0, f64x2_mul(diff, tt)))
-        }
+        let tt   = f64x2_splat(t);
+        let diff = f64x2_sub(rhs.0, self.0);
+        Self(f64x2_add(self.0, f64x2_mul(diff, tt)))
     }
 
     #[inline] pub fn distance(self, rhs: Self)    -> f64 { (self - rhs).length() }
@@ -154,12 +152,12 @@ impl DVec2 {
     // ── Component-wise ────────────────────────────────────────────────────────
 
     /// f64x2_min — propagates NaN from either operand.
-    #[inline] pub fn min(self, rhs: Self) -> Self { Self(unsafe { f64x2_min(self.0, rhs.0) }) }
+    #[inline] pub fn min(self, rhs: Self) -> Self { Self(f64x2_min(self.0, rhs.0)) }
     /// f64x2_max — propagates NaN from either operand.
-    #[inline] pub fn max(self, rhs: Self) -> Self { Self(unsafe { f64x2_max(self.0, rhs.0) }) }
+    #[inline] pub fn max(self, rhs: Self) -> Self { Self(f64x2_max(self.0, rhs.0)) }
     #[inline] pub fn clamp(self, lo: Self, hi: Self) -> Self { self.max(lo).min(hi) }
     /// Direct f64x2_abs — no sign-mask trick needed unlike SSE2.
-    #[inline] pub fn abs(self) -> Self { Self(unsafe { f64x2_abs(self.0) }) }
+    #[inline] pub fn abs(self) -> Self { Self(f64x2_abs(self.0)) }
 
     // floor/ceil/round: no f64x2 rounding in WASM SIMD128 baseline; scalar fallback.
     #[inline] pub fn floor(self) -> Self { Self::new(self.x.floor(), self.y.floor()) }
@@ -187,49 +185,49 @@ impl DVec2 {
 
 impl Add for DVec2 {
     type Output = Self;
-    #[inline(always)] fn add(self, r: Self) -> Self { Self(unsafe { f64x2_add(self.0, r.0) }) }
+    #[inline(always)] fn add(self, r: Self) -> Self { Self(f64x2_add(self.0, r.0)) }
 }
 impl Sub for DVec2 {
     type Output = Self;
-    #[inline(always)] fn sub(self, r: Self) -> Self { Self(unsafe { f64x2_sub(self.0, r.0) }) }
+    #[inline(always)] fn sub(self, r: Self) -> Self { Self(f64x2_sub(self.0, r.0)) }
 }
 impl Mul for DVec2 {
     type Output = Self;
-    #[inline(always)] fn mul(self, r: Self) -> Self { Self(unsafe { f64x2_mul(self.0, r.0) }) }
+    #[inline(always)] fn mul(self, r: Self) -> Self { Self(f64x2_mul(self.0, r.0)) }
 }
 impl Div for DVec2 {
     type Output = Self;
-    #[inline(always)] fn div(self, r: Self) -> Self { Self(unsafe { f64x2_div(self.0, r.0) }) }
+    #[inline(always)] fn div(self, r: Self) -> Self { Self(f64x2_div(self.0, r.0)) }
 }
 impl Mul<f64> for DVec2 {
     type Output = Self;
-    #[inline(always)] fn mul(self, s: f64) -> Self { Self(unsafe { f64x2_mul(self.0, f64x2_splat(s)) }) }
+    #[inline(always)] fn mul(self, s: f64) -> Self { Self(f64x2_mul(self.0, f64x2_splat(s))) }
 }
 impl Mul<DVec2> for f64 {
     type Output = DVec2;
-    #[inline(always)] fn mul(self, v: DVec2) -> DVec2 { DVec2(unsafe { f64x2_mul(f64x2_splat(self), v.0) }) }
+    #[inline(always)] fn mul(self, v: DVec2) -> DVec2 { DVec2(f64x2_mul(f64x2_splat(self), v.0)) }
 }
 impl Div<f64> for DVec2 {
     type Output = Self;
-    #[inline(always)] fn div(self, s: f64) -> Self { Self(unsafe { f64x2_div(self.0, f64x2_splat(s)) }) }
+    #[inline(always)] fn div(self, s: f64) -> Self { Self(f64x2_div(self.0, f64x2_splat(s))) }
 }
 /// Direct f64x2_neg — no XOR trick unlike SSE2.
 impl Neg for DVec2 {
     type Output = Self;
-    #[inline(always)] fn neg(self) -> Self { Self(unsafe { f64x2_neg(self.0) }) }
+    #[inline(always)] fn neg(self) -> Self { Self(f64x2_neg(self.0)) }
 }
 
 impl AddAssign for DVec2 {
-    #[inline(always)] fn add_assign(&mut self, r: Self) { self.0 = unsafe { f64x2_add(self.0, r.0) }; }
+    #[inline(always)] fn add_assign(&mut self, r: Self) { self.0 = f64x2_add(self.0, r.0); }
 }
 impl SubAssign for DVec2 {
-    #[inline(always)] fn sub_assign(&mut self, r: Self) { self.0 = unsafe { f64x2_sub(self.0, r.0) }; }
+    #[inline(always)] fn sub_assign(&mut self, r: Self) { self.0 = f64x2_sub(self.0, r.0); }
 }
 impl MulAssign<f64> for DVec2 {
-    #[inline(always)] fn mul_assign(&mut self, s: f64) { self.0 = unsafe { f64x2_mul(self.0, f64x2_splat(s)) }; }
+    #[inline(always)] fn mul_assign(&mut self, s: f64) { self.0 = f64x2_mul(self.0, f64x2_splat(s)); }
 }
 impl DivAssign<f64> for DVec2 {
-    #[inline(always)] fn div_assign(&mut self, s: f64) { self.0 = unsafe { f64x2_div(self.0, f64x2_splat(s)) }; }
+    #[inline(always)] fn div_assign(&mut self, s: f64) { self.0 = f64x2_div(self.0, f64x2_splat(s)); }
 }
 
 // ── PartialEq ─────────────────────────────────────────────────────────────────
@@ -237,11 +235,9 @@ impl DivAssign<f64> for DVec2 {
 impl PartialEq for DVec2 {
     #[inline]
     fn eq(&self, rhs: &Self) -> bool {
-        unsafe {
-            // f64x2_eq → all-1s per lane if equal.
-            // u64x2_bitmask extracts MSB of each 64-bit lane → u16 with 2 bits.
-            (u64x2_bitmask(f64x2_eq(self.0, rhs.0)) & 0b11) == 0b11
-        }
+        // f64x2_eq → all-1s per lane if equal.
+        // u64x2_bitmask extracts MSB of each 64-bit lane → u16 with 2 bits.
+        (u64x2_bitmask(f64x2_eq(self.0, rhs.0)) & 0b11) == 0b11
     }
 }
 
