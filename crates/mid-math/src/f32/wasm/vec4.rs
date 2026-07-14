@@ -48,7 +48,7 @@ impl Vec4 {
     }
 
     #[inline(always)]
-    pub fn splat(v: f32) -> Self { Self(unsafe { f32x4_splat(v) }) }
+    pub fn splat(v: f32) -> Self { Self(f32x4_splat(v)) }
 
     #[inline(always)] pub fn from_array(a: [f32; 4]) -> Self { Self::new(a[0], a[1], a[2], a[3]) }
     #[inline(always)] pub fn to_array(self) -> [f32; 4] { [self.x, self.y, self.z, self.w] }
@@ -65,7 +65,7 @@ impl Vec4 {
             f32::from_bits(0xFFFF_FFFF),
             0.0,
         ]);
-        Vec3(unsafe { v128_and(self.0, MASK) })
+        Vec3(v128_and(self.0, MASK))
     }
 
     // ── Arithmetic ────────────────────────────────────────────────────────────
@@ -122,19 +122,17 @@ impl Vec4 {
     /// Linear interpolation: `self + (rhs - self) * t`.
     #[inline]
     pub fn lerp(self, rhs: Self, t: f32) -> Self {
-        unsafe {
-            let tt   = f32x4_splat(t);
-            let diff = f32x4_sub(rhs.0, self.0);
-            Self(f32x4_add(self.0, f32x4_mul(diff, tt)))
-        }
+        let tt   = f32x4_splat(t);
+        let diff = f32x4_sub(rhs.0, self.0);
+        Self(f32x4_add(self.0, f32x4_mul(diff, tt)))
     }
 
     // ── Component-wise ────────────────────────────────────────────────────────
 
-    #[inline] pub fn min(self, r: Self) -> Self { Self(unsafe { f32x4_pmin(self.0, r.0) }) }
-    #[inline] pub fn max(self, r: Self) -> Self { Self(unsafe { f32x4_pmax(self.0, r.0) }) }
+    #[inline] pub fn min(self, r: Self) -> Self { Self(f32x4_pmin(self.0, r.0)) }
+    #[inline] pub fn max(self, r: Self) -> Self { Self(f32x4_pmax(self.0, r.0)) }
     #[inline] pub fn clamp(self, lo: Self, hi: Self) -> Self { self.max(lo).min(hi) }
-    #[inline] pub fn abs(self) -> Self { Self(unsafe { f32x4_abs(self.0) }) }
+    #[inline] pub fn abs(self) -> Self { Self(f32x4_abs(self.0)) }
 
     // ── Predicates ────────────────────────────────────────────────────────────
 
@@ -147,14 +145,12 @@ impl Vec4 {
 
     #[inline]
     pub fn approx_eq(self, rhs: Self) -> bool {
-        unsafe {
-            // f32x4_abs gives the absolute difference, compare < eps each lane
-            let diff = f32x4_abs(f32x4_sub(self.0, rhs.0));
-            let eps  = f32x4_splat(EPSILON);
-            let lt   = f32x4_lt(diff, eps);
-            // All 4 lanes must pass — bitmask gives 1 bit per lane
-            (u32x4_bitmask(lt) & 0b1111) == 0b1111
-        }
+        // f32x4_abs gives the absolute difference, compare < eps each lane
+        let diff = f32x4_abs(f32x4_sub(self.0, rhs.0));
+        let eps  = f32x4_splat(EPSILON);
+        let lt   = f32x4_lt(diff, eps);
+        // All 4 lanes must pass — bitmask gives 1 bit per lane
+        (u32x4_bitmask(lt) & 0b1111) == 0b1111
     }
 }
 
@@ -162,49 +158,49 @@ impl Vec4 {
 
 impl Add for Vec4 {
     type Output = Self;
-    #[inline(always)] fn add(self, r: Self) -> Self { Self(unsafe { f32x4_add(self.0, r.0) }) }
+    #[inline(always)] fn add(self, r: Self) -> Self { Self(f32x4_add(self.0, r.0)) }
 }
 impl Sub for Vec4 {
     type Output = Self;
-    #[inline(always)] fn sub(self, r: Self) -> Self { Self(unsafe { f32x4_sub(self.0, r.0) }) }
+    #[inline(always)] fn sub(self, r: Self) -> Self { Self(f32x4_sub(self.0, r.0)) }
 }
 impl Mul<f32> for Vec4 {
     type Output = Self;
-    #[inline(always)] fn mul(self, s: f32) -> Self { Self(unsafe { f32x4_mul(self.0, f32x4_splat(s)) }) }
+    #[inline(always)] fn mul(self, s: f32) -> Self { Self(f32x4_mul(self.0, f32x4_splat(s))) }
 }
 impl Mul<Vec4> for f32 {
     type Output = Vec4;
-    #[inline(always)] fn mul(self, v: Vec4) -> Vec4 { Vec4(unsafe { f32x4_mul(f32x4_splat(self), v.0) }) }
+    #[inline(always)] fn mul(self, v: Vec4) -> Vec4 { Vec4(f32x4_mul(f32x4_splat(self), v.0)) }
 }
 impl Mul for Vec4 {
     type Output = Self;
-    #[inline(always)] fn mul(self, r: Self) -> Self { Self(unsafe { f32x4_mul(self.0, r.0) }) }
+    #[inline(always)] fn mul(self, r: Self) -> Self { Self(f32x4_mul(self.0, r.0)) }
 }
 impl Div<f32> for Vec4 {
     type Output = Self;
-    #[inline(always)] fn div(self, s: f32) -> Self { Self(unsafe { f32x4_div(self.0, f32x4_splat(s)) }) }
+    #[inline(always)] fn div(self, s: f32) -> Self { Self(f32x4_div(self.0, f32x4_splat(s))) }
 }
 impl Neg for Vec4 {
     type Output = Self;
-    #[inline(always)] fn neg(self) -> Self { Self(unsafe { f32x4_neg(self.0) }) }
+    #[inline(always)] fn neg(self) -> Self { Self(f32x4_neg(self.0)) }
 }
 impl AddAssign for Vec4 {
-    #[inline(always)] fn add_assign(&mut self, r: Self) { self.0 = unsafe { f32x4_add(self.0, r.0) }; }
+    #[inline(always)] fn add_assign(&mut self, r: Self) { self.0 = f32x4_add(self.0, r.0); }
 }
 impl SubAssign for Vec4 {
-    #[inline(always)] fn sub_assign(&mut self, r: Self) { self.0 = unsafe { f32x4_sub(self.0, r.0) }; }
+    #[inline(always)] fn sub_assign(&mut self, r: Self) { self.0 = f32x4_sub(self.0, r.0); }
 }
 impl MulAssign<f32> for Vec4 {
-    #[inline(always)] fn mul_assign(&mut self, s: f32) { self.0 = unsafe { f32x4_mul(self.0, f32x4_splat(s)) }; }
+    #[inline(always)] fn mul_assign(&mut self, s: f32) { self.0 = f32x4_mul(self.0, f32x4_splat(s)); }
 }
 impl DivAssign<f32> for Vec4 {
-    #[inline(always)] fn div_assign(&mut self, s: f32) { self.0 = unsafe { f32x4_div(self.0, f32x4_splat(s)) }; }
+    #[inline(always)] fn div_assign(&mut self, s: f32) { self.0 = f32x4_div(self.0, f32x4_splat(s)); }
 }
 
 impl PartialEq for Vec4 {
     #[inline]
     fn eq(&self, rhs: &Self) -> bool {
-        unsafe { (u32x4_bitmask(f32x4_eq(self.0, rhs.0)) & 0b1111) == 0b1111 }
+        (u32x4_bitmask(f32x4_eq(self.0, rhs.0)) & 0b1111) == 0b1111
     }
 }
 
