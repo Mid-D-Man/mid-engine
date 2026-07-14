@@ -40,6 +40,9 @@ pub mod noise;
 pub mod camera;
 pub mod geom;
 
+// ── Small-vector storage ──────────────────────────────────────────────────────
+pub mod mid_vec;
+
 pub use constants::*;
 
 // ── Storage — low-precision boundary types ────────────────────────────────────
@@ -249,6 +252,9 @@ pub use geom::barycentric::{
     BarycentricCoords, Triangle2, Triangle3,
     signed_area_2d, triangle_area_3d,
 };
+
+// ── MidVec — inline small-vector ─────────────────────────────────────────────
+pub use mid_vec::MidVec;
 
 // ── Scalar utilities ──────────────────────────────────────────────────────────
 
