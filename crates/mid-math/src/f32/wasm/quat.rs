@@ -86,14 +86,12 @@ impl Quat {
 
     #[inline]
     pub fn dot(self, rhs: Self) -> f32 {
-        unsafe {
-            let mul = f32x4_mul(self.0, rhs.0);
-            let lo = i32x4_shuffle::<0, 1, 4, 5>(mul, mul);
-            let hi = i32x4_shuffle::<2, 3, 6, 7>(mul, mul);
-            let s  = f32x4_add(lo, hi);
-            let s2 = i32x4_shuffle::<1, 0, 5, 4>(s, s);
-            f32x4_extract_lane::<0>(f32x4_add(s, s2))
-        }
+        let mul = f32x4_mul(self.0, rhs.0);
+        let lo = i32x4_shuffle::<0, 1, 4, 5>(mul, mul);
+        let hi = i32x4_shuffle::<2, 3, 6, 7>(mul, mul);
+        let s  = f32x4_add(lo, hi);
+        let s2 = i32x4_shuffle::<1, 0, 5, 4>(s, s);
+        f32x4_extract_lane::<0>(f32x4_add(s, s2))
     }
 
     #[inline] pub fn length_sq(self) -> f32 { self.dot(self) }
@@ -127,14 +125,14 @@ impl Quat {
     /// Conjugate: negate xyz, keep w. Single XOR on WASM.
     #[inline]
     pub fn conjugate(self) -> Self {
-        Self(unsafe { v128_xor(self.0, CONJ_SIGN) })
+        Self(v128_xor(self.0, CONJ_SIGN))
     }
 
     #[inline]
     pub fn inverse(self) -> Self {
         let sq = self.length_sq();
         if sq < EPSILON { return Self::IDENTITY; }
-        Self(unsafe { f32x4_mul(self.conjugate().0, f32x4_splat(1.0 / sq)) })
+        Self(f32x4_mul(self.conjugate().0, f32x4_splat(1.0 / sq)))
     }
 
     #[inline]
@@ -145,30 +143,28 @@ impl Quat {
     }
 
     pub fn mul_quat(self, rhs: Self) -> Self {
-        unsafe {
-            let lhs = self.0;
-            let rhs = rhs.0;
+        let lhs = self.0;
+        let rhs = rhs.0;
 
-            let r_xxxx = i32x4_shuffle::<0, 0, 4, 4>(lhs, lhs);
-            let r_yyyy = i32x4_shuffle::<1, 1, 5, 5>(lhs, lhs);
-            let r_zzzz = i32x4_shuffle::<2, 2, 6, 6>(lhs, lhs);
-            let r_wwww = i32x4_shuffle::<3, 3, 7, 7>(lhs, lhs);
+        let r_xxxx = i32x4_shuffle::<0, 0, 4, 4>(lhs, lhs);
+        let r_yyyy = i32x4_shuffle::<1, 1, 5, 5>(lhs, lhs);
+        let r_zzzz = i32x4_shuffle::<2, 2, 6, 6>(lhs, lhs);
+        let r_wwww = i32x4_shuffle::<3, 3, 7, 7>(lhs, lhs);
 
-            let lxrw_etc = f32x4_mul(r_wwww, rhs);
-            let l_wzyx = i32x4_shuffle::<3, 2, 5, 4>(rhs, rhs);
-            let lwrx_etc = f32x4_mul(r_xxxx, l_wzyx);
-            let l_zwxy = i32x4_shuffle::<1, 0, 7, 6>(l_wzyx, l_wzyx);
-            let lwrx_signed = f32x4_mul(lwrx_etc, CONTROL_WZYX);
-            let lzry_etc = f32x4_mul(r_yyyy, l_zwxy);
-            let l_yxwz = i32x4_shuffle::<3, 2, 5, 4>(l_zwxy, l_zwxy);
-            let lzry_signed = f32x4_mul(lzry_etc, CONTROL_ZWXY);
-            let lyrz_etc = f32x4_mul(r_zzzz, l_yxwz);
-            let result0 = f32x4_add(lxrw_etc, lwrx_signed);
-            let lyrz_signed = f32x4_mul(lyrz_etc, CONTROL_YXWZ);
-            let result1 = f32x4_add(lzry_signed, lyrz_signed);
+        let lxrw_etc = f32x4_mul(r_wwww, rhs);
+        let l_wzyx = i32x4_shuffle::<3, 2, 5, 4>(rhs, rhs);
+        let lwrx_etc = f32x4_mul(r_xxxx, l_wzyx);
+        let l_zwxy = i32x4_shuffle::<1, 0, 7, 6>(l_wzyx, l_wzyx);
+        let lwrx_signed = f32x4_mul(lwrx_etc, CONTROL_WZYX);
+        let lzry_etc = f32x4_mul(r_yyyy, l_zwxy);
+        let l_yxwz = i32x4_shuffle::<3, 2, 5, 4>(l_zwxy, l_zwxy);
+        let lzry_signed = f32x4_mul(lzry_etc, CONTROL_ZWXY);
+        let lyrz_etc = f32x4_mul(r_zzzz, l_yxwz);
+        let result0 = f32x4_add(lxrw_etc, lwrx_signed);
+        let lyrz_signed = f32x4_mul(lyrz_etc, CONTROL_YXWZ);
+        let result1 = f32x4_add(lzry_signed, lyrz_signed);
 
-            Self(f32x4_add(result0, result1))
-        }
+        Self(f32x4_add(result0, result1))
     }
 
     // ── Interpolation ──────────────────────────────────────────────────────────
@@ -178,16 +174,14 @@ impl Quat {
     /// Uses `normalize_fast()` — blend of two unit quats is always non-zero.
     #[inline]
     pub fn nlerp(self, rhs: Self, t: f32) -> Self {
-        unsafe {
-            let dot       = self.dot(rhs);
-            let sign_mask = f32x4_splat(-0.0);
-            let dot_v     = f32x4_splat(dot);
-            let sign_bit  = v128_and(dot_v, sign_mask);
-            let rhs_adj   = v128_xor(rhs.0, sign_bit);
-            let tt        = f32x4_splat(t);
-            let diff      = f32x4_sub(rhs_adj, self.0);
-            Self(f32x4_add(self.0, f32x4_mul(diff, tt))).normalize_fast()
-        }
+        let dot       = self.dot(rhs);
+        let sign_mask = f32x4_splat(-0.0);
+        let dot_v     = f32x4_splat(dot);
+        let sign_bit  = v128_and(dot_v, sign_mask);
+        let rhs_adj   = v128_xor(rhs.0, sign_bit);
+        let tt        = f32x4_splat(t);
+        let diff      = f32x4_sub(rhs_adj, self.0);
+        Self(f32x4_add(self.0, f32x4_mul(diff, tt))).normalize_fast()
     }
 
     pub fn slerp(self, mut rhs: Self, t: f32) -> Self {
@@ -198,14 +192,12 @@ impl Quat {
         let sin_theta = (1.0 - dot * dot).sqrt();
         let s0 = ((1.0 - t) * angle).sin();
         let s1 = (t * angle).sin();
-        unsafe {
-            let blended = f32x4_add(
-                f32x4_mul(self.0, f32x4_splat(s0)),
-                f32x4_mul(rhs.0,  f32x4_splat(s1)),
-            );
-            // blended / sin_theta is ≈unit — normalize_fast() corrects FP drift.
-            Self(f32x4_div(blended, f32x4_splat(sin_theta))).normalize_fast()
-        }
+        let blended = f32x4_add(
+            f32x4_mul(self.0, f32x4_splat(s0)),
+            f32x4_mul(rhs.0,  f32x4_splat(s1)),
+        );
+        // blended / sin_theta is ≈unit — normalize_fast() corrects FP drift.
+        Self(f32x4_div(blended, f32x4_splat(sin_theta))).normalize_fast()
     }
 
     // ── Conversion ─────────────────────────────────────────────────────────────
@@ -240,24 +232,24 @@ impl MulAssign for Quat {
 }
 impl Neg for Quat {
     type Output = Self;
-    #[inline] fn neg(self) -> Self { Self(unsafe { f32x4_neg(self.0) }) }
+    #[inline] fn neg(self) -> Self { Self(f32x4_neg(self.0)) }
 }
 impl Add for Quat {
     type Output = Self;
-    #[inline] fn add(self, r: Self) -> Self { Self(unsafe { f32x4_add(self.0, r.0) }) }
+    #[inline] fn add(self, r: Self) -> Self { Self(f32x4_add(self.0, r.0)) }
 }
 impl Sub for Quat {
     type Output = Self;
-    #[inline] fn sub(self, r: Self) -> Self { Self(unsafe { f32x4_sub(self.0, r.0) }) }
+    #[inline] fn sub(self, r: Self) -> Self { Self(f32x4_sub(self.0, r.0)) }
 }
 impl Mul<f32> for Quat {
     type Output = Self;
-    #[inline] fn mul(self, s: f32) -> Self { Self(unsafe { f32x4_mul(self.0, f32x4_splat(s)) }) }
+    #[inline] fn mul(self, s: f32) -> Self { Self(f32x4_mul(self.0, f32x4_splat(s))) }
 }
 impl PartialEq for Quat {
     #[inline]
     fn eq(&self, rhs: &Self) -> bool {
-        unsafe { (u32x4_bitmask(f32x4_eq(self.0, rhs.0)) & 0b1111) == 0b1111 }
+        (u32x4_bitmask(f32x4_eq(self.0, rhs.0)) & 0b1111) == 0b1111
     }
 }
 impl Default for Quat { fn default() -> Self { Self::IDENTITY } }
@@ -307,4 +299,4 @@ pub(crate) fn quat_from_rotation_axes(x_axis: Vec3, y_axis: Vec3, z_axis: Vec3) 
             Quat::new((m21 - m12) * inv4w, (m02 - m20) * inv4w, (m10 - m01) * inv4w, four_wsq * inv4w)
         }
     }
-}
+            }
