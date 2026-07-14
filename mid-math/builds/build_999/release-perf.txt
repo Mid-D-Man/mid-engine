@@ -1,0 +1,192 @@
+   Compiling proc-macro2 v1.0.106
+   Compiling unicode-ident v1.0.24
+   Compiling quote v1.0.46
+   Compiling autocfg v1.5.1
+   Compiling libc v0.2.186
+   Compiling libm v0.2.16
+   Compiling zerocopy v0.8.54
+   Compiling num-traits v0.2.19
+   Compiling cfg-if v1.0.4
+   Compiling bytemuck v1.25.1
+   Compiling crossbeam-utils v0.8.22
+   Compiling syn v2.0.118
+   Compiling getrandom v0.2.17
+   Compiling rand_core v0.6.4
+   Compiling crossbeam-epoch v0.9.20
+   Compiling crossbeam-deque v0.8.7
+   Compiling nano-gemm-codegen v0.1.0
+   Compiling either v1.16.0
+   Compiling rayon-core v1.13.0
+   Compiling version_check v0.9.5
+   Compiling paste v1.0.15
+   Compiling pulp v0.21.5
+   Compiling reborrow v0.5.5
+   Compiling bitflags v2.13.0
+   Compiling rayon v1.12.0
+   Compiling dyn-stack-macros v0.1.3
+   Compiling dyn-stack v0.13.2
+   Compiling raw-cpuid v11.6.0
+   Compiling once_cell v1.21.4
+   Compiling serde_core v1.0.228
+   Compiling num-integer v0.1.46
+   Compiling memchr v2.8.3
+   Compiling ucd-trie v0.1.7
+   Compiling seq-macro v0.3.6
+   Compiling syn v1.0.109
+   Compiling serde v1.0.228
+   Compiling zerocopy-derive v0.8.54
+   Compiling pest v2.8.7
+   Compiling nano-gemm-core v0.1.0
+   Compiling serde_derive v1.0.228
+   Compiling pest_meta v2.8.7
+   Compiling zmij v1.0.23
+   Compiling pest_generator v2.8.7
+   Compiling equator-macro v0.4.2
+   Compiling nano-gemm-c64 v0.1.0
+   Compiling nano-gemm-f32 v0.1.0
+   Compiling nano-gemm-f64 v0.1.0
+   Compiling nano-gemm-c32 v0.1.0
+   Compiling crossbeam-channel v0.5.16
+   Compiling crossbeam-queue v0.3.13
+   Compiling safe_arch v0.7.4
+   Compiling serde_json v1.0.150
+   Compiling semver v1.0.28
+   Compiling defer v0.2.1
+   Compiling rustc_version v0.4.1
+   Compiling wide v0.7.33
+   Compiling ppv-lite86 v0.2.21
+   Compiling interpol v0.2.1
+   Compiling rand_chacha v0.3.1
+   Compiling private-gemm-x86 v0.1.20
+   Compiling rand v0.8.7
+   Compiling half v2.7.1
+   Compiling crossbeam v0.8.4
+   Compiling equator v0.4.2
+   Compiling num-complex v0.4.6
+   Compiling pest_derive v2.8.7
+   Compiling equator-macro v0.2.1
+   Compiling num-bigint v0.4.8
+   Compiling approx v0.5.1
+   Compiling atomic-wait v1.1.0
+   Compiling matrixmultiply v0.3.11
+   Compiling regex-syntax v0.8.11
+   Compiling clap_lex v1.1.0
+   Compiling ciborium-io v0.2.2
+   Compiling plotters-backend v0.3.7
+   Compiling itoa v1.0.18
+   Compiling anstyle v1.0.14
+   Compiling clap_builder v4.6.0
+   Compiling gemm-common v0.18.2
+   Compiling qd v0.7.7
+   Compiling regex-automata v0.4.15
+   Compiling gemm-c64 v0.18.2
+   Compiling gemm-f64 v0.18.2
+   Compiling gemm-f32 v0.18.2
+   Compiling gemm-c32 v0.18.2
+   Compiling py_literal v0.4.0
+   Compiling plotters-svg v0.3.7
+   Compiling ciborium-ll v0.2.2
+   Compiling spindle v0.2.6
+   Compiling equator v0.2.2
+   Compiling vek v0.17.2
+   Compiling faer-macros v0.21.0
+   Compiling itertools v0.10.5
+   Compiling num_cpus v1.17.0
+   Compiling byteorder v1.5.0
+   Compiling generativity v1.2.1
+   Compiling rawpointer v0.2.1
+   Compiling same-file v1.0.6
+   Compiling cast v0.3.0
+   Compiling walkdir v2.5.0
+   Compiling criterion-plot v0.5.0
+   Compiling faer-traits v0.22.1
+   Compiling npyz v0.8.4
+   Compiling nano-gemm v0.1.3
+   Compiling tinytemplate v1.2.1
+   Compiling ciborium v0.2.2
+   Compiling plotters v0.3.7
+   Compiling gemm v0.18.2
+   Compiling regex v1.13.0
+   Compiling clap v4.6.1
+   Compiling simba v0.9.1
+   Compiling rand_distr v0.4.3
+   Compiling nalgebra-macros v0.2.2
+   Compiling num-rational v0.4.2
+   Compiling is-terminal v0.4.17
+   Compiling typenum v1.20.1
+   Compiling anes v0.1.6
+   Compiling oorandom v11.1.5
+   Compiling faer v0.22.6
+   Compiling criterion v0.5.1
+   Compiling nalgebra v0.33.3
+   Compiling ultraviolet v0.9.2
+   Compiling glam v0.28.0
+   Compiling mid-math v0.2.0 (/home/runner/work/mid-engine/mid-engine/crates/mid-math)
+error[E0583]: file not found for module `mid_vec`
+  --> crates/mid-math/src/tests/mod.rs:15:1
+   |
+15 | mod mid_vec;
+   | ^^^^^^^^^^^^
+   |
+   = help: to create the module `mid_vec`, create file "crates/mid-math/src/tests/mid_vec.rs" or "crates/mid-math/src/tests/mid_vec/mod.rs"
+   = note: if there is a `mod mid_vec` elsewhere in the crate already, import it with `use crate::...` instead
+
+warning: unused import: `EPSILON`
+ --> crates/mid-math/src/tests/vec_tests.rs:4:46
+  |
+4 |     use crate::{Vec2, Vec3, Vec4, approx_eq, EPSILON};
+  |                                              ^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `EPSILON`
+ --> crates/mid-math/src/tests/quat_tests.rs:4:58
+  |
+4 |     use crate::{Quat, Vec3, Mat4, approx_eq, to_radians, EPSILON};
+  |                                                          ^^^^^^^
+
+warning: unused imports: `Vec4` and `approx_eq`
+ --> crates/mid-math/src/tests/stress_tests.rs:5:23
+  |
+5 |     use crate::{Vec3, Vec4, Quat, Mat4, to_radians, lerp, smoothstep, approx_eq, EPSILON};
+  |                       ^^^^                                            ^^^^^^^^^
+
+warning: unused import: `DEPSILON`
+  --> crates/mid-math/src/tests/f64_tests.rs:10:68
+   |
+10 |         DAffine3, DMat2, DMat3, DMat4, DQuat, DVec2, DVec3, DVec4, DEPSILON,
+   |                                                                    ^^^^^^^^
+
+warning: unused imports: `IMask16` and `IMask8`
+  --> crates/mid-math/src/tests/wide_tests.rs:12:17
+   |
+12 |         IMask4, IMask8, IMask16,
+   |                 ^^^^^^  ^^^^^^^
+
+warning: unused imports: `EPSILON` and `approx_eq`
+  --> crates/mid-math/src/tests/wide_tests.rs:22:21
+   |
+22 |         to_radians, approx_eq, EPSILON,
+   |                     ^^^^^^^^^  ^^^^^^^
+
+warning: unused import: `Fixed`
+ --> crates/mid-math/src/tests/fixed.rs:7:65
+  |
+7 | use crate::{Fixed16, Fixed8, Fixed12, Fixed16Vec2, Fixed16Vec3, Fixed};
+  |                                                                 ^^^^^
+
+warning: unused import: `PerspectiveParams`
+ --> crates/mid-math/src/tests/camera.rs:8:5
+  |
+8 |     PerspectiveParams,
+  |     ^^^^^^^^^^^^^^^^^
+
+warning: unused import: `NoiseSource4d`
+  --> crates/mid-math/src/tests/noise.rs:14:52
+   |
+14 |     DomainWarp, Fbm, NoiseSource2d, NoiseSource3d, NoiseSource4d,
+   |                                                    ^^^^^^^^^^^^^
+
+For more information about this error, try `rustc --explain E0583`.
+warning: `mid-math` (lib test) generated 9 warnings
+error: could not compile `mid-math` (lib test) due to 1 previous error; 9 warnings emitted
