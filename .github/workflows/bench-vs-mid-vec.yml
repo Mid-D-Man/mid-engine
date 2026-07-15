@@ -1,8 +1,8 @@
 # .github/workflows/bench-vs-mid-vec.yml
-# Run: Actions → "mid-math: bench MidVec vs Vec" → Run workflow
+# Run: Actions → "mid-math: bench MidVec vs Vec/VecDeque/SmallVec/TinyVec" → Run workflow
 # DO NOT add push/pull_request triggers — benchmarks take 5-10 minutes.
 
-name: mid-math — bench MidVec vs Vec
+name: mid-math — bench MidVec vs Vec/VecDeque/SmallVec/TinyVec
 
 on:
   workflow_dispatch:
@@ -53,11 +53,20 @@ jobs:
       - name: Publish benchmark summary
         run: |
           {
-            echo "## mid-math MidVec vs Vec — Criterion Benchmarks"
+            echo "## mid-math small-vec containers — Criterion Benchmarks"
             echo ""
             echo "**Build:** #${{ github.run_number }} &nbsp; **Rust:** \`${{ steps.rustver.outputs.ver }}\`"
             echo ""
             echo "**Note:** ${{ inputs.baseline_note }}"
+            echo ""
+            echo "Containers: \`vec\` (\`std::vec::Vec\`, baseline), \`vecdeque\`"
+            echo "(\`std::collections::VecDeque\`, the ring-buffer comparison — no inline"
+            echo "storage, bucketed with \`vec\` where that matters), \`mid_vec\` (this crate's"
+            echo "own \`MidVec<T, N>\`), \`smallvec\` (\`smallvec::SmallVec<[T; N]>\`, \`union\`"
+            echo "feature — same union+MaybeUninit storage strategy as MidVec), \`tinyvec\`"
+            echo "(\`tinyvec::TinyVec<[T; N]>\`, the auto-spilling Inline/Heap enum), and"
+            echo "\`tinyvec_arrayvec\` (\`tinyvec::ArrayVec<[T; N]>\`, fixed-capacity, only"
+            echo "benched at sizes <= N since it panics past that)."
             echo ""
             echo "Covers: \`construct_push\` (organic push, no pre-reserve), \`construct_and_drop\`"
             echo "(alloc/dealloc round trip at/under and over N), \`bulk_collect\` (FromIterator"
@@ -70,8 +79,11 @@ jobs:
             echo "> Lower is faster. Each group shows related operations side by side."
             echo "> MidVec is expected to win construct_push/construct_and_drop (fewer or zero"
             echo "> allocations) and be roughly at par or slightly behind on bulk_collect (Vec's"
-            echo "> collect specialisation also allocates only once there, so MidVec's per-"
-            echo "> element heap/inline tag check is pure overhead in that specific group)."
+            echo "> collect specialisation also allocates only once there, so every tagged"
+            echo "> inline/heap container's per-element tag check is pure overhead in that"
+            echo "> specific group). \`smallvec\` is MidVec's closest structural relative (same"
+            echo "> union storage) — the two should track each other closely everywhere; a"
+            echo "> persistent gap there is the signal worth digging into."
             echo ""
 
             python3 - << 'PYEOF'
@@ -130,7 +142,7 @@ jobs:
                   else:
                       print(f"| {variant} | {mean} |")
 
-          parse_bench_file('bench-vs-mid-vec-raw.txt', 'vs_mid_vec — MidVec<T,N> vs Vec<T>')
+          parse_bench_file('bench-vs-mid-vec-raw.txt', 'vs_mid_vec — MidVec<T,N> vs Vec/VecDeque/SmallVec/TinyVec')
           PYEOF
 
           } >> $GITHUB_STEP_SUMMARY
