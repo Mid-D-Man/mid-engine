@@ -42,12 +42,27 @@ jobs:
           key: cargo-registry-bench-${{ hashFiles('crates/mid-math/Cargo.toml') }}
           restore-keys: cargo-registry-
 
-      # ── Bench: vs_mid_vec (MidVec<T,N> vs Vec<T>) ───────────────────────────
+      # ── Bench: vs_mid_vec (MidVec<T,N> vs Vec/VecDeque/SmallVec/TinyVec) ────
       - name: Run vs_mid_vec criterion benchmarks
         run: |
           echo "Running: cargo bench --bench vs_mid_vec -p mid-math"
           echo "Note: ${{ inputs.baseline_note }}"
           cargo bench --bench vs_mid_vec -p mid-math 2>&1 | tee bench-vs-mid-vec-raw.txt
+          echo "Bench exit code: $?" >> "$GITHUB_STEP_SUMMARY"
+
+      # ── Surface criterion's own diagnostics directly in the summary ─────────
+      # Same idea as Abemch-vs-all.yml: a clean "Bench exit code: 0" does not
+      # by itself guarantee every benchmark printed a result row (criterion
+      # can silently skip printing one whose measured time hit exactly 0.0).
+      - name: Surface bench diagnostics
+        run: |
+          {
+            echo "### Diagnostics"
+            echo '```'
+            grep -E 'took zero time|Unable to complete|Warning:|panicked|Completed [0-9]+ iterations' \
+              bench-vs-mid-vec-raw.txt | head -60 || echo "(none found)"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
 
       # ── Publish summary ──────────────────────────────────────────────────────
       - name: Publish benchmark summary
@@ -86,64 +101,7 @@ jobs:
             echo "> persistent gap there is the signal worth digging into."
             echo ""
 
-            python3 - << 'PYEOF'
-          import re, sys
-
-          RE_ANSI  = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
-          RE_RESULT = re.compile(
-              r'^(\S[^\n]+?)\s+time:\s+\[\s*([\d.]+\s+\S+)\s+([\d.]+\s+\S+)\s+([\d.]+\s+\S+)\s*\]',
-              re.MULTILINE,
-          )
-          RE_THROUGHPUT = re.compile(
-              r'^(\S[^\n]+?)\s+thrpt:\s+\[\s*([\d.]+\s+\S+/s)\s+([\d.]+\s+\S+/s)\s+([\d.]+\s+\S+/s)\s*\]',
-              re.MULTILINE,
-          )
-
-          def parse_bench_file(path, title):
-              try:
-                  raw = open(path, encoding='utf-8', errors='replace').read()
-              except FileNotFoundError:
-                  print(f"*({path} not found)*")
-                  return
-
-              text = RE_ANSI.sub('', raw)
-              throughputs = {m.group(1).strip(): m.group(3).strip() for m in RE_THROUGHPUT.finditer(text)}
-              current_group = None
-
-              print(f"\n---\n\n### {title}\n")
-
-              for m in RE_RESULT.finditer(text):
-                  name = m.group(1).strip()
-                  mean = m.group(3).strip()
-                  thrpt = throughputs.get(name, '')
-
-                  parts = name.split('/')
-                  if len(parts) >= 2:
-                      group   = '/'.join(parts[:-1])
-                      variant = parts[-1]
-                  else:
-                      group   = name
-                      variant = ''
-
-                  if group != current_group:
-                      if current_group is not None:
-                          print()
-                      print(f"#### {group}")
-                      if thrpt:
-                          print("| Op | Mean | Throughput |")
-                          print("|---|---|---|")
-                      else:
-                          print("| Op | Mean |")
-                          print("|---|---|")
-                      current_group = group
-
-                  if thrpt:
-                      print(f"| {variant} | {mean} | {thrpt} |")
-                  else:
-                      print(f"| {variant} | {mean} |")
-
-          parse_bench_file('bench-vs-mid-vec-raw.txt', 'vs_mid_vec — MidVec<T,N> vs Vec/VecDeque/SmallVec/TinyVec')
-          PYEOF
+            python3 scripts/bench_vs_mid_vec.py
 
           } >> $GITHUB_STEP_SUMMARY
 
