@@ -25,6 +25,13 @@ ultraviolet    = { version = "0.9" }
 matrixmultiply = { version = "0.3" }
 faer           = { version = "0.22" }
 vek            = { version = "0.17", features = ["repr_simd"] }
+# vs_mid_vec comparison targets. `union` matches MidVec's own storage
+# strategy (union + MaybeUninit, no enum discriminant) — without it,
+# smallvec falls back to a less comparable representation. `alloc` is
+# required for tinyvec::TinyVec (the auto-spilling Inline/Heap enum);
+# tinyvec::ArrayVec is available without it.
+smallvec       = { version = "1.15", features = ["union"] }
+tinyvec        = { version = "1.12", features = ["alloc"] }
 
 [[bench]]
 name    = "vs_glam"
