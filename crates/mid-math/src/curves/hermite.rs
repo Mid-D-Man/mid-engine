@@ -49,6 +49,17 @@ impl<T: Interpolate + Clone> HermiteKey<T> {
     }
 }
 
+impl<T: Default> Default for HermiteKey<T> {
+    /// All-zero key (tangents default to zero, matching `Vec3::default()`).
+    /// Not used by the crate's own curve logic — added so this type can
+    /// satisfy `tinyvec::Array::Item: Default`, which `vs_mid_vec`'s
+    /// benchmarks need for `TinyVec`/`ArrayVec` comparisons.
+    #[inline]
+    fn default() -> Self {
+        Self { position: T::default(), tangent_out: T::default(), tangent_in: T::default() }
+    }
+}
+
 /// Hermite spline through a sequence of `HermiteKey` values.
 ///
 /// Each segment is defined by two consecutive keys.
