@@ -1,0 +1,220 @@
+# .github/workflows/bench-vs-all-f64.yml
+# f64 benchmark: mid-math vs nalgebra (only f64-capable competitor — glam has
+# no native f64 Vec3, ultraviolet has no f64 support at all; see vs_all_f64.rs
+# doc comment).
+# Run: Actions → "mid-math — bench f64" → Run workflow
+# DO NOT add push/pull_request triggers.
+
+name: A mid-math — bench f64
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_cpu:
+        description: >
+          Compiler target-cpu or architecture configuration. Controls which SIMD
+          instructions rustc emits. DVec3/DMat3/DMat4/DAffine3/DDualQuat are
+          always-scalar regardless of this setting (see f64/mod.rs) — only
+          DVec2/DVec4/DQuat have a dispatched SIMD backend, so the spread this
+          produces will be narrower than the f32 bench_all run.
+          native     = all hardware features the runner has.
+          x86-64-v4  = AVX-512F+BW+CD+DQ+VL.
+          x86-64-v3  = AVX2+FMA+BMI2 guaranteed (Haswell+).
+          x86-64-v2  = SSE4.2 baseline — no AVX.
+          x86-64     = SSE2 only.
+          neon       = ARM NEON acceleration (runs on native aarch64 runner).
+          wasm       = WebAssembly wasm32-wasip1 target + simd128 via wasmtime.
+                       Unlike the f32 bench, this bench has never been run
+                       under wasm before — nalgebra is pure Rust so it should
+                       build, but treat a first wasm result here as unverified
+                       until it's actually produced a clean row.
+          scalar     = pure scalar fallback via --features force-scalar
+                       (bypasses the sse2/neon dispatch in f64/mod.rs same as
+                       it does for f32).
+        required: true
+        default: 'native'
+        type: choice
+        options:
+          - native
+          - x86-64-v4
+          - x86-64-v3
+          - x86-64-v2
+          - x86-64
+          - neon
+          - wasm
+          - scalar
+      baseline_note:
+        description: 'Context for this run (e.g. "baseline scalar f64")'
+        required: false
+        default: 'manual f64 benchmark run'
+
+permissions:
+  contents: read
+  actions:  read
+
+env:
+  CARGO_TERM_COLOR: never
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  bench:
+    name: bench (${{ inputs.target_cpu }})
+    runs-on: ${{ inputs.target_cpu == 'neon' && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # ── Setup environment flags based on target selection ──────────────────
+      - name: Configure target environment
+        run: |
+          if [ "${{ inputs.target_cpu }}" = "wasm" ]; then
+            echo "RUSTFLAGS=-C target-feature=+simd128" >> $GITHUB_ENV
+            echo "BENCH_TARGET=--target wasm32-wasip1" >> $GITHUB_ENV
+            echo "ACTIVE_CPU_FLAGS=-C target-feature=+simd128" >> $GITHUB_ENV
+            echo "BENCH_FEATURES=" >> $GITHUB_ENV
+          elif [ "${{ inputs.target_cpu }}" = "neon" ]; then
+            echo "BENCH_TARGET=" >> $GITHUB_ENV
+            echo "ACTIVE_CPU_FLAGS=" >> $GITHUB_ENV
+            echo "BENCH_FEATURES=" >> $GITHUB_ENV
+          elif [ "${{ inputs.target_cpu }}" = "scalar" ]; then
+            echo "BENCH_TARGET=" >> $GITHUB_ENV
+            echo "ACTIVE_CPU_FLAGS=" >> $GITHUB_ENV
+            echo "BENCH_FEATURES=--features force-scalar" >> $GITHUB_ENV
+          else
+            # See Abemch-vs-all.yml for why this is CARGO_TARGET_*_RUSTFLAGS
+            # and not plain RUSTFLAGS: plain RUSTFLAGS also applies to
+            # build-script (host) compilation, which SIGILLs if the runner's
+            # real CPU doesn't have the requested ISA (e.g. AVX-512 on the
+            # AMD EPYC GitHub-hosted runners).
+            echo "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS=-C target-cpu=${{ inputs.target_cpu }}" >> $GITHUB_ENV
+            echo "BENCH_TARGET=" >> $GITHUB_ENV
+            echo "ACTIVE_CPU_FLAGS=-C target-cpu=${{ inputs.target_cpu }}" >> $GITHUB_ENV
+            echo "BENCH_FEATURES=" >> $GITHUB_ENV
+          fi
+
+      # ── Soft hardware gate for x86-64-v4 ─────────────────────────────────────
+      - name: Check AVX-512 hardware availability
+        id: hwcheck
+        if: inputs.target_cpu == 'x86-64-v4'
+        run: |
+          if grep -qw 'avx512f' /proc/cpuinfo; then
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            {
+              echo "## bench (x86-64-v4) — skipped"
+              echo ""
+              echo "> GitHub-hosted \`ubuntu-latest\` runners use AMD EPYC CPUs without AVX-512."
+              echo "> rustc will happily emit AVX-512 instructions for \`-C target-cpu=x86-64-v4\`"
+              echo "> regardless of the host's real capabilities — running the resulting binary"
+              echo "> here would SIGILL. This run is marked successful (skipped, not failed)."
+              echo ">"
+              echo "> To get real x86-64-v4 numbers, this workflow needs a self-hosted runner"
+              echo "> on actual AVX-512-capable hardware (Ice Lake / Zen 4 or newer)."
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Set up Rust stable
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+          override: true
+          target: ${{ inputs.target_cpu == 'wasm' && 'wasm32-wasip1' || '' }}
+          rustflags: ""
+
+      - name: Install wasmtime
+        if: inputs.target_cpu == 'wasm'
+        uses: bytecodealliance/actions/wasmtime/setup@v1
+        with:
+          version: v25.0.2
+
+      - name: Configure WASM test runner
+        if: inputs.target_cpu == 'wasm'
+        run: |
+          mkdir -p .cargo
+          cat >> .cargo/config.toml << 'EOF'
+          [target.wasm32-wasip1]
+          runner = ["wasmtime", "run", "--dir", ".", "--env", "CRITERION_DEBUG=1", "--"]
+          EOF
+
+      - name: Confirm CPU and compiler features
+        run: |
+          {
+            echo "## CPU & Compiler — Build #${{ github.run_number }}"
+            echo ""
+            echo "| | |"
+            echo "|---|---|"
+            echo "| Runner        | \`${{ inputs.target_cpu == 'neon' && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}\` |"
+            echo "| target-cpu    | \`${{ inputs.target_cpu }}\` |"
+            echo "| ACTIVE_CPU_FLAGS | \`$ACTIVE_CPU_FLAGS\` |"
+            echo "| Rust          | \`$(rustc --version)\` |"
+            echo "| Branch        | \`${{ github.ref_name }}\` |"
+            echo "| Commit        | \`${GITHUB_SHA:0:8}\` |"
+            echo ""
+            echo "### Rustc target_feature cfg"
+            echo '```'
+            if [ "${{ inputs.target_cpu }}" = "wasm" ]; then
+              rustc --print cfg --target wasm32-wasip1 $RUSTFLAGS 2>&1 | grep '^target_feature' | sort
+            else
+              rustc --print cfg $ACTIVE_CPU_FLAGS 2>&1 | grep -E '^target_(arch|feature)' | sort
+            fi
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Cache cargo registry + build artifacts
+        if: steps.hwcheck.outputs.skip != 'true'
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-${{ runner.arch }}-bench-f64-${{ inputs.target_cpu }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ runner.arch }}-bench-f64-${{ inputs.target_cpu }}-
+
+      - name: Run f64 criterion benchmarks
+        if: steps.hwcheck.outputs.skip != 'true'
+        run: |
+          echo "Note: ${{ inputs.baseline_note }}"
+          cargo bench --bench vs_all_f64 -p mid-math $BENCH_TARGET $BENCH_FEATURES 2>&1 | tee bench-f64-raw.txt
+          echo "Bench exit code: $?" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Surface bench diagnostics
+        if: steps.hwcheck.outputs.skip != 'true'
+        run: |
+          {
+            echo "### Diagnostics"
+            echo '```'
+            grep -E 'took zero time|Unable to complete|Warning:|panicked|Completed [0-9]+ iterations' \
+              bench-f64-raw.txt | head -60 || echo "(none found)"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Publish summary
+        if: steps.hwcheck.outputs.skip != 'true'
+        env:
+          BENCH_RAW_FILE: bench-f64-raw.txt
+        run: |
+          {
+            echo "## mid-math f64 vs nalgebra — Criterion Benchmarks"
+            echo ""
+            echo "Build: #${{ github.run_number }} &nbsp;|&nbsp; Rust: \`$(rustc --version | cut -d' ' -f2)\` &nbsp;|&nbsp; target-cpu: \`${{ inputs.target_cpu }}\`"
+            echo ""
+            echo "**Note:** ${{ inputs.baseline_note }}"
+            echo ""
+            echo "> Lower is faster. DVec3/DMat3/DMat4/DAffine3/DDualQuat are always scalar —"
+            echo "> only DVec2/DVec4/DQuat carry a dispatched SIMD backend, so those are the"
+            echo "> groups where target-cpu should actually move the needle."
+            echo ""
+            python3 scripts/bench_vs_all.py
+          } >> $GITHUB_STEP_SUMMARY
+
+      - name: Upload artifacts
+        if: steps.hwcheck.outputs.skip != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: bench-f64-${{ github.run_number }}-${{ inputs.target_cpu }}
+          path: bench-f64-raw.txt
+          retention-days: 30
