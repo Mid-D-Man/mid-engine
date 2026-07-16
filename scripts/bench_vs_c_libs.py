@@ -121,7 +121,7 @@ OPS = [
     ('rotation', 'mul',             'Quat mul'),
     ('rotation', 'rotate',          'Quat rotate vec'),
     ('rotation', 'slerp',           'Quat slerp'),
-    ('mat4',     'mul',             'Mat4 mul ⚠️'),
+    ('mat4',     'mul',             'Mat4 mul'),
     ('mat4',     'transform_point', 'Mat4 transform_point'),
     ('mat4',     'inverse_general', 'Mat4 inverse_general'),
 ]
@@ -163,9 +163,13 @@ dxm_ns  = dxm_data.get(mat4_key,  (None, None))[1]
 print("#### Mat4 multiply gap analysis")
 print("")
 if mid_ns and glam_ns:
-    print(f"- mid-math vs glam:       **{mid_ns / glam_ns:.2f}×** slower  ({fmt_ns(mid_ns)} vs {fmt_ns(glam_ns)})")
-    print(f"  - Cause: `[[f32;4];4]` storage → pointer ABI → 8× `_mm_load_ps` before math")
-    print(f"  - Fix: named `Vec4` fields → data in XMM registers → target ≤7 ns")
+    ratio = mid_ns / glam_ns
+    direction = "slower" if ratio > 1.0 else "faster"
+    display_ratio = ratio if ratio > 1.0 else glam_ns / mid_ns
+    print(f"- mid-math vs glam:       **{display_ratio:.2f}×** {direction}  ({fmt_ns(mid_ns)} vs {fmt_ns(glam_ns)})")
+    if ratio > 1.1:
+        print(f"  - Historically caused by `[[f32;4];4]` storage → pointer ABI → 8× `_mm_load_ps` before math")
+        print(f"  - Fix: named `Vec4` fields → data in XMM registers → target ≤7 ns")
 if cglm_ns and glam_ns:
     print(f"- cglm vs glam:           **{cglm_ns / glam_ns:.2f}×** ({fmt_ns(cglm_ns)} vs {fmt_ns(glam_ns)})")
 if dxm_ns and glam_ns:
