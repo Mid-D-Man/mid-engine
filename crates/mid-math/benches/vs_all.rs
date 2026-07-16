@@ -266,7 +266,17 @@ fn bench_mat4(c: &mut Criterion) {
 
     let gl_a = glam_trs(1.0, 45.0, 2.0);
     let gl_b = glam_trs(0.5, 30.0, 1.5);
-    let gl_p = glam::Vec3::new(1.0, 2.0, 3.0);
+    // glam::Vec3 is scalar-only by design on every platform (its own
+    // `USES_SCALAR_MATH` const is `true` unconditionally) -- Vec3A is
+    // glam's SIMD-backed 3D vector. mid-math's Vec3 is unconditionally
+    // SIMD (backed by __m128/float32x4_t/v128 everywhere), so Vec3A is
+    // the type that's actually comparable to it. Using plain Vec3 here
+    // was quietly comparing mid-math's SIMD Vec3 against glam's *scalar*
+    // Vec3 -- mild on x86 (cheap scalar float ops), much larger on NEON
+    // (pricier lane extract/insert), which is what was driving the
+    // outsized ARM gap in mat4/transform_point and the entity-transform
+    // benches below.
+    let gl_p_a = glam::Vec3A::new(1.0, 2.0, 3.0);
 
     #[cfg(not(target_arch = "wasm32"))] let na_a = na_trs(1.0, 45.0, 2.0);
     #[cfg(not(target_arch = "wasm32"))] let na_b = na_trs(0.5, 30.0, 1.5);
@@ -285,7 +295,7 @@ fn bench_mat4(c: &mut Criterion) {
     g.bench_function("mul/ultraviolet", |b| b.iter(|| black_box(uv_a) * black_box(uv_b)));
 
     g.bench_function("transform_point/mid-math",    |b| b.iter(|| black_box(mm_a).transform_point(black_box(mm_p))));
-    g.bench_function("transform_point/glam",        |b| b.iter(|| black_box(gl_a).transform_point3(black_box(gl_p))));
+    g.bench_function("transform_point/glam",        |b| b.iter(|| black_box(gl_a).transform_point3a(black_box(gl_p_a))));
     #[cfg(not(target_arch = "wasm32"))]
     g.bench_function("transform_point/nalgebra",    |b| b.iter(|| black_box(na_a).transform_point(&black_box(na_p))));
     #[cfg(not(target_arch = "wasm32"))]
@@ -402,7 +412,10 @@ fn bench_affine3(c: &mut Criterion) {
     g.bench_function("inverse/glam-affine3a",    |b| b.iter(|| black_box(gl_a1).inverse()));
 
     g.bench_function("transform_point/mid-math-affine3", |b| b.iter(|| black_box(mm_a1).transform_point(black_box(mm_p))));
-    g.bench_function("transform_point/glam-affine3a",    |b| b.iter(|| black_box(gl_a1).transform_point3(black_box(glam::Vec3::new(5.0, 0.0, 0.0)))));
+    // Same Vec3-vs-Vec3A note as the mat4 group above: transform_point3a
+    // is glam-affine3a's SIMD-native entry point, the fair match for
+    // mid-math's always-SIMD Vec3/Affine3.
+    g.bench_function("transform_point/glam-affine3a",    |b| b.iter(|| black_box(gl_a1).transform_point3a(black_box(glam::Vec3A::new(5.0, 0.0, 0.0)))));
 
     g.finish();
 }
@@ -491,7 +504,12 @@ fn bench_100k_entities(c: &mut Criterion) {
     #[cfg(not(target_arch = "wasm32"))] let uv_t = uv_trs(1.0, 45.0, 1.0);
 
     let pos_mm: Vec<Vec3>        = (0..N).map(|i| Vec3::new(i as f32 * 0.01, 0.0, 0.0)).collect();
-    let pos_gl: Vec<glam::Vec3>  = (0..N).map(|i| glam::Vec3::new(i as f32 * 0.01, 0.0, 0.0)).collect();
+    // Vec3A, not Vec3 — see the note in bench_mat4 above. Plain glam::Vec3
+    // is scalar by design on every platform; comparing it against
+    // mid-math's always-SIMD Vec3 in a 100k-iteration loop was the main
+    // driver behind the outsized NEON gap here (per-call scalar lane
+    // extract/insert overhead compounding over N, worse on ARM than x86).
+    let pos_gl: Vec<glam::Vec3A> = (0..N).map(|i| glam::Vec3A::new(i as f32 * 0.01, 0.0, 0.0)).collect();
     #[cfg(not(target_arch = "wasm32"))]
     let pos_na: Vec<Point3<f32>> = (0..N).map(|i| Point3::new(i as f32 * 0.01, 0.0, 0.0)).collect();
     #[cfg(not(target_arch = "wasm32"))]
@@ -504,7 +522,7 @@ fn bench_100k_entities(c: &mut Criterion) {
     ));
     g.bench_function("glam", |b| b.iter_batched(
         || pos_gl.clone(),
-        |mut p| { for v in p.iter_mut() { *v = gl_t.transform_point3(black_box(*v)); } black_box(p) },
+        |mut p| { for v in p.iter_mut() { *v = gl_t.transform_point3a(black_box(*v)); } black_box(p) },
         BatchSize::LargeInput,
     ));
     #[cfg(not(target_arch = "wasm32"))]
@@ -537,7 +555,8 @@ fn bench_1m_entities(c: &mut Criterion) {
     let gl_t = glam_trs(1.0, 45.0, 1.0);
 
     let pos_mm: Vec<Vec3>       = (0..N).map(|i| Vec3::new(i as f32 * 0.001, 0.0, 0.0)).collect();
-    let pos_gl: Vec<glam::Vec3> = (0..N).map(|i| glam::Vec3::new(i as f32 * 0.001, 0.0, 0.0)).collect();
+    // Vec3A — see the note in bench_100k_entities above, same reasoning.
+    let pos_gl: Vec<glam::Vec3A> = (0..N).map(|i| glam::Vec3A::new(i as f32 * 0.001, 0.0, 0.0)).collect();
 
     g.bench_function("mid-math", |b| b.iter_batched(
         || pos_mm.clone(),
@@ -546,7 +565,7 @@ fn bench_1m_entities(c: &mut Criterion) {
     ));
     g.bench_function("glam", |b| b.iter_batched(
         || pos_gl.clone(),
-        |mut p| { for v in p.iter_mut() { *v = gl_t.transform_point3(black_box(*v)); } black_box(p) },
+        |mut p| { for v in p.iter_mut() { *v = gl_t.transform_point3a(black_box(*v)); } black_box(p) },
         BatchSize::LargeInput,
     ));
 
