@@ -38,89 +38,87 @@ vek            = { version = "0.17", features = ["repr_simd"] }
 smallvec       = { version = "1.15", features = ["union"] }
 tinyvec        = { version = "1.12", features = ["alloc"] }
 
-[[bench]]
-name    = "vs_glam"
-harness = false
 
 [[bench]]
 name    = "vs_storage"
 harness = false
-
+ 
 [[bench]]
 name    = "vs_mat3_layouts"
 harness = false
-
+ 
 [[bench]]
 name    = "vs_all"
 harness = false
-
+ 
 [[bench]]
 name    = "vs_all_f64"
 harness = false
-
+ 
 [[bench]]
 name    = "vs_mat4_fastest"
 harness = false
-
+ 
 [[bench]]
 name    = "vs_mat4_asm"
 harness = false
-
+ 
 [[bench]]
 name    = "vs_int32"
 harness = false
-
+ 
 [[bench]]
 name    = "vs_int64"
 harness = false
-
+ 
 [[bench]]
 name    = "vs_wide_float"
 harness = false
-
+ 
 [[bench]]
 name    = "vs_wide_int"
 harness = false
-
+ 
 [[bench]]
 name    = "vs_curves"
 harness = false
-
+ 
 [[bench]]
 name    = "vs_mid_vec"
 harness = false
-
+ 
 [[bench]]
 name    = "vs_color"
 harness = false
-
+ 
 [[bench]]
 name    = "vs_fixed"
 harness = false
-
+ 
 [[bench]]
 name    = "vs_helpers"
 harness = false
-
+ 
 [[bench]]
 name    = "vs_rng"
 harness = false
-
+ 
 [[bench]]
 name    = "noise"
 harness = false
-
+ 
 [[bench]]
 name    = "camera"
 harness = false
-
+ 
 [[bench]]
 name    = "geom"
 harness = false
-
+ 
 [features]
 default      = []
 simd         = []
 avx2         = []
 coresimd     = []
 force-scalar = []
+ 
