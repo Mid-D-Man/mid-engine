@@ -1,5 +1,8 @@
 # .github/workflows/bench-vs-mat4-asm.yml
-# Bench mat4 multiply: AVX intrinsic vs explicit asm! with pinned low ymm registers.
+# Bench mat4 multiply: AVX intrinsic vs explicit asm! with pinned low ymm
+# registers, vs glam. Only the asm-lowreg sub-benchmark requires AVX+FMA
+# (cfg-gated out otherwise, see vs_mat4_asm.rs) — the other three run on
+# any target-cpu, so this is useful across the same ISA spread as vs_all.
 # Runs ONLY on manual dispatch to avoid polluting CI.
 
 name: mid-math — bench mat4 asm
@@ -7,105 +10,178 @@ name: mid-math — bench mat4 asm
 on:
   workflow_dispatch:
     inputs:
+      target_cpu:
+        description: >
+          Compiler target-cpu or architecture configuration.
+          native     = all hardware features the runner has (AVX-512+AVX2+FMA
+                       on GitHub-hosted x86_64 runners) — asm-lowreg runs.
+          x86-64-v4  = AVX-512F+BW+CD+DQ+VL — asm-lowreg runs.
+          x86-64-v3  = AVX2+FMA+BMI2 guaranteed (Haswell+) — asm-lowreg runs.
+          x86-64-v2  = SSE4.2 baseline, no AVX — asm-lowreg is skipped
+                       (cfg-gated out at compile time, not a failure);
+                       avx-intrinsic/4x-independent/glam still run.
+          x86-64     = SSE2 only — same asm-lowreg skip as x86-64-v2.
+          neon       = ARM NEON, runs on native aarch64 runner — asm-lowreg
+                       skipped (x86-only asm), the other three still run.
+          scalar     = pure scalar fallback via --features force-scalar —
+                       asm-lowreg skipped, others still run.
+        required: true
+        default: 'native'
+        type: choice
+        options:
+          - native
+          - x86-64-v4
+          - x86-64-v3
+          - x86-64-v2
+          - x86-64
+          - neon
+          - scalar
       note:
         description: 'Context for this run'
         required: false
         default: 'asm vs intrinsic mat4 mul'
 
 env:
-  RUSTFLAGS: "-C target-cpu=native"
   CARGO_TERM_COLOR: never
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
   bench:
-    name: bench
-    runs-on: ubuntu-latest
+    name: bench (${{ inputs.target_cpu }})
+    runs-on: ${{ inputs.target_cpu == 'neon' && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}
 
     steps:
       - uses: actions/checkout@v4
 
+      - name: Configure target environment
+        run: |
+          if [ "${{ inputs.target_cpu }}" = "neon" ]; then
+            echo "ACTIVE_CPU_FLAGS=" >> $GITHUB_ENV
+            echo "BENCH_FEATURES=" >> $GITHUB_ENV
+          elif [ "${{ inputs.target_cpu }}" = "scalar" ]; then
+            echo "ACTIVE_CPU_FLAGS=" >> $GITHUB_ENV
+            echo "BENCH_FEATURES=--features force-scalar" >> $GITHUB_ENV
+          else
+            # See Abemch-vs-all.yml for why CARGO_TARGET_*_RUSTFLAGS instead
+            # of plain RUSTFLAGS (avoids SIGILL in build-script/host compiles
+            # when the runner's real CPU lacks the requested ISA).
+            echo "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS=-C target-cpu=${{ inputs.target_cpu }}" >> $GITHUB_ENV
+            echo "ACTIVE_CPU_FLAGS=-C target-cpu=${{ inputs.target_cpu }}" >> $GITHUB_ENV
+            echo "BENCH_FEATURES=" >> $GITHUB_ENV
+          fi
+
+      - name: Check AVX-512 hardware availability
+        id: hwcheck
+        if: inputs.target_cpu == 'x86-64-v4'
+        run: |
+          if grep -qw 'avx512f' /proc/cpuinfo; then
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            {
+              echo "## bench (x86-64-v4) — skipped"
+              echo ""
+              echo "> GitHub-hosted \`ubuntu-latest\` runners use AMD EPYC CPUs without AVX-512."
+              echo "> Running an AVX-512-targeted binary here would SIGILL. Marked successful"
+              echo "> (skipped, not failed). Needs a self-hosted AVX-512-capable runner."
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
       - name: Set up Rust stable
         uses: actions-rust-lang/setup-rust-toolchain@v1
+        if: steps.hwcheck.outputs.skip != 'true'
         with:
           toolchain: stable
           override: true
+          rustflags: ""
 
       - name: Confirm CPU features and AVX availability
+        if: steps.hwcheck.outputs.skip != 'true'
         run: |
           {
             echo "## CPU & Compiler — Build #${{ github.run_number }}"
             echo ""
             echo "| | |"
             echo "|---|---|"
-            echo "| Runner        | \`ubuntu-latest\` |"
-            echo "| RUSTFLAGS     | \`-C target-cpu=native\` |"
+            echo "| Runner        | \`${{ inputs.target_cpu == 'neon' && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}\` |"
+            echo "| target-cpu    | \`${{ inputs.target_cpu }}\` |"
+            echo "| ACTIVE_CPU_FLAGS | \`$ACTIVE_CPU_FLAGS\` |"
             echo "| Rust          | \`$(rustc --version)\` |"
             echo "| Commit        | \`${GITHUB_SHA:0:8}\` |"
             echo "| Note          | ${{ inputs.note }} |"
             echo ""
-            echo "### AVX/FMA flags"
-            echo '```'
-            grep -m1 '^flags' /proc/cpuinfo \
-              | tr ' ' '\n' \
-              | grep -E '^(avx|fma|sse)' \
-              | sort \
-              | paste - - - - -
-            echo '```'
-            echo ""
             echo "### Rustc target_feature cfg"
             echo '```'
-            rustc --print cfg -C target-cpu=native 2>&1 \
-              | grep '^target_feature' \
-              | grep -E '"(avx|fma|sse)' \
-              | sort
+            rustc --print cfg $ACTIVE_CPU_FLAGS 2>&1 | grep -E '^target_(arch|feature)' | sort
             echo '```'
             echo ""
-            # Hard fail if AVX+FMA not present — bench is meaningless without it
-            rustc --print cfg -C target-cpu=native 2>&1 | grep -q 'target_feature="avx"' \
-              || { echo "::error::AVX not available on this runner — asm bench requires AVX+FMA"; exit 1; }
-            rustc --print cfg -C target-cpu=native 2>&1 | grep -q 'target_feature="fma"' \
-              || { echo "::error::FMA not available on this runner — asm bench requires AVX+FMA"; exit 1; }
+
+            if [ "${{ inputs.target_cpu }}" = "neon" ] || [ "${{ inputs.target_cpu }}" = "scalar" ]; then
+              echo "> **asm-lowreg will not appear below** — it's x86 AVX+FMA inline asm," >> "$GITHUB_STEP_SUMMARY"
+              echo "> cfg-gated out entirely on this target. avx-intrinsic/4x-independent/glam still run." >> "$GITHUB_STEP_SUMMARY"
+            else
+              HAS_AVX=$(rustc --print cfg $ACTIVE_CPU_FLAGS 2>&1 | grep -c 'target_feature="avx"' || true)
+              HAS_FMA=$(rustc --print cfg $ACTIVE_CPU_FLAGS 2>&1 | grep -c 'target_feature="fma"' || true)
+              if [ "$HAS_AVX" -gt 0 ] && [ "$HAS_FMA" -gt 0 ]; then
+                echo "> AVX+FMA active — asm-lowreg will run." >> "$GITHUB_STEP_SUMMARY"
+              else
+                echo "> **asm-lowreg will not appear below** — this target-cpu lacks AVX+FMA," >> "$GITHUB_STEP_SUMMARY"
+                echo "> so it's cfg-gated out at compile time (not a failure). avx-intrinsic/4x-independent/glam still run." >> "$GITHUB_STEP_SUMMARY"
+              fi
+            fi
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Cache cargo registry + build artifacts
+        if: steps.hwcheck.outputs.skip != 'true'
         uses: actions/cache@v4
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ runner.os }}-bench-asm-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-${{ runner.arch }}-bench-asm-${{ inputs.target_cpu }}-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-bench-asm-
-            ${{ runner.os }}-bench-
+            ${{ runner.os }}-${{ runner.arch }}-bench-asm-${{ inputs.target_cpu }}-
 
       - name: Run mat4 asm benchmark
+        if: steps.hwcheck.outputs.skip != 'true'
         run: |
-          cargo bench --bench vs_mat4_asm -p mid-math \
+          cargo bench --bench vs_mat4_asm -p mid-math $BENCH_FEATURES \
             2>&1 | tee bench-mat4-asm-raw.txt
-          echo "Exit: $?" >> "$GITHUB_STEP_SUMMARY"
+          echo "Bench exit code: $?" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Surface bench diagnostics
+        if: steps.hwcheck.outputs.skip != 'true'
+        run: |
+          {
+            echo "### Diagnostics"
+            echo '```'
+            grep -E 'took zero time|Unable to complete|Warning:|panicked|Completed [0-9]+ iterations' \
+              bench-mat4-asm-raw.txt | head -60 || echo "(none found)"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Publish bench summary
+        if: steps.hwcheck.outputs.skip != 'true'
+        env:
+          BENCH_RAW_FILE: bench-mat4-asm-raw.txt
         run: |
           {
             echo "## mat4 mul — asm vs intrinsic vs glam"
             echo ""
-            echo "Build: #${{ github.run_number }} &nbsp;|&nbsp; Rust: \`$(rustc --version | cut -d' ' -f2)\` &nbsp;|&nbsp; target-cpu: \`native\`"
+            echo "Build: #${{ github.run_number }} &nbsp;|&nbsp; Rust: \`$(rustc --version | cut -d' ' -f2)\` &nbsp;|&nbsp; target-cpu: \`${{ inputs.target_cpu }}\`"
             echo ""
             echo "> \`mid-math/4x-independent\` throughput ≈ cglm methodology (4 independent muls)."
             echo "> Lower is faster. All times are per operation."
             echo ""
             python3 scripts/bench_vs_all.py
           } >> "$GITHUB_STEP_SUMMARY"
-        env:
-          BENCH_RAW_FILE: bench-mat4-asm-raw.txt
 
       - name: Emit LLVM assembly for inspection
+        if: steps.hwcheck.outputs.skip != 'true' && (inputs.target_cpu == 'native' || inputs.target_cpu == 'x86-64-v3' || inputs.target_cpu == 'x86-64-v4')
         run: |
-          RUSTFLAGS="-C target-cpu=native --emit=asm" \
+          RUSTFLAGS="$ACTIVE_CPU_FLAGS --emit=asm" \
           cargo build -p mid-math --release 2>/dev/null || true
-          # Pull the col_pair / mat4_mul sections for the summary
           ASM_FILE=$(find target/release/deps -name 'mid_math-*.s' 2>/dev/null | head -1)
           if [ -n "$ASM_FILE" ]; then
             {
@@ -118,8 +194,9 @@ jobs:
           fi
 
       - name: Upload artifacts
+        if: steps.hwcheck.outputs.skip != 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: bench-mat4-asm-${{ github.run_number }}
+          name: bench-mat4-asm-${{ github.run_number }}-${{ inputs.target_cpu }}
           path: bench-mat4-asm-raw.txt
           retention-days: 30
