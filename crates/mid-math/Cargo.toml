@@ -11,7 +11,10 @@ crate-type = ["rlib", "cdylib", "staticlib"]
 [dependencies]
 
 [dev-dependencies]
-glam = { version = "0.28", features = [] }
+# Bumped 0.28 -> 0.33 (2026-07-16): 0.28 was ~5 minor releases stale, meaning
+# every "vs glam" bench result up to this point was measured against an old
+# release, not current glam. crates.io latest at time of bump: 0.33.2.
+glam = { version = "0.33", features = [] }
 
 [target.'cfg(target_arch = "wasm32")'.dev-dependencies]
 # default-features = false drops the rayon feature — so WASM compilation doesn't fail since it can't target wasi.
@@ -20,8 +23,10 @@ criterion = { version = "0.5", features = ["html_reports"], default-features = f
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 # Native builds keep default features (including rayon) for faster, parallel benchmark execution.
 criterion      = { version = "0.5", features = ["html_reports"] }
-nalgebra       = { version = "0.33" }
-ultraviolet    = { version = "0.9" }
+# Bumped 0.33 -> 0.35 (2026-07-16): crates.io latest at time of bump: 0.35.0.
+nalgebra       = { version = "0.35" }
+# Bumped 0.9 -> 0.10 (2026-07-16): crates.io latest at time of bump: 0.10.0.
+ultraviolet    = { version = "0.10" }
 matrixmultiply = { version = "0.3" }
 faer           = { version = "0.22" }
 vek            = { version = "0.17", features = ["repr_simd"] }
