@@ -4,10 +4,18 @@
 //! Gate: `#[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), target_feature = "avx512f"))]`
 //!
 //! ## Hardware availability
-//! GitHub Actions ubuntu-latest runners (2026) have full AVX-512:
-//!   avx512f avx512dq avx512bw avx512vl avx512vnni avx512ifma
-//!   avx512vbmi avx512bitalg avx512vbmi2 avx512vpopcntdq
-//! Activate with: `-C target-cpu=x86-64-v4` or `-C target-cpu=native`
+//! GitHub Actions `ubuntu-latest` runners do **not** have AVX-512 — they're
+//! AMD EPYC, confirmed by `/proc/cpuinfo` on the `native` bench build (no
+//! `avx512*` flags present at all) and by the `x86-64-v4` job in
+//! `Abemch-vs-all.yml`, which soft-skips itself via a hardware gate rather
+//! than SIGILL. This module has therefore never executed in CI — not for
+//! perf, and not for correctness (no tests live under `f32/avx512/`).
+//! Treat the "~2.0 ns target" below as a design target, not a measured
+//! result, until this runs on real AVX-512 hardware (Ice Lake / Zen4+,
+//! self-hosted or a different CI tier). The optimization itself stays —
+//! this note is just correcting what used to be claimed here.
+//! Activate with: `-C target-cpu=x86-64-v4` or `-C target-cpu=native` (on
+//! hardware that actually has it).
 //!
 //! ## Gate interaction with avx/
 //! avx512f implies avx+fma on all existing silicon.
