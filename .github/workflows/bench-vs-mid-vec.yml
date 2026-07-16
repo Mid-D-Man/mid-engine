@@ -66,6 +66,8 @@ jobs:
 
       # ── Publish summary ──────────────────────────────────────────────────────
       - name: Publish benchmark summary
+        env:
+          BENCH_RAW_FILE: bench-vs-mid-vec-raw.txt
         run: |
           {
             echo "## mid-math small-vec containers — Criterion Benchmarks"
@@ -101,7 +103,7 @@ jobs:
             echo "> persistent gap there is the signal worth digging into."
             echo ""
 
-            python3 scripts/bench_vs_mid_vec.py
+            python3 scripts/bench_vs_all.py
 
           } >> $GITHUB_STEP_SUMMARY
 
