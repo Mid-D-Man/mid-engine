@@ -43,8 +43,21 @@ jobs:
         run: |
           echo "Note: ${{ inputs.baseline_note }}"
           cargo bench --bench vs_rng -p mid-math 2>&1 | tee bench-rng-raw.txt
+          echo "Bench exit code: $?" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Surface bench diagnostics
+        run: |
+          {
+            echo "### Diagnostics"
+            echo '```'
+            grep -E 'took zero time|Unable to complete|Warning:|panicked|Completed [0-9]+ iterations' \
+              bench-rng-raw.txt | head -60 || echo "(none found)"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Publish summary
+        env:
+          BENCH_RAW_FILE: bench-rng-raw.txt
         run: |
           {
             echo "## mid-math RNG Benchmarks — Xorshift64 vs PCG32"
@@ -59,41 +72,7 @@ jobs:
             echo "> Both are deterministic: same seed → same sequence on x86, ARM, WASM."
             echo "> bulk\_1m sample\_size=20."
             echo ""
-            python3 - << 'PYEOF'
-          import re, sys
-
-          RE_ANSI   = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
-          RE_RESULT = re.compile(
-              r'^(\S[^\n]+?)\s+time:\s+\[\s*([\d.]+\s+\S+)\s+([\d.]+\s+\S+)\s+([\d.]+\s+\S+)\s*\]',
-              re.MULTILINE,
-          )
-
-          try:
-              raw = open('bench-rng-raw.txt', encoding='utf-8', errors='replace').read()
-          except FileNotFoundError:
-              print("*(bench-rng-raw.txt not found)*")
-              sys.exit(0)
-
-          text = RE_ANSI.sub('', raw)
-          current_group = None
-
-          for m in RE_RESULT.finditer(text):
-              name    = m.group(1).strip()
-              lo      = m.group(2).strip()
-              mean    = m.group(3).strip()
-              hi      = m.group(4).strip()
-              parts   = name.split('/')
-              group   = '/'.join(parts[:-1]) if len(parts) >= 2 else name
-              variant = parts[-1]            if len(parts) >= 2 else ''
-              if group != current_group:
-                  if current_group is not None:
-                      print()
-                  print(f"#### {group}")
-                  print("| Impl / Variant | Low | Mean | High |")
-                  print("|---|---|---|---|")
-                  current_group = group
-              print(f"| {variant} | {lo} | {mean} | {hi} |")
-          PYEOF
+            python3 scripts/bench_vs_all.py
 
           } >> $GITHUB_STEP_SUMMARY
 
