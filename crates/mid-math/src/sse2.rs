@@ -21,10 +21,21 @@ pub(crate) const fn m128_from_f32x4(a: [f32; 4]) -> __m128 {
 
 /// 3-lane dot product. Result lands in lane 0; lanes 1-3 are unspecified.
 ///
-/// **Requires lane 3 of `lhs`/`rhs` to be `0.0`** (the `Vec3` padding
-/// invariant) — the SSE4.1 variant below doesn't need this, since `_mm_dp_ps`
-/// excludes lane 3 from the sum via its immediate regardless of its value.
-#[cfg(not(target_feature = "sse4.1"))]
+/// **Requires lane 3 of `lhs`/`rhs` to be `0.0`** (the `Vec3` padding invariant).
+///
+/// ## Why this is the only path (no SSE4.1 `_mm_dp_ps` variant)
+///
+/// A `_mm_dp_ps`-based variant used to be gated in here under
+/// `target_feature = "sse4.1"`, on the theory that 1 instruction beats a
+/// mul+2×shuffle+2×add chain. Bench data across build #50/#54/#56/#57
+/// (native/x86-64/x86-64-v2/x86-64-v3) proved that theory wrong: `vec3/dot`
+/// and `vec4/dot` were tied with glam on plain SSE2 (~1.12 ns) but ~30-40%
+/// *slower* than glam (~1.56 ns vs ~1.12-1.14 ns) on every build where
+/// SSE4.1 was active. `DPPS` has notoriously poor latency on most x86
+/// microarchitectures (~11-14 cycles) — fewer instructions does not mean
+/// faster here, the shuffle chain pipelines better despite doing "more work".
+/// Left unconditional now on purpose; don't re-add a `sse4.1`-gated
+/// `_mm_dp_ps` path without a fresh benchmark proving it actually wins.
 #[inline(always)]
 pub(crate) unsafe fn dot3_in_x(lhs: __m128, rhs: __m128) -> __m128 {
     let mul = _mm_mul_ps(lhs, rhs);
@@ -34,19 +45,10 @@ pub(crate) unsafe fn dot3_in_x(lhs: __m128, rhs: __m128) -> __m128 {
     _mm_add_ps(xy, z)
 }
 
-/// SSE4.1: one `_mm_dp_ps` replaces the mul+2×shuffle+2×add chain above.
-/// Input mask `0111` sums only x,y,z (lane 3 excluded regardless of its
-/// value — no zero-padding invariant needed). Output mask `0001` writes
-/// only lane 0, matching the baseline's "lanes 1-3 unspecified" contract
-/// (they're now precisely `0.0` rather than merely unspecified).
-#[cfg(target_feature = "sse4.1")]
-#[inline(always)]
-pub(crate) unsafe fn dot3_in_x(lhs: __m128, rhs: __m128) -> __m128 {
-    _mm_dp_ps::<0b0111_0001>(lhs, rhs)
-}
-
 /// 4-lane dot product. Result lands in lane 0; lanes 1-3 are unspecified.
-#[cfg(not(target_feature = "sse4.1"))]
+///
+/// See `dot3_in_x` above for why there's no `_mm_dp_ps`/SSE4.1 variant here —
+/// same measured regression applies to `dot4`.
 #[inline(always)]
 pub(crate) unsafe fn dot4_in_x(lhs: __m128, rhs: __m128) -> __m128 {
     let mul      = _mm_mul_ps(lhs, rhs);
@@ -54,14 +56,6 @@ pub(crate) unsafe fn dot4_in_x(lhs: __m128, rhs: __m128) -> __m128 {
     let xz_yw    = _mm_add_ps(mul, zw_in_xy);
     let yw_in_0  = _mm_shuffle_ps::<0b00_00_00_01>(xz_yw, xz_yw);
     _mm_add_ps(xz_yw, yw_in_0)
-}
-
-/// SSE4.1: one `_mm_dp_ps` replaces the mul+2×shuffle+2×add chain above.
-/// Input mask `1111` sums all 4 lanes. Output mask `0001` writes only lane 0.
-#[cfg(target_feature = "sse4.1")]
-#[inline(always)]
-pub(crate) unsafe fn dot4_in_x(lhs: __m128, rhs: __m128) -> __m128 {
-    _mm_dp_ps::<0b1111_0001>(lhs, rhs)
 }
 
 /// Broadcast dot3 result to all 4 lanes via pairwise-add — 5 instructions.
@@ -89,7 +83,9 @@ pub(crate) unsafe fn dot4_in_x(lhs: __m128, rhs: __m128) -> __m128 {
 ///
 /// `swp` IMM `0b10_11_00_01`: out[0]=in[1], out[1]=in[0], out[2]=in[3], out[3]=in[2].
 /// `shf` IMM `0b01_00_11_10`: out[0]=sum[2], out[1]=sum[3], out[2]=sum[0], out[3]=sum[1].
-#[cfg(not(target_feature = "sse4.1"))]
+///
+/// No SSE4.1 `_mm_dp_ps` variant here on purpose — see `dot3_in_x` above,
+/// same measured regression (DPPS latency loses to this shuffle chain).
 #[inline(always)]
 pub(crate) unsafe fn dot3_into_m128(lhs: __m128, rhs: __m128) -> __m128 {
     let mul = _mm_mul_ps(lhs, rhs);                         // [x,   y,   z,   0  ]
@@ -97,16 +93,6 @@ pub(crate) unsafe fn dot3_into_m128(lhs: __m128, rhs: __m128) -> __m128 {
     let sum = _mm_add_ps(mul, swp);                         // [x+y, x+y, z,   z  ]
     let shf = _mm_shuffle_ps::<0b01_00_11_10>(sum, sum);   // [z,   z,   x+y, x+y]
     _mm_add_ps(sum, shf)                                    // [dot, dot, dot, dot ]
-}
-
-/// SSE4.1: one `_mm_dp_ps` replaces the 5-instruction chain above. Input
-/// mask `0111` sums only x,y,z — no zero-padding invariant needed, lane 3
-/// is excluded from the sum regardless of its value. Output mask `1111`
-/// broadcasts to all 4 lanes directly.
-#[cfg(target_feature = "sse4.1")]
-#[inline(always)]
-pub(crate) unsafe fn dot3_into_m128(lhs: __m128, rhs: __m128) -> __m128 {
-    _mm_dp_ps::<0b0111_1111>(lhs, rhs)
 }
 
 /// Broadcast dot4 result to all 4 lanes via pairwise-add — 5 instructions.
@@ -134,7 +120,11 @@ pub(crate) unsafe fn dot3_into_m128(lhs: __m128, rhs: __m128) -> __m128 {
 ///
 /// `swp` IMM `0b10_11_00_01`: out[0]=in[1], out[1]=in[0], out[2]=in[3], out[3]=in[2].
 /// `shf` IMM `0b01_00_11_10`: out[0]=sum[2], out[1]=sum[3], out[2]=sum[0], out[3]=sum[1].
-#[cfg(not(target_feature = "sse4.1"))]
+///
+/// No SSE4.1 `_mm_dp_ps` variant here on purpose — see `dot3_in_x` above,
+/// same measured regression (DPPS latency loses to this shuffle chain).
+/// This one matters most: it's on the hot path for `Vec4::normalize`,
+/// `Quat::normalize`, `Quat::normalize_fast`, `Quat::nlerp`, `Quat::slerp`.
 #[inline(always)]
 pub(crate) unsafe fn dot4_into_m128(lhs: __m128, rhs: __m128) -> __m128 {
     let mul = _mm_mul_ps(lhs, rhs);                         // [x,   y,   z,   w  ]
@@ -142,16 +132,6 @@ pub(crate) unsafe fn dot4_into_m128(lhs: __m128, rhs: __m128) -> __m128 {
     let sum = _mm_add_ps(mul, swp);                         // [x+y, x+y, z+w, z+w]
     let shf = _mm_shuffle_ps::<0b01_00_11_10>(sum, sum);   // [z+w, z+w, x+y, x+y]
     _mm_add_ps(sum, shf)                                    // [dot, dot, dot, dot ]
-}
-
-/// SSE4.1: one `_mm_dp_ps` replaces the 5-instruction chain above. Input
-/// mask `1111` sums all 4 lanes, output mask `1111` broadcasts to all 4.
-/// Same call sites benefit automatically: `Vec4::normalize`, `Quat::normalize`,
-/// `Quat::normalize_fast`, `Quat::nlerp`, `Quat::slerp`.
-#[cfg(target_feature = "sse4.1")]
-#[inline(always)]
-pub(crate) unsafe fn dot4_into_m128(lhs: __m128, rhs: __m128) -> __m128 {
-    _mm_dp_ps::<0b1111_1111>(lhs, rhs)
 }
 
 /// Scalar f32 dot3.
@@ -335,4 +315,4 @@ pub(crate) unsafe fn dot4d_into_m128d(lo_a: __m128d, hi_a: __m128d,
 #[inline(always)]
 pub(crate) unsafe fn m128d_abs(v: __m128d) -> __m128d {
     _mm_andnot_pd(_mm_set1_pd(-0.0), v)
-                               }
+        }
