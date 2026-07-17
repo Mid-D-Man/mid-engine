@@ -188,6 +188,7 @@ pub use wide::float::Vec3x8;
 pub use curves::{
     Interpolate, QuadraticBezier, CubicBezier, CatmullRom, CatmullRomAlpha,
     HermiteSpline, HermiteKey, KochanekBartels, TcbKey, CardinalSpline, BSpline,
+    CURVE_N,
 };
 
 // ── Fixed-point ───────────────────────────────────────────────────────────────
@@ -245,7 +246,7 @@ pub use camera::{
     perspective_infinite_rh, perspective_infinite_rh_gl, perspective_reversed_z_rh,
     perspective_infinite_lh, perspective_reversed_z_lh,
     perspective_decompose, perspective_resize,
-    csm_split_depths, sub_frustum_corners,
+    csm_split_depths, sub_frustum_corners, CSM_N,
 };
 
 // ── Geometry ──────────────────────────────────────────────────────────────────
