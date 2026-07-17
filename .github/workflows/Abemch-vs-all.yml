@@ -11,7 +11,10 @@ on:
           x86-64-v3  = AVX2+FMA+BMI2 guaranteed (Haswell+) — use for OPT-7 AVX2 work, target ~4.0 ns.
           x86-64-v2  = SSE4.2 baseline — no AVX.
           x86-64     = SSE2 only — baseline numbers before AVX2 work lands.
-          neon       = ARM NEON acceleration (runs on native aarch64 runner).
+          neon       = ARM NEON + whatever else -C target-cpu=native finds on
+                       this runner (fp16/dotprod/rdm/fhm where present; not
+                       sve/sve2, target_feature="sve" isn't expressible on
+                       stable Rust yet regardless of target-cpu).
           wasm       = WebAssembly wasm32-wasip1 target + simd128 via wasmtime.
           scalar     = pure scalar fallback, no SIMD backend at all — needs
                        --features force-scalar since sse2 is otherwise
@@ -51,8 +54,22 @@ jobs:
             echo "ACTIVE_CPU_FLAGS=-C target-feature=+simd128" >> $GITHUB_ENV
             echo "BENCH_FEATURES=" >> $GITHUB_ENV
           elif [ "${{ inputs.target_cpu }}" = "neon" ]; then
+            # Previously left RUSTFLAGS empty entirely, which meant this
+            # only ever got the *default* aarch64-unknown-linux-gnu codegen
+            # (baseline NEON, nothing else) -- regardless of what the actual
+            # runner CPU supports. This is a native aarch64 runner (host ==
+            # target, no cross-compile), so target-cpu=native is safe as
+            # plain RUSTFLAGS here -- unlike the x86-64-v4 case below, there's
+            # no host/target mismatch that could SIGILL a build script.
+            # Confirmed via /proc/cpuinfo on this runner: fp16 (fphp/asimdhp),
+            # dotprod (asimddp), rdm (asimdrdm), fhm (asimdfhm) are all
+            # present but weren't being enabled. sve/sve2 are also present in
+            # hardware but stay off regardless -- `target_feature = "sve"`
+            # can't be expressed on stable Rust yet (rust-lang/rust#111167),
+            # see f32/sve/mod.rs.
+            echo "RUSTFLAGS=-C target-cpu=native" >> $GITHUB_ENV
             echo "BENCH_TARGET=" >> $GITHUB_ENV
-            echo "ACTIVE_CPU_FLAGS=" >> $GITHUB_ENV
+            echo "ACTIVE_CPU_FLAGS=-C target-cpu=native" >> $GITHUB_ENV
             echo "BENCH_FEATURES=" >> $GITHUB_ENV
           elif [ "${{ inputs.target_cpu }}" = "scalar" ]; then
             # No target-cpu flag needed — force-scalar bypasses the sse2 cfg
