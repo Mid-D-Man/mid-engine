@@ -1,7 +1,7 @@
 // crates/mid-math/src/curves/interpolate.rs
 //! The `Interpolate` trait — implemented by every type a curve can operate on.
 
-use crate::{Vec2, Vec3, Quat};
+use crate::{Vec2, Vec3, Quat, DVec2, DVec3, DQuat};
 
 /// Types that support linear interpolation and scalar scaling.
 ///
@@ -52,4 +52,36 @@ impl Interpolate for Quat {
     #[inline] fn scale(self, s: f32) -> Quat { self * s }
     #[inline] fn add(self, rhs: Quat) -> Quat { self + rhs }
     #[inline] fn sub(self, rhs: Quat) -> Quat { self - rhs }
-                                                               }
+}
+
+// ── f64 (large-world precision) ─────────────────────────────────────────────
+//
+// The curve parameter `t` stays `f32` here, matching the bare `f64` scalar
+// impl above — precision belongs to the position/value being interpolated,
+// not the blend weight, so there's no loss from that. Every curve type in
+// this module is already generic over `T: Interpolate`, so these three
+// impls are the entire cost of `HermiteSpline<DVec3>`,
+// `CatmullRom<DVec3>`, etc. working — nothing else in `curves/` needed to
+// change.
+
+impl Interpolate for DVec2 {
+    #[inline] fn lerp(self, rhs: DVec2, t: f32) -> DVec2 { self.lerp(rhs, t as f64) }
+    #[inline] fn scale(self, s: f32) -> DVec2 { self * (s as f64) }
+    #[inline] fn add(self, rhs: DVec2) -> DVec2 { self + rhs }
+    #[inline] fn sub(self, rhs: DVec2) -> DVec2 { self - rhs }
+}
+
+impl Interpolate for DVec3 {
+    #[inline] fn lerp(self, rhs: DVec3, t: f32) -> DVec3 { self.lerp(rhs, t as f64) }
+    #[inline] fn scale(self, s: f32) -> DVec3 { self * (s as f64) }
+    #[inline] fn add(self, rhs: DVec3) -> DVec3 { self + rhs }
+    #[inline] fn sub(self, rhs: DVec3) -> DVec3 { self - rhs }
+}
+
+/// Quaternion interpolation uses slerp instead of lerp for correctness.
+impl Interpolate for DQuat {
+    #[inline] fn lerp(self, rhs: DQuat, t: f32) -> DQuat { self.slerp(rhs, t as f64) }
+    #[inline] fn scale(self, s: f32) -> DQuat { self * (s as f64) }
+    #[inline] fn add(self, rhs: DQuat) -> DQuat { self + rhs }
+    #[inline] fn sub(self, rhs: DQuat) -> DQuat { self - rhs }
+    }
