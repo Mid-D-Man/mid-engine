@@ -25,6 +25,21 @@ impl Mask4 {
         })
     }
 
+    /// Index (0-3) of the lowest-numbered true lane, or `None` if none are true.
+    #[inline]
+    pub fn first_set_lane(self) -> Option<u32> {
+        let b = self.bitmask();
+        if b == 0 { None } else { Some(b.trailing_zeros()) }
+    }
+
+    /// Number of true lanes (0-4).
+    #[inline]
+    pub fn count_set(self) -> u32 { self.bitmask().count_ones() }
+
+    /// Iterate the indices (0-3) of true lanes, lowest to highest.
+    #[inline]
+    pub fn iter_set_lanes(self) -> Mask4LaneIter { Mask4LaneIter { bits: self.bitmask() } }
+
     #[allow(dead_code)]
     #[inline(always)]
     pub(crate) fn from_bools(a: bool, b: bool, c: bool, d: bool) -> Self {
@@ -32,6 +47,26 @@ impl Mask4 {
         Mask4([lane(a), lane(b), lane(c), lane(d)])
     }
 }
+
+/// Iterator over the true-lane indices of a [`Mask4`]. See [`Mask4::iter_set_lanes`].
+pub struct Mask4LaneIter { bits: u32 }
+
+impl Iterator for Mask4LaneIter {
+    type Item = u32;
+    #[inline]
+    fn next(&mut self) -> Option<u32> {
+        if self.bits == 0 { return None; }
+        let idx = self.bits.trailing_zeros();
+        self.bits &= self.bits - 1; // clear lowest set bit
+        Some(idx)
+    }
+    #[inline]
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let n = self.bits.count_ones() as usize;
+        (n, Some(n))
+    }
+}
+impl ExactSizeIterator for Mask4LaneIter {}
 
 impl BitAnd for Mask4 { type Output=Self; fn bitand(self, r: Self) -> Self { Mask4([self.0[0]&r.0[0], self.0[1]&r.0[1], self.0[2]&r.0[2], self.0[3]&r.0[3]]) } }
 impl BitAndAssign for Mask4 { fn bitand_assign(&mut self, r: Self) { *self = *self & r; } }
@@ -46,4 +81,4 @@ impl fmt::Debug for Mask4 {
         let b = self.bitmask();
         write!(f, "Mask4({},{},{},{})", b&1!=0, b>>1&1!=0, b>>2&1!=0, b>>3&1!=0)
     }
-                                                                    }
+}
