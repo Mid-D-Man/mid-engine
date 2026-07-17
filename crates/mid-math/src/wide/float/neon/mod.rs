@@ -42,7 +42,7 @@ pub mod f32x4;
 pub mod vec3x4;
 pub mod quatx4;
 
-pub use mask4::Mask4;
+pub use mask4::{Mask4, Mask4LaneIter};
 pub use vec3x4::Vec3x4;
 pub use quatx4::QuatX4;
 // f32x4 type NOT re-exported at module level (name clash with module).
