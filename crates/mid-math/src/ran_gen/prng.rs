@@ -24,6 +24,22 @@ impl Xorshift64 {
         Self(if seed == 0 { 1 } else { seed })
     }
 
+    /// Seed from hardware entropy (RDSEED/RDRAND, x86_64 only) if available,
+    /// falling back to `fallback_seed` otherwise — see
+    /// [`crate::ran_gen::hardware_seed_u64`] for exactly when that happens.
+    #[inline]
+    pub fn new_from_hardware_entropy_or(fallback_seed: u64) -> Self {
+        Self::new_safe(crate::ran_gen::hardware_seed_u64().unwrap_or(fallback_seed))
+    }
+
+    /// Seed from hardware entropy. `None` if unavailable (non-x86_64 target,
+    /// build without `rdrand`/`rdseed` target features, or both transiently
+    /// exhausted their retry budget) — caller decides the fallback.
+    #[inline]
+    pub fn new_from_hardware_entropy() -> Option<Self> {
+        crate::ran_gen::hardware_seed_u64().map(Self::new_safe)
+    }
+
     // ── Core generation ───────────────────────────────────────────────────────
 
     #[inline]
@@ -243,4 +259,4 @@ impl fmt::Debug for Xorshift64 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "Xorshift64(state={:#018x})", self.0)
     }
-    }
+             }
