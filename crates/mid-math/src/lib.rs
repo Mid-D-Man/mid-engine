@@ -175,7 +175,7 @@ pub use wide::int::{IMask4, IMask8, IMask16};
 pub use wide::int::{i32x4, u32x4, i16x8, u16x8, i8x16, u8x16};
 
 // ── Wide SIMD — float ─────────────────────────────────────────────────────────
-pub use wide::float::Mask4;
+pub use wide::float::{Mask4, Mask4LaneIter};
 #[allow(non_camel_case_types)]
 pub use wide::float::f32x4;
 pub use wide::float::Vec3x4;
@@ -221,6 +221,7 @@ pub use helpers::octahedral::{
 // ── RNG ───────────────────────────────────────────────────────────────────────
 pub use ran_gen::prng::Xorshift64;
 pub use ran_gen::pcg::Pcg32;
+pub use ran_gen::hardware_seed_u64;
 
 // ── String hashing ────────────────────────────────────────────────────────────
 pub use string::StringId;
