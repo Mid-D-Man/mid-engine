@@ -36,7 +36,7 @@ pub(crate) mod scalar;
 pub(crate) mod sse2;
 
 #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), not(feature = "force-scalar")))]
-pub use sse2::{Mask4, Vec3x4, QuatX4};
+pub use sse2::{Mask4, Mask4LaneIter, Vec3x4, QuatX4};
 
 #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), not(feature = "force-scalar")))]
 #[allow(non_camel_case_types)]
@@ -66,7 +66,7 @@ pub use avx2::Vec3x8;
 pub(crate) mod neon;
 
 #[cfg(all(target_arch = "aarch64", not(feature = "force-scalar")))]
-pub use neon::{Mask4, Vec3x4, QuatX4};
+pub use neon::{Mask4, Mask4LaneIter, Vec3x4, QuatX4};
 
 #[cfg(all(target_arch = "aarch64", not(feature = "force-scalar")))]
 #[allow(non_camel_case_types)]
@@ -88,7 +88,7 @@ pub(crate) mod wasm;
     target_feature = "simd128",
     not(feature = "force-scalar"),
 ))]
-pub use wasm::{Mask4, Vec3x4, QuatX4};
+pub use wasm::{Mask4, Mask4LaneIter, Vec3x4, QuatX4};
 
 #[cfg(all(
     any(target_arch = "wasm32", target_arch = "wasm64"),
@@ -114,7 +114,7 @@ pub use wasm::f32x4::f32x4;
         ),
     )),
 ))]
-pub use scalar::{Mask4, Vec3x4, QuatX4};
+pub use scalar::{Mask4, Mask4LaneIter, Vec3x4, QuatX4};
 
 #[cfg(any(
     feature = "force-scalar",
