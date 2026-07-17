@@ -50,7 +50,49 @@ impl Mask4 {
                 | (vgetq_lane_u32::<3>(s) << 3)
         }
     }
+
+    // ── Lane iteration ──────────────────────────────────────────────────────
+    //
+    // Portable — operates on the 4-bit `bitmask()` value via
+    // `trailing_zeros`/`count_ones`, which LLVM lowers to CLZ-based
+    // sequences on aarch64 (no BMI1/POPCNT here, that's x86-only, but the
+    // same API shape applies everywhere the mask exists).
+
+    /// Index (0-3) of the lowest-numbered true lane, or `None` if none are true.
+    #[inline]
+    pub fn first_set_lane(self) -> Option<u32> {
+        let b = self.bitmask();
+        if b == 0 { None } else { Some(b.trailing_zeros()) }
+    }
+
+    /// Number of true lanes (0-4).
+    #[inline]
+    pub fn count_set(self) -> u32 { self.bitmask().count_ones() }
+
+    /// Iterate the indices (0-3) of true lanes, lowest to highest.
+    #[inline]
+    pub fn iter_set_lanes(self) -> Mask4LaneIter { Mask4LaneIter { bits: self.bitmask() } }
 }
+
+/// Iterator over the true-lane indices of a [`Mask4`]. See [`Mask4::iter_set_lanes`].
+pub struct Mask4LaneIter { bits: u32 }
+
+impl Iterator for Mask4LaneIter {
+    type Item = u32;
+    #[inline]
+    fn next(&mut self) -> Option<u32> {
+        if self.bits == 0 { return None; }
+        let idx = self.bits.trailing_zeros();
+        self.bits &= self.bits - 1; // clear lowest set bit
+        Some(idx)
+    }
+    #[inline]
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let n = self.bits.count_ones() as usize;
+        (n, Some(n))
+    }
+}
+impl ExactSizeIterator for Mask4LaneIter {}
 
 impl BitAnd for Mask4 {
     type Output = Self;
@@ -88,4 +130,4 @@ impl fmt::Debug for Mask4 {
         write!(f, "Mask4({}, {}, {}, {})",
             b & 1 != 0, b >> 1 & 1 != 0, b >> 2 & 1 != 0, b >> 3 & 1 != 0)
     }
-          }
+                                                                }
