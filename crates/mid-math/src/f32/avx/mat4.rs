@@ -43,6 +43,7 @@ use core::arch::x86_64::*;
 
 use crate::f32::sse2::mat4::Mat4;
 use crate::f32::sse2::vec4::Vec4;
+use crate::f32::sse2::vec3::Vec3;
 
 // ── Inner helper ──────────────────────────────────────────────────────────────
 
@@ -135,3 +136,48 @@ impl Mul<Mat4> for Mat4 {
 }
 // MulAssign lives in sse2/mat4.rs (ungated) — delegates to whichever Mul<Mat4>
 // is in scope. No second definition needed here.
+
+// ── Transform helpers, FMA-fused ────────────────────────────────────────────
+//
+// sse2/mat4.rs's plain versions step aside under this same
+// not(avx512f) && avx+fma gate (see the #[cfg] on each method there).
+//
+// Same 128-bit __m128 shape as the SSE2 version -- this isn't the 256-bit
+// two-column trick col_pair() uses above, transform_point only ever has one
+// output column. The win is purely instruction count: 3 mul + 3 add (6 ops)
+// collapses to 1 mul + 2 fmadd + 1 add (4 ops) via _mm_fmadd_ps, which is
+// available on any target with target_feature="fma" regardless of whether
+// 256-bit AVX registers are in play elsewhere.
+//
+// This previously didn't exist at all -- transform_point ran the plain SSE2
+// path unconditionally on every x86 tier, including native/x86-64-v3, which
+// left FMA on the table for the single most-called op in the entity-transform
+// benchmarks. Re-bench after this lands; whether it closes the loop-level gap
+// against glam or not, it's a straightforward win on its own terms.
+#[cfg(not(target_feature = "avx512f"))]
+impl Mat4 {
+    #[inline(always)]
+    pub fn transform_point(self, p: Vec3) -> Vec3 {
+        unsafe {
+            let bx = _mm_shuffle_ps::<0b00_00_00_00>(p.0, p.0);
+            let by = _mm_shuffle_ps::<0b01_01_01_01>(p.0, p.0);
+            let bz = _mm_shuffle_ps::<0b10_10_10_10>(p.0, p.0);
+            let res = _mm_mul_ps(self.x_axis.0, bx);
+            let res = _mm_fmadd_ps(self.y_axis.0, by, res);
+            let res = _mm_fmadd_ps(self.z_axis.0, bz, res);
+            Vec3(_mm_add_ps(res, self.w_axis.0))
+        }
+    }
+
+    #[inline(always)]
+    pub fn transform_vector(self, v: Vec3) -> Vec3 {
+        unsafe {
+            let bx = _mm_shuffle_ps::<0b00_00_00_00>(v.0, v.0);
+            let by = _mm_shuffle_ps::<0b01_01_01_01>(v.0, v.0);
+            let bz = _mm_shuffle_ps::<0b10_10_10_10>(v.0, v.0);
+            let res = _mm_mul_ps(self.x_axis.0, bx);
+            let res = _mm_fmadd_ps(self.y_axis.0, by, res);
+            Vec3(_mm_fmadd_ps(self.z_axis.0, bz, res))
+        }
+    }
+                }
