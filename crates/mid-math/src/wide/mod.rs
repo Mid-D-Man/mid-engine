@@ -13,7 +13,7 @@ pub use int::{i32x4, u32x4, i16x8, u16x8, i8x16, u8x16};
 
 // ── Float wide re-exports ─────────────────────────────────────────────────────
 
-pub use float::Mask4;
+pub use float::{Mask4, Mask4LaneIter};
 
 #[allow(non_camel_case_types)]
 pub use float::f32x4;
