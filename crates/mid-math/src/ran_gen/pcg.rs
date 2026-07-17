@@ -35,6 +35,22 @@ impl Pcg32 {
     #[inline]
     pub fn new_single_stream(seed: u64) -> Self { Self::new(seed, 1) }
 
+    /// Seed from hardware entropy (RDSEED/RDRAND, x86_64 only) if available,
+    /// falling back to `fallback_seed` otherwise. `seq` picks the stream as
+    /// usual — see [`Pcg32::new`].
+    #[inline]
+    pub fn new_from_hardware_entropy_or(seq: u64, fallback_seed: u64) -> Self {
+        Self::new(crate::ran_gen::hardware_seed_u64().unwrap_or(fallback_seed), seq)
+    }
+
+    /// Seed from hardware entropy. `None` if unavailable — see
+    /// [`crate::Xorshift64::new_from_hardware_entropy`] for exactly when
+    /// that happens.
+    #[inline]
+    pub fn new_from_hardware_entropy(seq: u64) -> Option<Self> {
+        crate::ran_gen::hardware_seed_u64().map(|s| Self::new(s, seq))
+    }
+
     // ── Core generation ───────────────────────────────────────────────────────
 
     #[inline]
@@ -256,4 +272,4 @@ impl fmt::Debug for Pcg32 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "Pcg32(state={:#018x}, inc={:#018x})", self.state, self.inc)
     }
-        }
+    }
