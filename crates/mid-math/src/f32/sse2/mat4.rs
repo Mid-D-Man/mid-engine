@@ -386,7 +386,14 @@ impl Mat4 {
     }
 
     // ── Transform helpers ─────────────────────────────────────────────────────
+    //
+    // Gated off when avx+fma is present -- avx/mat4.rs provides an FMA-fused
+    // replacement (3 mul+add pairs -> 1 mul + 2 fmadd, same shape as the
+    // Mul<Mat4> split below). Previously these ran unconditionally on every
+    // x86 tier including native/x86-64-v3, leaving FMA on the table for the
+    // single most-called transform in the whole entity-transform hot loop.
 
+    #[cfg(not(all(target_feature = "avx", target_feature = "fma")))]
     #[inline]
     pub fn transform_point(self, p: Vec3) -> Vec3 {
         unsafe {
@@ -400,6 +407,7 @@ impl Mat4 {
         }
     }
 
+    #[cfg(not(all(target_feature = "avx", target_feature = "fma")))]
     #[inline]
     pub fn transform_vector(self, v: Vec3) -> Vec3 {
         unsafe {
@@ -772,4 +780,4 @@ impl fmt::Display for Mat4 {
         }
         Ok(())
     }
-        }
+                                              }
