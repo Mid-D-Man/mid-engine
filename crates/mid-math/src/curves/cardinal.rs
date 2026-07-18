@@ -15,6 +15,8 @@
 
 use super::interpolate::Interpolate;
 use super::hermite::evaluate_segment;
+use super::CURVE_N;
+use crate::MidVec;
 
 /// Cardinal spline through a list of control points.
 ///
@@ -22,7 +24,7 @@ use super::hermite::evaluate_segment;
 /// Values outside [0,1] produce overshoot (intentional in some animation styles).
 #[derive(Clone, Debug)]
 pub struct CardinalSpline<T> {
-    pub points:  Vec<T>,
+    pub points:  MidVec<T, CURVE_N>,
     /// Tension parameter. 0 = Catmull-Rom tangents. 1 = straight lines.
     pub tension: f32,
 }
@@ -32,7 +34,7 @@ impl<T: Interpolate + Clone> CardinalSpline<T> {
     #[inline]
     pub fn new(points: Vec<T>, tension: f32) -> Self {
         assert!(points.len() >= 2, "CardinalSpline requires at least 2 points");
-        Self { points, tension }
+        Self { points: MidVec::from_vec_or_inline(points), tension }
     }
 
     /// Create with tension = 0 (equivalent to uniform Catmull-Rom).
