@@ -19,6 +19,8 @@
 //!           Physics velocity integration. Procedural walk cycle blending.
 
 use super::interpolate::Interpolate;
+use super::CURVE_N;
+use crate::MidVec;
 
 /// A single keyframe — position + incoming and outgoing tangent.
 ///
@@ -66,14 +68,14 @@ impl<T: Default> Default for HermiteKey<T> {
 /// Minimum 2 keys required.
 #[derive(Clone, Debug)]
 pub struct HermiteSpline<T> {
-    pub keys: Vec<HermiteKey<T>>,
+    pub keys: MidVec<HermiteKey<T>, CURVE_N>,
 }
 
 impl<T: Interpolate + Clone> HermiteSpline<T> {
     #[inline]
     pub fn new(keys: Vec<HermiteKey<T>>) -> Self {
         assert!(keys.len() >= 2, "HermiteSpline requires at least 2 keys");
-        Self { keys }
+        Self { keys: MidVec::from_vec_or_inline(keys) }
     }
 
     /// Number of segments.
@@ -172,4 +174,4 @@ pub(super) fn derivative_segment<T: Interpolate>(
         .add(m0.scale(dh10))
         .add(p1.scale(dh01))
         .add(m1.scale(dh11))
-}
+    }
