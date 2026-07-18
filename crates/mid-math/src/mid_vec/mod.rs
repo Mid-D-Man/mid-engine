@@ -123,6 +123,35 @@ impl<T, const N: usize> MidVec<T, N> {
         Self { len: Self::pack(len, true), raw: RawMidVec::new_heap(ptr, cap) }
     }
 
+    /// Like `from_vec`, but actually uses inline storage when the incoming
+    /// `Vec` is small enough to fit (`len() <= N`).
+    ///
+    /// `from_vec` always adopts the `Vec`'s existing heap allocation
+    /// zero-copy — correct and cheap when the `Vec` is already large, but
+    /// if it only has 2 elements and `N` is 8, `from_vec` leaves it
+    /// permanently on the heap anyway, defeating the entire point of
+    /// having inline storage. This is the right constructor for "ordinary
+    /// application code handed us a `Vec`, probably small" call sites
+    /// (e.g. spline control points); use plain `from_vec` when the source
+    /// is itself another spill-aware container that already decided it
+    /// needed the heap.
+    ///
+    /// Costs one extra per-element move for the small case (`vec.len() <=
+    /// N`) since the elements have to be walked out of the old allocation
+    /// into the new inline one before the old `Vec` is dropped. Identical
+    /// zero-copy behaviour to `from_vec` once `vec.len() > N`.
+    pub fn from_vec_or_inline(vec: Vec<T>) -> Self {
+        if vec.len() <= N {
+            let mut v = Self::new();
+            for item in vec {
+                v.push(item);
+            }
+            v
+        } else {
+            Self::from_vec(vec)
+        }
+    }
+
     /// Inverse of `from_vec`: zero-copy if already spilled to the heap,
     /// otherwise allocates once and copies the `N` (or fewer) inline
     /// elements out.
@@ -607,4 +636,4 @@ impl<T, const N: usize> Extend<T> for MidVec<T, N> {
             self.push(item);
         }
     }
-                }
+                          }
