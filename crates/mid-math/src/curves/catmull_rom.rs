@@ -20,6 +20,8 @@
 //!           point-to-point interpolation.
 
 use super::interpolate::Interpolate;
+use super::CURVE_N;
+use crate::MidVec;
 
 /// Alpha parameterisation for Catmull-Rom.
 ///
@@ -63,7 +65,7 @@ impl CatmullRomAlpha {
 #[derive(Clone, Debug)]
 pub struct CatmullRom<T> {
     /// Control points. Must have ≥ 2 interior points (≥ 4 total with phantoms).
-    pub points: Vec<T>,
+    pub points: MidVec<T, CURVE_N>,
     pub alpha:  CatmullRomAlpha,
 }
 
@@ -71,13 +73,13 @@ impl<T: Interpolate + Clone> CatmullRom<T> {
     /// Create with uniform alpha (fastest).
     #[inline]
     pub fn new(points: Vec<T>) -> Self {
-        Self { points, alpha: CatmullRomAlpha::Centripetal }
+        Self { points: MidVec::from_vec_or_inline(points), alpha: CatmullRomAlpha::Centripetal }
     }
 
     /// Create with explicit alpha.
     #[inline]
     pub fn with_alpha(points: Vec<T>, alpha: CatmullRomAlpha) -> Self {
-        Self { points, alpha }
+        Self { points: MidVec::from_vec_or_inline(points), alpha }
     }
 
     /// Number of curve segments. Each segment spans two adjacent control points.
@@ -193,4 +195,4 @@ fn parametric_segment<T: Interpolate>(
     // concrete point type. We provide the uniform fallback here and a
     // specialised impl for Vec3 below.
     uniform_segment(p0, p1, p2, p3, t)
-          }
+                                        }
