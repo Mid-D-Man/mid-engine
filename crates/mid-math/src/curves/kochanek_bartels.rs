@@ -28,6 +28,8 @@
 
 use super::interpolate::Interpolate;
 use super::hermite::{evaluate_segment, derivative_segment};
+use super::CURVE_N;
+use crate::MidVec;
 
 /// One TCB keyframe.
 #[derive(Clone, Copy, Debug)]
@@ -57,14 +59,14 @@ impl<T: Clone> TcbKey<T> {
 /// phantom points for the out-of-range neighbours.
 #[derive(Clone, Debug)]
 pub struct KochanekBartels<T> {
-    pub keys: Vec<TcbKey<T>>,
+    pub keys: MidVec<TcbKey<T>, CURVE_N>,
 }
 
 impl<T: Interpolate + Clone> KochanekBartels<T> {
     #[inline]
     pub fn new(keys: Vec<TcbKey<T>>) -> Self {
         assert!(keys.len() >= 2, "KochanekBartels requires at least 2 keys");
-        Self { keys }
+        Self { keys: MidVec::from_vec_or_inline(keys) }
     }
 
     /// Number of segments.
@@ -147,4 +149,4 @@ impl<T: Interpolate + Clone> KochanekBartels<T> {
             out[i] = self.evaluate(i as f32 / n as f32 * total);
         }
     }
-          }
+    }
