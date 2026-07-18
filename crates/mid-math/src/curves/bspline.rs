@@ -24,6 +24,8 @@
 //!           interpolation is not required, hair/ribbon rendering.
 
 use super::interpolate::Interpolate;
+use super::CURVE_N;
+use crate::MidVec;
 
 /// Uniform cubic B-spline. Degree 3, C² continuous.
 ///
@@ -35,7 +37,7 @@ use super::interpolate::Interpolate;
 /// you need the curve to interpolate all points.
 #[derive(Clone, Debug)]
 pub struct BSpline<T> {
-    pub control_points: Vec<T>,
+    pub control_points: MidVec<T, CURVE_N>,
 }
 
 impl<T: Interpolate + Clone> BSpline<T> {
@@ -45,7 +47,7 @@ impl<T: Interpolate + Clone> BSpline<T> {
             control_points.len() >= 4,
             "BSpline (cubic) requires at least 4 control points"
         );
-        Self { control_points }
+        Self { control_points: MidVec::from_vec_or_inline(control_points) }
     }
 
     /// Number of curve segments.
@@ -153,4 +155,4 @@ fn cubic_bspline_derivative<T: Interpolate>(p0: T, p1: T, p2: T, p3: T, t: f32) 
         .add(p1.scale(c1))
         .add(p2.scale(c2))
         .add(p3.scale(c3))
-      }
+}
