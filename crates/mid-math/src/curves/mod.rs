@@ -25,6 +25,14 @@ pub mod kochanek_bartels;
 pub mod bspline;
 pub mod cardinal;
 
+/// Inline capacity shared by every curve type's control-point/keyframe
+/// storage (`MidVec<_, CURVE_N>`). 8 matches what `benches/vs_mid_vec.rs`
+/// and `benches/vs_curves.rs` already measured this crate's curve types
+/// against — control points/keyframes are typically 4-16 elements, so this
+/// covers the common case with zero heap allocations and spills gracefully
+/// for anything larger.
+pub const CURVE_N: usize = 8;
+
 pub use interpolate::Interpolate;
 pub use bezier::{QuadraticBezier, CubicBezier};
 pub use catmull_rom::{CatmullRom, CatmullRomAlpha};
