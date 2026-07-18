@@ -51,4 +51,4 @@ pub use projection::{
 
 pub use ray::{unproject, unproject_separate, picking_ray};
 
-pub use csm::{csm_split_depths, sub_frustum_corners};
+pub use csm::{csm_split_depths, sub_frustum_corners, CSM_N};
