@@ -84,4 +84,4 @@ impl Interpolate for DQuat {
     #[inline] fn scale(self, s: f32) -> DQuat { self * (s as f64) }
     #[inline] fn add(self, rhs: DQuat) -> DQuat { self + rhs }
     #[inline] fn sub(self, rhs: DQuat) -> DQuat { self - rhs }
-    }
+        }
