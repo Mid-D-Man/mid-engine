@@ -1,9 +1,49 @@
 # .github/workflows/bench-vs-fixed.yml
+# Fixed-point benchmark: mid-math Fixed<FRAC> vs its own f32/f64 float
+# equivalents (there's no external crate with a comparable const-generic
+# fixed-point type to bench against — this is a self-comparison, unlike
+# vs_all.rs/vs_all_f64.rs).
+# Run: Actions → "mid-math — bench fixed-point" → Run workflow
+# DO NOT add push/pull_request triggers.
+
 name: mid-math — bench fixed-point
 
 on:
   workflow_dispatch:
     inputs:
+      target_cpu:
+        description: >
+          Compiler target-cpu or architecture configuration. Controls which SIMD
+          instructions rustc emits. Fixed<FRAC> is scalar i64/i128 arithmetic
+          (see fixed/fixed.rs) — no SIMD backend exists for it at all right now,
+          so every tier below should produce near-identical numbers. That's the
+          point of running the full matrix here: if a tier DOESN'T match the
+          others, that's a real signal (codegen difference, not a fixed-point
+          algorithm difference), not something to explain away.
+          native     = all hardware features the runner has.
+          x86-64-v4  = AVX-512F+BW+CD+DQ+VL.
+          x86-64-v3  = AVX2+FMA+BMI2 guaranteed (Haswell+).
+          x86-64-v2  = SSE4.2 baseline — no AVX.
+          x86-64     = SSE2 only.
+          neon       = ARM NEON + whatever else -C target-cpu=native finds.
+          wasm       = WebAssembly wasm32-wasip1 target + simd128 via wasmtime.
+          scalar     = --features force-scalar. Fixed-point itself doesn't
+                       read this feature at all (it has no SIMD to disable),
+                       but the f32_baseline comparison entries in this bench
+                       do go through Vec3/Mat4 etc., so this still matters for
+                       that half of the comparison.
+        required: true
+        default: 'native'
+        type: choice
+        options:
+          - native
+          - x86-64-v4
+          - x86-64-v3
+          - x86-64-v2
+          - x86-64
+          - neon
+          - wasm
+          - scalar
       baseline_note:
         description: 'Context (e.g. "baseline Fixed16 scalar and vec ops")'
         required: false
@@ -11,51 +51,159 @@ on:
 
 permissions:
   contents: read
-  actions: read
+  actions:  read
+
+env:
+  CARGO_TERM_COLOR: never
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
   bench:
-    runs-on: ubuntu-latest
-    env:
-      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+    name: bench (${{ inputs.target_cpu }})
+    runs-on: ${{ inputs.target_cpu == 'neon' && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+      # ── Setup environment flags based on target selection ──────────────────
+      - name: Configure target environment
+        run: |
+          if [ "${{ inputs.target_cpu }}" = "wasm" ]; then
+            echo "RUSTFLAGS=-C target-feature=+simd128" >> $GITHUB_ENV
+            echo "BENCH_TARGET=--target wasm32-wasip1" >> $GITHUB_ENV
+            echo "ACTIVE_CPU_FLAGS=-C target-feature=+simd128" >> $GITHUB_ENV
+            echo "BENCH_FEATURES=" >> $GITHUB_ENV
+          elif [ "${{ inputs.target_cpu }}" = "neon" ]; then
+            # host==target on this native aarch64 runner (no cross-compile),
+            # so plain RUSTFLAGS is safe -- same reasoning as Abemch-vs-all.yml.
+            echo "RUSTFLAGS=-C target-cpu=native" >> $GITHUB_ENV
+            echo "BENCH_TARGET=" >> $GITHUB_ENV
+            echo "ACTIVE_CPU_FLAGS=-C target-cpu=native" >> $GITHUB_ENV
+            echo "BENCH_FEATURES=" >> $GITHUB_ENV
+          elif [ "${{ inputs.target_cpu }}" = "scalar" ]; then
+            echo "BENCH_TARGET=" >> $GITHUB_ENV
+            echo "ACTIVE_CPU_FLAGS=" >> $GITHUB_ENV
+            echo "BENCH_FEATURES=--features force-scalar" >> $GITHUB_ENV
+          else
+            # See Abemch-vs-all.yml for why this is CARGO_TARGET_*_RUSTFLAGS
+            # and not plain RUSTFLAGS (build-script SIGILL risk on mismatched
+            # host/target ISA, e.g. AVX-512 requested on AMD EPYC runners).
+            echo "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS=-C target-cpu=${{ inputs.target_cpu }}" >> $GITHUB_ENV
+            echo "BENCH_TARGET=" >> $GITHUB_ENV
+            echo "ACTIVE_CPU_FLAGS=-C target-cpu=${{ inputs.target_cpu }}" >> $GITHUB_ENV
+            echo "BENCH_FEATURES=" >> $GITHUB_ENV
+          fi
 
-      - name: Get Rust version
-        id: rustver
-        run: echo "ver=$(rustc --version)" >> $GITHUB_OUTPUT
+      # ── Soft hardware gate for x86-64-v4 ─────────────────────────────────────
+      - name: Check AVX-512 hardware availability
+        id: hwcheck
+        if: inputs.target_cpu == 'x86-64-v4'
+        run: |
+          if grep -qw 'avx512f' /proc/cpuinfo; then
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            {
+              echo "## bench (x86-64-v4) — skipped"
+              echo ""
+              echo "> GitHub-hosted \`ubuntu-latest\` runners use AMD EPYC CPUs without AVX-512."
+              echo "> rustc will happily emit AVX-512 instructions for \`-C target-cpu=x86-64-v4\`"
+              echo "> regardless of the host's real capabilities — running the resulting binary"
+              echo "> here would SIGILL. This run is marked successful (skipped, not failed)."
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Install Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+          override: true
+          target: ${{ inputs.target_cpu == 'wasm' && 'wasm32-wasip1' || '' }}
+          rustflags: ""
+
+      - name: Install wasmtime
+        if: inputs.target_cpu == 'wasm'
+        uses: bytecodealliance/actions/wasmtime/setup@v1
+        with:
+          version: v25.0.2
+
+      - name: Configure WASM test runner
+        if: inputs.target_cpu == 'wasm'
+        run: |
+          mkdir -p .cargo
+          cat >> .cargo/config.toml << 'EOF'
+          [target.wasm32-wasip1]
+          runner = ["wasmtime", "run", "--dir", ".", "--env", "CRITERION_DEBUG=1", "--"]
+          EOF
+
+      - name: Confirm CPU and compiler features
+        run: |
+          {
+            echo "## CPU & Compiler — Build #${{ github.run_number }}"
+            echo ""
+            echo "| | |"
+            echo "|---|---|"
+            echo "| Runner        | \`${{ inputs.target_cpu == 'neon' && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}\` |"
+            echo "| target-cpu    | \`${{ inputs.target_cpu }}\` |"
+            echo "| ACTIVE_CPU_FLAGS | \`$ACTIVE_CPU_FLAGS\` |"
+            echo "| Rust          | \`$(rustc --version)\` |"
+            echo "| Branch        | \`${{ github.ref_name }}\` |"
+            echo "| Commit        | \`${GITHUB_SHA:0:8}\` |"
+            echo ""
+            echo "### Rustc target_feature cfg"
+            echo '```'
+            if [ "${{ inputs.target_cpu }}" = "wasm" ]; then
+              rustc --print cfg --target wasm32-wasip1 $RUSTFLAGS 2>&1 | grep '^target_feature' | sort
+            else
+              rustc --print cfg $ACTIVE_CPU_FLAGS 2>&1 | grep -E '^target_(arch|feature)' | sort
+            fi
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - uses: actions/cache@v4
+        if: steps.hwcheck.outputs.skip != 'true'
         with:
           path: |
-            ~/.cargo/bin/
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git/db/
-          key: cargo-bench-fixed-${{ hashFiles('crates/mid-math/Cargo.toml') }}
-          restore-keys: cargo-bench-fixed-
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-${{ runner.arch }}-bench-fixed-${{ inputs.target_cpu }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ runner.arch }}-bench-fixed-${{ inputs.target_cpu }}-
 
       - name: Run fixed-point benchmarks
+        if: steps.hwcheck.outputs.skip != 'true'
         run: |
           echo "Note: ${{ inputs.baseline_note }}"
-          cargo bench --bench vs_fixed -p mid-math 2>&1 | tee bench-fixed-raw.txt
+          cargo bench --bench vs_fixed -p mid-math $BENCH_TARGET $BENCH_FEATURES 2>&1 | tee bench-fixed-raw.txt
+          echo "Bench exit code: $?" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Surface bench diagnostics
+        if: steps.hwcheck.outputs.skip != 'true'
+        run: |
+          {
+            echo "### Diagnostics"
+            echo '```'
+            grep -E 'took zero time|Unable to complete|Warning:|panicked|Completed [0-9]+ iterations' \
+              bench-fixed-raw.txt | head -60 || echo "(none found)"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Publish summary
+        if: steps.hwcheck.outputs.skip != 'true'
         run: |
           {
             echo "## mid-math Fixed-Point Benchmarks — Criterion"
             echo ""
-            echo "**Build:** #${{ github.run_number }} &nbsp; **Rust:** \`${{ steps.rustver.outputs.ver }}\`"
+            echo "Build: #${{ github.run_number }} &nbsp;|&nbsp; Rust: \`$(rustc --version | cut -d' ' -f2)\` &nbsp;|&nbsp; target-cpu: \`${{ inputs.target_cpu }}\`"
             echo ""
             echo "**Note:** ${{ inputs.baseline_note }}"
             echo ""
             echo "> Fixed16 = i64 with 16 fractional bits. mul/div use i128 intermediate (deterministic)."
-            echo "> f32\_baseline entries show the floating-point equivalent — expect fixed to be 2–5x slower."
+            echo "> f32\_baseline entries show the floating-point equivalent — expect fixed to be 2-5x slower."
             echo "> bulk\_100k sample\_size=20; measures integration throughput across 100k entities."
+            echo "> No SIMD backend exists for Fixed<FRAC> — every tier here should read near-identical;"
+            echo "> a real spread between tiers is itself a finding, not expected variance."
             echo ""
             python3 - << 'PYEOF'
           import re, sys
@@ -96,8 +244,9 @@ jobs:
           } >> $GITHUB_STEP_SUMMARY
 
       - uses: actions/upload-artifact@v4
+        if: steps.hwcheck.outputs.skip != 'true'
         with:
-          name: bench-fixed-${{ github.run_number }}
+          name: bench-fixed-${{ github.run_number }}-${{ inputs.target_cpu }}
           path: |
             bench-fixed-raw.txt
             target/criterion/
