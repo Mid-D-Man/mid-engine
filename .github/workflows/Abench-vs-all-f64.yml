@@ -22,7 +22,10 @@ on:
           x86-64-v3  = AVX2+FMA+BMI2 guaranteed (Haswell+).
           x86-64-v2  = SSE4.2 baseline — no AVX.
           x86-64     = SSE2 only.
-          neon       = ARM NEON acceleration (runs on native aarch64 runner).
+          neon       = ARM NEON + whatever else -C target-cpu=native finds
+                       (fp16/dotprod/rdm/fhm where present; not sve/sve2 on
+                       older rustc, though 1.97+ does expose them -- see
+                       f32/sve/mod.rs for the current story on that).
           wasm       = WebAssembly wasm32-wasip1 target + simd128 via wasmtime.
                        Unlike the f32 bench, this bench has never been run
                        under wasm before — nalgebra is pure Rust so it should
@@ -74,8 +77,15 @@ jobs:
             echo "ACTIVE_CPU_FLAGS=-C target-feature=+simd128" >> $GITHUB_ENV
             echo "BENCH_FEATURES=" >> $GITHUB_ENV
           elif [ "${{ inputs.target_cpu }}" = "neon" ]; then
+            # Same fix as Abemch-vs-all.yml (f32): host==target on this
+            # native aarch64 runner, so target-cpu=native is safe as plain
+            # RUSTFLAGS -- no cross-compile host/target mismatch to SIGILL a
+            # build script. Unlocks fp16/dotprod/rdm/fhm where the hardware
+            # has them; DVec2/DVec4/DQuat are the only types here that could
+            # actually benefit (see f64/mod.rs always-scalar list).
+            echo "RUSTFLAGS=-C target-cpu=native" >> $GITHUB_ENV
             echo "BENCH_TARGET=" >> $GITHUB_ENV
-            echo "ACTIVE_CPU_FLAGS=" >> $GITHUB_ENV
+            echo "ACTIVE_CPU_FLAGS=-C target-cpu=native" >> $GITHUB_ENV
             echo "BENCH_FEATURES=" >> $GITHUB_ENV
           elif [ "${{ inputs.target_cpu }}" = "scalar" ]; then
             echo "BENCH_TARGET=" >> $GITHUB_ENV
@@ -160,6 +170,22 @@ jobs:
               rustc --print cfg $ACTIVE_CPU_FLAGS 2>&1 | grep -E '^target_(arch|feature)' | sort
             fi
             echo '```'
+            echo ""
+
+            if [ "${{ inputs.target_cpu }}" != "wasm" ] && [ "${{ inputs.target_cpu }}" != "neon" ] && [ "${{ inputs.target_cpu }}" != "scalar" ]; then
+              AVX2=$(rustc --print cfg $ACTIVE_CPU_FLAGS 2>&1 | grep -c 'target_feature="avx2"' || true)
+              if [ "$AVX2" -gt 0 ]; then
+                echo "> **Active path:** sse2/dvec4.rs — avx2 target_feature is present but" >> "$GITHUB_STEP_SUMMARY"
+                echo "> f64/avx2/dvec4.rs is still an unimplemented stub (OPT-F64-1), so this" >> "$GITHUB_STEP_SUMMARY"
+                echo "> tier runs the exact same DVec4 code as x86-64-v2/x86-64 right now." >> "$GITHUB_STEP_SUMMARY"
+              else
+                echo "> **Active path:** sse2/dvec4.rs (DVec2/DVec4/DQuat only — everything" >> "$GITHUB_STEP_SUMMARY"
+                echo "> else in this bench is always-scalar regardless of target-cpu)." >> "$GITHUB_STEP_SUMMARY"
+              fi
+            elif [ "${{ inputs.target_cpu }}" = "scalar" ]; then
+              echo "> **Active path:** scalar dvec2/dvec3/dvec4/dquat (--features force-scalar" >> "$GITHUB_STEP_SUMMARY"
+              echo "> bypasses the sse2 dispatch too, not just f32's)." >> "$GITHUB_STEP_SUMMARY"
+            fi
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Cache cargo registry + build artifacts
