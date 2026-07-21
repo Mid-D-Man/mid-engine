@@ -19,6 +19,12 @@
 /// (heavy concurrent use across cores) and report failure via the carry
 /// flag. Retry a bounded number of times before giving up — 10 is Intel's
 /// documented recommendation, not a number pulled out of the air.
+///
+/// #[allow(dead_code)]: only referenced inside the x86_64+rdrand/rdseed
+/// branches below. On every other target (confirmed via the neon bench
+/// build) neither branch compiles in, so this would otherwise warn as
+/// unused there even though it's genuinely used on the targets it's for.
+#[allow(dead_code)]
 const HW_ENTROPY_RETRY_BUDGET: u32 = 10;
 
 #[cfg(all(target_arch = "x86_64", target_feature = "rdseed"))]
@@ -67,4 +73,4 @@ fn try_rdrand64() -> Option<u64> { None }
 #[inline]
 pub fn hardware_seed_u64() -> Option<u64> {
     try_rdseed64().or_else(try_rdrand64)
-          }
+}
