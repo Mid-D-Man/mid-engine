@@ -44,6 +44,7 @@ use core::arch::x86_64::*;
 use crate::f32::sse2::mat4::Mat4;
 use crate::f32::sse2::vec4::Vec4;
 use crate::f32::sse2::vec3::Vec3;
+use crate::wide::float::sse2::vec3x4::Vec3x4;
 
 // ── Inner helper ──────────────────────────────────────────────────────────────
 
@@ -178,6 +179,68 @@ impl Mat4 {
             let res = _mm_mul_ps(self.x_axis.0, bx);
             let res = _mm_fmadd_ps(self.y_axis.0, by, res);
             Vec3(_mm_fmadd_ps(self.z_axis.0, bz, res))
+        }
+    }
+
+    // ── Wide SIMD batch transforms, FMA-fused ───────────────────────────────
+    //
+    // FMA counterpart to sse2/mat4.rs's transform_vec3x4/transform_vec3x4_dir
+    // -- those had the exact same missing-FMA gap transform_point had before
+    // its own fix (always ran the plain SSE2 path regardless of tier, no
+    // #[cfg] to step aside). Same row/broadcast math as the SSE2 version,
+    // just fused, matching the exact function names and signatures so
+    // existing callers and the existing correctness test
+    // (vec3x4_mat4_transform_matches_scalar in tests/wide_tests.rs) don't
+    // need to change at all -- this is a pure step-aside-and-replace under
+    // the same #[cfg] the SSE2 side now has, not a new API.
+    #[inline(always)]
+    pub fn transform_vec3x4(
+        self,
+        v: Vec3x4,
+    ) -> Vec3x4 {
+        unsafe {
+            let c0x = _mm_shuffle_ps::<0b00_00_00_00>(self.x_axis.0, self.x_axis.0);
+            let c0y = _mm_shuffle_ps::<0b01_01_01_01>(self.x_axis.0, self.x_axis.0);
+            let c0z = _mm_shuffle_ps::<0b10_10_10_10>(self.x_axis.0, self.x_axis.0);
+            let c1x = _mm_shuffle_ps::<0b00_00_00_00>(self.y_axis.0, self.y_axis.0);
+            let c1y = _mm_shuffle_ps::<0b01_01_01_01>(self.y_axis.0, self.y_axis.0);
+            let c1z = _mm_shuffle_ps::<0b10_10_10_10>(self.y_axis.0, self.y_axis.0);
+            let c2x = _mm_shuffle_ps::<0b00_00_00_00>(self.z_axis.0, self.z_axis.0);
+            let c2y = _mm_shuffle_ps::<0b01_01_01_01>(self.z_axis.0, self.z_axis.0);
+            let c2z = _mm_shuffle_ps::<0b10_10_10_10>(self.z_axis.0, self.z_axis.0);
+            let c3x = _mm_shuffle_ps::<0b00_00_00_00>(self.w_axis.0, self.w_axis.0);
+            let c3y = _mm_shuffle_ps::<0b01_01_01_01>(self.w_axis.0, self.w_axis.0);
+            let c3z = _mm_shuffle_ps::<0b10_10_10_10>(self.w_axis.0, self.w_axis.0);
+
+            let rx = _mm_add_ps(_mm_fmadd_ps(c1x, v.y, _mm_mul_ps(c0x, v.x)), _mm_fmadd_ps(c2x, v.z, c3x));
+            let ry = _mm_add_ps(_mm_fmadd_ps(c1y, v.y, _mm_mul_ps(c0y, v.x)), _mm_fmadd_ps(c2y, v.z, c3y));
+            let rz = _mm_add_ps(_mm_fmadd_ps(c1z, v.y, _mm_mul_ps(c0z, v.x)), _mm_fmadd_ps(c2z, v.z, c3z));
+
+            Vec3x4 { x: rx, y: ry, z: rz }
+        }
+    }
+
+    #[inline(always)]
+    pub fn transform_vec3x4_dir(
+        self,
+        v: Vec3x4,
+    ) -> Vec3x4 {
+        unsafe {
+            let c0x = _mm_shuffle_ps::<0b00_00_00_00>(self.x_axis.0, self.x_axis.0);
+            let c0y = _mm_shuffle_ps::<0b01_01_01_01>(self.x_axis.0, self.x_axis.0);
+            let c0z = _mm_shuffle_ps::<0b10_10_10_10>(self.x_axis.0, self.x_axis.0);
+            let c1x = _mm_shuffle_ps::<0b00_00_00_00>(self.y_axis.0, self.y_axis.0);
+            let c1y = _mm_shuffle_ps::<0b01_01_01_01>(self.y_axis.0, self.y_axis.0);
+            let c1z = _mm_shuffle_ps::<0b10_10_10_10>(self.y_axis.0, self.y_axis.0);
+            let c2x = _mm_shuffle_ps::<0b00_00_00_00>(self.z_axis.0, self.z_axis.0);
+            let c2y = _mm_shuffle_ps::<0b01_01_01_01>(self.z_axis.0, self.z_axis.0);
+            let c2z = _mm_shuffle_ps::<0b10_10_10_10>(self.z_axis.0, self.z_axis.0);
+
+            let rx = _mm_fmadd_ps(c2x, v.z, _mm_fmadd_ps(c1x, v.y, _mm_mul_ps(c0x, v.x)));
+            let ry = _mm_fmadd_ps(c2y, v.z, _mm_fmadd_ps(c1y, v.y, _mm_mul_ps(c0y, v.x)));
+            let rz = _mm_fmadd_ps(c2z, v.z, _mm_fmadd_ps(c1z, v.y, _mm_mul_ps(c0z, v.x)));
+
+            Vec3x4 { x: rx, y: ry, z: rz }
         }
     }
                 }
