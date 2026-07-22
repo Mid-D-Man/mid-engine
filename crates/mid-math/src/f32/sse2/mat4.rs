@@ -666,7 +666,13 @@ impl Mat4 {
     }
 
     // ── Wide SIMD batch transforms ────────────────────────────────────────────
+    //
+    // Same missing-FMA gap transform_point had before it got the same
+    // treatment: this always ran the plain SSE2 path regardless of tier.
+    // avx/mat4.rs now has the FMA-fused replacement, active whenever
+    // avx+fma is present (native/x86-64-v3/v4 among others).
 
+    #[cfg(not(all(target_feature = "avx", target_feature = "fma")))]
     pub fn transform_vec3x4(
         self,
         v: crate::wide::float::sse2::vec3x4::Vec3x4,
@@ -695,6 +701,7 @@ impl Mat4 {
         }
     }
 
+    #[cfg(not(all(target_feature = "avx", target_feature = "fma")))]
     pub fn transform_vec3x4_dir(
         self,
         v: crate::wide::float::sse2::vec3x4::Vec3x4,
@@ -780,4 +787,4 @@ impl fmt::Display for Mat4 {
         }
         Ok(())
     }
-                                              }
+        }
