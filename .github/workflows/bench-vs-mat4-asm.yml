@@ -56,7 +56,11 @@ jobs:
       - name: Configure target environment
         run: |
           if [ "${{ inputs.target_cpu }}" = "neon" ]; then
-            echo "ACTIVE_CPU_FLAGS=" >> $GITHUB_ENV
+            # Same fix as Abemch-vs-all.yml/Abench-vs-all-f64.yml: host==target
+            # on this native aarch64 runner, so plain RUSTFLAGS=-C target-cpu=native
+            # is safe (no cross-compile mismatch to SIGILL a build script).
+            echo "RUSTFLAGS=-C target-cpu=native" >> $GITHUB_ENV
+            echo "ACTIVE_CPU_FLAGS=-C target-cpu=native" >> $GITHUB_ENV
             echo "BENCH_FEATURES=" >> $GITHUB_ENV
           elif [ "${{ inputs.target_cpu }}" = "scalar" ]; then
             echo "ACTIVE_CPU_FLAGS=" >> $GITHUB_ENV
