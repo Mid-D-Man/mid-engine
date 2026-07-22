@@ -28,7 +28,7 @@
 use criterion::{black_box, criterion_group, criterion_main, BatchSize, Criterion, Throughput};
 
 // ── mid-math ──────────────────────────────────────────────────────────────────
-use mid_math::{to_radians, Affine3, Mat2, Mat3, Mat4, Quat, Vec2, Vec3, Vec4};
+use mid_math::{to_radians, Affine3, Mat2, Mat3, Mat4, Quat, Vec2, Vec3, Vec4, Vec3x4};
 
 // ── glam ─────────────────────────────────────────────────────────────────────
 use glam::{
@@ -518,6 +518,28 @@ fn bench_100k_entities(c: &mut Criterion) {
     g.bench_function("mid-math", |b| b.iter_batched(
         || pos_mm.clone(),
         |mut p| { for v in p.iter_mut() { *v = mm_t.transform_point(black_box(*v)); } black_box(p) },
+        BatchSize::LargeInput,
+    ));
+    // Not an "apples to apples" entry like the ones above -- glam/nalgebra/
+    // ultraviolet have no SoA/wide-vector concept at all to compare against
+    // here (checked: none of their source trees have anything like it).
+    // This uses transform_vec3x4 (Vec3x4 = SoA, x/y/z each hold 4 points'
+    // worth of that component in one __m128) to transform 4 points per call
+    // instead of 1, cutting both the loop-iteration count and some of the
+    // per-point arithmetic (see the comment on transform_vec3x4's FMA
+    // version in avx/mat4.rs for the exact op-count accounting). N is
+    // 100_000 = 25_000 * 4 exactly, so chunks_exact(4) has no remainder to
+    // handle here.
+    g.bench_function("mid-math-batch4", |b| b.iter_batched(
+        || pos_mm.clone(),
+        |mut p| {
+            for chunk in p.chunks_exact_mut(4) {
+                let packed = Vec3x4::from_vec3s(chunk[0], chunk[1], chunk[2], chunk[3]);
+                let out = mm_t.transform_vec3x4(black_box(packed)).to_array();
+                chunk[0] = out[0]; chunk[1] = out[1]; chunk[2] = out[2]; chunk[3] = out[3];
+            }
+            black_box(p)
+        },
         BatchSize::LargeInput,
     ));
     g.bench_function("glam", |b| b.iter_batched(
