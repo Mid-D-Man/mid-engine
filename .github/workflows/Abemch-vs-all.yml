@@ -259,6 +259,13 @@ jobs:
           # it does NOT by itself mean every benchmark printed a result line
           # (criterion can legitimately skip printing one bench's line without
           # erroring — see the WASM diagnostics step below for why).
+          #
+          # set -o pipefail (added after a real incident): without it, `cargo
+          # bench | tee file` reports tee's exit code (always 0), not cargo
+          # bench's -- a hard compile failure would silently show this step,
+          # and the whole job, as green. Confirmed this actually happened on
+          # the f64 sibling workflow before this line existed there.
+          set -o pipefail
           cargo bench --bench vs_all -p mid-math $BENCH_TARGET $BENCH_FEATURES 2>&1 | tee bench-vs-all-raw.txt
           echo "Bench exit code: $?" >> "$GITHUB_STEP_SUMMARY"
 
