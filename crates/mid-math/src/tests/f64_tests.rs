@@ -661,4 +661,41 @@ fn ffi_dvec3_roundtrip() {
         let a2 = DAffine3::from(ca);
         assert_eq!(a, a2);
     }
-}
+
+    // ── coresimd DVec3 smoke test ────────────────────────────────────────────
+    //
+    // First test either coresimd module (f32 or f64) has ever had. Basic
+    // arithmetic plus a cross-check against the scalar DVec3 for the same
+    // inputs -- if the f64x4 swizzle/lane math in coresimd/dvec3.rs has a
+    // sign or index error, this is what would catch it. Run with:
+    //   cargo +nightly test --features coresimd -p mid-math
+    #[cfg(feature = "coresimd")]
+    #[test]
+    fn coresimd_dvec3_matches_scalar() {
+        use crate::f64::coresimd::DVec3 as CDVec3;
+
+        let sa = DVec3::new(1.0, 2.0, 3.0);
+        let sb = DVec3::new(4.0, -5.0, 6.0);
+        let ca = CDVec3::new(1.0, 2.0, 3.0);
+        let cb = CDVec3::new(4.0, -5.0, 6.0);
+
+        let s_sum = sa + sb;
+        let c_sum = ca + cb;
+        assert!(approx(s_sum.x, c_sum.x) && approx(s_sum.y, c_sum.y) && approx(s_sum.z, c_sum.z));
+
+        assert!(approx(sa.dot(sb), ca.dot(cb)));
+
+        let s_cross = sa.cross(sb);
+        let c_cross = ca.cross(cb);
+        assert!(approx(s_cross.x, c_cross.x) && approx(s_cross.y, c_cross.y) && approx(s_cross.z, c_cross.z));
+
+        let s_norm = sa.normalize();
+        let c_norm = ca.normalize();
+        assert!(approx(s_norm.x, c_norm.x) && approx(s_norm.y, c_norm.y) && approx(s_norm.z, c_norm.z));
+        assert!(c_norm.is_normalized());
+
+        // Zero-length normalize should be the zero vector on both, not NaN.
+        let c_zero_norm = CDVec3::ZERO.normalize();
+        assert!(approx(c_zero_norm.x, 0.0) && approx(c_zero_norm.y, 0.0) && approx(c_zero_norm.z, 0.0));
+    }
+    }
