@@ -11,6 +11,13 @@ pub mod daffine3;
 pub mod ddual_quat;
 
 // ── Always-scalar types (no SIMD variant) ─────────────────────────────────────
+//
+// True for the default build. DVec3 is the one exception when built with
+// --features coresimd: crate::f64::coresimd::DVec3 (pub(crate), f64x4-backed)
+// exists as an additional, separate implementation -- same non-invasive
+// pattern f32/mod.rs already uses for its own coresimd module. Doesn't
+// change what plain `DVec3` below resolves to; that's still always this
+// scalar one regardless of the coresimd feature.
 pub use dvec3::DVec3;
 pub use dmat2::DMat2;
 pub use dmat3::DMat3;
@@ -19,6 +26,16 @@ pub use daffine2::DAffine2;
 pub use daffine3::DAffine3;
 pub use ddual_quat::DDualQuat;
 pub use dvec2::DEPSILON;
+
+// ── Portable SIMD (coresimd) ───────────────────────────────────────────────────
+//
+// See coresimd/mod.rs for why DVec3 is the one worth having here that the
+// hardware-specific backends structurally can't provide. pub(crate) same as
+// f32's version -- not part of the public API yet, mirrors that module's
+// current (also unreviewed-by-a-compiler-in-this-session, also
+// zero-CI-coverage-until-now) status.
+#[cfg(feature = "coresimd")]
+pub(crate) mod coresimd;
 
 // ── SIMD-dispatched: x86 / x86_64 ────────────────────────────────────────────
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
