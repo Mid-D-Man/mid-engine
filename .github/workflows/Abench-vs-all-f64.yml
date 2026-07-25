@@ -203,6 +203,12 @@ jobs:
       - name: Run f64 criterion benchmarks
         if: steps.hwcheck.outputs.skip != 'true'
         run: |
+          # set -o pipefail: without this, `cargo bench | tee file` reports
+          # tee's exit code (always 0), not cargo bench's. This is exactly
+          # why build #4 showed "Status Success" / "Bench exit code: 0"
+          # despite a hard compile failure -- the two real errors only
+          # showed up in the annotations, not as a failed job.
+          set -o pipefail
           echo "Note: ${{ inputs.baseline_note }}"
           cargo bench --bench vs_all_f64 -p mid-math $BENCH_TARGET $BENCH_FEATURES 2>&1 | tee bench-f64-raw.txt
           echo "Bench exit code: $?" >> "$GITHUB_STEP_SUMMARY"
