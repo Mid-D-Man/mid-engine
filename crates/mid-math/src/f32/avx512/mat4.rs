@@ -53,6 +53,8 @@ use core::arch::x86_64::*;
 
 use crate::f32::sse2::mat4::Mat4;
 use crate::f32::sse2::vec4::Vec4;
+use crate::f32::sse2::vec3::Vec3;
+use crate::wide::float::sse2::vec3x4::Vec3x4;
 
 // ── Broadcast helper ──────────────────────────────────────────────────────────
 
@@ -155,3 +157,97 @@ impl Mul<Mat4> for Mat4 {
     }
 }
 // MulAssign is ungated in sse2/mat4.rs — delegates to whichever Mul<Mat4> is active.
+
+// ── transform_point / transform_vector / transform_vec3x4[_dir] ────────────────
+//
+// THE BUG: avx/mat4.rs's impl Mat4 block (transform_point, transform_vector,
+// transform_vec3x4, transform_vec3x4_dir) is gated
+// #[cfg(not(target_feature = "avx512f"))] -- correctly stepping aside so this
+// module can take over, matching the Mul<Mat4> cascade above. But nobody
+// actually added replacements here when that gate went in, so on any real
+// avx512f build all four methods vanished from Mat4 entirely: not in sse2
+// (excluded, avx+fma both present whenever avx512f is), not in avx (excluded,
+// avx512f present), not here (never existed). Every FFI/library build target
+// on avx512f-capable hardware failed as a result -- this hit the f64 bench
+// job because that job still compiles the whole library, not because it's
+// f64-related.
+//
+// THE FIX: these are unchanged from avx/mat4.rs's FMA versions, not a new
+// 512-bit rewrite. transform_point/transform_vector operate on one Vec3
+// (128-bit) and transform_vec3x4[_dir] on one Vec3x4 (also 128-bit lanes,
+// just 4 of them) -- there's no wider operand here for a ZMM version to
+// operate on, same reasoning as why SVE doesn't help at matched width (see
+// f32/sve/mod.rs). Copying the working FMA implementation verbatim fixes the
+// break without introducing new, unverifiable 512-bit code on a path that
+// doesn't have anything to gain from it.
+impl Mat4 {
+    #[inline(always)]
+    pub fn transform_point(self, p: Vec3) -> Vec3 {
+        unsafe {
+            let bx = _mm_shuffle_ps::<0b00_00_00_00>(p.0, p.0);
+            let by = _mm_shuffle_ps::<0b01_01_01_01>(p.0, p.0);
+            let bz = _mm_shuffle_ps::<0b10_10_10_10>(p.0, p.0);
+            let res = _mm_mul_ps(self.x_axis.0, bx);
+            let res = _mm_fmadd_ps(self.y_axis.0, by, res);
+            let res = _mm_fmadd_ps(self.z_axis.0, bz, res);
+            Vec3(_mm_add_ps(res, self.w_axis.0))
+        }
+    }
+
+    #[inline(always)]
+    pub fn transform_vector(self, v: Vec3) -> Vec3 {
+        unsafe {
+            let bx = _mm_shuffle_ps::<0b00_00_00_00>(v.0, v.0);
+            let by = _mm_shuffle_ps::<0b01_01_01_01>(v.0, v.0);
+            let bz = _mm_shuffle_ps::<0b10_10_10_10>(v.0, v.0);
+            let res = _mm_mul_ps(self.x_axis.0, bx);
+            let res = _mm_fmadd_ps(self.y_axis.0, by, res);
+            Vec3(_mm_fmadd_ps(self.z_axis.0, bz, res))
+        }
+    }
+
+    #[inline(always)]
+    pub fn transform_vec3x4(self, v: Vec3x4) -> Vec3x4 {
+        unsafe {
+            let c0x = _mm_shuffle_ps::<0b00_00_00_00>(self.x_axis.0, self.x_axis.0);
+            let c0y = _mm_shuffle_ps::<0b01_01_01_01>(self.x_axis.0, self.x_axis.0);
+            let c0z = _mm_shuffle_ps::<0b10_10_10_10>(self.x_axis.0, self.x_axis.0);
+            let c1x = _mm_shuffle_ps::<0b00_00_00_00>(self.y_axis.0, self.y_axis.0);
+            let c1y = _mm_shuffle_ps::<0b01_01_01_01>(self.y_axis.0, self.y_axis.0);
+            let c1z = _mm_shuffle_ps::<0b10_10_10_10>(self.y_axis.0, self.y_axis.0);
+            let c2x = _mm_shuffle_ps::<0b00_00_00_00>(self.z_axis.0, self.z_axis.0);
+            let c2y = _mm_shuffle_ps::<0b01_01_01_01>(self.z_axis.0, self.z_axis.0);
+            let c2z = _mm_shuffle_ps::<0b10_10_10_10>(self.z_axis.0, self.z_axis.0);
+            let c3x = _mm_shuffle_ps::<0b00_00_00_00>(self.w_axis.0, self.w_axis.0);
+            let c3y = _mm_shuffle_ps::<0b01_01_01_01>(self.w_axis.0, self.w_axis.0);
+            let c3z = _mm_shuffle_ps::<0b10_10_10_10>(self.w_axis.0, self.w_axis.0);
+
+            let rx = _mm_add_ps(_mm_fmadd_ps(c1x, v.y, _mm_mul_ps(c0x, v.x)), _mm_fmadd_ps(c2x, v.z, c3x));
+            let ry = _mm_add_ps(_mm_fmadd_ps(c1y, v.y, _mm_mul_ps(c0y, v.x)), _mm_fmadd_ps(c2y, v.z, c3y));
+            let rz = _mm_add_ps(_mm_fmadd_ps(c1z, v.y, _mm_mul_ps(c0z, v.x)), _mm_fmadd_ps(c2z, v.z, c3z));
+
+            Vec3x4 { x: rx, y: ry, z: rz }
+        }
+    }
+
+    #[inline(always)]
+    pub fn transform_vec3x4_dir(self, v: Vec3x4) -> Vec3x4 {
+        unsafe {
+            let c0x = _mm_shuffle_ps::<0b00_00_00_00>(self.x_axis.0, self.x_axis.0);
+            let c0y = _mm_shuffle_ps::<0b01_01_01_01>(self.x_axis.0, self.x_axis.0);
+            let c0z = _mm_shuffle_ps::<0b10_10_10_10>(self.x_axis.0, self.x_axis.0);
+            let c1x = _mm_shuffle_ps::<0b00_00_00_00>(self.y_axis.0, self.y_axis.0);
+            let c1y = _mm_shuffle_ps::<0b01_01_01_01>(self.y_axis.0, self.y_axis.0);
+            let c1z = _mm_shuffle_ps::<0b10_10_10_10>(self.y_axis.0, self.y_axis.0);
+            let c2x = _mm_shuffle_ps::<0b00_00_00_00>(self.z_axis.0, self.z_axis.0);
+            let c2y = _mm_shuffle_ps::<0b01_01_01_01>(self.z_axis.0, self.z_axis.0);
+            let c2z = _mm_shuffle_ps::<0b10_10_10_10>(self.z_axis.0, self.z_axis.0);
+
+            let rx = _mm_fmadd_ps(c2x, v.z, _mm_fmadd_ps(c1x, v.y, _mm_mul_ps(c0x, v.x)));
+            let ry = _mm_fmadd_ps(c2y, v.z, _mm_fmadd_ps(c1y, v.y, _mm_mul_ps(c0y, v.x)));
+            let rz = _mm_fmadd_ps(c2z, v.z, _mm_fmadd_ps(c1z, v.y, _mm_mul_ps(c0z, v.x)));
+
+            Vec3x4 { x: rx, y: ry, z: rz }
+        }
+    }
+    }
