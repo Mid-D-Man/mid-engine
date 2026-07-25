@@ -125,4 +125,29 @@ macro_rules! impl_dvec4_deref {
             }
         }
     };
+}
+
+/// Implement Deref/DerefMut to XYZ<f64> for a SIMD-backed DVec3 newtype
+/// (lane 3 is padding, same convention as impl_vec3_deref! for f32).
+///
+/// Didn't exist before -- nothing needed it, since the only DVec3 in the
+/// crate was the plain-named-field scalar one. Needed now for
+/// f64/coresimd/dvec3.rs, which wraps f64x4 instead of named x/y/z fields.
+#[macro_export]
+macro_rules! impl_dvec3_deref {
+    ($ty:ty) => {
+        impl core::ops::Deref for $ty {
+            type Target = $crate::deref::XYZ<f64>;
+            #[inline(always)]
+            fn deref(&self) -> &Self::Target {
+                unsafe { &*(self as *const Self).cast() }
+            }
         }
+        impl core::ops::DerefMut for $ty {
+            #[inline(always)]
+            fn deref_mut(&mut self) -> &mut Self::Target {
+                unsafe { &mut *(self as *mut Self).cast() }
+            }
+        }
+    };
+}
