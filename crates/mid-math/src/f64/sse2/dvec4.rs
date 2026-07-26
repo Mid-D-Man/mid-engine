@@ -116,13 +116,20 @@ impl DVec4 {
     /// Normalize to unit length. Returns ZERO for near-zero-length vectors.
     ///
     /// Applies the same guard mask to both lo and hi registers simultaneously.
+    ///
+    /// Computes the reciprocal of the length once and multiplies both
+    /// registers by it, instead of dividing each register independently
+    /// (the previous version paid for two full packed divisions instead of
+    /// one — the same divide-then-multiply-once pattern the scalar fallback
+    /// already uses via `self * (1.0 / l)`).
     #[inline]
     pub fn normalize(self) -> Self {
         unsafe {
             let len_v = dot4d_into_m128d(self.lo, self.hi, self.lo, self.hi);
             let sqrt  = _mm_sqrt_pd(len_v); // [sqrt(dot), sqrt(dot)]
-            let lo_n  = _mm_div_pd(self.lo, sqrt);
-            let hi_n  = _mm_div_pd(self.hi, sqrt);
+            let rcp   = _mm_div_pd(_mm_set1_pd(1.0), sqrt);
+            let lo_n  = _mm_mul_pd(self.lo, rcp);
+            let hi_n  = _mm_mul_pd(self.hi, rcp);
             let ok    = _mm_cmpgt_pd(sqrt, _mm_set1_pd(DEPSILON));
             Self {
                 lo: _mm_and_pd(lo_n, ok),
