@@ -111,13 +111,17 @@ impl DQuat {
     /// `vbslq_f64(mask, a, b)` selects bits from `a` where `mask` is all-1s,
     /// else from `b` — the canonical AArch64 bitwise-select pattern, avoiding
     /// the and/andnot/or trio the x86 SSE2 path needs.
+    /// Computes the reciprocal of the length once and multiplies both
+    /// registers by it, instead of dividing each register independently
+    /// against the same broadcast length (same fix as DVec4::normalize).
     #[inline]
     pub fn normalize(self) -> Self {
         unsafe {
             let len_v  = dot4d_neon_into_f64x2(self.lo, self.hi, self.lo, self.hi);
             let sqrt_v = vsqrtq_f64(len_v);
-            let lo_n   = vdivq_f64(self.lo, sqrt_v);
-            let hi_n   = vdivq_f64(self.hi, sqrt_v);
+            let rcp_v  = vdivq_f64(vdupq_n_f64(1.0), sqrt_v);
+            let lo_n   = vmulq_f64(self.lo, rcp_v);
+            let hi_n   = vmulq_f64(self.hi, rcp_v);
             let ok     = vcgtq_f64(sqrt_v, vdupq_n_f64(DEPSILON));
             Self {
                 lo: vbslq_f64(ok, lo_n, Self::IDENTITY.lo),
@@ -309,4 +313,4 @@ impl fmt::Display for DQuat {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "DQuat({:.6}, {:.6}, {:.6}, {:.6})", self.x, self.y, self.z, self.w)
     }
-                  }
+       }
