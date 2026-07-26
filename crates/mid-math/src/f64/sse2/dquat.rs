@@ -106,13 +106,17 @@ impl DQuat {
     #[inline(always)] pub fn length_sq(self) -> f64 { self.dot(self) }
     #[inline] pub fn length(self)    -> f64 { self.length_sq().sqrt() }
 
+    /// Computes the reciprocal of the length once and multiplies both
+    /// registers by it, instead of dividing each register independently
+    /// against the same broadcast length (same fix as DVec4::normalize).
     #[inline]
     pub fn normalize(self) -> Self {
         unsafe {
             let len_v = dot4d_into_m128d(self.lo, self.hi, self.lo, self.hi);
             let sqrt  = _mm_sqrt_pd(len_v);
-            let lo_n  = _mm_div_pd(self.lo, sqrt);
-            let hi_n  = _mm_div_pd(self.hi, sqrt);
+            let rcp   = _mm_div_pd(_mm_set1_pd(1.0), sqrt);
+            let lo_n  = _mm_mul_pd(self.lo, rcp);
+            let hi_n  = _mm_mul_pd(self.hi, rcp);
             let ok    = _mm_cmpgt_pd(sqrt, _mm_set1_pd(DEPSILON));
             // Keep normalized value where len > DEPSILON, else fall back to IDENTITY
             let id_lo = Self::IDENTITY.lo;
@@ -299,4 +303,4 @@ impl fmt::Display for DQuat {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "DQuat({:.6}, {:.6}, {:.6}, {:.6})", self.x, self.y, self.z, self.w)
     }
-}
+    }
