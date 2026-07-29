@@ -18,7 +18,7 @@ use core::fmt;
 use core::ops::{Add, Mul, MulAssign, Neg, Sub};
 use core::arch::aarch64::*;
 
-use crate::neon::{dot4d_neon, dot4d_neon_into_f64x2, f64x2_from_f64x2};
+use crate::neon::{dot4d_neon, f64x2_from_f64x2};
 use crate::impl_dvec4_deref;
 use crate::f64::dvec3::DVec3;
 use crate::f64::dmat4::DMat4;
@@ -106,27 +106,21 @@ impl DQuat {
     #[inline(always)] pub fn length_sq(self) -> f64 { self.dot(self) }
     #[inline] pub fn length(self)    -> f64 { self.length_sq().sqrt() }
 
-    /// Normalize. Falls back to IDENTITY for near-zero-length quaternions.
-    ///
-    /// `vbslq_f64(mask, a, b)` selects bits from `a` where `mask` is all-1s,
-    /// else from `b` — the canonical AArch64 bitwise-select pattern, avoiding
-    /// the and/andnot/or trio the x86 SSE2 path needs.
-    /// Computes the reciprocal of the length once and multiplies both
-    /// registers by it, instead of dividing each register independently
-    /// against the same broadcast length (same fix as DVec4::normalize).
+    /// Normalize. Falls back to plain scalar here, same reasoning as
+    /// DVec4::normalize on this target: even after the divide-once fix,
+    /// CI showed this packed path still well behind glam's plain-scalar
+    /// normalize, and it silently drags `nlerp` down with it since nlerp's
+    /// last step is this call (`nlerp` went from 16.1ns to 22.8ns in CI
+    /// right after the divide-once fix landed here, worse than before).
+    /// `length()` above still uses the NEON dot path; only the divide-out
+    /// step is scalar. Uses reciprocal-then-multiply (one division) rather
+    /// than four separate divisions.
     #[inline]
     pub fn normalize(self) -> Self {
-        unsafe {
-            let len_v  = dot4d_neon_into_f64x2(self.lo, self.hi, self.lo, self.hi);
-            let sqrt_v = vsqrtq_f64(len_v);
-            let rcp_v  = vdivq_f64(vdupq_n_f64(1.0), sqrt_v);
-            let lo_n   = vmulq_f64(self.lo, rcp_v);
-            let hi_n   = vmulq_f64(self.hi, rcp_v);
-            let ok     = vcgtq_f64(sqrt_v, vdupq_n_f64(DEPSILON));
-            Self {
-                lo: vbslq_f64(ok, lo_n, Self::IDENTITY.lo),
-                hi: vbslq_f64(ok, hi_n, Self::IDENTITY.hi),
-            }
+        let l = self.length();
+        if l < DEPSILON { Self::IDENTITY } else {
+            let rcp = 1.0 / l;
+            Self::new(self.x * rcp, self.y * rcp, self.z * rcp, self.w * rcp)
         }
     }
 
@@ -313,4 +307,4 @@ impl fmt::Display for DQuat {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "DQuat({:.6}, {:.6}, {:.6}, {:.6})", self.x, self.y, self.z, self.w)
     }
-       }
+        }
