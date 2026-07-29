@@ -15,7 +15,7 @@ use core::fmt;
 use core::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAssign};
 use core::arch::aarch64::*;
 
-use crate::neon::{dot2d_neon, dot2d_neon_into_f64x2};
+use crate::neon::dot2d_neon;
 use crate::impl_dvec2_deref;
 use crate::DEPSILON;
 
@@ -86,20 +86,16 @@ impl DVec2 {
         if l < DEPSILON { 0.0 } else { 1.0 / l }
     }
 
-    /// Normalize. Guard: zero lanes where length ≤ DEPSILON via uint64 AND mask.
+    /// Normalize. Falls back to plain scalar division here: on this target
+    /// a single 2-lane `vdivq_f64` doesn't pay for itself over scalar
+    /// (confirmed in CI — stayed behind glam's plain-scalar normalize:
+    /// 5.39ns vs glam's 3.59ns). `length()` above still uses the NEON dot
+    /// path (`dot2d_neon`) which is a genuine win; only the divide-out step
+    /// goes scalar here. Matches the scalar module's own `self / l`.
     #[inline]
     pub fn normalize(self) -> Self {
-        unsafe {
-            let len_v  = dot2d_neon_into_f64x2(self.0, self.0); // [dot, dot]
-            let sqrt_v = vsqrtq_f64(len_v);
-            let norm   = Self(vdivq_f64(self.0, sqrt_v));
-            let ok     = vcgtq_f64(sqrt_v, vdupq_n_f64(DEPSILON)); // uint64x2_t
-            // AND float bits with mask: zeroes lanes where len <= DEPSILON
-            Self(vreinterpretq_f64_u64(vandq_u64(
-                vreinterpretq_u64_f64(norm.0),
-                ok,
-            )))
-        }
+        let l = self.length();
+        if l < DEPSILON { Self::ZERO } else { Self::new(self.x / l, self.y / l) }
     }
 
     #[inline]
