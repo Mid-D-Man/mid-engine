@@ -17,7 +17,7 @@ use core::fmt;
 use core::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAssign};
 use core::arch::aarch64::*;
 
-use crate::neon::{dot4d_neon, dot4d_neon_into_f64x2};
+use crate::neon::dot4d_neon;
 use crate::impl_dvec4_deref;
 use crate::DEPSILON;
 
@@ -92,24 +92,20 @@ impl DVec4 {
 
     /// Normalize. Guard mask applied to both lo and hi via uint64 AND.
     ///
-    /// Computes the reciprocal of the length once and multiplies both
-    /// registers by it, instead of dividing each register independently
-    /// against the same broadcast length (this is where the real 100k/1m
-    /// batch cost was going — division is the one op here that isn't
-    /// roughly free, and the old version paid for it twice per call).
+    /// Normalize. Falls back to plain scalar here: even after the
+    /// divide-once fix (one `vdivq_f64` + two `vmulq_f64` instead of two
+    /// divisions), CI showed this packed path still ~2x behind glam's
+    /// plain-scalar normalize on this target (11.4ns vs 5.5ns) — this also
+    /// silently regresses `nlerp`, which ends with this call. `length()`
+    /// above still uses the NEON dot path; only the divide-out step is
+    /// scalar. Uses reciprocal-then-multiply (one division, not four) to
+    /// match the pattern already proven better than plain division.
     #[inline]
     pub fn normalize(self) -> Self {
-        unsafe {
-            let len_v  = dot4d_neon_into_f64x2(self.lo, self.hi, self.lo, self.hi);
-            let sqrt_v = vsqrtq_f64(len_v);
-            let rcp_v  = vdivq_f64(vdupq_n_f64(1.0), sqrt_v);
-            let lo_n   = vmulq_f64(self.lo, rcp_v);
-            let hi_n   = vmulq_f64(self.hi, rcp_v);
-            let ok     = vcgtq_f64(sqrt_v, vdupq_n_f64(DEPSILON));
-            Self {
-                lo: vreinterpretq_f64_u64(vandq_u64(vreinterpretq_u64_f64(lo_n), ok)),
-                hi: vreinterpretq_f64_u64(vandq_u64(vreinterpretq_u64_f64(hi_n), ok)),
-            }
+        let l = self.length();
+        if l < DEPSILON { Self::ZERO } else {
+            let rcp = 1.0 / l;
+            Self::new(self.x * rcp, self.y * rcp, self.z * rcp, self.w * rcp)
         }
     }
 
