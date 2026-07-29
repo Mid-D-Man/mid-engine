@@ -65,12 +65,6 @@ pub(crate) unsafe fn dot2d_neon(a: float64x2_t, b: float64x2_t) -> f64 {
     vaddvq_f64(vmulq_f64(a, b))
 }
 
-/// Broadcast 2-lane f64 dot to all lanes.
-#[inline(always)]
-pub(crate) unsafe fn dot2d_neon_into_f64x2(a: float64x2_t, b: float64x2_t) -> float64x2_t {
-    vdupq_n_f64(vaddvq_f64(vmulq_f64(a, b)))
-}
-
 /// 4-lane f64 dot product from two `(lo, hi)` float64x2_t pairs.
 ///
 /// Computes `lo_a·lo_b + hi_a·hi_b` using two `vaddvq_f64` calls.
@@ -82,13 +76,4 @@ pub(crate) unsafe fn dot4d_neon(
     lo_b: float64x2_t, hi_b: float64x2_t,
 ) -> f64 {
     vaddvq_f64(vmulq_f64(lo_a, lo_b)) + vaddvq_f64(vmulq_f64(hi_a, hi_b))
-}
-
-/// Broadcast 4-lane f64 dot to a float64x2_t (both lanes = dot).
-#[inline(always)]
-pub(crate) unsafe fn dot4d_neon_into_f64x2(
-    lo_a: float64x2_t, hi_a: float64x2_t,
-    lo_b: float64x2_t, hi_b: float64x2_t,
-) -> float64x2_t {
-    vdupq_n_f64(dot4d_neon(lo_a, hi_a, lo_b, hi_b))
-}
+                               }
