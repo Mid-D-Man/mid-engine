@@ -8,10 +8,23 @@ name = "mid_net"
 crate-type = ["lib", "cdylib", "staticlib"]
 
 [dependencies]
-#dixscript = "1.0.0" not currently existing
+# dixscript 1.0.0 published 2026-07-27 (crates.io) — it exists now, but
+# NOT added here. Checked its own Cargo.toml: 23 mandatory transitive
+# deps even with `default-features = false` (serde, regex, chrono,
+# aes-gcm, chacha20poly1305, argon2, ...) — a general-purpose config
+# format's dependency budget, not a 128Hz netcode hot path's. Its Rust
+# API is also a dynamic accessor (`data.get::<T>("path")`), not struct
+# codegen, so it wouldn't replace packet.rs's typed encode/decode
+# anyway. See docs/mid-net.md "DixScript Integration" for the reasoning.
+#
+# tokio/bytes are a SEPARATE open question from wire encoding — async
+# runtime + buffer-type choice for socket.rs, not decided this pass.
+# Revisit before building socket.rs; see docs/mid-net.md.
 tokio     = { version = "1", features = ["full"] }
 bytes     = "1.5"
-bincode   = "1.3"
+# bincode intentionally removed: wire encoding is hand-rolled, zero-dep
+# (see src/packet.rs). Was the literal thing flagged as an open question
+# in docs/mid-net.md — resolved in favor of hand-rolled, now closed.
 
 [features]
 default = []
