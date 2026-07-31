@@ -2,7 +2,7 @@
 
 Reliable UDP with DixScript (.mdix) packet definitions.
 
-**Status:** in progress (build order: math → common → geom → **net** → ecs → physics). `packet.rs` has a real implementation (hand-rolled codec, `PlayerState`/`PlayerEvent`, 12 passing unit tests). `socket.rs`, `reliable.rs`, `sequence.rs`, `ffi.rs` are still skeletons.
+**Status:** in progress (build order: math → common → geom → **net** → ecs → physics). `packet.rs` (hand-rolled codec, `PlayerState`/`PlayerEvent`, 12 tests) and `sequence.rs` (wraparound-aware sequence comparison + ack-bitfield tracking, 13 tests including the gafferongames.com reference scenario) have real implementations, 25 tests passing total. `socket.rs`, `reliable.rs`, `ffi.rs` are still skeletons — `reliable.rs` is next: retransmit buffer, RTT-based timeout, and framing `packet.rs` payloads with `sequence.rs`'s sequence numbers.
 
 ## Dependency philosophy
 
@@ -45,12 +45,36 @@ Standard pattern used across the reliable-UDP-for-games space (this is the same 
 
 ## DixScript Integration
 
-Packet shapes are defined in `.mdix` files under `packets/`.
+Packet shapes are defined in `.mdix` files under `packets/`. `dixscript`
+1.0.0 published to crates.io 2026-07-27 — checked its actual Rust API
+and Cargo.toml (not assumed) before deciding whether mid-net should
+depend on it:
 
-**Important:** benchmark the DixScript deserializer vs the hand-rolled
-encoder (`packet.rs`) early in development. At 128 Hz with many entities
-the per-packet overhead matters. Use DixScript for definitions; the
-hand-rolled encoder is the fast path for in-flight bytes.
+- **Not a fit for the wire format.** Its Rust API is a dynamic accessor
+  over parsed `.mdix` (`data.get::<T>("path")`), not struct codegen —
+  there's no DixScript step `packet.rs`'s hand-written types are
+  standing in for waiting to be automated away. It also ships a real
+  binary Packer/Unpacker (the "DLM pipeline"), but that's a
+  general-purpose encode path for arbitrary DixScript ASTs — encryption
+  and compression built in, self-describing — not tuned for a fixed
+  28-byte per-tick struct. Wrong shape for the 128 Hz hot path.
+- **Not added as a dependency, mandatory or not.** Even with
+  `default-features = false`, `dixscript` pulls in 23 mandatory
+  transitive crates (serde, regex, chrono, aes-gcm, chacha20poly1305,
+  argon2, uuid, phf, …) — a reasonable budget for a general config/data
+  format, but it directly conflicts with mid-net's own zero-dependency
+  mandate above. Not reaching for it here for the same reason `bincode`
+  got removed.
+- **Where it might still fit, later, deliberately:** authoring/
+  validating the `.mdix` schema files themselves at dev time (e.g. via
+  `mdix-cli`, build-from-source only right now, not on crates.io yet),
+  or as a save-file/non-hot-path format elsewhere in the engine where
+  its encryption and compression are actually wanted. Not a mid-net
+  runtime dependency either way.
+
+`packet.rs` stays the fast path for in-flight bytes; the `.mdix` files
+stay the human-authored source of truth for packet shape, kept in sync
+by hand for now.
 
 ## Packet Budget
 
