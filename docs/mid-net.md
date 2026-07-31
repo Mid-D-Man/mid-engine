@@ -2,13 +2,15 @@
 
 Reliable UDP with DixScript (.mdix) packet definitions.
 
-**Status:** starting now (build order: math → common → geom → **net** → ecs → physics). Currently a skeleton — all files 2-18 lines, no real implementation yet.
+**Status:** in progress (build order: math → common → geom → **net** → ecs → physics). `packet.rs` has a real implementation (hand-rolled codec, `PlayerState`/`PlayerEvent`, 12 passing unit tests). `socket.rs`, `reliable.rs`, `sequence.rs`, `ffi.rs` are still skeletons.
 
 ## Dependency philosophy
 
 Same mandate as mid-math: **zero external dependencies where at all possible, minimal where not, works on every target with no platform-specific runtime requirement.** No assumption of a particular OS network stack beyond standard UDP sockets — no io_uring-only paths, no eBPF/XDP, nothing that only runs on Linux. This rules out reaching for existing Rust netcode crates (laminar, renet, etc.) as dependencies; they're useful as *reference reading*, not as things to pull in.
 
-**Open question to resolve before writing code:** the line below about "wire encoder uses bincode" needs a decision. If that means the literal `bincode` crate, it contradicts the zero-dependency mandate and should be replaced with a hand-rolled encoder in the same spirit as mid-math's SIMD work — or, if DixScript's own runtime already does binary encoding without depending on the `bincode` crate, the doc just needs its wording fixed so "bincode" isn't confused with the dependency. Pin this down first.
+**Resolved:** "wire encoder uses bincode" meant the literal `bincode` crate (confirmed against the actual stub doc comments in `lib.rs`/`packet.rs`, which said so explicitly). That contradicted the zero-dependency mandate, so it's replaced with a hand-rolled encoder — explicit little-endian, fixed layout for `PlayerState`, length-prefixed fields for `PlayerEvent`'s strings. `bincode` is removed from `Cargo.toml`. Same spirit as mid-math's SIMD work: hand-rolled over dependency, in this case with an extra motivation — Ubel Stratum's LOW tier (manual memory, FFI) is a plausible future consumer of these bytes, and a Rust-only reflection-based format like bincode gives a non-Rust caller nothing to bind against, where a flat byte layout does.
+
+`tokio`/`bytes` in `Cargo.toml` are a **separate, still-open** question — async runtime and buffer-type choice for `socket.rs`, not resolved by the wire-encoding decision above. Revisit before building `socket.rs`.
 
 ## Why UDP
 
@@ -45,13 +47,10 @@ Standard pattern used across the reliable-UDP-for-games space (this is the same 
 
 Packet shapes are defined in `.mdix` files under `packets/`.
 
-**Important:** benchmark the DixScript deserializer vs a hand-rolled encoder
-early in development. At 128 Hz with many entities the per-packet
-overhead matters. Use DixScript for definitions; consider a
-separate fast path for in-flight bytes if needed. (See the dependency
-philosophy note above — pin down what "the wire encoder" actually is
-before this benchmark, since the two candidates have different
-dependency implications.)
+**Important:** benchmark the DixScript deserializer vs the hand-rolled
+encoder (`packet.rs`) early in development. At 128 Hz with many entities
+the per-packet overhead matters. Use DixScript for definitions; the
+hand-rolled encoder is the fast path for in-flight bytes.
 
 ## Packet Budget
 
