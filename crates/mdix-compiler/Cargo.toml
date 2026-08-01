@@ -1,0 +1,19 @@
+[package]
+name = "mdix-compiler"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "mdix-compiler"
+path = "src/main.rs"
+
+[dependencies]
+# Enabled for real: this tool's whole job is compiling .mdix files, and
+# it's a standalone binary, not linked into any core crate -- exactly
+# where dixscript belongs per docs/architecture.md's dependency policy.
+# Note: dixscript's published MSRV is 1.85, higher than the rest of the
+# workspace's toolchain floor -- not an issue under `channel = "stable"`
+# (rust-toolchain.toml) but worth knowing if this tool's CI job ever
+# gets pinned to an older toolchain independently.
+dixscript = "1.0.0"
+clap      = { version = "4", features = ["derive"] }
