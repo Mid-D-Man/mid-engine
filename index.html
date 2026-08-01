@@ -203,16 +203,16 @@
       <span class="badge badge-wip">Rust · Priority 4</span>
     </a>
 
-    <div class="card" style="opacity:.5;cursor:not-allowed">
+    <a class="card" href="mid-net/" id="card-mid-net">
       <div class="card-icon">📡</div>
       <div class="card-title">mid-net</div>
-      <div class="card-desc">Reliable UDP · DixScript packet definitions · 128 Hz tick</div>
-      <div class="card-status">
+      <div class="card-desc">Reliable UDP · hand-rolled wire codec · 128 Hz tick</div>
+      <div class="card-status" id="status-mid-net">
         <div class="dot dot-grey"></div>
-        <span style="color:#484f58">Not started</span>
+        <span>Loading…</span>
       </div>
-      <span class="badge badge-soon">Priority 2</span>
-    </div>
+      <span class="badge badge-wip">Rust · In progress</span>
+    </a>
 
     <div class="card" style="opacity:.5;cursor:not-allowed">
       <div class="card-icon">🧩</div>
@@ -294,6 +294,7 @@
 const crates = [
   { name: 'mid-log',  jsonFile: 'mid-log/mid-log-test-results.json'   },
   { name: 'mid-math', jsonFile: 'mid-math/mid-math-test-results.json' },
+  { name: 'mid-net',  jsonFile: 'mid-net/mid-net-test-results.json'   },
 ];
 
 crates.forEach(({ name, jsonFile }) => {
@@ -317,4 +318,4 @@ crates.forEach(({ name, jsonFile }) => {
 });
 </script>
 </body>
-</html>
+      </html>

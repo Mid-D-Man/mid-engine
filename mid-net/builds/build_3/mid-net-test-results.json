@@ -1,0 +1,278 @@
+{
+  "build": "3",
+  "branch": "main",
+  "commit": "275712e4",
+  "date": "",
+  "rust_version": "rustc 1.97.1 (8bab26f4f 2026-07-14)",
+  "crate": "mid-net",
+  "summary": {
+    "total": 42,
+    "passed": 42,
+    "failed": 0,
+    "ignored": 0,
+    "duration_s": 0.0
+  },
+  "suites": [
+    {
+      "name": "lib (unit tests)",
+      "passed": 42,
+      "failed": 0,
+      "ignored": 0,
+      "duration_s": 0.0,
+      "tests": [
+        {
+          "name": "packet::tests::distinct_player_states_do_not_collide",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "packet::tests::packet_kind_round_trips_through_u8",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "packet::tests::player_event_decode_rejects_bad_utf8",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "packet::tests::player_event_decode_rejects_truncated_string",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "packet::tests::player_event_handles_empty_strings",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "packet::tests::player_event_default_round_trips",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "packet::tests::player_state_decode_rejects_truncated_buffer",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "packet::tests::player_state_decode_rejects_trailing_bytes",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "packet::tests::player_event_round_trips",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "packet::tests::player_state_default_round_trips",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "packet::tests::player_state_round_trips",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "packet::tests::player_state_wire_size_is_exact",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "reliable::tests::ack_bitfield_can_ack_older_packets_too",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "reliable::tests::duplicate_ack_of_already_removed_packet_is_harmless",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "reliable::tests::empty_payload_round_trips_on_both_frame_kinds",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "reliable::tests::nothing_retransmitted_before_timeout_elapses",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "reliable::tests::reliable_frame_rejects_short_buffer",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "reliable::tests::acked_packet_is_removed_and_unacked_is_not",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "reliable::tests::reliable_frame_round_trips",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "reliable::tests::retransmits_after_timeout_and_updates_bookkeeping",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "reliable::tests::rtt_estimator_converges_toward_stable_samples",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "reliable::tests::rtt_estimator_starts_at_conservative_default",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "reliable::tests::retransmitted_packet_does_not_pollute_rtt_sample",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "reliable::tests::rtt_estimator_timeout_is_clamped",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "reliable::tests::rtt_estimator_widens_timeout_under_jitter",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "reliable::tests::unreliable_frame_rejects_short_buffer",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "reliable::tests::unreliable_frame_rejects_unknown_kind",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "sequence::tests::duplicate_packet_is_a_no_op",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "reliable::tests::unreliable_frame_round_trips",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "sequence::tests::forward_jump_beyond_window_drops_old_history_without_panicking",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "sequence::tests::exact_window_boundary_shift_of_32_is_representable",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "reliable::tests::clean_ack_without_retransmit_does_feed_rtt_sample",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "sequence::tests::is_acked_false_for_anything_newer_than_ack",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "sequence::tests::matches_gafferongames_reference_example",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "sequence::tests::is_acked_true_for_the_ack_itself",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "sequence::tests::more_recent_handles_wraparound",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "sequence::tests::record_received_across_u16_wraparound_does_not_panic",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "sequence::tests::more_recent_normal_case",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "sequence::tests::out_of_order_arrival_within_window",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "sequence::tests::sequential_no_loss",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "sequence::tests::single_gap_is_reflected_in_bits",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "sequence::tests::stale_packet_beyond_window_is_ignored_not_panicking",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        }
+      ]
+    }
+  ]
+}
