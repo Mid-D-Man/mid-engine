@@ -9,7 +9,7 @@ Modular Anti-Engine — each crate is independently publishable.
 | mid-math | SIMD numerics, f32/f64, zero external deps | f32 optimization complete, f64 optimization complete (this pass fixed `DMat4::inverse`, `DVec4`/`DQuat` normalize, NEON scalar-fallback for normalize). Queued: int vectors, wide vector types |
 | mid-common | Shared types, traits, string/FFI utilities | Partial — `string/`, `ffi/` substantial (300-500+ real lines each); `error.rs`/`traits.rs`/`types.rs` still thin (2-3 lines) |
 | mid-geom | 2D/3D shapes, intersection tests, raycasting, frustum culling | Substantial — real AABB/sphere/capsule/rect/circle shapes with AABB-AABB, AABB-sphere, sphere-sphere, capsule-sphere, capsule-capsule intersection tests, ray-vs-plane/AABB/sphere/capsule raycasting, plane/frustum culling. Known gaps: no OBB, no capsule-vs-AABB, no broadphase/BVH — fill these reactively once mid-physics defines what it actually needs, not speculatively |
-| **mid-net** | Reliable UDP transport, two-channel (reliable/unreliable), DixScript packet definitions | **Starting now.** Currently skeleton only (all files 2-18 lines) |
+| **mid-net** | Reliable UDP transport, two-channel (reliable/unreliable), hand-rolled wire codec | **In progress.** `packet.rs`, `sequence.rs`, `reliable.rs` real and tested (42 tests: codec round-trips, wraparound-safe sequence/ack arithmetic, RTT-based retransmit). `socket.rs`/`ffi.rs` still skeleton |
 | mid-ecs | Data-oriented ECS (SoA), network sync baked in from day one | Next after mid-net. Currently skeleton only (all files 2-15 lines) |
 | mid-physics | Rigid body dynamics, collision response | Not started — crate doesn't exist yet |
 | mid-anim | Animation | Not started |
@@ -31,10 +31,39 @@ Physics goes after ecs specifically so rigid bodies can be ECS components from d
 
 - **No exceptions** — everything fast and memory-safe
 - **Zero-copy** — minimize RAM-to-RAM movement
-- **Zero-to-minimal external dependencies** — same standard mid-math holds itself to; applies to mid-net too (see `docs/mid-net.md`'s dependency philosophy section)
+- **Zero-to-minimal external dependencies, every core crate, no exceptions
+  — including DixScript.** Decided this pass, generalized from the
+  mid-net-specific call: `dixscript` (1.0.0, published 2026-07-27) is not
+  a dependency of any core crate (mid-math, mid-common, mid-geom,
+  mid-net, mid-ecs, mid-physics), full stop — not just "for now." Checked
+  its own manifest: 23 mandatory transitive crates even with
+  `default-features = false` (serde, regex, chrono, aes-gcm,
+  chacha20poly1305, argon2, uuid, phf, ...). That's the right budget for
+  a general-purpose config/data-interchange format; it isn't for
+  hot-path systems code held to the same standard mid-math's SIMD work
+  set.
+  **Where DixScript actually belongs:** as *the engine's own convenient
+  data format* — one layer up from these core crates, for things like
+  save data, level/scene data, editor project files, and general
+  config, wherever built-in encryption/compression and human-authored
+  syntax are worth the dependency weight and there's no 128 Hz hot path
+  involved. `tools/mdix-compiler` (a separate binary, not linked into
+  any core crate) is the concrete home for this today — its manifest
+  now depends on `dixscript` for real, since compiling `.mdix` files is
+  exactly its job. The `.mdix` files under `mid-net/packets/` stay as
+  human-authored reference schema only; nothing parses them at build or
+  run time, so they don't pull the dependency into mid-net itself.
 - **Multiplayer-first** — net sync baked into ECS from day one
 - **FFI-ready** — every crate exposes a C-compatible API
-- **Works anywhere** — no platform-specific runtime requirement (no io_uring-only paths, no eBPF/XDP, nothing Linux-only) in any crate meant to run on the client
+- **Works anywhere** — no platform-specific runtime requirement (no
+  io_uring-only paths, no eBPF/XDP, nothing Linux-only, and no
+  `std::net`/`std::time::Instant` assumptions that break on `wasm32`) in
+  any crate meant to run on the client. mid-net's `reliable.rs` is the
+  first place this got load-bearing: it takes time as a caller-supplied
+  `Timestamp(u64)` rather than calling a clock itself, specifically so
+  the same protocol code runs unchanged on native (UDP) and in-browser
+  (WebTransport datagrams — baseline-available across browsers as of
+  March 2026) without an `Instant`-doesn't-exist-on-wasm32 rewrite later.
 
 ## Performance Targets
 

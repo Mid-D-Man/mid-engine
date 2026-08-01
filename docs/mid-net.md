@@ -1,8 +1,11 @@
 # mid-net
 
-Reliable UDP with DixScript (.mdix) packet definitions.
+Reliable UDP netcode, hand-rolled wire format. Packet shapes are
+documented as `.mdix` reference schema, but DixScript itself is not a
+dependency of this crate — see "Dependency philosophy" below and
+`docs/architecture.md`.
 
-**Status:** in progress (build order: math → common → geom → **net** → ecs → physics). `packet.rs` (hand-rolled codec, `PlayerState`/`PlayerEvent`, 12 tests) and `sequence.rs` (wraparound-aware sequence comparison + ack-bitfield tracking, 13 tests including the gafferongames.com reference scenario) have real implementations, 25 tests passing total. `socket.rs`, `reliable.rs`, `ffi.rs` are still skeletons — `reliable.rs` is next: retransmit buffer, RTT-based timeout, and framing `packet.rs` payloads with `sequence.rs`'s sequence numbers.
+**Status:** in progress (build order: math → common → geom → **net** → ecs → physics). `packet.rs` (hand-rolled codec, `PlayerState`/`PlayerEvent`, 12 tests), `sequence.rs` (wraparound-aware sequence/ack arithmetic, 13 tests including the gafferongames.com reference scenario), and `reliable.rs` (frame headers, RTT estimator, retransmit buffer, 17 tests) have real implementations — 42 tests passing total. Not yet built: a single "connection" object composing `AckTracker` + `RetransmitBuffer` + frame (de)coding into one `send`/`poll_received`/`update` API — right now these are tested building blocks, not glued into one type yet. `socket.rs` (actual transport) and `ffi.rs` are still skeletons.
 
 ## Dependency philosophy
 
@@ -35,42 +38,48 @@ Both engines converge on exactly this split, which is a good sign this is the ri
 
 ### Reliability mechanism (the concrete "ACK + retransmit")
 
-Standard pattern used across the reliable-UDP-for-games space (this is the same approach behind e.g. Glenn Fiedler's `reliable` library, cited widely as the reference design):
+Standard pattern used across the reliable-UDP-for-games space (this is the same approach behind e.g. Glenn Fiedler's `reliable` library, cited widely as the reference design). Implemented in `sequence.rs` + `reliable.rs`, tested against the reference design's own worked example:
 
-- Each reliable packet carries a monotonically increasing sequence number.
-- Receiver tracks the highest sequence number seen plus a bitfield of the last N (typically 32) packets received, and sends that back as the ack.
-- Sender keeps unacked packets in a small buffer, resends on timeout (RTT-based, not fixed) or when a gap is confirmed via the ack bitfield.
-- Sequence numbers wrap — comparisons need wraparound-aware logic (`(a - b) as i16 > 0` style), not raw `>`.
-- Keep this as its own small, self-contained module — it's the one part of mid-net worth writing tests against known packet-loss sequences early, since a subtle wraparound or off-by-one bug here silently corrupts delivery guarantees rather than crashing.
+- Each reliable packet carries a monotonically increasing sequence number (`sequence.rs::Sequence`).
+- Receiver tracks the highest sequence number seen plus a 32-bit bitfield of what came before it, and sends that back as the ack (`sequence.rs::AckTracker`) — piggybacked on the header of every outgoing reliable packet, not sent as separate ack packets.
+- Sender keeps unacked packets in a small buffer (`reliable.rs::RetransmitBuffer`), resends on an RTT-based timeout (`RttEstimator`, same smoothing constants as TCP's classic Jacobson/Karels RTO estimator) rather than a fixed guess.
+- **Karn's algorithm applied:** a packet's RTT is only sampled the first time it's acked with zero retransmits behind it. Once a packet's been resent, an ack for it is ambiguous — no way to tell which transmission it's acknowledging — so counting it would poison the RTT estimate. Tested explicitly (`retransmitted_packet_does_not_pollute_rtt_sample`).
+- Sequence numbers wrap — comparisons need wraparound-aware logic, not raw `>`. `Sequence` deliberately has no `PartialOrd`/`Ord` impl so `<`/`>` can't be reached for by habit; `is_more_recent_than` is explicit about it.
+
+## Platform & FFI
+
+Two hard constraints, both load-bearing in `reliable.rs`'s design, not just aspirational:
+
+- **No `std::net`, no `std::time::Instant`, anywhere in `packet.rs`/`sequence.rs`/`reliable.rs`.** `std::net::UdpSocket` doesn't exist on `wasm32-unknown-unknown` — checked current browser transport options rather than assuming: WebTransport datagrams (baseline-available across browsers as of March 2026, UDP-like: unreliable, unordered, MTU-sized) are the client-server fit; WebRTC `RTCDataChannel` unreliable mode is the P2P equivalent but needs ICE/STUN/TURN for client-server, more complexity than this needs. Either way, both present the same shape as UDP — a byte buffer in, a byte buffer out, no delivery guarantee — which is exactly the interface `reliable.rs` and `packet.rs` are written against. `socket.rs` is where the actual per-platform transport gets picked (`cfg`-gated); nothing above it needs to change when that happens.
+- **Time is a caller-supplied `Timestamp(u64)` (milliseconds), never queried internally.** `std::time::Instant` has no defined layout and isn't meaningful across a C ABI, and it panics on `wasm32-unknown-unknown` without a shim. Pushing "what does now mean" up to the caller sidesteps both problems at once, and as a side effect makes every `reliable.rs` test deterministic — a manually-advanced fake clock, no real sleeping, no timing flakiness.
 
 ## DixScript Integration
 
-Packet shapes are defined in `.mdix` files under `packets/`. `dixscript`
-1.0.0 published to crates.io 2026-07-27 — checked its actual Rust API
-and Cargo.toml (not assumed) before deciding whether mid-net should
-depend on it:
+Packet shapes are documented as `.mdix` reference schema under
+`packets/`, but this is **not** a mid-net dependency — decided this pass
+and then generalized into a repo-wide policy (see
+`docs/architecture.md`, "Technical Mandates"): `dixscript` is not a
+dependency of any core crate, not just mid-net, not just "for now."
 
-- **Not a fit for the wire format.** Its Rust API is a dynamic accessor
-  over parsed `.mdix` (`data.get::<T>("path")`), not struct codegen —
-  there's no DixScript step `packet.rs`'s hand-written types are
-  standing in for waiting to be automated away. It also ships a real
-  binary Packer/Unpacker (the "DLM pipeline"), but that's a
-  general-purpose encode path for arbitrary DixScript ASTs — encryption
-  and compression built in, self-describing — not tuned for a fixed
-  28-byte per-tick struct. Wrong shape for the 128 Hz hot path.
-- **Not added as a dependency, mandatory or not.** Even with
-  `default-features = false`, `dixscript` pulls in 23 mandatory
-  transitive crates (serde, regex, chrono, aes-gcm, chacha20poly1305,
-  argon2, uuid, phf, …) — a reasonable budget for a general config/data
-  format, but it directly conflicts with mid-net's own zero-dependency
-  mandate above. Not reaching for it here for the same reason `bincode`
-  got removed.
-- **Where it might still fit, later, deliberately:** authoring/
-  validating the `.mdix` schema files themselves at dev time (e.g. via
-  `mdix-cli`, build-from-source only right now, not on crates.io yet),
-  or as a save-file/non-hot-path format elsewhere in the engine where
-  its encryption and compression are actually wanted. Not a mid-net
-  runtime dependency either way.
+- **Not a fit for the wire format even setting the dependency question
+  aside.** Checked its actual Rust API: it's a dynamic accessor over
+  parsed `.mdix` (`data.get::<T>("path")`), not struct codegen — there
+  was never a DixScript step `packet.rs`'s hand-written types were
+  standing in for. It also ships a real binary Packer/Unpacker (the
+  "DLM pipeline"), but that's a general-purpose encode path for
+  arbitrary DixScript ASTs — encryption and compression built in,
+  self-describing — not tuned for a fixed 28-byte per-tick struct.
+- **Not added as a dependency, mandatory or not, by policy now — not a
+  case-by-case call.** Even with `default-features = false`, `dixscript`
+  pulls in 23 mandatory transitive crates (serde, regex, chrono,
+  aes-gcm, chacha20poly1305, argon2, uuid, phf, …). Right budget for a
+  general config/data format, wrong one for a core systems crate.
+- **Where it actually lives:** `tools/mdix-compiler` — a separate
+  binary, not linked into any core crate — now depends on `dixscript`
+  for real, since compiling `.mdix` files is exactly its job. That's
+  the concrete instance of "DixScript as the engine's convenient data
+  format" the policy above points to. mid-net's own `.mdix` files stay
+  human-authored reference schema only.
 
 `packet.rs` stays the fast path for in-flight bytes; the `.mdix` files
 stay the human-authored source of truth for packet shape, kept in sync
