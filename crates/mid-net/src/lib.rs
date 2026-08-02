@@ -1,4 +1,4 @@
-//! mid-net — Reliable UDP netcode, hand-rolled wire format
+//! mid-net — Reliable UDP-class netcode, hand-rolled wire format
 //!
 //! Unreliable channel : position, rotation, animation state (128 Hz)
 //! Reliable channel   : discrete events — join, pickup, damage
@@ -12,13 +12,21 @@
 //!
 //! Sequence numbers and ack-bitfield tracking live in `sequence.rs`,
 //! tested against the gafferongames.com reference design docs/mid-net.md
-//! cites. `reliable.rs` builds the actual send/receive protocol on top:
-//! frame headers (kind + sequence, or kind + sequence + piggybacked ack
-//! for the reliable channel), an RTT-based retransmit buffer, and
-//! nothing else — no sockets, no wall clock, so it runs identically on
-//! native and `wasm32` and stays FFI-safe (plain data in, plain data
-//! out). `socket.rs` (still a stub) is where the actual transport
-//! per-platform lives — UDP natively, WebTransport datagrams in-browser.
+//! cites. `reliable.rs` builds frame headers, an RTT estimator, and a
+//! retransmit buffer on top — kept as the correct, tested implementation
+//! for any transport without native reliability, though the chosen
+//! transport (QUIC) means `PlayerEvent` doesn't need it in practice; see
+//! docs/mid-net.md "Reliability mechanism".
+//!
+//! `transport.rs` is the pluggable-backend boundary (a `Transport` trait,
+//! verified against Unity Netcode for Entities' `INetworkInterface` +
+//! `DefaultDriverConstructor.cs` pattern) that `packet.rs`/`sequence.rs`/
+//! `reliable.rs` never bypass to talk to a socket directly.
+//! `LoopbackTransport` is real and tested today; native (`quinn`) and
+//! browser (`web-transport-wasm`) backends belong in `socket.rs`, not
+//! yet built — quinn needs a newer Rust than this sandbox can compile,
+//! so that part is static-analysis-only for now. See docs/mid-net.md
+//! "Transport" and "Mobile" for the full picture.
 //!
 //! 7.8ms budget per tick at 128 Hz. Design the packet budget early.
 
@@ -26,15 +34,8 @@ pub mod socket;
 pub mod packet;
 pub mod reliable;
 pub mod sequence;
+pub mod transport;
 pub mod ffi;
-
-// socket.rs is still a 2-line stub — this re-export doesn't resolve yet
-// and the crate won't build as a whole until MidSocket exists. Left in
-// deliberately (not commented out) so it stays visible as the next real
-// gap rather than getting quietly forgotten; packet.rs/sequence.rs/
-// reliable.rs have no dependency on socket and compile/test fine
-// standalone (verified as a group, not just individually).
-pub use socket::MidSocket;
 
 pub use packet::{DecodeError, Packet, PacketKind, PlayerEvent, PlayerId, PlayerState};
 pub use sequence::{is_acked, AckTracker, Sequence};
@@ -43,3 +44,4 @@ pub use reliable::{
     FrameError, ReliableHeader, RetransmitBuffer, RttEstimator, Timestamp, UnreliableHeader,
     RELIABLE_HEADER_SIZE, UNRELIABLE_HEADER_SIZE,
 };
+pub use transport::{LoopbackTransport, Transport};
