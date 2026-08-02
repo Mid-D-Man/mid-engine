@@ -2,10 +2,6 @@
 name: mid-net — Tests
 
 on:
-  push:
-    branches: [main, master, develop]
-  pull_request:
-    branches: [main, master]
   workflow_dispatch:
 
 permissions:
@@ -13,29 +9,8 @@ permissions:
   actions:  read
 
 jobs:
-
-  parse-trigger:
-    runs-on: ubuntu-latest
-    outputs:
-      run_tests: ${{ steps.decide.outputs.run_tests }}
-    steps:
-      - name: Decide whether to run
-        id: decide
-        run: |
-          RUN=false
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            RUN=true
-          else
-            MSG="${{ github.event.head_commit.message }}${{ github.event.pull_request.title }}"
-            echo "$MSG" | grep -qiE '\-\-mid-net\b|\-\-mid-all\b' && RUN=true || true
-          fi
-          echo "run_tests=$RUN" >> $GITHUB_OUTPUT
-          echo "Run mid-net tests: $RUN"
-
   run-tests:
     runs-on: ubuntu-latest
-    needs: parse-trigger
-    if: needs.parse-trigger.outputs.run_tests == 'true'
 
     steps:
       - name: Checkout
@@ -62,22 +37,23 @@ jobs:
             ~/.cargo/registry/index/
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
-          key: cargo-registry-${{ hashFiles('crates/mid-net/Cargo.toml') }}
+          key: cargo-registry-${{ hashFiles('crates/mid-net/**/Cargo.toml') }}
           restore-keys: |
             cargo-registry-
 
       - name: Check formatting
-        run: cargo fmt -p mid-net --check
+        run: cargo fmt -p mid-net -p mid-net-wire -p mid-net-transport -p mid-net-reliable --check
         continue-on-error: true
 
       - name: Clippy
-        run: cargo clippy -p mid-net -- -D warnings
+        run: cargo clippy -p mid-net -p mid-net-wire -p mid-net-transport -p mid-net-reliable -- -D warnings
         continue-on-error: true
 
       - name: Build all crate types
         run: |
-          echo "=== Building mid-net (rlib + cdylib + staticlib) ==="
-          cargo build -p mid-net
+          echo "=== Building mid-net family (facade + wire + transport + reliable) ==="
+          echo "=== mid-net itself builds as rlib + cdylib + staticlib; the sub-crates are plain rlibs ==="
+          cargo build -p mid-net -p mid-net-wire -p mid-net-transport -p mid-net-reliable
           echo ""
           echo "=== Produced libraries ==="
           find target/debug -maxdepth 1 \
@@ -90,7 +66,7 @@ jobs:
       - name: Run unit tests
         continue-on-error: true
         run: |
-          cargo test -p mid-net \
+          cargo test -p mid-net -p mid-net-wire -p mid-net-transport -p mid-net-reliable \
             --color=never \
             --no-fail-fast \
             -- --show-output 2>&1 | tee mid-net-test-raw.txt
@@ -239,7 +215,7 @@ jobs:
 
   deploy-results:
     runs-on: ubuntu-latest
-    needs: [parse-trigger, run-tests]
+    needs: [run-tests]
     if: always() && needs.run-tests.result != 'skipped'
 
     steps:
@@ -310,7 +286,7 @@ jobs:
 
   summary:
     runs-on: ubuntu-latest
-    needs: [parse-trigger, run-tests, deploy-results]
+    needs: [run-tests, deploy-results]
     if: always()
     steps:
       - name: Print summary
@@ -322,6 +298,3 @@ jobs:
           echo "Branch:  ${{ github.ref_name }}"
           echo "Tests:   ${{ needs.run-tests.result    || 'skipped' }}"
           echo "Deploy:  ${{ needs.deploy-results.result || 'skipped' }}"
-          if [ "${{ needs.parse-trigger.outputs.run_tests }}" != "true" ]; then
-            echo "Not triggered. Add --mid-net or --mid-all to your commit message."
-          fi
