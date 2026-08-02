@@ -2,6 +2,9 @@
 members = [
     "crates/mid-log",
     "crates/mid-net",
+    "crates/mid-net/wire",
+    "crates/mid-net/transport",
+    "crates/mid-net/reliable",
     "crates/mid-ecs",
     "crates/mid-math",
     "crates/mid-geom",
@@ -18,7 +21,3 @@ lto           = true
 codegen-units = 1
 strip         = true
 debug         = false
-
-[profile.dev]
-opt-level = 0
-debug     = true
