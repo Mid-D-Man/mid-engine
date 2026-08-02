@@ -6,7 +6,51 @@ Packet shapes are documented as `.mdix` reference schema, but DixScript
 itself is not a dependency of this crate — see "Dependency philosophy"
 below and `docs/architecture.md`.
 
-**Status:** in progress (build order: math → common → geom → **net** → ecs → physics). `packet.rs` (hand-rolled codec, 12 tests), `sequence.rs` (wraparound-aware sequence arithmetic, 13 tests), `reliable.rs` (frame headers, RTT estimator, retransmit buffer, 17 tests), and `transport.rs` (the `Transport` trait + `LoopbackTransport`, 4 tests) have real implementations — 46 tests passing total. Decided this pass, not yet built: `PlayerEvent` moves onto a QUIC reliable stream instead of `reliable.rs`'s own retransmit buffer (see "Reliability mechanism"); the real `quinn`/`web-transport-wasm`-backed `Transport` impls are still design, not code — MSRV for that dependency tree is ~1.85, past what this sandbox can compile-verify, so that work is static-analysis-verified only until it lands in real CI. `socket.rs` (wiring a real `Transport` impl in) and `ffi.rs` are still skeletons.
+**Status:** in progress (build order: math → common → geom → **net** → ecs → physics). Restructured into subfolder crates this pass — see "Crate Structure" below. `mid-net-wire` (packet codec, 12 tests + sequence/ack arithmetic, 13 tests), `mid-net-reliable` (frame headers, RTT estimator, retransmit buffer, 17 tests), and `mid-net-transport` (the `Transport` trait + `LoopbackTransport`, 4 tests) have real implementations — 46 tests passing total, verified as a real multi-crate Cargo workspace (not just reorganized files) before delivery. Decided this pass, not yet built: `PlayerEvent` moves onto a QUIC reliable stream instead of `mid-net-reliable`'s own retransmit buffer (see "Reliability mechanism"); the real `quinn`/`web-transport-wasm`-backed `Transport` impls are still design, not code — planned as sibling subfolder crates (`mid-net-transport-quinn`, `mid-net-transport-wasm`), not yet built. MSRV for that dependency tree is ~1.85, past what this sandbox can compile-verify, so that work is static-analysis-verified only until it lands in real CI. `mid-net` itself (the facade crate) currently just re-exports the three sub-crates; `ffi.rs` is still a skeleton.
+
+## Crate Structure
+
+Restructured this pass from one flat crate into subfolder crates —
+checked naia's actual layout first (`socket/{client,server,shared}`,
+each its own crate under a subfolder) rather than inventing a
+convention, since that's exactly this situation: naia splits out
+`naia-socket-shared` (protocol-adjacent, no transport-specific deps)
+from `naia-client-socket`/`naia-server-socket` (the crates that
+actually carry platform-specific transport dependencies), for the same
+reason we're doing it here — so a heavy, platform-specific transport
+backend's dependency tree never contaminates the zero-dependency
+protocol layer.
+
+```
+crates/mid-net/
+  Cargo.toml, src/lib.rs, src/ffi.rs   — facade: re-exports everything, owns the FFI surface
+  wire/                                — mid-net-wire: packet.rs + sequence.rs. Zero deps.
+  transport/                           — mid-net-transport: the Transport trait + LoopbackTransport. Zero deps.
+  reliable/                            — mid-net-reliable: frame headers, RTT, retransmit buffer. Depends on mid-net-wire only.
+  transport-quinn/  (planned)          — native Transport impl, depends on quinn. Not built.
+  transport-wasm/   (planned)          — browser Transport impl, depends on wasm-bindgen/web-sys. Not built.
+```
+
+Dependency graph is a clean DAG, verified by actually building it as a
+real Cargo workspace (`cargo build --workspace` / `cargo test --workspace`
+against a local 4-member workspace mirroring this layout), not just
+asserted from the file split: `mid-net-wire` and `mid-net-transport` have
+zero path dependencies on each other or on anything else in the family;
+`mid-net-reliable` depends on `mid-net-wire` only (needs `PacketKind` for
+frame headers, `Sequence`/`is_acked` for the retransmit buffer); the
+facade depends on all three. `mid-net-transport` deliberately has zero
+dependency on `mid-net-wire` — it only ever moves `&[u8]`/`Vec<u8>`, it
+has no idea `PlayerState` or `PacketKind` exist, which is exactly what
+lets it be swapped or reused independently of the wire format.
+
+Old flat-file layout retired this pass:
+`crates/mid-net/src/{packet,sequence}.rs` → `crates/mid-net/wire/src/`,
+`crates/mid-net/src/reliable.rs` → `crates/mid-net/reliable/src/lib.rs`,
+`crates/mid-net/src/transport.rs` → `crates/mid-net/transport/src/lib.rs`,
+`crates/mid-net/src/socket.rs` → retired entirely (its role — "where
+concrete Transport backends land" — is now the planned
+`transport-quinn`/`transport-wasm` subfolder crates instead of a file).
+Root workspace `Cargo.toml` updated to list the three new members.
 
 ## Dependency philosophy
 
@@ -14,9 +58,10 @@ Same mandate as mid-math: **zero external dependencies where at all possible, mi
 
 **Resolved:** "wire encoder uses bincode" meant the literal `bincode` crate (confirmed against the actual stub doc comments in `lib.rs`/`packet.rs`, which said so explicitly). That contradicted the zero-dependency mandate, so it's replaced with a hand-rolled encoder — explicit little-endian, fixed layout for `PlayerState`, length-prefixed fields for `PlayerEvent`'s strings. `bincode` is removed from `Cargo.toml`. Same spirit as mid-math's SIMD work: hand-rolled over dependency, in this case with an extra motivation — Ubel Stratum's LOW tier (manual memory, FFI) is a plausible future consumer of these bytes, and a Rust-only reflection-based format like bincode gives a non-Rust caller nothing to bind against, where a flat byte layout does.
 
-**Resolved:** `tokio`/`bytes` sitting unconditionally in `Cargo.toml` (the "separate, still-open" question from earlier this pass) is superseded by the transport decision below, not answered in isolation. `quinn` (verified against its real, published Cargo.toml, not a summary) declares `tokio = { workspace = true }` **unconditionally** — every runtime feature choice (`runtime-tokio`/`runtime-async-std`/`runtime-smol`) only gates which of tokio's *own* features (`time`/`rt`/`net`) get turned on, not whether the crate itself is present. So "zero tokio" isn't achievable while using `quinn` on native, and that's fine — it's normal, well-supported, native-only weight, nothing like the `"full"` feature set currently in `Cargo.toml`. The wasm side is unaffected either way: `web-transport-wasm` (verified via its own published dependency list) has zero `quinn`, zero `tokio` — just `wasm-bindgen`/`web-sys`/`js-sys`/`url`/`thiserror`. `Cargo.toml` isn't updated yet — real `quinn`/`web-transport` integration is next, blocked on nothing except being written.
+**Resolved:** `tokio`/`bytes` sitting unconditionally in the old single `Cargo.toml` (the "separate, still-open" question from earlier this pass) is superseded by the transport decision below, not answered in isolation, and now further resolved by the restructuring above — `tokio` will only ever appear in the future `mid-net-transport-quinn` crate's manifest, never in `mid-net-wire`/`mid-net-transport`/`mid-net-reliable`/the facade. `quinn` (verified against its real, published Cargo.toml, not a summary) declares `tokio = { workspace = true }` **unconditionally** — every runtime feature choice (`runtime-tokio`/`runtime-async-std`/`runtime-smol`) only gates which of tokio's *own* features (`time`/`rt`/`net`) get turned on, not whether the crate itself is present. So "zero tokio" isn't achievable while using `quinn` on native, and that's fine — it's normal, well-supported, native-only weight, nothing like the `"full"` feature set the old flat `Cargo.toml` had, and now it's contained to exactly one sub-crate instead of leaking into the whole family. The wasm side is unaffected either way: `web-transport-wasm` (verified via its own published dependency list) has zero `quinn`, zero `tokio` — just `wasm-bindgen`/`web-sys`/`js-sys`/`url`/`thiserror`.
 
 ## Why UDP-class (not TCP)
+
 
 TCP head-of-line blocking stalls all packets when one is lost.
 For position updates at 128 Hz, a dropped packet is just stale — skip it.
