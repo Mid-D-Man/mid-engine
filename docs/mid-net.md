@@ -6,7 +6,37 @@ Packet shapes are documented as `.mdix` reference schema, but DixScript
 itself is not a dependency of this crate — see "Dependency philosophy"
 below and `docs/architecture.md`.
 
-**Status:** in progress (build order: math → common → geom → **net** → ecs → physics). Restructured into subfolder crates this pass — see "Crate Structure" below. `mid-net-wire` (packet codec, 12 tests + sequence/ack arithmetic, 13 tests), `mid-net-reliable` (frame headers, RTT estimator, retransmit buffer, 17 tests), and `mid-net-transport` (the `Transport` trait + `LoopbackTransport`, 4 tests) have real implementations — 46 tests passing total, verified as a real multi-crate Cargo workspace (not just reorganized files) before delivery. Decided this pass, not yet built: `PlayerEvent` moves onto a QUIC reliable stream instead of `mid-net-reliable`'s own retransmit buffer (see "Reliability mechanism"); the real `quinn`/`web-transport-wasm`-backed `Transport` impls are still design, not code — planned as sibling subfolder crates (`mid-net-transport-quinn`, `mid-net-transport-wasm`), not yet built. MSRV for that dependency tree is ~1.85, past what this sandbox can compile-verify, so that work is static-analysis-verified only until it lands in real CI. `mid-net` itself (the facade crate) currently just re-exports the three sub-crates; `ffi.rs` is still a skeleton.
+**Status:** in progress (build order: math → common → geom → **net** → ecs → physics). Restructured into subfolder crates this pass — see "Crate Structure" below. `mid-net-wire` (packet codec, 12 tests + sequence/ack arithmetic, 13 tests), `mid-net-reliable` (frame headers, RTT estimator, retransmit buffer, 17 tests), `mid-net-transport` (the `Transport` trait + `LoopbackTransport`, 4 tests), and `connection.rs` in the facade crate (`Connection<T: Transport>` — the actual `send_player_state`/`send_player_event`/`poll` API, 5 tests) all have real implementations — 51 tests passing total, verified as a real multi-crate Cargo workspace before delivery each time, not just reorganized files. Still not built: the real `quinn`/`web-transport-wasm`-backed `Transport` impls, planned as sibling subfolder crates (`mid-net-transport-quinn`, `mid-net-transport-wasm`). MSRV for that dependency tree is ~1.85, past what this sandbox can compile-verify, so that work is static-analysis-verified only until it lands in real CI. `ffi.rs` is still a skeleton.
+
+## Connection
+
+`connection.rs` (in the facade crate) is what a game loop actually calls
+— `Connection::new(transport)`, then `send_player_state`/`send_player_event`
+to send and `poll()` once a tick to get back a `Vec<ConnectionEvent>`.
+Two things worth knowing about what it deliberately does *not* do:
+
+- **Doesn't use `mid-net-reliable`'s `RetransmitBuffer`/`RttEstimator` at
+  all.** `Transport::send_reliable`/`poll_reliable` already guarantee
+  real delivery — there's no `has_native_reliability()` escape hatch in
+  the real trait, every implementation is required to actually deliver
+  reliably. So there's nothing for a retransmit buffer to do at this
+  layer. Those pieces aren't dead code — they're exactly what a future
+  raw-UDP `Transport` impl would need internally to satisfy that
+  guarantee itself, one layer down — but nothing in the current call
+  graph reaches them, and that's worth saying plainly rather than
+  leaving quiet.
+- **Only frames the unreliable channel, not the reliable one.**
+  `PlayerState` still gets `mid-net-reliable`'s kind+sequence framing
+  (`encode_unreliable_frame`) because staleness detection is still this
+  layer's job even though delivery isn't. `PlayerEvent` gets just a
+  one-byte kind tag — no sequence number, since ordering is the
+  transport's guarantee now, not something to redundantly re-derive.
+
+Tested against `LoopbackTransport` pairs, including a staleness case
+that needed injecting frames with an explicit out-of-order sequence
+directly (`LoopbackTransport`'s FIFO pump can't produce real reordering
+on its own) to actually exercise that path rather than just assert it
+works.
 
 ## Crate Structure
 
