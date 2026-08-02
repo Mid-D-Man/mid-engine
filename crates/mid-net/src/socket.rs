@@ -1,16 +1,17 @@
 //! Raw UDP socket abstraction.
 //!
-//! Not implemented yet. `MidSocket` below is a placeholder that exists
-//! only so the crate compiles and `lib.rs`'s `pub use socket::MidSocket`
-//! resolves — real transport work hasn't started (see docs/mid-net.md
-//! status). The actual design question here — native UDP vs. browser
-//! WebTransport datagrams, `cfg`-gated per target (see docs/mid-net.md
-//! "Platform & FFI") — is real work still to do, not filled in
-//! speculatively just to make this placeholder feel more finished.
-
-/// Placeholder only. Constructing this does nothing useful yet — no
-/// fields, no methods, no behavior. Exists purely so `mid_net::MidSocket`
-/// resolves and the crate (and its CI) can build while `packet.rs`,
-/// `sequence.rs`, and `reliable.rs` are exercised for real.
-#[derive(Debug)]
-pub struct MidSocket;
+//! Not implemented yet. The pluggable-transport *boundary* itself lives
+//! in `transport.rs` (the `Transport` trait + `LoopbackTransport`) —
+//! this file is where concrete backends implementing that trait will
+//! land: native (`quinn`/`web-transport-quinn`) and browser
+//! (`web-transport-wasm`), per docs/mid-net.md "Transport". Neither is
+//! built yet — quinn's dependency tree needs a newer Rust than this
+//! sandbox can compile (edition2024 in a transitive dep), confirmed by
+//! trying to resolve it directly, so that part stays static-analysis-only
+//! until it's written against a real toolchain.
+//!
+//! No placeholder type here on purpose this time — `transport.rs`'s
+//! `Transport` trait plus `LoopbackTransport` already give `lib.rs`
+//! something real to export and the crate something real to compile
+//! against, so there's no unresolved-import gap left for a placeholder
+//! to paper over.
