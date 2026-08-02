@@ -1,0 +1,9 @@
+[package]
+name = "mid-net-wire"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "mid_net_wire"
+
+[dependencies]
