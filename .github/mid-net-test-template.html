@@ -235,34 +235,34 @@
       padding-left:10px;margin-bottom:14px;">Protocol Coverage</div>
     <div class="prim-grid">
       <div class="prim-card">
-        <div class="p-name p-ok">✓ packet.rs</div>
-        <div class="p-sub">PlayerState · PlayerEvent</div>
-        <div class="p-note">hand-rolled codec, zero deps</div>
+        <div class="p-name p-ok">✓ mid-net-wire</div>
+        <div class="p-sub">PlayerState · PlayerEvent · Sequence · AckTracker</div>
+        <div class="p-note">hand-rolled codec + wraparound-safe seq/ack, zero deps</div>
       </div>
       <div class="prim-card">
-        <div class="p-name p-ok">✓ sequence.rs</div>
-        <div class="p-sub">Sequence · AckTracker</div>
-        <div class="p-note">wraparound-safe, gafferongames ref case</div>
-      </div>
-      <div class="prim-card">
-        <div class="p-name p-ok">✓ reliable.rs</div>
+        <div class="p-name p-ok">✓ mid-net-reliable</div>
         <div class="p-sub">RetransmitBuffer · RttEstimator</div>
-        <div class="p-note">Karn's algorithm, no clock/socket calls</div>
+        <div class="p-note">Karn's algorithm, no clock/socket calls, deps: mid-net-wire only</div>
       </div>
       <div class="prim-card">
-        <div class="p-name p-warn">⚠ socket.rs</div>
-        <div class="p-sub">MidSocket</div>
-        <div class="p-note">skeleton — crate won't link without it</div>
+        <div class="p-name p-ok">✓ mid-net-transport</div>
+        <div class="p-sub">Transport trait · LoopbackTransport</div>
+        <div class="p-note">zero deps, verified against Unity's INetworkInterface pattern</div>
+      </div>
+      <div class="prim-card">
+        <div class="p-name p-warn">⚠ mid-net-transport-quinn</div>
+        <div class="p-sub">native Transport impl</div>
+        <div class="p-note">planned — MSRV ~1.85, not yet built</div>
+      </div>
+      <div class="prim-card">
+        <div class="p-name p-warn">⚠ mid-net-transport-wasm</div>
+        <div class="p-sub">browser Transport impl</div>
+        <div class="p-note">planned — not yet built</div>
       </div>
       <div class="prim-card">
         <div class="p-name p-warn">⚠ ffi.rs</div>
-        <div class="p-sub">C ABI exports</div>
+        <div class="p-sub">C ABI exports (facade crate)</div>
         <div class="p-note">skeleton — not started</div>
-      </div>
-      <div class="prim-card">
-        <div class="p-name p-info">ℹ Connection</div>
-        <div class="p-sub">AckTracker + RetransmitBuffer + framing</div>
-        <div class="p-note">not yet composed into one type</div>
       </div>
     </div>
   </div>
@@ -465,4 +465,4 @@ fetch('mid-net-test-results.json')
   });
 </script>
 </body>
-  </html>
+        </html>
