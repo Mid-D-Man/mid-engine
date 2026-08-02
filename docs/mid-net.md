@@ -1,11 +1,12 @@
 # mid-net
 
-Reliable UDP netcode, hand-rolled wire format. Packet shapes are
-documented as `.mdix` reference schema, but DixScript itself is not a
-dependency of this crate — see "Dependency philosophy" below and
-`docs/architecture.md`.
+Reliable UDP-class netcode over QUIC (native: `quinn`, browser:
+WebTransport), hand-rolled wire format, pluggable transport boundary.
+Packet shapes are documented as `.mdix` reference schema, but DixScript
+itself is not a dependency of this crate — see "Dependency philosophy"
+below and `docs/architecture.md`.
 
-**Status:** in progress (build order: math → common → geom → **net** → ecs → physics). `packet.rs` (hand-rolled codec, `PlayerState`/`PlayerEvent`, 12 tests), `sequence.rs` (wraparound-aware sequence/ack arithmetic, 13 tests including the gafferongames.com reference scenario), and `reliable.rs` (frame headers, RTT estimator, retransmit buffer, 17 tests) have real implementations — 42 tests passing total. Not yet built: a single "connection" object composing `AckTracker` + `RetransmitBuffer` + frame (de)coding into one `send`/`poll_received`/`update` API — right now these are tested building blocks, not glued into one type yet. `socket.rs` (actual transport) and `ffi.rs` are still skeletons.
+**Status:** in progress (build order: math → common → geom → **net** → ecs → physics). `packet.rs` (hand-rolled codec, 12 tests), `sequence.rs` (wraparound-aware sequence arithmetic, 13 tests), `reliable.rs` (frame headers, RTT estimator, retransmit buffer, 17 tests), and `transport.rs` (the `Transport` trait + `LoopbackTransport`, 4 tests) have real implementations — 46 tests passing total. Decided this pass, not yet built: `PlayerEvent` moves onto a QUIC reliable stream instead of `reliable.rs`'s own retransmit buffer (see "Reliability mechanism"); the real `quinn`/`web-transport-wasm`-backed `Transport` impls are still design, not code — MSRV for that dependency tree is ~1.85, past what this sandbox can compile-verify, so that work is static-analysis-verified only until it lands in real CI. `socket.rs` (wiring a real `Transport` impl in) and `ffi.rs` are still skeletons.
 
 ## Dependency philosophy
 
@@ -13,20 +14,28 @@ Same mandate as mid-math: **zero external dependencies where at all possible, mi
 
 **Resolved:** "wire encoder uses bincode" meant the literal `bincode` crate (confirmed against the actual stub doc comments in `lib.rs`/`packet.rs`, which said so explicitly). That contradicted the zero-dependency mandate, so it's replaced with a hand-rolled encoder — explicit little-endian, fixed layout for `PlayerState`, length-prefixed fields for `PlayerEvent`'s strings. `bincode` is removed from `Cargo.toml`. Same spirit as mid-math's SIMD work: hand-rolled over dependency, in this case with an extra motivation — Ubel Stratum's LOW tier (manual memory, FFI) is a plausible future consumer of these bytes, and a Rust-only reflection-based format like bincode gives a non-Rust caller nothing to bind against, where a flat byte layout does.
 
-`tokio`/`bytes` in `Cargo.toml` are a **separate, still-open** question — async runtime and buffer-type choice for `socket.rs`, not resolved by the wire-encoding decision above. Revisit before building `socket.rs`.
+**Resolved:** `tokio`/`bytes` sitting unconditionally in `Cargo.toml` (the "separate, still-open" question from earlier this pass) is superseded by the transport decision below, not answered in isolation. `quinn` (verified against its real, published Cargo.toml, not a summary) declares `tokio = { workspace = true }` **unconditionally** — every runtime feature choice (`runtime-tokio`/`runtime-async-std`/`runtime-smol`) only gates which of tokio's *own* features (`time`/`rt`/`net`) get turned on, not whether the crate itself is present. So "zero tokio" isn't achievable while using `quinn` on native, and that's fine — it's normal, well-supported, native-only weight, nothing like the `"full"` feature set currently in `Cargo.toml`. The wasm side is unaffected either way: `web-transport-wasm` (verified via its own published dependency list) has zero `quinn`, zero `tokio` — just `wasm-bindgen`/`web-sys`/`js-sys`/`url`/`thiserror`. `Cargo.toml` isn't updated yet — real `quinn`/`web-transport` integration is next, blocked on nothing except being written.
 
-## Why UDP
+## Why UDP-class (not TCP)
 
 TCP head-of-line blocking stalls all packets when one is lost.
 For position updates at 128 Hz, a dropped packet is just stale — skip it.
-UDP delivers the next packet immediately.
+UDP (and QUIC, which is UDP-based) delivers the next packet immediately.
+
+QUIC specifically (over raw UDP) buys real, hard-to-replicate-by-hand
+wins on top of that base property: proper congestion control (not just
+a retransmit timer), TLS 1.3 encryption for free, and connection
+migration — a mobile client switching from WiFi to cellular keeps the
+same connection instead of dropping it. See "Reliability mechanism" and
+"Transport" below for how that changes what this crate hand-rolls vs.
+what it leans on the protocol for.
 
 ## Two Channels
 
 | Channel | Content | Loss behaviour |
 |---|---|---|
-| Unreliable | position, rotation, animation | drop freely |
-| Reliable | join, pickup, damage, events | ACK + retransmit |
+| Unreliable | position, rotation, animation | drop freely — QUIC/WebTransport datagram |
+| Reliable | join, pickup, damage, events | QUIC/WebTransport reliable stream |
 
 ### Validated against Unity and Unreal (checked their actual docs/source, not just recalled)
 
@@ -36,15 +45,92 @@ Both engines converge on exactly this split, which is a good sign this is the ri
 - **Unity (Netcode for GameObjects)**: same split via `NetworkDelivery`/QoS channels (Reliable vs Unreliable), configurable per message. Same guidance: high-frequency (multiple-times-a-second) → unreliable.
 - **Both**: reliable delivery ordering is guaranteed **per-object/per-channel, not globally.** Don't build a single global sequence number across all reliable traffic — that reintroduces TCP-style head-of-line blocking between unrelated entities, which is the exact problem UDP was chosen to avoid. Keep reliable and unreliable streams on independent sequence spaces (confirmed against the general reliable-UDP literature too — mixing them reintroduces the stall you're trying to avoid, since a lost reliable packet's resend-wait shouldn't block delivery of unrelated unreliable packets that were sent after it).
 
-### Reliability mechanism (the concrete "ACK + retransmit")
+### Reliability mechanism — decided this pass, changed from the original plan
 
-Standard pattern used across the reliable-UDP-for-games space (this is the same approach behind e.g. Glenn Fiedler's `reliable` library, cited widely as the reference design). Implemented in `sequence.rs` + `reliable.rs`, tested against the reference design's own worked example:
+**`PlayerEvent` rides a QUIC/WebTransport reliable stream, not `reliable.rs`'s own ack/retransmit.** The original plan (below, still true as *documentation* of a real, correct, tested technique) assumed an unreliable-only transport, the way raw UDP or a WebRTC unreliable datachannel is — checked naia (a real, mature, cross-platform native+wasm Rust netcode library) for comparison, and confirmed it built exactly this kind of hand-rolled ack-bitfield layer, for exactly that reason: its transports (`webrtc-unreliable` on **both** platforms, not just wasm — checked its actual `Cargo.toml`, not just its README) don't offer reliable streams at all, so it has no choice. We're not in that position once the transport is QUIC: real congestion control (not just a retransmit timer) is a genuinely hard problem to match by hand, so `PlayerEvent` gets it from the protocol instead of reinventing it.
 
-- Each reliable packet carries a monotonically increasing sequence number (`sequence.rs::Sequence`).
-- Receiver tracks the highest sequence number seen plus a 32-bit bitfield of what came before it, and sends that back as the ack (`sequence.rs::AckTracker`) — piggybacked on the header of every outgoing reliable packet, not sent as separate ack packets.
-- Sender keeps unacked packets in a small buffer (`reliable.rs::RetransmitBuffer`), resends on an RTT-based timeout (`RttEstimator`, same smoothing constants as TCP's classic Jacobson/Karels RTO estimator) rather than a fixed guess.
-- **Karn's algorithm applied:** a packet's RTT is only sampled the first time it's acked with zero retransmits behind it. Once a packet's been resent, an ack for it is ambiguous — no way to tell which transmission it's acknowledging — so counting it would poison the RTT estimate. Tested explicitly (`retransmitted_packet_does_not_pollute_rtt_sample`).
-- Sequence numbers wrap — comparisons need wraparound-aware logic, not raw `>`. `Sequence` deliberately has no `PartialOrd`/`Ord` impl so `<`/`>` can't be reached for by habit; `is_more_recent_than` is explicit about it.
+**What that leaves real, not retired:**
+- `sequence.rs::Sequence` — still exactly as load-bearing. `PlayerState`'s datagrams can still arrive out of order under QUIC/WebTransport (datagrams are explicitly unordered), so staleness detection is still needed regardless of what carries the bytes.
+- `reliable.rs::RetransmitBuffer`/`RttEstimator`/`AckTracker`/`is_acked` — correct, tested (Karn's algorithm and all), and kept, but no longer the primary path for either channel. Available if a future need genuinely wants ack/retransmit over a raw datagram rather than a full stream (e.g. a transport backend without native stream reliability). Two real gaps found comparing against naia's *settled* implementation (the tagged `v0.25.0` release — its untagged `main` branch turned out to have diverged into unrelated private content, not a trustworthy comparison point, see the session history if that matters later) that would apply if/when this *is* used for real: no `should_send_empty_ack`-equivalent (naia guarantees an ack goes out even on a tick with nothing else to send, so the peer's buffer doesn't stall waiting on one) and no rolling loss-percentage telemetry (naia's `loss_monitor`, separate from RTT). Not built — flagging for whenever this path gets picked up again.
+- The frame-header concept (kind byte + sequence number) — still how `PlayerState` datagrams identify themselves and get staleness-checked.
+
+Original plan, kept for reference (same shape as Glenn Fiedler's `reliable` library, and naia's own ack manager):
+
+- Each reliable packet carries a monotonically increasing sequence number.
+- Receiver tracks the highest sequence number seen plus a 32-bit bitfield of what came before it, piggybacked on every outgoing packet's header.
+- Sender keeps unacked packets in a buffer, resends on an RTT-based timeout (`RttEstimator`, same smoothing constants as TCP's Jacobson/Karels RTO estimator).
+- Karn's algorithm: a packet's RTT is only sampled the first time it's acked with zero retransmits behind it — an ack for a resent packet is ambiguous about which transmission it confirms.
+- Sequence numbers wrap — `Sequence` deliberately has no `PartialOrd`/`Ord` so `<`/`>` can't be reached for by habit.
+
+## Transport
+
+`transport.rs`'s `Transport` trait is the pluggable boundary — same idea
+as Unity Netcode's swappable `NetworkTransport` (UTP / WebSocket / a
+third-party transport, all underneath one `NetworkManager`). We need at
+least two backends no matter what (native, browser), so building the
+boundary as a real trait now — rather than an internal `cfg` detail —
+means a third backend (Steam Sockets, a custom relay, anything) is just
+another impl, not a redesign.
+
+**Checked against the actual `com.unity.netcode` source** (needle-mirror
+mirror, Netcode for *Entities* — note this is a different package than
+Netcode for GameObjects referenced above; verified which one by reading
+`package.json` before trusting anything else in it), not just general
+knowledge of the pattern:
+- `DefaultDriverConstructor.cs` confirms the exact shape decided above,
+  in Unity's own words, not just by inference: its WebSocket driver
+  registration comment reads *"Web socket does not require reliable
+  pipeline... but they need to be kept around for compatibility
+  reasons for cross-platform connections."* That's Unity's own code
+  independently landing on "the transport can satisfy 'reliable' natively
+  and the pipeline stage becomes a no-op" — the same reasoning that put
+  `PlayerEvent` on a QUIC stream instead of `reliable.rs`'s own buffer.
+- It registers **three** interchangeable backends under one driver store,
+  not two: `UDPNetworkInterface`, `WebSocketNetworkInterface`, and
+  `IPCNetworkInterface` (same-process client+server, no real socket at
+  all) — `LoopbackTransport` is our version of that third one, not just a
+  test convenience Unity skipped.
+- `NetworkSnapshotAck.cs` independently confirms the ack-bitfield
+  technique itself: "shift the entire mask LEFT by that delta, then apply
+  the new mask on top" — the exact operation `sequence.rs::AckTracker`
+  implements, arrived at separately.
+
+Deliberately **synchronous and poll-based, not `async fn`**: an async
+trait spanning native and `wasm32` hits Rust's `!Send`-on-wasm wall —
+checked how the `web-transport` crate itself handles this, and it
+doesn't unify native/wasm behind one trait either, it swaps concrete
+types per target via `cfg`. Each `Transport` impl is free to use async,
+threads, or JS callbacks internally; the trait only asks for a
+queue-drain once a tick, matching `reliable.rs`'s existing "no runtime
+baked into the protocol logic" principle.
+
+Planned concrete implementations (none built yet — `LoopbackTransport`,
+in `transport.rs` now, is the only one that exists, for tests):
+- **Native** (desktop + mobile — iOS/Android are ordinary Rust
+  cross-compile targets here, nothing quinn-specific to solve): QUIC via
+  `quinn`, through the `web-transport-quinn` backend.
+- **Browser** (including mobile browsers — Safari 26.4, shipped March
+  2026, closed the last real gap; checked current support rather than
+  assumed, Safari on iOS was specifically the blocker before that):
+  WebTransport via `web-transport-wasm`, zero `quinn`/`tokio` in that
+  build.
+
+## Mobile
+
+Two separate claims, both checked rather than assumed:
+- **Native mobile apps** (Rust cross-compiled to iOS/Android): no
+  blocker. `quinn` is pure Rust + `rustls` — no OpenSSL/platform-TLS
+  linking fights — and UDP sockets are standard on both OSes. Same
+  native `Transport` backend as desktop, just a different
+  cross-compilation target; a build-system concern, not an architecture
+  one.
+- **Mobile browsers**, if ever relevant: WebTransport is supported on
+  Safari iOS (26.4+, March 2026) and Android (Chrome 108+, Firefox
+  132+, Samsung Internet 18+) — checked current browser support tables,
+  not the pre-2026 state where Safari was the blocker.
+- Bonus specific to mobile: QUIC's connection migration means a client
+  moving from WiFi to cellular keeps its connection. Raw UDP plus a
+  hand-rolled reliability layer would not have gotten this for free.
 
 ## Platform & FFI
 
