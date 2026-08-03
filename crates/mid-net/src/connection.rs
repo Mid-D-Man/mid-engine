@@ -194,10 +194,10 @@ mod tests {
         // Bypasses Connection::send_player_state to inject frames with an
         // explicit, out-of-natural-order sequence -- LoopbackTransport's
         // FIFO pump can't produce real reordering on its own, so this is
-        // the only way to actually exercise the staleness path. Reaching
-        // into `b.transport` directly is fine here: this test module is
-        // inside the same crate as `Connection`, so the private field is
-        // visible, same as it would be to any other code in this crate.
+        // the only way to actually exercise the staleness path. Uses
+        // `transport_mut()` rather than reaching into the private field
+        // directly -- same accessor any real external Transport
+        // implementer would need, exercised here for consistency.
         let (mut raw_a, t_b) = LoopbackTransport::new_pair();
         let mut b = Connection::new(t_b);
 
@@ -238,4 +238,4 @@ mod tests {
     fn pump(a: &mut Connection<LoopbackTransport>, b: &mut Connection<LoopbackTransport>) {
         LoopbackTransport::pump(a.transport_mut(), b.transport_mut());
     }
-                   }
+            }
