@@ -38,6 +38,21 @@ directly (`LoopbackTransport`'s FIFO pump can't produce real reordering
 on its own) to actually exercise that path rather than just assert it
 works.
 
+**Custom transports:** `Connection<T: Transport>` is generic and
+`Transport` is a fully public, ordinarily-implementable trait — no
+sealed supertrait, nothing that requires being inside this crate. Proved
+this rather than just asserted it: wrote `examples/custom-transport-demo`
+as a genuinely separate crate depending only on `mid-net-transport` and
+`mid-net` (never touching mid-net's own source), implementing a
+`FlakyTransport` that simulates datagram loss while still honoring the
+reliable channel's real-delivery contract. Building that example is what
+actually surfaced a real gap: `Connection`'s `transport` field was
+private, so external code had no way to reach in and drive a loopback-
+style transport's pump/tick step. Fixed by adding `transport_mut()`/
+`transport()` accessors to `Connection` — small, and only found by
+actually trying to write the third-party code rather than reasoning
+about the trait boundary in the abstract.
+
 ## Crate Structure
 
 Restructured this pass from one flat crate into subfolder crates —
