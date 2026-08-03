@@ -12,6 +12,7 @@ members = [
     "crates/mid-trace",
     "tools/mdix-compiler",
     "examples/headless-server",
+    "examples/custom-transport-demo",
 ]
 resolver = "2"
 
