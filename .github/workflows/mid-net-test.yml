@@ -72,6 +72,24 @@ jobs:
             -- --show-output 2>&1 | tee mid-net-test-raw.txt
           echo "TEST_EXIT=${PIPESTATUS[0]}" >> $GITHUB_ENV
 
+      # Real end-to-end verification, not just Rust-side unit tests: an
+      # actual C program, compiled with gcc, linked against the
+      # libmid_net.so this job just built, exercising memory allocated
+      # on the C side and passed across the real FFI boundary. Ubuntu's
+      # GitHub-hosted runners ship gcc preinstalled, no extra setup.
+      - name: FFI smoke test (real C program via gcc, not just Rust tests)
+        continue-on-error: true
+        run: |
+          echo "=== Compiling C smoke test against mid_net.h ==="
+          gcc -o crates/mid-net/ffi-smoke-test/test \
+            crates/mid-net/ffi-smoke-test/test.c \
+            -I crates/mid-net/ffi-smoke-test \
+            -L target/debug \
+            -lmid_net -Wall -Wextra
+          echo ""
+          echo "=== Running against the real compiled libmid_net.so ==="
+          LD_LIBRARY_PATH=target/debug crates/mid-net/ffi-smoke-test/test
+
       - name: Parse results to JSON
         env:
           BUILD_NUM:    ${{ github.run_number }}
