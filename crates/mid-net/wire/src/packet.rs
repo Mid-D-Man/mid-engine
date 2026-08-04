@@ -163,7 +163,14 @@ pub struct PlayerId(pub u32);
 /// Unreliable channel, sent every tick at 128 Hz (`packets/player-state.mdix`).
 /// Loss is fine — the next tick's packet supersedes it. Fixed wire size,
 /// no length-prefixed fields, so encode/decode cost is just 7 stores/loads.
+///
+/// `repr(C)`: all fields are plain `f32`, already C-compatible, so this
+/// crosses the FFI boundary by value directly — `ffi.rs` doesn't need a
+/// separate mirror struct kept in sync by hand. `PlayerEvent` below can't
+/// do this (it owns `String`s, not C-representable), so it gets an
+/// opaque-handle FFI wrapper instead; see `ffi.rs`.
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[repr(C)]
 pub struct PlayerState {
     pub x: f32,
     pub y: f32,
@@ -387,4 +394,4 @@ mod tests {
         b.encode(&mut bb);
         assert_ne!(ba, bb);
     }
-}
+    }
