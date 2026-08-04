@@ -6,7 +6,46 @@ Packet shapes are documented as `.mdix` reference schema, but DixScript
 itself is not a dependency of this crate — see "Dependency philosophy"
 below and `docs/architecture.md`.
 
-**Status:** in progress (build order: math → common → geom → **net** → ecs → physics). Restructured into subfolder crates this pass — see "Crate Structure" below. `mid-net-wire` (packet codec, 12 tests + sequence/ack arithmetic, 13 tests), `mid-net-reliable` (frame headers, RTT estimator, retransmit buffer, 17 tests), `mid-net-transport` (the `Transport` trait + `LoopbackTransport`, 4 tests), and `connection.rs` in the facade crate (`Connection<T: Transport>` — the actual `send_player_state`/`send_player_event`/`poll` API, 5 tests) all have real implementations — 51 tests passing total, verified as a real multi-crate Cargo workspace before delivery each time, not just reorganized files. Still not built: the real `quinn`/`web-transport-wasm`-backed `Transport` impls, planned as sibling subfolder crates (`mid-net-transport-quinn`, `mid-net-transport-wasm`). MSRV for that dependency tree is ~1.85, past what this sandbox can compile-verify, so that work is static-analysis-verified only until it lands in real CI. `ffi.rs` is still a skeleton.
+**Status:** in progress (build order: math → common → geom → **net** → ecs → physics). Restructured into subfolder crates this pass — see "Crate Structure" below. `mid-net-wire` (packet codec, 12 tests + sequence/ack arithmetic, 13 tests), `mid-net-reliable` (frame headers, RTT estimator, retransmit buffer, 17 tests), `mid-net-transport` (the `Transport` trait + `LoopbackTransport`, 4 tests), `connection.rs` (`Connection<T: Transport>`, 5 tests), and now `ffi.rs` (C ABI for the wire codec, 9 tests, plus a real C smoke test — see "FFI" below) all have real implementations — 60 tests passing total (51 Rust unit tests + a real C program run against the actual compiled library). Still not built: the real `quinn`/`web-transport-wasm`-backed `Transport` impls, planned as sibling subfolder crates (`mid-net-transport-quinn`, `mid-net-transport-wasm`). MSRV for that dependency tree is ~1.85, past what this sandbox can compile-verify.
+
+## FFI
+
+`ffi.rs` exposes the wire codec (`PlayerState`/`PlayerEvent` encode/decode)
+over a C ABI — genuinely useful today even with no real `Transport`
+backend built, since a non-Rust caller (Ubel Stratum's LOW tier is the
+concrete motivating case) can encode/decode packets now. `Connection<T>`
+is deliberately NOT exposed yet — it's generic over `Transport`, C ABI
+can't cross a Rust generic, and the only concrete backend that exists
+today is `LoopbackTransport`, not useful to a real FFI caller. Revisit
+once `mid-net-transport-quinn` exists.
+
+- `PlayerState`: `#[repr(C)]` added directly to the type in
+  `mid-net-wire` — all fields are plain `f32`, already C-compatible, so
+  it crosses the boundary by value with no separate FFI-mirror struct to
+  keep in sync by hand.
+- `PlayerEvent`: owns `String`s, not `repr(C)`-representable, so it's an
+  opaque handle (`new`/`free`/getters/`encode`/`decode`) — the standard
+  pattern for variable-length owned data across a C ABI.
+- Every function null-checks its pointer arguments before dereferencing,
+  and every function body runs inside `catch_unwind` — an unwind
+  crossing an `extern "C"` boundary is undefined behavior, so a panic
+  here becomes a defined `MidNetStatus::InternalPanic` code instead.
+  Neither protects against a caller violating a documented `unsafe`
+  contract (a pointer that isn't actually valid for the claimed length)
+  — that's inherent to any C ABI, same as it would be for any C library.
+- `encode` functions support "pass a NULL buffer to query the required
+  size" — standard for variable-length C APIs.
+
+**Verified with an actual C program, not just Rust unit tests** —
+`crates/mid-net/ffi-smoke-test/` (`mid_net.h` + `test.c`) is real C code,
+compiled with real `gcc`, linked against the actual `libmid_net.so` this
+crate produces (also checked against `libmid_net.a`, static linking —
+both link paths the dashboard's FFI Output Targets card promises actually
+work). Exercises memory allocated on the C side, round-tripped through
+Rust, back out to C — null pointers, too-small buffers, invalid UTF-8,
+and garbage bytes on decode all checked to confirm they return defined
+error codes rather than crash. Wired into `mid-net-test.yml` as a real CI
+step so this stays verified on every run, not just checked once by hand.
 
 ## Connection
 
@@ -222,7 +261,11 @@ Two separate claims, both checked rather than assumed:
   moving from WiFi to cellular keeps its connection. Raw UDP plus a
   hand-rolled reliability layer would not have gotten this for free.
 
-## Platform & FFI
+## Platform Design Principles
+
+(Concrete C ABI implementation is in "FFI" near the top of this doc —
+this section is the design principles that made it possible, established
+back when `reliable.rs` was first built.)
 
 Two hard constraints, both load-bearing in `reliable.rs`'s design, not just aspirational:
 
