@@ -11,5 +11,5 @@
 pub mod packet;
 pub mod sequence;
 
-pub use packet::{DecodeError, Packet, PacketKind, PlayerEvent, PlayerId, PlayerState};
+pub use packet::{DecodeError, Packet, PacketKind, PlayerEvent, PlayerId, PlayerState, PLAYER_STATE_WIRE_SIZE};
 pub use sequence::{is_acked, AckTracker, Sequence};
