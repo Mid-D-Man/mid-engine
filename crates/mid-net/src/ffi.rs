@@ -178,17 +178,27 @@ pub extern "C" fn mid_net_player_event_get_player_id(event: *const MidNetPlayerE
     if event.is_null() {
         return 0;
     }
-    unsafe { (*event).0.player_id.0 }
+    // SAFETY: non-null handle from `_new`/`_decode`, per this module's contract.
+    let event = unsafe { &*event };
+    event.0.player_id.0
 }
 
 /// Pointer to the event-name string's UTF-8 bytes (NOT null-terminated —
-/// use the `_len` function alongside it).
+/// use the `_len` function alongside it). Valid only while `event` is
+/// alive; do not use after `mid_net_player_event_free`.
 #[no_mangle]
 pub extern "C" fn mid_net_player_event_get_event_ptr(event: *const MidNetPlayerEvent) -> *const u8 {
     if event.is_null() {
         return ptr::null();
     }
-    unsafe { (*event).0.event.as_ptr() }
+    // SAFETY: non-null handle per this module's contract. Bound as an
+    // explicit reference here rather than chaining through the raw
+    // pointer deref directly -- `.as_ptr()` takes `&self`, and letting
+    // that reference get created implicitly (`(*event).0.event.as_ptr()`)
+    // is exactly what rustc's `dangerous_implicit_autorefs` lint (deny by
+    // default since ~1.93) flags. Same fix applied to every getter below.
+    let event = unsafe { &*event };
+    event.0.event.as_ptr()
 }
 
 #[no_mangle]
@@ -196,7 +206,8 @@ pub extern "C" fn mid_net_player_event_get_event_len(event: *const MidNetPlayerE
     if event.is_null() {
         return 0;
     }
-    unsafe { (*event).0.event.len() }
+    let event = unsafe { &*event };
+    event.0.event.len()
 }
 
 /// Pointer to the payload string's UTF-8 bytes (NOT null-terminated).
@@ -205,7 +216,8 @@ pub extern "C" fn mid_net_player_event_get_payload_ptr(event: *const MidNetPlaye
     if event.is_null() {
         return ptr::null();
     }
-    unsafe { (*event).0.payload.as_ptr() }
+    let event = unsafe { &*event };
+    event.0.payload.as_ptr()
 }
 
 #[no_mangle]
@@ -213,7 +225,8 @@ pub extern "C" fn mid_net_player_event_get_payload_len(event: *const MidNetPlaye
     if event.is_null() {
         return 0;
     }
-    unsafe { (*event).0.payload.len() }
+    let event = unsafe { &*event };
+    event.0.payload.len()
 }
 
 /// Encodes `*event` into `out_buf`. Same "pass NULL to query size"
@@ -361,4 +374,4 @@ mod tests {
         assert_eq!(mid_net_player_event_get_event_len(null_handle), 0);
         mid_net_player_event_free(ptr::null_mut());
     }
-  }
+              }
