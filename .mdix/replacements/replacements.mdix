@@ -1,0 +1,10 @@
+
+@CONFIG(
+  version    -> "1.0.0"
+  author     -> "MidManStudio"
+  debug_mode -> "off"
+)
+
+@DATA(
+    target_root = "."
+)
