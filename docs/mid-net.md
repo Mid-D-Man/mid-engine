@@ -111,9 +111,18 @@ crates/mid-net/
   wire/                                — mid-net-wire: packet.rs + sequence.rs. Zero deps.
   transport/                           — mid-net-transport: the Transport trait + LoopbackTransport. Zero deps.
   reliable/                            — mid-net-reliable: frame headers, RTT, retransmit buffer. Depends on mid-net-wire only.
-  transport-quinn/  (planned)          — native Transport impl, depends on quinn. Not built.
+  transport-quinn/                     — mid-net-transport-quinn: native Transport impl over web-transport-quinn. Written, unverified — see "Transport" below.
   transport-wasm/   (planned)          — browser Transport impl, depends on wasm-bindgen/web-sys. Not built.
 ```
+
+`mid-net-transport-quinn` is deliberately **not** a dependency of the
+facade `mid-net` crate, even though it now exists — the facade stays
+platform-agnostic (wire codec + trait + `Connection<T: Transport>`,
+usable from `wasm32` with nothing quinn-shaped in the dependency tree),
+and a native binary that actually needs QUIC (`examples/headless-server`,
+eventually) depends on `mid-net-transport-quinn` directly, the same way
+`examples/custom-transport-demo` already depends on `mid-net-transport`
+directly rather than through the facade.
 
 Dependency graph is a clean DAG, verified by actually building it as a
 real Cargo workspace (`cargo build --workspace` / `cargo test --workspace`
@@ -233,16 +242,83 @@ threads, or JS callbacks internally; the trait only asks for a
 queue-drain once a tick, matching `reliable.rs`'s existing "no runtime
 baked into the protocol logic" principle.
 
-Planned concrete implementations (none built yet — `LoopbackTransport`,
-in `transport.rs` now, is the only one that exists, for tests):
+Concrete implementations:
 - **Native** (desktop + mobile — iOS/Android are ordinary Rust
   cross-compile targets here, nothing quinn-specific to solve): QUIC via
-  `quinn`, through the `web-transport-quinn` backend.
+  `quinn`, through the `web-transport-quinn` backend. **Written this pass**
+  as `mid-net-transport-quinn` — see below.
 - **Browser** (including mobile browsers — Safari 26.4, shipped March
   2026, closed the last real gap; checked current support rather than
   assumed, Safari on iOS was specifically the blocker before that):
   WebTransport via `web-transport-wasm`, zero `quinn`/`tokio` in that
-  build.
+  build. Not started.
+
+### `mid-net-transport-quinn` — written, not yet verified against a real toolchain
+
+Wraps an already-established `web_transport_quinn::Session` as a
+`Transport`. Deliberately scoped to *that* — dialing, accepting, certs,
+and ALPN setup are connection-*establishment* concerns, genuinely
+separate from the wire contract `Transport` describes, and building them
+now would mean guessing at how `headless-server` wants to configure TLS
+before that's actually been decided.
+
+**Could not be compiled here.** `web-transport-quinn`'s dependency tree
+needs a Cargo that understands `edition2024` (~1.85+) — confirmed
+directly, not assumed: `cargo check -p mid-net-transport-quinn` against
+this workspace's pinned rustc 1.75 fails at `cpufeatures`'s manifest with
+exactly that error. This re-confirms the same MSRV wall flagged in an
+earlier pass, against today's actual current dependency versions rather
+than trusting that finding had a shelf life. Built instead by reading the
+real, current `web-transport-quinn` 0.11.12 API on docs.rs — method
+signatures and their async/sync-ness are cited in the source comments,
+not recalled from memory — and reasoning through it by hand. One real
+ecosystem fact worth recording since it moved since it was last checked:
+the crate's home moved from `kixelated/web-transport-rs` to
+`moq-dev/web-transport` (still Luke Curley/`kixelated` as the crates.io
+owner) — re-verify the repo URL before trusting it if it's referenced
+again later.
+
+The one part of the crate that *could* be compiled and tested here — the
+`framing` module (pure functions, no `quinn`/`tokio`/I/O) — was, against
+a standalone extraction of its exact source, on this sandbox's real
+rustc 1.75: 6/6 tests pass. Everything touching `quinn` or
+`web_transport_quinn` types is unverified pending real CI.
+
+**Wire format**, layered on top of WebTransport (which already handles
+its own internal stream-type/session-ID framing — confirmed from
+`session.rs`'s source, not assumed): datagrams need no framing of their
+own (WebTransport datagrams already arrive as discrete messages). For
+reliable streams, a caller-chosen `stream_id: u32` (see
+`Transport::send_reliable`) has no relationship to QUIC's own
+protocol-level stream IDs, so each logical `stream_id` gets one
+dedicated uni stream, opened on first use: first 4 bytes written are the
+`stream_id` itself, everything after that is a sequence of
+little-endian-length-prefixed frames, one per `send_reliable` call —
+little-endian to match `mid-net-wire`/`mid-net-reliable`'s existing
+convention, not a second one invented for this layer.
+
+**Runtime requirement, and why it's not optional:** `QuinnTransport::new`
+takes a `tokio::runtime::Handle` explicitly and schedules its background
+tasks onto it via `handle.spawn`, rather than spinning up its own
+independent runtime internally. This is load-bearing, not a style choice
+— a `Session`'s underlying `quinn::Connection` already required a Tokio
+runtime to exist before `QuinnTransport::new` is ever called (QUIC's I/O
+driver has to be registered somewhere), and Tokio's IO/timer resources
+are bound to the runtime that registered them. A second, independent
+runtime trying to drive the same connection's futures would be polling
+resources from a reactor that never registered them — a known Tokio
+footgun, not a guess specific to this crate. Reasoned through from
+Tokio's documented runtime-resource binding, not confirmed by running
+it — if `QuinnTransport` ever panics with a "no reactor running" or "I/O
+driver not registered" style error on real CI, start here.
+
+**Known accepted trade-off:** `send_reliable`'s `Ok(())` means "handed to
+the background writer task," not "on the wire" — matching what
+`Transport::send_reliable`'s doc already promises (delivery, not
+synchronous confirmation), but worth being explicit that a message can
+still be silently dropped if the writer task itself has already died
+(surfaces as `QuinnTransportError::WorkerGone` on the *next* call, not
+the one that actually got dropped).
 
 ## Mobile
 
