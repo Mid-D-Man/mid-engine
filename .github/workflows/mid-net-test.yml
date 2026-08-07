@@ -88,7 +88,7 @@ jobs:
             -lmid_net -Wall -Wextra
           echo ""
           echo "=== Running against the real compiled libmid_net.so ==="
-          LD_LIBRARY_PATH=target/debug crates/mid-net/ffi-smoke-test/test
+          LD_LIBRARY_PATH=target/debug crates/mid-net/ffi-smoke-test/test 2>&1 | tee mid-net-ffi-smoke-raw.txt
 
       # mid-net-transport-quinn is new this pass and could NOT be
       # compiled or tested wherever it was written — its `web-transport-quinn`
@@ -203,6 +203,52 @@ jobs:
                   cur_name, cur_tests, cur_dur = None, [], 0.0
 
           flush(cur_name, cur_tests, cur_dur)
+
+          # FFI smoke test (real C program, not cargo test) -- a much
+          # simpler format than the above: `ok:   <msg>` / `FAIL: <msg>
+          # (line N)`, see crates/mid-net/ffi-smoke-test/test.c's CHECK()
+          # macro. Never fed into the dashboard before this pass -- the
+          # step's stdout wasn't even being captured to a file, and this
+          # parser only understood `cargo test` output anyway. Folded into
+          # the same `suites` list as its own entry so it counts toward
+          # the real total instead of only getting a static one-line
+          # mention in the Protocol Coverage card.
+          RE_C_OK   = re.compile(r'^ok:\s+(.+)$')
+          RE_C_FAIL = re.compile(r'^FAIL:\s+(.+?)\s+\(line (\d+)\)$')
+
+          c_tests = []
+          try:
+              c_raw = strip(open('mid-net-ffi-smoke-raw.txt', encoding='utf-8', errors='replace').read())
+              for line in c_raw.splitlines():
+                  m = RE_C_FAIL.match(line)
+                  if m:
+                      c_tests.append({
+                          'name':        m.group(1),
+                          'status':      'failed',
+                          'duration_ms': 0,
+                          'output':      f'line {m.group(2)}',
+                      })
+                      continue
+                  m = RE_C_OK.match(line)
+                  if m:
+                      c_tests.append({
+                          'name':        m.group(1),
+                          'status':      'passed',
+                          'duration_ms': 0,
+                          'output':      '',
+                      })
+          except FileNotFoundError:
+              pass  # smoke test step didn't run (or the compile itself failed before it could produce output)
+
+          if c_tests:
+              suites.append({
+                  'name':       'ffi-smoke-test (C, real gcc)',
+                  'passed':     sum(1 for t in c_tests if t['status'] == 'passed'),
+                  'failed':     sum(1 for t in c_tests if t['status'] == 'failed'),
+                  'ignored':    0,
+                  'duration_s': 0.0,
+                  'tests':      c_tests,
+              })
 
           total   = sum(s['passed'] + s['failed'] + s['ignored'] for s in suites)
           passed  = sum(s['passed']  for s in suites)
