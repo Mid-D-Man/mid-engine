@@ -90,6 +90,31 @@ jobs:
           echo "=== Running against the real compiled libmid_net.so ==="
           LD_LIBRARY_PATH=target/debug crates/mid-net/ffi-smoke-test/test
 
+      # mid-net-transport-quinn is new this pass and could NOT be
+      # compiled or tested wherever it was written — its `web-transport-quinn`
+      # dependency needs edition2024 (~1.85+), which that environment
+      # didn't have. This runner's `stable` toolchain should clear that
+      # bar, so this step is the FIRST real compile it's ever seen.
+      # Deliberately kept separate from the steps above (own step, own
+      # continue-on-error) rather than folded into the existing build/test
+      # commands: if this fails, it shouldn't take the already-verified
+      # 60 tests down with it or block the dashboard from reporting them.
+      # Not wired into the JSON/dashboard parsing pipeline below yet —
+      # do that once this has gone green here at least once.
+      - name: Build mid-net-transport-quinn (native QUIC backend, unverified)
+        id: quinn_build
+        continue-on-error: true
+        run: cargo build -p mid-net-transport-quinn
+
+      - name: Test mid-net-transport-quinn (unverified)
+        continue-on-error: true
+        run: cargo test -p mid-net-transport-quinn --no-fail-fast -- --show-output
+
+      - name: Flag if mid-net-transport-quinn didn't build
+        if: steps.quinn_build.outcome == 'failure'
+        run: |
+          echo "::warning::mid-net-transport-quinn failed to build — this is the first real compile it's had, see its crate-level doc comment for context. Check the 'Build mid-net-transport-quinn' step's log above."
+
       - name: Parse results to JSON
         env:
           BUILD_NUM:    ${{ github.run_number }}
