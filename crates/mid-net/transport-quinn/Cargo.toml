@@ -11,3 +11,16 @@ mid-net-transport = { path = "../transport" }
 web-transport-quinn = "0.11"
 bytes = "1"
 tokio = { version = "1", default-features = false, features = ["rt", "sync"] }
+
+# Test-only. tokio's extra features here (macros, time) merge with the
+# [dependencies] entry above for the same crate/version -- this doesn't
+# widen what ships in the actual library, only what `cargo test` builds.
+# `web-transport-quinn`'s default `aws-lc-rs` feature (see its own
+# Cargo.toml: `default = ["aws-lc-rs"]`) is what makes ServerBuilder/
+# ClientBuilder available at all -- already on by default via the plain
+# "0.11" dependency above, nothing extra needed here for that part.
+[dev-dependencies]
+tokio             = { version = "1", features = ["macros", "time"] }
+rcgen             = "0.14"
+rustls-pki-types  = "1"
+url               = "2"
