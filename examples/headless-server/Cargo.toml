@@ -8,7 +8,13 @@ name = "headless-server"
 path = "src/main.rs"
 
 [dependencies]
-mid-log    = { path = "../../crates/mid-log" }
-mid-net    = { path = "../../crates/mid-net" }
-mid-ecs    = { path = "../../crates/mid-ecs" }
-mid-common = { path = "../../crates/mid-common" }
+mid-log               = { path = "../../crates/mid-log" }
+mid-net               = { path = "../../crates/mid-net" }
+mid-net-transport-quinn = { path = "../../crates/mid-net/transport-quinn" }
+mid-ecs               = { path = "../../crates/mid-ecs" }
+mid-common            = { path = "../../crates/mid-common" }
+web-transport-quinn   = "0.11"
+tokio                 = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
+rcgen                 = "0.14"
+rustls-pki-types      = "1"
+url                   = "2"
