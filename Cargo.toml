@@ -10,6 +10,10 @@
 # "build everything") pulls this crate in and needs the newer toolchain.
 # If you're on an older Rust and something inexplicably won't resolve,
 # this is almost certainly why — build with explicit `-p` flags instead.
+# UPDATE (later pass): `examples/headless-server` now depends on
+# `mid-net-transport-quinn` directly too (it's the actual thing exercising
+# it over a real bind/dial, not just compiling it in isolation), so
+# `-p headless-server` needs the same newer toolchain now as well.
 members = [
     "crates/mid-log",
     "crates/mid-net",
