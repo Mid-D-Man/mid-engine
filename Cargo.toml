@@ -14,6 +14,18 @@
 # `mid-net-transport-quinn` directly too (it's the actual thing exercising
 # it over a real bind/dial, not just compiling it in isolation), so
 # `-p headless-server` needs the same newer toolchain now as well.
+# UPDATE (later pass): `mid-net-transport-wasm` added, and it behaves
+# DIFFERENTLY from the two above — confirmed empirically, not assumed.
+# `cargo check -p mid-net-transport-wasm` with NO `--target` flag
+# resolves cleanly even on rustc 1.75 (its `web-transport-wasm` dependency
+# lives under `[target.'cfg(target_arch = "wasm32")'.dependencies]`,
+# and resolver 2 doesn't fetch platform-specific deps for a platform
+# that isn't actually being built). The wall only shows up with an
+# explicit `--target wasm32-unknown-unknown` — same edition2024 problem,
+# this time via `idna_adapter` rather than `cpufeatures`, pulled in
+# through `web-transport-wasm`'s own tree. So: `-p mid-net-transport-wasm`
+# alone is fine anywhere; add `--target wasm32-unknown-unknown` and it
+# needs the same ~1.85+ toolchain as the other two.
 members = [
     "crates/mid-log",
     "crates/mid-net",
@@ -21,6 +33,7 @@ members = [
     "crates/mid-net/transport",
     "crates/mid-net/reliable",
     "crates/mid-net/transport-quinn",
+    "crates/mid-net/transport-wasm",
     "crates/mid-ecs",
     "crates/mid-math",
     "crates/mid-geom",
