@@ -6,7 +6,7 @@ Packet shapes are documented as `.mdix` reference schema, but DixScript
 itself is not a dependency of this crate — see "Dependency philosophy"
 below and `docs/architecture.md`.
 
-**Status:** in progress (build order: math → common → geom → **net** → ecs → physics). Restructured into subfolder crates this pass — see "Crate Structure" below. `mid-net-wire` (packet codec, 12 tests + sequence/ack arithmetic, 13 tests), `mid-net-reliable` (frame headers, RTT estimator, retransmit buffer, 17 tests), `mid-net-transport` (the `Transport` trait + `LoopbackTransport`, 4 tests), `connection.rs` (`Connection<T: Transport>`, 5 tests), and now `ffi.rs` (C ABI for the wire codec, 9 tests, plus a real C smoke test — see "FFI" below) all have real implementations — 60 tests passing total (51 Rust unit tests + a real C program run against the actual compiled library). Still not built: the real `quinn`/`web-transport-wasm`-backed `Transport` impls, planned as sibling subfolder crates (`mid-net-transport-quinn`, `mid-net-transport-wasm`). MSRV for that dependency tree is ~1.85, past what this sandbox can compile-verify.
+**Status:** in progress (build order: math → common → geom → **net** → ecs → physics). Restructured into subfolder crates this pass — see "Crate Structure" below. `mid-net-wire` (packet codec, 12 tests + sequence/ack arithmetic, 13 tests), `mid-net-reliable` (frame headers, RTT estimator, retransmit buffer, 17 tests), `mid-net-transport` (the `Transport` trait + `LoopbackTransport`, 4 tests), `connection.rs` (`Connection<T: Transport>`, 5 tests), and `ffi.rs` (C ABI for the wire codec, 9 tests, plus a real C smoke test — see "FFI" below) all have real implementations verified on real CI (rustc 1.97.1) — 60 tests tracked on the dashboard (51 Rust unit tests + a real C program run against the actual compiled library), separately from the two backends below, which aren't wired into that dashboard yet. Both concrete `Transport` backends are now **written**: `mid-net-transport-quinn` (native, `quinn`/`web-transport-quinn`) had its first real compile on real CI succeed cold; `mid-net-transport-wasm` (browser, `web-transport-wasm`) is written but has never been compiled at all yet, not even partially — see "Transport" below for exactly what was and wasn't verified for each.
 
 ## FFI
 
@@ -112,7 +112,7 @@ crates/mid-net/
   transport/                           — mid-net-transport: the Transport trait + LoopbackTransport. Zero deps.
   reliable/                            — mid-net-reliable: frame headers, RTT, retransmit buffer. Depends on mid-net-wire only.
   transport-quinn/                     — mid-net-transport-quinn: native Transport impl over web-transport-quinn. Written, unverified — see "Transport" below.
-  transport-wasm/   (planned)          — browser Transport impl, depends on wasm-bindgen/web-sys. Not built.
+  transport-wasm/                       — mid-net-transport-wasm: browser Transport impl over web-transport-wasm. Written, unverified even more so than transport-quinn — see "Transport" below.
 ```
 
 `mid-net-transport-quinn` is deliberately **not** a dependency of the
@@ -251,7 +251,7 @@ Concrete implementations:
   2026, closed the last real gap; checked current support rather than
   assumed, Safari on iOS was specifically the blocker before that):
   WebTransport via `web-transport-wasm`, zero `quinn`/`tokio` in that
-  build. Not started.
+  build. **Written this pass** as `mid-net-transport-wasm` — see below.
 
 ### `mid-net-transport-quinn` — written, not yet verified against a real toolchain
 
@@ -319,6 +319,79 @@ synchronous confirmation), but worth being explicit that a message can
 still be silently dropped if the writer task itself has already died
 (surfaces as `QuinnTransportError::WorkerGone` on the *next* call, not
 the one that actually got dropped).
+
+### `mid-net-transport-wasm` — written, verified even less than transport-quinn
+
+Wraps an established `web_transport_wasm::Session` (`--target
+wasm32-unknown-unknown` only) as a `Transport`. Same scope boundary as
+the quinn crate: an already-established session in, dialing/certs out of
+scope here.
+
+**Three real divergences from the native backend**, found by reading
+`web-transport-wasm` 0.5.10's actual downloaded source, not assumed to
+mirror quinn's shape:
+1. `Session::send_datagram` is **async** here, unlike
+   `web_transport_quinn::Session::send_datagram` (sync). So on this
+   backend, datagram sends go through the same queue-plus-background-task
+   pattern reliable sends already needed — `Ok(())` from
+   `Transport::send_datagram` means "handed off," not "on the wire,"
+   which wasn't true for the native backend.
+2. No `read_exact` equivalent — `RecvStream::read(max)` returns *up to*
+   `max` bytes, not exactly. A small hand-rolled loop
+   (`read_exact_n`) sits on top of it for the header/length-prefix reads
+   the wire format needs.
+3. **`Session` clone handles can't both do the same *kind* of
+   operation** — stated directly in the crate's own doc comment. Every
+   background task gets its own clone, used for exactly one operation
+   kind (datagram recv, datagram send, `accept_uni`, `open_uni`) and
+   never shared.
+
+There's also no sync "is this still connected" getter at all —
+`Session::closed()` *awaits* until closed rather than reporting current
+state — worked around with a small `Rc<Cell<bool>>` flag flipped by a
+dedicated task that just awaits it once.
+
+**No threads, deliberately different bridging mechanism than the native
+side:** wasm32 in a browser tab is single-threaded (Web Workers +
+`SharedArrayBuffer` would change that, out of scope here), so instead of
+`QuinnTransport`'s background-OS-thread-plus-`tokio::sync::mpsc`
+approach, this crate hand-rolls a tiny single-threaded async queue
+(`queue::WakeQueue`, `Rc<RefCell<..>>`-based, one stored `Waker`) and
+schedules everything via `wasm_bindgen_futures::spawn_local` onto the
+browser's own microtask queue. Chose hand-rolling this over pulling in
+`futures::channel::mpsc` for it — the whole thing is two operations
+(sync push, async wait-for-next) and about 40 lines, in keeping with
+this project's standing preference for hand-rolled over dependency
+weight that isn't earning its keep.
+
+**Required build flag:** `web-sys` gates its WebTransport bindings
+behind `--cfg=web_sys_unstable_apis`; the workspace's root
+`.cargo/config.toml` sets it, scoped to the wasm32 target only. See that
+file's own comment for why it had to live there and not inside this
+crate's own directory, and for the `RUSTFLAGS`-overrides-this-file
+gotcha.
+
+**Verification status — read this precisely, not just "unverified" —**
+`framing.rs` and `queue.rs` are plain Rust, zero wasm-specific
+dependencies, and their tests genuinely run: 10/10 pass, confirmed both
+in isolation and inside the real workspace (`cargo test -p
+mid-net-transport-wasm`, rustc 1.75, this sandbox). `transport.rs` — the
+actual `WasmTransport` — is a different story, and weaker than
+`mid-net-transport-quinn`'s situation, not just "the wasm version of the
+same problem": there's no wasm32 target or JS runtime available here at
+all, so nothing in that file has been syntax-checked, type-checked, or
+run, by anything, ever. (One genuinely useful thing was learned trying:
+`#[cfg(...)] mod transport;` — an external-file module reference — skips
+opening the file entirely when the cfg doesn't match the host, proven
+with a deliberately-broken standalone file before trusting it either
+way; only wrapping the real content as an *inline* `#[cfg(...)] mod
+transport { .. }` block in a throwaway harness actually got it parsed,
+and that only proves syntax, not that any referenced item exists.) Every
+API call in that file is cited against the real, downloaded source in
+its own doc comment — that citation discipline is carrying this file's
+correctness, not any tooling. Needs real CI with the wasm32 target, and
+ideally a `wasm-bindgen-test` run in an actual browser, before it's
+trusted anywhere near as much as the quinn side now can be.
 
 ## Mobile
 

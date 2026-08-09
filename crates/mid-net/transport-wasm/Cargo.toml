@@ -1,0 +1,27 @@
+[package]
+name = "mid-net-transport-wasm"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "mid_net_transport_wasm"
+
+# Only mid-net-transport (the Transport trait itself) and bytes are needed
+# on every host -- both are plain Rust, nothing wasm-specific about them.
+# `bytes` is needed by the framing/queue modules' own tests, not just the
+# wasm-gated code below.
+[dependencies]
+mid-net-transport = { path = "../transport" }
+
+# Everything WebTransport-shaped is gated to the real target. This is
+# deliberate, not incidental: it means `cargo test -p mid-net-transport-wasm`
+# on an ordinary x86_64 CI runner (or this sandbox) still compiles and
+# actually runs the `framing`/`queue` modules' tests -- neither depends on
+# `web-sys`/`wasm-bindgen` at all -- while `WasmTransport` itself, which
+# does, only exists in a real `--target wasm32-unknown-unknown` build.
+# Same reasoning as mid-net-transport-quinn's own split between what could
+# and couldn't be verified without the real target/toolchain.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+web-transport-wasm   = "0.5"
+wasm-bindgen-futures = "0.4"
+bytes                = "1"
