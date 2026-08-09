@@ -7,3 +7,26 @@
 # (Zen 3 has no AVX-512). The bench binary itself still gets the full flags.
 [host]
 rustflags = []
+
+# Required by mid-net-transport-wasm: web-sys gates its WebTransport
+# bindings behind this cfg, and web-transport-wasm cannot enable it on a
+# consumer's behalf (it has its own compile_error! pointing at exactly
+# this fix if the flag is missing -- see that crate's lib.rs). Placed
+# here at the workspace root rather than nested inside the crate's own
+# directory: Cargo's config discovery walks up from wherever it's
+# invoked, not down into workspace members, so a config.toml sitting
+# inside crates/mid-net/transport-wasm/ would silently never be picked
+# up when building from the workspace root the way every CI step here
+# does. Scoped to the wasm32 target specifically -- inert for every
+# other crate's native builds, since the cfg it sets doesn't do anything
+# unless code specifically checks for it, which only web-sys's own
+# WebTransport gate does.
+#
+# NOTE: RUSTFLAGS the environment variable, if ever set by a CI step
+# building this crate, overrides this file entirely rather than merging
+# with it (confirmed from web-transport-wasm's own doc comment on this
+# exact flag) -- if a wasm CI job ever needs its own RUSTFLAGS for
+# something else, it has to include --cfg=web_sys_unstable_apis itself
+# rather than relying on this file still applying.
+[target.wasm32-unknown-unknown]
+rustflags = ["--cfg=web_sys_unstable_apis"]
