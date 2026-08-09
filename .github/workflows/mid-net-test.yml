@@ -279,6 +279,109 @@ jobs:
           print(f"Suites:{len(suites)}  Passed:{passed}  Failed:{failed}  Ignored:{ignored}")
           PYEOF
 
+      # Same idea as mid-math's Abench-vs-all-f64.yml "Publish summary"
+      # step: write real content to $GITHUB_STEP_SUMMARY (the run's own
+      # "Summary" tab), not just the gh-pages dashboard. That dashboard
+      # needs a separate deploy step to succeed and Pages to be up; this
+      # doesn't depend on either -- it's attached to this job directly,
+      # so it's there even on a run where deploy-results fails outright.
+      # Reads the same mid-net-test-results.json the step above just
+      # wrote, not a second parse of the raw output.
+      - name: Write test results to job summary
+        if: always()
+        run: |
+          python3 - << 'PYEOF'
+          import json
+          import os
+
+          try:
+              with open('mid-net-test-results.json') as f:
+                  result = json.load(f)
+          except FileNotFoundError:
+              with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as f:
+                  f.write("## mid-net Test Results\n\n")
+                  f.write("`mid-net-test-results.json` wasn't produced — the parse step "
+                          "above likely failed before writing it. Check its log.\n")
+              raise SystemExit(0)
+
+          summary = result['summary']
+          suites  = result['suites']
+
+          lines = []
+          lines.append(f"## mid-net Test Results — Build #{result['build']}")
+          lines.append("")
+          lines.append(
+              f"Branch: `{result['branch']}` &nbsp;|&nbsp; "
+              f"Commit: `{result['commit']}` &nbsp;|&nbsp; "
+              f"Rust: `{result['rust_version']}`"
+          )
+          lines.append("")
+
+          if summary['failed'] == 0 and summary['total'] > 0:
+              lines.append(f"### ✅ All {summary['total']} tests passed")
+          elif summary['total'] == 0:
+              lines.append("### ⚠️ No tests were collected — check the raw log")
+          else:
+              lines.append(f"### ❌ {summary['failed']} of {summary['total']} tests failed")
+          lines.append("")
+
+          # Failures first and never collapsed -- the whole point of this
+          # step is that a failure is visible without opening anything.
+          failing = [
+              (s['name'], t)
+              for s in suites
+              for t in s['tests']
+              if t['status'] == 'failed'
+          ]
+          if failing:
+              lines.append("### Failures")
+              lines.append("")
+              for suite_name, t in failing:
+                  lines.append(f"- **{suite_name} :: {t['name']}**")
+                  if t.get('output'):
+                      first_line = t['output'].strip().splitlines()[0]
+                      lines.append(f"  - `{first_line}`")
+              lines.append("")
+
+          lines.append("| Suite | Passed | Failed | Ignored | Duration |")
+          lines.append("|---|---|---|---|---|")
+          for s in suites:
+              mark = "✅" if s['failed'] == 0 else "❌"
+              lines.append(
+                  f"| {mark} {s['name']} | {s['passed']} | {s['failed']} | "
+                  f"{s['ignored']} | {s['duration_s']:.2f}s |"
+              )
+          lines.append("")
+          lines.append(
+              f"**Total: {summary['total']}** &nbsp;|&nbsp; "
+              f"Passed: {summary['passed']} &nbsp;|&nbsp; "
+              f"Failed: {summary['failed']} &nbsp;|&nbsp; "
+              f"Ignored: {summary['ignored']} &nbsp;|&nbsp; "
+              f"Duration: {summary['duration_s']:.2f}s"
+          )
+          lines.append("")
+
+          # Per-suite test list, collapsed -- this is the part that would
+          # be unreadable as one flat table across every suite (60+ Rust
+          # tests plus the C smoke test's 18 checks), so each suite gets
+          # its own <details>. Failures already surfaced above regardless
+          # of whether their suite's block here is ever opened.
+          for s in suites:
+              lines.append(f"<details><summary>{s['name']} — {len(s['tests'])} tests</summary>")
+              lines.append("")
+              lines.append("| Test | Status |")
+              lines.append("|---|---|")
+              for t in s['tests']:
+                  mark = "✅" if t['status'] == 'passed' else "❌"
+                  lines.append(f"| `{t['name']}` | {mark} |")
+              lines.append("")
+              lines.append("</details>")
+              lines.append("")
+
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as f:
+              f.write("\n".join(lines) + "\n")
+          PYEOF
+
       - name: Build HTML report
         env:
           RUST_VERSION: ${{ steps.rustver.outputs.ver }}
