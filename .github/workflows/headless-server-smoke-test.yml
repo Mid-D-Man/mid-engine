@@ -1,0 +1,161 @@
+# .github/workflows/headless-server-smoke-test.yml
+#
+# Runs `examples/headless-server` for real -- both roles, in the same job,
+# server backgrounded and the client run against it over real loopback
+# QUIC -- and checks the actual exchange happened, not just "didn't
+# crash". Exists specifically so this can be verified from anywhere
+# GitHub Actions is reachable, without needing a local toolchain capable
+# of building quinn's dependency tree (~1.85+) at all.
+#
+# Same reason mid-net-test.yml's own summary step exists: this writes a
+# real pass/fail report to the run's own Summary tab, not just exit code
+# — a glance at the Actions list tells you whether the example actually
+# exchanged messages, not just whether the binary happened to compile.
+
+name: headless-server — Smoke Test
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  # How long the client runs against the server before this job kills
+  # both and checks what was actually exchanged. Both sides tick at
+  # roughly 30 Hz (see main.rs's TICK constant), so this is comfortably
+  # enough time for several real send/poll round trips, not just one.
+  EXCHANGE_SECONDS: 8
+
+jobs:
+  smoke-test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Get Rust version
+        id: rustver
+        run: echo "ver=$(rustc --version)" >> $GITHUB_OUTPUT
+
+      - name: Cache cargo registry
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+          key: cargo-registry-headless-server-${{ hashFiles('examples/headless-server/Cargo.toml') }}
+          restore-keys: |
+            cargo-registry-headless-server-
+            cargo-registry-
+
+      - name: Build headless-server
+        run: cargo build -p headless-server
+
+      # Backgrounded, output captured to a file rather than piped directly
+      # -- a piped background process is awkward to both tee to a file
+      # AND let this step return immediately, and the step needs to move
+      # on to starting the client without waiting for the server (which
+      # never exits on its own) to finish.
+      - name: Start server in the background
+        run: |
+          cargo run -p headless-server -- server 127.0.0.1:5000 \
+            > server.log 2>&1 &
+          echo "server_pid=$!" >> "$GITHUB_ENV"
+
+          echo "=== Waiting for the server to actually report listening (up to 30s) ==="
+          for i in $(seq 1 30); do
+            if grep -q "listening on" server.log 2>/dev/null; then
+              echo "Server is listening (after ${i}s)."
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "Server never logged 'listening on' within 30s -- dumping what it did log:"
+          cat server.log
+          exit 1
+
+      - name: Run client against it
+        run: |
+          # `timeout` rather than letting the client's own loop run
+          # forever -- both roles tick until the connection closes, which
+          # nothing here ever triggers, so this is what actually bounds
+          # the job. `|| true`: a 124 (timeout's own "I killed it") exit
+          # is the expected, successful outcome here, not a failure --
+          # the log-content checks below are what decide pass/fail, not
+          # this exit code.
+          timeout "${EXCHANGE_SECONDS}"s \
+            cargo run -p headless-server -- client 127.0.0.1:5000 42 \
+            > client.log 2>&1 || true
+
+      - name: Stop the server
+        if: always()
+        run: kill "$server_pid" 2>/dev/null || true
+
+      - name: Check the exchange actually happened, write job summary
+        if: always()
+        run: |
+          python3 - << 'PYEOF'
+          import os
+
+          def read_or(path):
+              try:
+                  with open(path) as f:
+                      return f.read()
+              except FileNotFoundError:
+                  return None
+
+          server_log = read_or('server.log')
+          client_log = read_or('client.log')
+
+          # (label, log, required substring) -- every one of these has to
+          # actually appear for the exchange to count as real, not just
+          # "the processes started".
+          checks = [
+              ("server: bound and listening",       server_log, "listening on"),
+              ("server: saw the client's request",  server_log, "incoming request"),
+              ("server: WebTransport session up",   server_log, "session accepted"),
+              ("server: received a PlayerState",    server_log, "recv PlayerState"),
+              ("server: received the hello event",  server_log, "recv PlayerEvent: hello"),
+              ("client: dialed the server",          client_log, "connecting to"),
+              ("client: WebTransport session up",    client_log, "connected"),
+              ("client: received a PlayerState",     client_log, "recv PlayerState"),
+          ]
+
+          results = [(label, log is not None and needle in log) for label, log, needle in checks]
+          all_ok = all(ok for _, ok in results)
+
+          lines = []
+          lines.append("## headless-server Smoke Test")
+          lines.append("")
+          lines.append("### ✅ Real exchange confirmed" if all_ok else "### ❌ Exchange incomplete")
+          lines.append("")
+          lines.append("| Check | Result |")
+          lines.append("|---|---|")
+          for label, ok in results:
+              lines.append(f"| {label} | {'✅' if ok else '❌'} |")
+          lines.append("")
+          lines.append("<details><summary>server.log</summary>\n")
+          lines.append("```")
+          lines.append((server_log or "(missing -- server never produced a log file)").strip())
+          lines.append("```")
+          lines.append("</details>")
+          lines.append("")
+          lines.append("<details><summary>client.log</summary>\n")
+          lines.append("```")
+          lines.append((client_log or "(missing -- client never produced a log file)").strip())
+          lines.append("```")
+          lines.append("</details>")
+
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as f:
+              f.write("\n".join(lines) + "\n")
+
+          if not all_ok:
+              raise SystemExit(1)
+          PYEOF
