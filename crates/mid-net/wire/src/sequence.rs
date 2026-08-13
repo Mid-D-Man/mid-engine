@@ -89,7 +89,7 @@ impl AckTracker {
             // An older packet arriving late, or a duplicate. Mark it if
             // it still fits the window; otherwise there's nothing to do.
             let shift = latest.0.wrapping_sub(seq.0) as u32;
-            if shift >= 1 && shift <= 32 {
+            if (1..=32).contains(&shift) {
                 self.bits |= 1u32 << (shift - 1);
             }
         }
