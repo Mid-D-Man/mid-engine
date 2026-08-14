@@ -16,7 +16,6 @@
 
 use core::ffi::{c_char, c_void, CStr};
 use alloc::boxed::Box;
-use alloc::string::ToString;
 
 use crate::string::{
     FixedStr,
@@ -24,7 +23,6 @@ use crate::string::{
     damerau_levenshtein_distance,
     fuzzy_match_score,
     flip_side_name,
-    search::extract_words,
     utils::split_name_number,
 };
 

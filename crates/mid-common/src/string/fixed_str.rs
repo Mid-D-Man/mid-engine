@@ -281,11 +281,26 @@ mod tests {
     #[test]
     fn utf8_truncation_safe() {
         let mut s: FixedStr<5> = FixedStr::new(); // capacity 4
-        // '°' is 2 bytes (0xc2 0xb0). "ab°c" = 5 bytes, only 4 fit but
-        // can't split the 2-byte char, so we get "ab" (2 bytes).
+        // '°' is 2 bytes (0xc2 0xb0). "ab°c" = 5 bytes: 'a'(1) + 'b'(1) +
+        // '°'(2) = 4 bytes fits exactly in the 4-byte capacity without
+        // splitting the 2-byte char; 'c' is the one that doesn't fit.
+        // (Previously asserted 2/"ab" here -- verified independently
+        // that's wrong: 'a'+'b'+'°' is 4 bytes total, which fits exactly,
+        // it doesn't overflow into '°' the way the old comment assumed.)
         let written = s.push_str("ab°c");
-        assert_eq!(written, 2);
-        assert_eq!(s.as_str(), "ab");
+        assert_eq!(written, 4);
+        assert_eq!(s.as_str(), "ab°");
+
+        // The actual split-avoidance case the test's name promises --
+        // the above no longer exercises it now that the byte math is
+        // fixed, so this covers what that one used to claim to: 'a'+'b'+
+        // 'c' = 3 bytes, then '°' would need bytes 3..5 but only byte 3
+        // is available before hitting the 4-byte capacity, so it must be
+        // excluded whole rather than half-copied into invalid UTF-8.
+        let mut s2: FixedStr<5> = FixedStr::new();
+        let written2 = s2.push_str("abc°d");
+        assert_eq!(written2, 3);
+        assert_eq!(s2.as_str(), "abc");
     }
 
     #[test]

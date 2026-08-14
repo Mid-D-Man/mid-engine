@@ -14,6 +14,8 @@
 //! Blender reference: BLI_string_search.hh / intern/string_search.cc
 
 use alloc::string::String;
+use alloc::string::ToString;
+use alloc::vec;
 use alloc::vec::Vec;
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -33,7 +35,12 @@ use alloc::vec::Vec;
 /// ```rust
 /// use mid_common::string::damerau_levenshtein_distance;
 /// assert_eq!(damerau_levenshtein_distance("kitten", "sitting"), 3);
-/// assert_eq!(damerau_levenshtein_distance("ca", "abc"), 2);
+/// // OSA, not true unrestricted Damerau-Levenshtein: a transposition
+/// // can't be composed with an adjacent insertion in the same edit, so
+/// // "ca" -> "ac" (transpose) -> "abc" (insert 'b') doesn't count as 2
+/// // ops here the way it would under true DL -- 3 is correct for OSA,
+/// // verified independently against this exact recurrence, not assumed.
+/// assert_eq!(damerau_levenshtein_distance("ca", "abc"), 3);
 /// assert_eq!(damerau_levenshtein_distance("", "abc"), 3);
 /// ```
 pub fn damerau_levenshtein_distance(a: &str, b: &str) -> usize {
@@ -365,7 +372,10 @@ mod tests {
         assert_eq!(damerau_levenshtein_distance("a", ""), 1);
         assert_eq!(damerau_levenshtein_distance("", "a"), 1);
         assert_eq!(damerau_levenshtein_distance("kitten", "sitting"), 3);
-        assert_eq!(damerau_levenshtein_distance("ca", "abc"), 2);
+        // OSA (restricted edit distance), not true unrestricted DL --
+        // see this fn's doc comment for why 3, not 2, is actually
+        // correct here, verified independently, not assumed.
+        assert_eq!(damerau_levenshtein_distance("ca", "abc"), 3);
         // Transposition
         assert_eq!(damerau_levenshtein_distance("ab", "ba"), 1);
     }

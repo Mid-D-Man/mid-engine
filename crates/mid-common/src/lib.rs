@@ -22,7 +22,12 @@ pub mod ffi;
 
 // ── Flat re-exports ────────────────────────────────────────────────────────────
 
-pub use error::MidError;
+// `pub use error::MidError;` intentionally NOT here yet -- error.rs is
+// still an empty auto-generated stub (see its own doc comment), no
+// `MidError` type exists to re-export. Confirmed via grep across the
+// whole workspace: nothing depends on `MidError` except this one broken
+// line, same situation as `mid-ecs::World` was. Add it back once
+// error.rs actually defines it.
 
 pub use string::{
     StrRef,
