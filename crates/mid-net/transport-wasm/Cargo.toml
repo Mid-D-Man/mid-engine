@@ -25,3 +25,12 @@ mid-net-transport = { path = "../transport" }
 web-transport-wasm   = "0.5"
 wasm-bindgen-futures = "0.4"
 bytes                = "1"
+
+# Test-only, still wasm32-gated: `tests/web.rs` runs via `wasm-pack test
+# --chrome --headless` against a real native quinn server (see the
+# sibling `wasm-test-server` crate) -- see that test file's own doc
+# comment for the full design and verification-status caveats.
+[target.'cfg(target_arch = "wasm32")'.dev-dependencies]
+wasm-bindgen-test = "0.3"
+gloo-timers       = { version = "0.4", features = ["futures"] }
+url               = "2"

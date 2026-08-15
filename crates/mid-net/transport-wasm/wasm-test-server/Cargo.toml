@@ -1,0 +1,27 @@
+[package]
+name = "mid-net-transport-wasm-test-server"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# Deliberately its OWN crate, not part of mid-net-transport-wasm's own
+# Cargo.toml (not even as a dev-dependency) -- mid-net-transport-wasm's
+# whole reason for existing is to build for wasm32 without quinn in the
+# tree at all, and quinn doesn't compile to wasm32 anyway. This crate
+# exists purely to give the browser-side wasm-bindgen-test something
+# real to connect to (browsers can't be WebTransport servers), and is
+# never itself built for wasm32.
+
+[[bin]]
+name = "wasm-test-server"
+path = "src/main.rs"
+
+[dependencies]
+mid-net-transport-quinn = { path = "../../transport-quinn" }
+mid-net-transport        = { path = "../../transport" }
+web-transport-quinn      = "0.11"
+tokio                    = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
+rcgen                    = "0.14"
+rustls-pki-types         = "1"
+ring                     = "0.17"
+time                     = "0.3"
