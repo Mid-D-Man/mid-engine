@@ -26,6 +26,13 @@
 # through `web-transport-wasm`'s own tree. So: `-p mid-net-transport-wasm`
 # alone is fine anywhere; add `--target wasm32-unknown-unknown` and it
 # needs the same ~1.85+ toolchain as the other two.
+# UPDATE (later pass): `mid-net-transport-wasm/wasm-test-server` added --
+# a native-only fixture server for the real browser test (see
+# .github/workflows/mid-net-transport-wasm-test.yml). Depends on
+# mid-net-transport-quinn directly, so `-p mid-net-transport-wasm-test-server`
+# needs the ~1.85+ toolchain unconditionally, same as `-p mid-net-transport-quinn`
+# itself -- not the conditional wasm32-only situation `mid-net-transport-wasm`
+# is in.
 members = [
     "crates/mid-log",
     "crates/mid-net",
@@ -34,6 +41,7 @@ members = [
     "crates/mid-net/reliable",
     "crates/mid-net/transport-quinn",
     "crates/mid-net/transport-wasm",
+    "crates/mid-net/transport-wasm/wasm-test-server",
     "crates/mid-ecs",
     "crates/mid-math",
     "crates/mid-geom",
