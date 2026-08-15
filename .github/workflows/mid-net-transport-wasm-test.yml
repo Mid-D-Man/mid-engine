@@ -1,0 +1,131 @@
+# .github/workflows/mid-net-transport-wasm-test.yml
+#
+# Verifies mid-net-transport-wasm two ways:
+#   1. Native `cargo test` -- the framing/queue modules only (no
+#      wasm-specific deps), same as this crate has been tested since it
+#      was written.
+#   2. A REAL browser, via `wasm-pack test --chrome --headless`, talking
+#      to a REAL native mid-net-transport-quinn server (see the sibling
+#      wasm-test-server crate) -- the actual WasmTransport code, exercised
+#      for the first time anywhere, and the one place in this whole
+#      project that proves native and browser backends can talk to each
+#      other over the wire.
+#
+# Honesty check before trusting this workflow's first run: this is the
+# least-verified CI setup built for this project. Every individual piece
+# (wasm-pack's installer, chromedriver auto-matching, headless Chrome's
+# actual WebTransport + serverCertificateHashes behavior, the
+# compile-time env-var injection into the wasm test build) is reasoned
+# from real, current documentation and source, the same discipline as
+# everything else -- but the ORCHESTRATION of all of them together has
+# never run once, not even partially, unlike e.g. mid-net-transport-quinn
+# which at least had its Rust code partially syntax-checked before its
+# first real CI run. Expect this to need iteration.
+
+name: mid-net-transport-wasm — Tests
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  run-tests:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain (native + wasm32 target)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Cache cargo registry
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+          key: cargo-registry-transport-wasm-${{ hashFiles('crates/mid-net/transport-wasm/Cargo.toml', 'crates/mid-net/transport-wasm/wasm-test-server/Cargo.toml') }}
+          restore-keys: |
+            cargo-registry-transport-wasm-
+            cargo-registry-
+
+      - name: Native tests (framing + queue modules only)
+        run: cargo test -p mid-net-transport-wasm
+
+      - name: Install wasm-pack
+        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+
+      - name: Build and start the native fixture server
+        run: |
+          cargo build -p mid-net-transport-wasm-test-server
+          ./target/debug/wasm-test-server > fixture.log 2>&1 &
+          echo "fixture_pid=$!" >> "$GITHUB_ENV"
+
+          echo "=== Waiting for the fixture server to report PORT and CERT_HASH_HEX (up to 30s) ==="
+          for i in $(seq 1 30); do
+            if grep -q "^PORT=" fixture.log 2>/dev/null && grep -q "^CERT_HASH_HEX=" fixture.log 2>/dev/null; then
+              echo "Fixture server ready (after ${i}s)."
+              break
+            fi
+            if [ "$i" = "30" ]; then
+              echo "Fixture server never reported PORT/CERT_HASH_HEX within 30s -- dumping its log:"
+              cat fixture.log
+              exit 1
+            fi
+            sleep 1
+          done
+
+          port=$(grep "^PORT=" fixture.log | head -1 | cut -d= -f2)
+          hash=$(grep "^CERT_HASH_HEX=" fixture.log | head -1 | cut -d= -f2)
+          echo "WASM_TEST_SERVER_PORT=${port}" >> "$GITHUB_ENV"
+          echo "WASM_TEST_CERT_HASH_HEX=${hash}" >> "$GITHUB_ENV"
+          echo "Fixture server on port ${port}, cert hash ${hash}"
+
+      # continue-on-error deliberately: this is the single most uncertain
+      # step in this whole project (see the file-level comment above) --
+      # a failure here shouldn't be indistinguishable from a genuine
+      # regression once this does start passing, so it's isolated the
+      # same way mid-net-transport-quinn's first-ever build/test steps
+      # were kept isolated from the already-proven pipeline.
+      - name: Run the real browser test (wasm-pack test --chrome --headless)
+        id: wasm_test
+        continue-on-error: true
+        run: |
+          cd crates/mid-net/transport-wasm
+          wasm-pack test --chrome --headless
+
+      - name: Stop the fixture server
+        if: always()
+        run: kill "$fixture_pid" 2>/dev/null || true
+
+      - name: Flag if the browser test didn't pass
+        if: steps.wasm_test.outcome == 'failure'
+        run: |
+          echo "::warning::mid-net-transport-wasm's browser test failed or didn't run cleanly -- this is the first time this test has ever executed anywhere, see this workflow file's own header comment for what is and isn't verified going in. Check the 'Run the real browser test' step's log above, and fixture.log if the server side looks suspect."
+
+      - name: Write summary
+        if: always()
+        run: |
+          {
+            echo "## mid-net-transport-wasm Test Results"
+            echo ""
+            if [ "${{ steps.wasm_test.outcome }}" = "success" ]; then
+              echo "### ✅ Browser test passed — native quinn server and wasm browser client verified talking to each other for real"
+            else
+              echo "### ⚠️ Browser test did not pass cleanly — see the step log. Native framing/queue tests above this are unaffected either way."
+            fi
+            echo ""
+            echo "<details><summary>Fixture server log</summary>"
+            echo ""
+            echo '```'
+            cat fixture.log 2>/dev/null || echo "(no fixture.log produced)"
+            echo '```'
+            echo "</details>"
+          } >> "$GITHUB_STEP_SUMMARY"
