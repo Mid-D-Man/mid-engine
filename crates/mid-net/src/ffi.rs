@@ -27,6 +27,20 @@
 //!   the required size" idiom (returns the byte count, writes nothing)
 //!   — standard for variable-length C APIs, so a caller never has to
 //!   guess or over-allocate.
+//! - Every function taking a raw pointer is marked `unsafe fn` and
+//!   documents its `# Safety` contract — `clippy::not_unsafe_ptr_arg_deref`
+//!   (deny by default; caught this on real CI, not found locally, same
+//!   MSRV-gap pattern as `dangerous_implicit_autorefs` earlier in this
+//!   project) requires this even though every dereference was already
+//!   inside its own inner `unsafe {}` block and null-checked first. The
+//!   inner blocks stay exactly as they were — only the function
+//!   signatures and their doc comments changed. This is a *Rust-side*
+//!   marker only: it does not change the exported C ABI at all (C has no
+//!   concept of `unsafe`), so `mid_net.h` and every existing C caller —
+//!   including `ffi-smoke-test/test.c` — are unaffected. It only means
+//!   Rust code calling these now needs an explicit `unsafe {}` block,
+//!   which is why every direct call in this file's own tests below
+//!   changed too.
 
 use mid_net_wire::{DecodeError, Packet, PlayerEvent, PlayerId, PlayerState};
 use std::ffi::CStr;
@@ -73,7 +87,8 @@ fn ffi_guard(f: impl FnOnce() -> i32) -> i32 {
 // ---------------------------------------------------------------------
 
 /// Wire size of an encoded `PlayerState` — always this many bytes, so a
-/// caller can just allocate this once rather than querying.
+/// caller can just allocate this once rather than querying. Takes no
+/// pointer, not `unsafe` — clippy agrees, this one was never flagged.
 #[no_mangle]
 pub extern "C" fn mid_net_player_state_wire_size() -> usize {
     mid_net_wire::PLAYER_STATE_WIRE_SIZE
@@ -84,11 +99,11 @@ pub extern "C" fn mid_net_player_state_wire_size() -> usize {
 /// success, or a negative `MidNetStatus`. Pass `out_buf = NULL` to query
 /// the required size without writing anything.
 ///
-/// # Safety (caller's contract)
+/// # Safety
 /// `state` must point to a valid, initialized `PlayerState`. If
 /// `out_buf` is non-null, it must be valid for `out_buf_len` bytes.
 #[no_mangle]
-pub extern "C" fn mid_net_player_state_encode(state: *const PlayerState, out_buf: *mut u8, out_buf_len: usize) -> i32 {
+pub unsafe extern "C" fn mid_net_player_state_encode(state: *const PlayerState, out_buf: *mut u8, out_buf_len: usize) -> i32 {
     ffi_guard(|| {
         if state.is_null() {
             return MidNetStatus::NullPointer as i32;
@@ -112,11 +127,11 @@ pub extern "C" fn mid_net_player_state_encode(state: *const PlayerState, out_buf
 /// Decodes exactly `buf_len` bytes from `buf` into `*out_state`. Returns
 /// `MidNetStatus::Ok` (`0`) on success.
 ///
-/// # Safety (caller's contract)
+/// # Safety
 /// `buf` must be valid for `buf_len` bytes. `out_state` must point to
 /// valid (not necessarily initialized) memory for one `PlayerState`.
 #[no_mangle]
-pub extern "C" fn mid_net_player_state_decode(buf: *const u8, buf_len: usize, out_state: *mut PlayerState) -> i32 {
+pub unsafe extern "C" fn mid_net_player_state_decode(buf: *const u8, buf_len: usize, out_state: *mut PlayerState) -> i32 {
     ffi_guard(|| {
         if buf.is_null() || out_state.is_null() {
             return MidNetStatus::NullPointer as i32;
@@ -144,10 +159,10 @@ pub struct MidNetPlayerEvent(PlayerEvent);
 /// Builds a `PlayerEvent` from null-terminated UTF-8 C strings. Returns
 /// NULL on a null pointer or invalid UTF-8.
 ///
-/// # Safety (caller's contract)
+/// # Safety
 /// `event` and `payload` must be valid, null-terminated C strings.
 #[no_mangle]
-pub extern "C" fn mid_net_player_event_new(player_id: u32, event: *const c_char, payload: *const c_char) -> *mut MidNetPlayerEvent {
+pub unsafe extern "C" fn mid_net_player_event_new(player_id: u32, event: *const c_char, payload: *const c_char) -> *mut MidNetPlayerEvent {
     if event.is_null() || payload.is_null() {
         return ptr::null_mut();
     }
@@ -163,18 +178,26 @@ pub extern "C" fn mid_net_player_event_new(player_id: u32, event: *const c_char,
 }
 
 /// Frees a handle returned by `mid_net_player_event_new` or
-/// `mid_net_player_event_decode`. NULL is a safe no-op. Freeing the same
-/// handle twice, or using it after freeing, is undefined behavior.
+/// `mid_net_player_event_decode`. NULL is a safe no-op.
+///
+/// # Safety
+/// `event` must either be NULL or a handle previously returned by
+/// `mid_net_player_event_new`/`_decode` that hasn't been freed yet.
+/// Freeing the same handle twice, or using it after freeing, is
+/// undefined behavior.
 #[no_mangle]
-pub extern "C" fn mid_net_player_event_free(event: *mut MidNetPlayerEvent) {
+pub unsafe extern "C" fn mid_net_player_event_free(event: *mut MidNetPlayerEvent) {
     if event.is_null() {
         return;
     }
     let _ = catch_unwind(AssertUnwindSafe(|| unsafe { drop(Box::from_raw(event)) }));
 }
 
+/// # Safety
+/// `event` must either be NULL or a valid handle from `_new`/`_decode`
+/// that hasn't been freed.
 #[no_mangle]
-pub extern "C" fn mid_net_player_event_get_player_id(event: *const MidNetPlayerEvent) -> u32 {
+pub unsafe extern "C" fn mid_net_player_event_get_player_id(event: *const MidNetPlayerEvent) -> u32 {
     if event.is_null() {
         return 0;
     }
@@ -186,8 +209,11 @@ pub extern "C" fn mid_net_player_event_get_player_id(event: *const MidNetPlayerE
 /// Pointer to the event-name string's UTF-8 bytes (NOT null-terminated —
 /// use the `_len` function alongside it). Valid only while `event` is
 /// alive; do not use after `mid_net_player_event_free`.
+///
+/// # Safety
+/// `event` must either be NULL or a valid, not-yet-freed handle.
 #[no_mangle]
-pub extern "C" fn mid_net_player_event_get_event_ptr(event: *const MidNetPlayerEvent) -> *const u8 {
+pub unsafe extern "C" fn mid_net_player_event_get_event_ptr(event: *const MidNetPlayerEvent) -> *const u8 {
     if event.is_null() {
         return ptr::null();
     }
@@ -201,8 +227,10 @@ pub extern "C" fn mid_net_player_event_get_event_ptr(event: *const MidNetPlayerE
     event.0.event.as_ptr()
 }
 
+/// # Safety
+/// `event` must either be NULL or a valid, not-yet-freed handle.
 #[no_mangle]
-pub extern "C" fn mid_net_player_event_get_event_len(event: *const MidNetPlayerEvent) -> usize {
+pub unsafe extern "C" fn mid_net_player_event_get_event_len(event: *const MidNetPlayerEvent) -> usize {
     if event.is_null() {
         return 0;
     }
@@ -211,8 +239,11 @@ pub extern "C" fn mid_net_player_event_get_event_len(event: *const MidNetPlayerE
 }
 
 /// Pointer to the payload string's UTF-8 bytes (NOT null-terminated).
+///
+/// # Safety
+/// `event` must either be NULL or a valid, not-yet-freed handle.
 #[no_mangle]
-pub extern "C" fn mid_net_player_event_get_payload_ptr(event: *const MidNetPlayerEvent) -> *const u8 {
+pub unsafe extern "C" fn mid_net_player_event_get_payload_ptr(event: *const MidNetPlayerEvent) -> *const u8 {
     if event.is_null() {
         return ptr::null();
     }
@@ -220,8 +251,10 @@ pub extern "C" fn mid_net_player_event_get_payload_ptr(event: *const MidNetPlaye
     event.0.payload.as_ptr()
 }
 
+/// # Safety
+/// `event` must either be NULL or a valid, not-yet-freed handle.
 #[no_mangle]
-pub extern "C" fn mid_net_player_event_get_payload_len(event: *const MidNetPlayerEvent) -> usize {
+pub unsafe extern "C" fn mid_net_player_event_get_payload_len(event: *const MidNetPlayerEvent) -> usize {
     if event.is_null() {
         return 0;
     }
@@ -232,10 +265,11 @@ pub extern "C" fn mid_net_player_event_get_payload_len(event: *const MidNetPlaye
 /// Encodes `*event` into `out_buf`. Same "pass NULL to query size"
 /// idiom as `mid_net_player_state_encode`.
 ///
-/// # Safety (caller's contract)
-/// If `out_buf` is non-null, it must be valid for `out_buf_len` bytes.
+/// # Safety
+/// `event` must either be NULL or a valid, not-yet-freed handle. If
+/// `out_buf` is non-null, it must be valid for `out_buf_len` bytes.
 #[no_mangle]
-pub extern "C" fn mid_net_player_event_encode(event: *const MidNetPlayerEvent, out_buf: *mut u8, out_buf_len: usize) -> i32 {
+pub unsafe extern "C" fn mid_net_player_event_encode(event: *const MidNetPlayerEvent, out_buf: *mut u8, out_buf_len: usize) -> i32 {
     ffi_guard(|| {
         if event.is_null() {
             return MidNetStatus::NullPointer as i32;
@@ -259,10 +293,10 @@ pub extern "C" fn mid_net_player_event_encode(event: *const MidNetPlayerEvent, o
 /// Decodes exactly `buf_len` bytes from `buf` into a new owned handle.
 /// Returns NULL on a null pointer or decode failure.
 ///
-/// # Safety (caller's contract)
+/// # Safety
 /// `buf` must be valid for `buf_len` bytes.
 #[no_mangle]
-pub extern "C" fn mid_net_player_event_decode(buf: *const u8, buf_len: usize) -> *mut MidNetPlayerEvent {
+pub unsafe extern "C" fn mid_net_player_event_decode(buf: *const u8, buf_len: usize) -> *mut MidNetPlayerEvent {
     if buf.is_null() {
         return ptr::null_mut();
     }
@@ -284,11 +318,13 @@ mod tests {
     fn player_state_encode_decode_round_trips_through_ffi() {
         let state = PlayerState { x: 1.0, y: 2.0, z: 3.0, rot_x: 0.0, rot_y: 0.0, rot_z: 0.0, rot_w: 1.0 };
         let mut buf = vec![0u8; mid_net_player_state_wire_size()];
-        let written = mid_net_player_state_encode(&state, buf.as_mut_ptr(), buf.len());
+        // SAFETY: `&state`/`buf.as_mut_ptr()` are both valid for this call's duration.
+        let written = unsafe { mid_net_player_state_encode(&state, buf.as_mut_ptr(), buf.len()) };
         assert_eq!(written, mid_net_player_state_wire_size() as i32);
 
         let mut out = PlayerState { x: 0.0, y: 0.0, z: 0.0, rot_x: 0.0, rot_y: 0.0, rot_z: 0.0, rot_w: 0.0 };
-        let status = mid_net_player_state_decode(buf.as_ptr(), buf.len(), &mut out);
+        // SAFETY: `buf` holds exactly the bytes just encoded above; `&mut out` is valid.
+        let status = unsafe { mid_net_player_state_decode(buf.as_ptr(), buf.len(), &mut out) };
         assert_eq!(status, MidNetStatus::Ok as i32);
         assert_eq!(out, state);
     }
@@ -296,7 +332,8 @@ mod tests {
     #[test]
     fn player_state_encode_null_buf_queries_size() {
         let state = PlayerState::default();
-        let size = mid_net_player_state_encode(&state, ptr::null_mut(), 0);
+        // SAFETY: `&state` valid; NULL out_buf is the documented "query size" contract.
+        let size = unsafe { mid_net_player_state_encode(&state, ptr::null_mut(), 0) };
         assert_eq!(size, mid_net_player_state_wire_size() as i32);
     }
 
@@ -304,74 +341,92 @@ mod tests {
     fn player_state_encode_rejects_buffer_too_small() {
         let state = PlayerState::default();
         let mut tiny = [0u8; 4];
-        let result = mid_net_player_state_encode(&state, tiny.as_mut_ptr(), tiny.len());
+        // SAFETY: `&state` valid; `tiny` is valid for its own length.
+        let result = unsafe { mid_net_player_state_encode(&state, tiny.as_mut_ptr(), tiny.len()) };
         assert_eq!(result, MidNetStatus::BufferTooSmall as i32);
     }
 
     #[test]
     fn player_state_functions_reject_null_pointers() {
         let mut out = PlayerState::default();
-        assert_eq!(mid_net_player_state_decode(ptr::null(), 10, &mut out), MidNetStatus::NullPointer as i32);
-        assert_eq!(mid_net_player_state_encode(ptr::null(), ptr::null_mut(), 0), MidNetStatus::NullPointer as i32);
+        // SAFETY: exercising the documented null-pointer rejection path itself.
+        unsafe {
+            assert_eq!(mid_net_player_state_decode(ptr::null(), 10, &mut out), MidNetStatus::NullPointer as i32);
+            assert_eq!(mid_net_player_state_encode(ptr::null(), ptr::null_mut(), 0), MidNetStatus::NullPointer as i32);
+        }
     }
 
     #[test]
     fn player_event_new_free_and_getters_round_trip() {
         let event = std::ffi::CString::new("pickup").unwrap();
         let payload = std::ffi::CString::new("item_id=3").unwrap();
-        let handle = mid_net_player_event_new(42, event.as_ptr(), payload.as_ptr());
+        // SAFETY: both CStrings are valid, null-terminated, and outlive this block.
+        let handle = unsafe { mid_net_player_event_new(42, event.as_ptr(), payload.as_ptr()) };
         assert!(!handle.is_null());
 
-        assert_eq!(mid_net_player_event_get_player_id(handle), 42);
-        let event_bytes = unsafe { slice::from_raw_parts(mid_net_player_event_get_event_ptr(handle), mid_net_player_event_get_event_len(handle)) };
-        assert_eq!(event_bytes, b"pickup");
-        let payload_bytes = unsafe { slice::from_raw_parts(mid_net_player_event_get_payload_ptr(handle), mid_net_player_event_get_payload_len(handle)) };
-        assert_eq!(payload_bytes, b"item_id=3");
+        // SAFETY: `handle` is non-null and not yet freed for the whole block below.
+        unsafe {
+            assert_eq!(mid_net_player_event_get_player_id(handle), 42);
+            let event_bytes = slice::from_raw_parts(mid_net_player_event_get_event_ptr(handle), mid_net_player_event_get_event_len(handle));
+            assert_eq!(event_bytes, b"pickup");
+            let payload_bytes = slice::from_raw_parts(mid_net_player_event_get_payload_ptr(handle), mid_net_player_event_get_payload_len(handle));
+            assert_eq!(payload_bytes, b"item_id=3");
 
-        mid_net_player_event_free(handle);
+            mid_net_player_event_free(handle);
+        }
     }
 
     #[test]
     fn player_event_encode_decode_round_trips_through_ffi() {
         let event = std::ffi::CString::new("damage").unwrap();
         let payload = std::ffi::CString::new("amount=10").unwrap();
-        let handle = mid_net_player_event_new(7, event.as_ptr(), payload.as_ptr());
+        // SAFETY: both CStrings valid and null-terminated.
+        let handle = unsafe { mid_net_player_event_new(7, event.as_ptr(), payload.as_ptr()) };
 
-        let needed = mid_net_player_event_encode(handle, ptr::null_mut(), 0);
-        assert!(needed > 0);
-        let mut buf = vec![0u8; needed as usize];
-        let written = mid_net_player_event_encode(handle, buf.as_mut_ptr(), buf.len());
-        assert_eq!(written, needed);
+        // SAFETY: `handle` non-null (just created above) and not yet freed for this whole block.
+        unsafe {
+            let needed = mid_net_player_event_encode(handle, ptr::null_mut(), 0);
+            assert!(needed > 0);
+            let mut buf = vec![0u8; needed as usize];
+            let written = mid_net_player_event_encode(handle, buf.as_mut_ptr(), buf.len());
+            assert_eq!(written, needed);
 
-        let decoded = mid_net_player_event_decode(buf.as_ptr(), buf.len());
-        assert!(!decoded.is_null());
-        assert_eq!(mid_net_player_event_get_player_id(decoded), 7);
+            let decoded = mid_net_player_event_decode(buf.as_ptr(), buf.len());
+            assert!(!decoded.is_null());
+            assert_eq!(mid_net_player_event_get_player_id(decoded), 7);
 
-        mid_net_player_event_free(handle);
-        mid_net_player_event_free(decoded);
+            mid_net_player_event_free(handle);
+            mid_net_player_event_free(decoded);
+        }
     }
 
     #[test]
     fn player_event_new_rejects_invalid_utf8() {
         let invalid = [0x66u8, 0x6f, 0xff, 0x00];
         let payload = std::ffi::CString::new("ok").unwrap();
-        let handle = mid_net_player_event_new(1, invalid.as_ptr() as *const c_char, payload.as_ptr());
+        // SAFETY: `invalid` is a valid, null-terminated byte buffer (just not valid UTF-8,
+        // which is exactly the rejection path this test exercises); `payload` is a valid CString.
+        let handle = unsafe { mid_net_player_event_new(1, invalid.as_ptr() as *const c_char, payload.as_ptr()) };
         assert!(handle.is_null());
     }
 
     #[test]
     fn player_event_decode_rejects_garbage() {
         let garbage = [0xFFu8, 0xFF, 0xFF];
-        let handle = mid_net_player_event_decode(garbage.as_ptr(), garbage.len());
+        // SAFETY: `garbage` is valid for its own length -- exercising the decode-failure path.
+        let handle = unsafe { mid_net_player_event_decode(garbage.as_ptr(), garbage.len()) };
         assert!(handle.is_null());
     }
 
     #[test]
     fn null_handle_getters_return_safe_defaults_not_crash() {
         let null_handle: *const MidNetPlayerEvent = ptr::null();
-        assert_eq!(mid_net_player_event_get_player_id(null_handle), 0);
-        assert!(mid_net_player_event_get_event_ptr(null_handle).is_null());
-        assert_eq!(mid_net_player_event_get_event_len(null_handle), 0);
-        mid_net_player_event_free(ptr::null_mut());
+        // SAFETY: every one of these has a documented, tested NULL-handle path.
+        unsafe {
+            assert_eq!(mid_net_player_event_get_player_id(null_handle), 0);
+            assert!(mid_net_player_event_get_event_ptr(null_handle).is_null());
+            assert_eq!(mid_net_player_event_get_event_len(null_handle), 0);
+            mid_net_player_event_free(ptr::null_mut());
+        }
     }
-              }
+        }
