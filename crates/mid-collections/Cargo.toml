@@ -1,0 +1,14 @@
+[package]
+name        = "mid-collections"
+version     = "0.1.0"
+edition     = "2021"
+description = "Hand-rolled data structures for Mid Engine, built piecemeal as mid-ecs actually needs them — sparse sets, generational arenas, lock-free ring buffers, and more. See docs/mid-collections.md for what's built and why."
+
+[lib]
+name       = "mid_collections"
+crate-type = ["lib"]
+
+[dependencies]
+
+[features]
+default = []
