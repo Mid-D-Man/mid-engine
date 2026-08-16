@@ -43,6 +43,7 @@ members = [
     "crates/mid-net/transport-wasm",
     "crates/mid-net/transport-wasm/wasm-test-server",
     "crates/mid-ecs",
+    "crates/mid-collections",
     "crates/mid-math",
     "crates/mid-geom",
     "crates/mid-common",
