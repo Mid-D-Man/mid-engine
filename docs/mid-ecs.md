@@ -18,6 +18,7 @@ Mid Engine completely avoids the traditional Object-Oriented memory traps by spl
 
 ### 2. The Sparse Shell (Volatile Logic)
 * Status effects or states that flicker on and off constantly—like `IsPoisoned`, `Disabled`, or `Hidden`—are managed using Sparse Sets or highly efficient Bitsets.
+* The Sparse Set this shell will be built on is real now — `mid_collections::SparseSet` (`crates/mid-collections`, see `docs/mid-collections.md`), 18/18 real tests passing. Not wired into `World` yet — that needs the generational-arena piece (the entity handle type) to exist first, so `SparseSet` stays generic over any `SparseSetIndex` key rather than assuming one.
 * **The "Stutter" Fix:** If you poison 1,000 goblins, the engine just flips a bitmask or adds a tiny entry in a sparse set. 
 * Result: Zero memory is physically moved between archetype tables. The engine stays fast, and we avoid the memory-copying lag spikes that plague pure archetype architectures during massive state changes.
 * For lightning-fast entity querying, the engine utilizes a `BitVec` layout (1 boolean into 1 bit), allowing us to filter hundreds of thousands of entities in microseconds using simple bitwise AND operations.
