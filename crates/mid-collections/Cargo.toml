@@ -10,5 +10,17 @@ crate-type = ["lib"]
 
 [dependencies]
 
+[dev-dependencies]
+# Same version/feature choice as mid-math's own criterion dev-dependency
+# (crates/mid-math/Cargo.toml) — html_reports for the local `target/criterion`
+# report, default features kept (includes rayon) for faster bench-harness
+# execution. No wasm-target split like mid-math's: nothing here targets
+# wasm32 for benching, so there's no rayon/wasi conflict to route around.
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[[bench]]
+name    = "sparse_set"
+harness = false
+
 [features]
 default = []
