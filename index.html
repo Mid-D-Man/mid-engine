@@ -214,16 +214,16 @@
       <span class="badge badge-wip">Rust · In progress</span>
     </a>
 
-    <div class="card" style="opacity:.5;cursor:not-allowed">
+    <a class="card" href="mid-ecs/" id="card-mid-ecs">
       <div class="card-icon">🧩</div>
       <div class="card-title">mid-ecs</div>
-      <div class="card-desc">Data-oriented ECS · SoA layout · 100k+ entities · rayon</div>
-      <div class="card-status">
+      <div class="card-desc">Hybrid ECS · Archetype Core + Sparse Shell · mid-collections::SparseSet built &amp; tested</div>
+      <div class="card-status" id="status-mid-ecs">
         <div class="dot dot-grey"></div>
-        <span style="color:#484f58">Not started</span>
+        <span>Loading…</span>
       </div>
-      <span class="badge badge-soon">Priority 3</span>
-    </div>
+      <span class="badge badge-wip">Rust · In progress</span>
+    </a>
 
     <div class="card" style="opacity:.5;cursor:not-allowed">
       <div class="card-icon">🔗</div>
@@ -295,6 +295,7 @@ const crates = [
   { name: 'mid-log',  jsonFile: 'mid-log/mid-log-test-results.json'   },
   { name: 'mid-math', jsonFile: 'mid-math/mid-math-test-results.json' },
   { name: 'mid-net',  jsonFile: 'mid-net/mid-net-test-results.json'   },
+  { name: 'mid-ecs',  jsonFile: 'mid-ecs/mid-ecs-test-results.json'   },
 ];
 
 crates.forEach(({ name, jsonFile }) => {

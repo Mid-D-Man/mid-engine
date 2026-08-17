@@ -1,0 +1,142 @@
+{
+  "build": "1",
+  "branch": "main",
+  "commit": "09e486ed",
+  "date": "",
+  "rust_version": "rustc 1.97.1 (8bab26f4f 2026-07-14)",
+  "crate": "mid-ecs",
+  "summary": {
+    "total": 18,
+    "passed": 18,
+    "failed": 0,
+    "ignored": 0,
+    "duration_s": 0.0
+  },
+  "suites": [
+    {
+      "name": "mid-collections",
+      "passed": 18,
+      "failed": 0,
+      "ignored": 0,
+      "duration_s": 0.0,
+      "tests": [
+        {
+          "name": "sparse_set::tests::clear_empties_and_resets_all_sparse_slots",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "sparse_set::tests::debug_impl_does_not_panic_and_lists_entries",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "sparse_set::tests::default_matches_new",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "sparse_set::tests::get_missing_key_returns_none",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "sparse_set::tests::get_mut_actually_mutates",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "sparse_set::tests::index_zero_is_a_valid_key",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "sparse_set::tests::insert_on_existing_key_replaces_and_returns_old",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "sparse_set::tests::insert_then_get",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "sparse_set::tests::keys_matches_iter_and_values_pairwise",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "sparse_set::tests::reinsert_after_remove_reuses_the_freed_sparse_slot",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "sparse_set::tests::remove_first_element_repeatedly_drains_correctly",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "sparse_set::tests::remove_last_element",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "sparse_set::tests::remove_middle_element_swaps_and_fixes_up_the_moved_key",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "sparse_set::tests::remove_missing_key_returns_none_and_changes_nothing",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "sparse_set::tests::works_with_a_non_u32_key_type",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "sparse_set::tests::sparse_grows_lazily_for_large_sparse_indices",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "sparse_set::tests::starts_empty",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "sparse_set::tests::values_and_values_mut_are_contiguous_no_gaps",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        }
+      ]
+    },
+    {
+      "name": "mid-ecs",
+      "passed": 0,
+      "failed": 0,
+      "ignored": 0,
+      "duration_s": 0.0,
+      "tests": []
+    }
+  ]
+}
