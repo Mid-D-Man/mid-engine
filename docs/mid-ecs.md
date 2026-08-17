@@ -2,6 +2,20 @@
 
 Data-oriented ECS using Structure of Arrays (SoA) layout.
 
+## Status
+
+**Entity allocation is real.** `World` (`crates/mid-ecs/src/world.rs`) —
+`spawn`/`despawn`/`is_alive`, generation-checked handles via
+`Entity`/`mid_collections::GenerationalIndexAllocator` — 12/12 real
+tests passing (verified by temporarily stripping the `rayon` dependency
+locally, same technique used the first time this exact MSRV wall was
+hit, restored unchanged afterward). `Archetype`, `Query`, `sync`, `ffi`
+are still stubs — no component storage exists yet, so a spawned entity
+today has an identity and nothing else attached to it. That's the next
+real step: wiring `mid_collections::SparseSet` (already built, already
+generic over `SparseSetIndex`, which `Entity` already implements) in as
+the Sparse Shell's actual storage.
+
 ## Target
 
 100 000+ entities at 60 Hz physics on a single core.
@@ -18,7 +32,7 @@ Mid Engine completely avoids the traditional Object-Oriented memory traps by spl
 
 ### 2. The Sparse Shell (Volatile Logic)
 * Status effects or states that flicker on and off constantly—like `IsPoisoned`, `Disabled`, or `Hidden`—are managed using Sparse Sets or highly efficient Bitsets.
-* The Sparse Set this shell will be built on is real now — `mid_collections::SparseSet` (`crates/mid-collections`, see `docs/mid-collections.md`), 18/18 real tests passing. Not wired into `World` yet — that needs the generational-arena piece (the entity handle type) to exist first, so `SparseSet` stays generic over any `SparseSetIndex` key rather than assuming one.
+* The Sparse Set this shell will be built on is real now — `mid_collections::SparseSet` (`crates/mid-collections`, see `docs/mid-collections.md`), 18/18 real tests passing. `Entity` (`crates/mid-ecs/src/world.rs`) already implements `SparseSetIndex`, so the two compose with no adapter needed — wiring an actual component type through as the first real Sparse Shell storage is the next step, not yet done.
 * **The "Stutter" Fix:** If you poison 1,000 goblins, the engine just flips a bitmask or adds a tiny entry in a sparse set. 
 * Result: Zero memory is physically moved between archetype tables. The engine stays fast, and we avoid the memory-copying lag spikes that plague pure archetype architectures during massive state changes.
 * For lightning-fast entity querying, the engine utilizes a `BitVec` layout (1 boolean into 1 bit), allowing us to filter hundreds of thousands of entities in microseconds using simple bitwise AND operations.

@@ -12,10 +12,12 @@ pub mod query;
 pub mod sync;
 pub mod ffi;
 
-// `pub use world::World;` intentionally NOT here yet -- world.rs is still
-// an empty auto-generated stub (see its own doc comment), no `World`
-// type exists to re-export. This line was here pointing at nothing,
-// which is what broke every build depending on this crate (including
-// `examples/headless-server`, since before this fix) -- confirmed via a
-// real build log, not assumed. Add it back once `world.rs` actually
-// defines `World`, during the real mid-ecs build pass.
+// Restored: world.rs now actually defines World (and Entity), as of the
+// generational-arena/entity-allocation pass -- see world.rs's own doc
+// comment. The comment that used to be here explained why this line was
+// deliberately absent (it pointed at nothing, and that broke every build
+// depending on this crate, including examples/headless-server, before
+// that was caught); kept as a note for anyone re-deriving this crate's
+// history, not because the bug risk still applies now that the type is
+// real.
+pub use world::{Entity, World};

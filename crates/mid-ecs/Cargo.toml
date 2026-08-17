@@ -8,6 +8,7 @@ name = "mid_ecs"
 crate-type = ["lib", "cdylib", "staticlib"]
 
 [dependencies]
+mid-collections = { path = "../mid-collections" }
 rayon = "1.8"
 
 [features]

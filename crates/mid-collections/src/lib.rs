@@ -21,10 +21,17 @@
 //!   and removed constantly) is built on; see `docs/mid-ecs.md`'s Hybrid
 //!   ECS Architecture section for how it fits alongside the Archetype
 //!   Core.
+//! - `generational_index` — the second piece. Issues handles that detect
+//!   their own staleness after the slot they point at is freed and
+//!   reused — `mid-ecs`'s `Entity` type and `World::spawn`/`despawn` are
+//!   a thin wrapper over this. Implements `SparseSetIndex` directly, so
+//!   it composes with `sparse_set` above with no adapter needed.
 
 #![no_std]
 extern crate alloc;
 
+pub mod generational_index;
 pub mod sparse_set;
 
+pub use generational_index::{GenerationalIndex, GenerationalIndexAllocator};
 pub use sparse_set::{SparseSet, SparseSetIndex};

@@ -85,7 +85,38 @@ This isn't one option among several for `mid-ecs`'s storage — it's the
 standard technique, and now it's real. Everything else in this doc is
 still secondary to it and still unbuilt.
 
-## Generational-index arena — Rust's own answer, not a C++ import
+**Benchmarked for real** (`crates/mid-collections/benches/sparse_set.rs`,
+`cargo bench -p mid-collections`), vs `std::HashMap<u32, T>` as the
+honest baseline — not a strawman, it's what anyone would reach for
+without a specific reason not to. The predicted split going in was
+"`get`/iterate should win decisively, `insert`/`remove` should be
+closer" — real numbers came back better than that hedge across the
+board, at every scale from 100 to 100,000 elements:
+
+| Operation | SparseSet vs HashMap, 100 elements | ...at 100,000 elements |
+|---|---|---|
+| `insert` (sequential) | 2.25x faster | 4.6x faster |
+| `get` (existing key)  | ~20x faster  | ~24.7x faster |
+| `remove` (all)        | 2.5x faster  | 5.3x faster |
+| `iterate` (`values()`)| 4.5x faster  | ~5x faster |
+
+`get`/`iterate` winning decisively was expected — direct array indexing
+and a contiguous scan against hashing-plus-probing. `insert`/`remove`
+winning by a similar margin was the actual surprise: the sparse array's
+lazy growth (`Vec::resize` calls as new indices push past the current
+extent — the direct cost of the "no paging" decision above) was expected
+to eat into that margin at small sizes, and it doesn't show up as more
+than noise even at n=100.
+
+## Generational-index arena — built (`crates/mid-collections/src/generational_index.rs`)
+
+**Status: real, tested, done for v1.** `GenerationalIndex` +
+`GenerationalIndexAllocator`, 16/16 real tests passing (34/34 across the
+whole crate, alongside Sparse Set's 18) — same "actually compiled and
+run" standard as Sparse Set, verified by temporarily stripping the
+criterion dev-dependency locally (the same technique this project used
+once already for mid-ecs's rayon dependency), confirming, then restoring
+the real `Cargo.toml` unchanged.
 
 Not from the C++ list — this is the Rust ecosystem's own well-established
 solution (`slotmap`, `generational-arena`) to a problem that shows up the
@@ -100,6 +131,51 @@ Rank this **above** most of the C++ list below for `mid-ecs`
 specifically — it's the single most common correctness bug in a naive
 ECS handle design, and it needs to be right from the entity-ID design
 itself, not retrofitted after.
+
+Design verified against real `slotmap` 1.0.7 source, not assumed or
+derived from a blog post: the core trick — one `u32` generation per slot
+where **even means vacant, odd means occupied** — is `slotmap`'s own
+actual shipped design (`src/basic.rs`), confirmed by reading it directly.
+Deliberate divergence from `slotmap`/`generational-arena`: **no value
+storage per slot.** Checked `hecs` and `bevy_ecs`'s own real entity
+allocators before deciding this, not assumed — both roll their own
+value-less allocator rather than reusing a generic slotmap crate, because
+entity component data lives in per-component storage (`SparseSet` today,
+the Archetype Core later) keyed *by* the entity, not stored *in* the
+allocator. Building the heavier value-storing version would have solved
+a problem `mid-ecs` doesn't have. Everything else — LIFO free-list reuse,
+`wrapping_add` on generation bump instead of a checked/panicking add,
+`free_head` pointing past the end of the slot array meaning "grow
+instead" with no separate sentinel needed — matches `slotmap`'s own
+choices directly, not reinvented independently.
+
+**Wired into `mid-ecs` for real, not just built and left standalone.**
+`mid-ecs`'s `World` (`crates/mid-ecs/src/world.rs`) is a thin wrapper —
+`World::spawn`/`despawn`/`is_alive` delegate straight through to a
+`GenerationalIndexAllocator`, and `Entity` is a thin wrapper over
+`GenerationalIndex` implementing `SparseSetIndex` itself, so it composes
+directly with `SparseSet` with no adapter type needed once component
+storage exists. This is `mid-ecs`'s first genuinely real behavior — no
+more empty stub — verified the same way: rayon (`mid-ecs`'s own MSRV
+wall) stripped temporarily, 12/12 real tests run against the actual
+`World` API, restored unchanged. One real bug caught by that run, not by
+review: a test meant to prove "despawning a handle from an unrelated
+`World` fails" was itself wrong — two fresh `World::new()` allocators
+both hand out `{index: 0, generation: 1}` as their first spawn, since
+`GenerationalIndex` carries no per-allocator identity, so the "unrelated"
+handle wasn't actually distinguishable from a legitimate one. Fixed by
+testing the thing that's actually load-bearing instead: a *stale* handle
+after its slot gets reused by a *new* entity must fail to despawn that
+new entity.
+
+**Explicitly not yet done, and why:** `World::despawn` does not remove
+any component data, because there's no component storage attached to
+entities yet. This is the exact place that removal will need to be
+threaded through once `SparseSet`-backed component storage exists —
+*before* the slot is freed and reused, or a reused slot's new entity
+would silently inherit the old one's leftover components. Demonstrated
+directly (not just described) in `generational_index.rs`'s own
+`usable_as_a_real_sparse_set_key` test.
 
 ## Lock-free SPSC/MPMC ring buffer
 
