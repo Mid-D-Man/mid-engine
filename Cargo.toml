@@ -33,6 +33,26 @@
 # needs the ~1.85+ toolchain unconditionally, same as `-p mid-net-transport-quinn`
 # itself -- not the conditional wasm32-only situation `mid-net-transport-wasm`
 # is in.
+# NOTE on mid-ecs (rayon dependency): needs rustc 1.80+, confirmed directly
+# (`cargo check -p mid-ecs` fails on rustc 1.75 at `rayon-core`'s manifest).
+# Independent of the edition2024 walls above -- ordinary MSRV drift, not the
+# same root cause. `-p mid-collections` alone is unaffected (zero deps).
+# NOTE on mid-collections' bench (criterion dev-dependency, added when the
+# SparseSet bench suite was written): pulls in criterion -> clap_builder,
+# which needs edition2024 same as the walls above -- confirmed directly,
+# fails at `clap_builder`'s manifest on rustc 1.75. A FIFTH independent
+# instance of this exact class of ordinary upstream MSRV drift, not a new
+# root cause. REAL REGRESSION worth flagging explicitly: this affects
+# `cargo test -p mid-collections` too, not just `--bench` -- verified
+# directly (first assumed dev-dependencies were resolved per-target, that
+# assumption was WRONG and corrected after actually testing it). Cargo
+# resolves a package's full manifest, dev-dependencies included, before
+# building ANY target from it, so mid-collections lost the "zero-MSRV-wall,
+# fully testable in this sandbox" property this same comment block used to
+# get to claim uniquely for it, the moment criterion was added as a dev-dep.
+# Real tests were still run and verified before this dependency was added
+# (18/18, see docs/mid-collections.md) -- this note is about local
+# re-verification going forward, not about doubting that earlier result.
 members = [
     "crates/mid-log",
     "crates/mid-net",
