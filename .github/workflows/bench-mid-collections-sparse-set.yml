@@ -1,0 +1,156 @@
+# .github/workflows/bench-mid-collections-sparse-set.yml
+#
+# SparseSet vs std::HashMap, across four scales bracketing Mid Engine's
+# stated 100,000+ entity target (docs/architecture.md). See
+# crates/mid-collections/benches/sparse_set.rs's own doc comment for why
+# HashMap specifically is the baseline, not a strawman.
+#
+# Modeled on .github/workflows/Abench-vs-all-f64.yml's structure, minus
+# the SIMD target-cpu dispatch matrix -- SparseSet's performance is
+# governed by cache locality and pointer-chasing, not vectorizable
+# arithmetic, so there's no ISA tier to sweep the way mid-math's benches
+# need. `set -o pipefail` and `actions/cache@v4` both follow directly
+# from that same file's own lessons (see its "Run f64 criterion
+# benchmarks" step comment, and mid-ecs-test.yml's Build #1 postmortem).
+#
+# HONEST VERIFICATION NOTE: unlike mid-ecs-test.yml's JSON parser, the
+# "Publish summary" step below could NOT be verified against a real
+# captured `cargo bench` run -- criterion's own dependency tree
+# (criterion -> clap_builder) hits the same edition2024 MSRV wall as
+# everything else in this workspace's sandbox toolchain (see root
+# Cargo.toml's comments), so `cargo bench` has never actually executed
+# anywhere in this project yet. The exact "time:   [...]" line format
+# below IS grounded in criterion 0.5.1's real, downloaded
+# `report.rs` source (not memory or docs.rs) -- but the grep pattern
+# built against that source has never been run against real output. This
+# workflow's first real trigger is what actually proves it, the same way
+# mid-net-transport-wasm-test.yml's first run was the real proof for that
+# whole browser-test setup.
+#
+# Run: Actions -> "mid-collections — bench SparseSet" -> Run workflow
+# DO NOT add push/pull_request triggers.
+
+name: mid-collections — bench SparseSet
+
+on:
+  workflow_dispatch:
+    inputs:
+      baseline_note:
+        description: 'Context for this run (e.g. "after swap_and_pop tweak")'
+        required: false
+        default: 'manual SparseSet benchmark run'
+
+permissions:
+  contents: read
+  actions:  read
+
+jobs:
+  bench:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Get Rust version
+        id: rustver
+        run: echo "ver=$(rustc --version)" >> $GITHUB_OUTPUT
+
+      # Caches target/ too, not just the registry -- unlike
+      # mid-ecs-test.yml's cache (registry only). This lets criterion's
+      # own target/criterion baseline persist between runs, so after the
+      # first run each subsequent one shows a real regression/improvement
+      # delta against the last, not just an absolute number in isolation.
+      - name: Cache cargo registry + build artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-bench-sparse-set-${{ hashFiles('crates/mid-collections/**/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-bench-sparse-set-
+
+      - name: Confirm environment
+        env:
+          RUST_VERSION: ${{ steps.rustver.outputs.ver }}
+        run: |
+          {
+            echo "## mid-collections SparseSet Bench — Build #${{ github.run_number }}"
+            echo ""
+            echo "| | |"
+            echo "|---|---|"
+            echo "| Rust   | \`${RUST_VERSION}\` |"
+            echo "| Branch | \`${{ github.ref_name }}\` |"
+            echo "| Commit | \`${GITHUB_SHA:0:8}\` |"
+            echo "| Note   | ${{ inputs.baseline_note }} |"
+            echo ""
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Run SparseSet criterion benchmarks
+        run: |
+          # set -o pipefail: see Abench-vs-all-f64.yml's own "Run f64
+          # criterion benchmarks" step comment for the exact incident
+          # (build #4 there) this guards against -- without it,
+          # `cargo bench | tee file` reports tee's exit code (always 0),
+          # not cargo bench's, and a real failure would show as green.
+          set -o pipefail
+          echo "Note: ${{ inputs.baseline_note }}"
+          cargo bench -p mid-collections --bench sparse_set -- --color never \
+            2>&1 | tee bench-sparse-set-raw.txt
+          echo "Bench exit code: $?" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Surface bench diagnostics
+        if: always()
+        run: |
+          {
+            echo "### Diagnostics"
+            echo '```'
+            grep -E 'took zero time|Unable to complete|Warning:|panicked|Completed [0-9]+ iterations' \
+              bench-sparse-set-raw.txt | head -60 || echo "(none found)"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Publish summary
+        if: always()
+        run: |
+          {
+            echo "### Results"
+            echo ""
+            echo "Lower is faster. Each pair (SparseSet vs HashMap) is grouped by"
+            echo "operation and size -- see the raw log below for full confidence"
+            echo "intervals and (after the first run) any comparison-to-previous delta."
+            echo ""
+            echo '```'
+            # Grounded in criterion 0.5.1's real report.rs source (not
+            # memory) -- see this file's header comment. Each headline
+            # result prints as the benchmark id on its own line
+            # (id.len() > 23 for every id used here, e.g.
+            # "insert_sequential/SparseSet/100") immediately followed by
+            # an indented "time:   [...]" line. -B1 pulls that id line
+            # back in alongside each match.
+            grep -B 1 "time:" bench-sparse-set-raw.txt | grep -v "^--$" || echo "(no results parsed -- see raw log)"
+            echo '```'
+            echo ""
+            echo "<details><summary>Full raw output</summary>"
+            echo ""
+            echo '```'
+            cat bench-sparse-set-raw.txt
+            echo '```'
+            echo ""
+            echo "</details>"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bench-sparse-set-${{ github.run_number }}
+          path: |
+            bench-sparse-set-raw.txt
+            target/criterion
+          retention-days: 30

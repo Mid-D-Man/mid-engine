@@ -49,8 +49,14 @@ jobs:
 
       # Cache only the cargo registry — NOT target/. See mid-net-test.yml
       # for why (target/ blows the 0.5 GB Actions storage limit fast).
+      # v4, not v3: matches this repo's own Abench-vs-all-f64.yml, and
+      # sidesteps the real Feb-2025 GitHub-wide cache-service-v1
+      # deprecation that older actions/cache releases integrated against
+      # (github.com/actions/cache/discussions/1510) -- v3 was the
+      # original draft here, inconsistent with the project's own more
+      # recently-evolved convention elsewhere in this repo.
       - name: Cache cargo registry
-        uses: actions/cache@v3
+        uses: actions/cache@v4
         with:
           path: |
             ~/.cargo/bin/
@@ -88,6 +94,15 @@ jobs:
       - name: Run unit tests
         continue-on-error: true
         run: |
+          # set -o pipefail: without this, `cargo test | tee file` reports
+          # tee's exit code (always 0), not cargo test's -- the exact
+          # lesson this repo already paid for once, see
+          # Abench-vs-all-f64.yml's "Run f64 criterion benchmarks" step
+          # comment (build #4 there showed false success on a real
+          # failure). continue-on-error already means this step can't
+          # fail the job either way, but the step's own reported status
+          # should still reflect reality, not tee's.
+          set -o pipefail
           cargo test -p mid-collections -p mid-ecs \
             --color=never \
             --no-fail-fast \
