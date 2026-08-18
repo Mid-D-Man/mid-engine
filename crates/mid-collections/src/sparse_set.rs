@@ -216,7 +216,10 @@ impl<I: SparseSetIndex, T> SparseSet<I, T> {
 
         let slot = self.sparse[index];
         if slot != EMPTY {
-            Some(core::mem::replace(&mut self.dense_values[slot as usize], value))
+            Some(core::mem::replace(
+                &mut self.dense_values[slot as usize],
+                value,
+            ))
         } else {
             debug_assert!(
                 self.dense_values.len() < EMPTY as usize,
@@ -289,12 +292,18 @@ impl<I: SparseSetIndex, T> SparseSet<I, T> {
 
     /// Iterates `(key, &value)` pairs, in dense order.
     pub fn iter(&self) -> impl Iterator<Item = (I, &T)> + '_ {
-        self.dense_keys.iter().copied().zip(self.dense_values.iter())
+        self.dense_keys
+            .iter()
+            .copied()
+            .zip(self.dense_values.iter())
     }
 
     /// Iterates `(key, &mut value)` pairs, in dense order.
     pub fn iter_mut(&mut self) -> impl Iterator<Item = (I, &mut T)> + '_ {
-        self.dense_keys.iter().copied().zip(self.dense_values.iter_mut())
+        self.dense_keys
+            .iter()
+            .copied()
+            .zip(self.dense_values.iter_mut())
     }
 }
 
@@ -410,7 +419,11 @@ mod tests {
         assert!(!s.contains(20));
         assert_eq!(s.get(10), Some(&"A"));
         assert_eq!(s.get(30), Some(&"C"));
-        assert_eq!(s.get(40), Some(&"D"), "D must still be reachable after being moved");
+        assert_eq!(
+            s.get(40),
+            Some(&"D"),
+            "D must still be reachable after being moved"
+        );
 
         // Every remaining key's sparse entry must point at a dense
         // position that actually holds that key -- not just "some
@@ -460,8 +473,15 @@ mod tests {
         let mut s = SparseSet::new();
         s.insert(100_000u32, "far");
         assert_eq!(s.get(100_000), Some(&"far"));
-        assert_eq!(s.len(), 1, "one dense element regardless of how sparse the key space is");
-        assert!(!s.contains(50_000), "untouched slots in between must read as absent");
+        assert_eq!(
+            s.len(),
+            1,
+            "one dense element regardless of how sparse the key space is"
+        );
+        assert!(
+            !s.contains(50_000),
+            "untouched slots in between must read as absent"
+        );
     }
 
     #[test]
@@ -490,7 +510,11 @@ mod tests {
 
         let mut vals: Vec<_> = s.values().copied().collect();
         vals.sort_unstable();
-        assert_eq!(vals, vec![1, 3], "no gap/tombstone left where the removed element was");
+        assert_eq!(
+            vals,
+            vec![1, 3],
+            "no gap/tombstone left where the removed element was"
+        );
 
         for v in s.values_mut() {
             *v *= 10;
@@ -553,8 +577,14 @@ mod tests {
     #[test]
     fn works_with_a_non_u32_key_type() {
         let mut s: SparseSet<FakeEntity, &str> = SparseSet::new();
-        let e1 = FakeEntity { index: 3, generation: 1 };
-        let e2 = FakeEntity { index: 8, generation: 4 };
+        let e1 = FakeEntity {
+            index: 3,
+            generation: 1,
+        };
+        let e2 = FakeEntity {
+            index: 8,
+            generation: 4,
+        };
 
         s.insert(e1, "one");
         s.insert(e2, "two");

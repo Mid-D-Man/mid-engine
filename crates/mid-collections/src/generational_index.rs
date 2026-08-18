@@ -184,7 +184,10 @@ impl GenerationalIndexAllocator {
             self.free_head = slot.next_free;
             slot.generation = generation;
             self.live_count += 1;
-            GenerationalIndex { index: free_head, generation }
+            GenerationalIndex {
+                index: free_head,
+                generation,
+            }
         } else {
             // Free list exhausted -- grow by one.
             debug_assert_eq!(
@@ -197,10 +200,16 @@ impl GenerationalIndexAllocator {
                 "GenerationalIndexAllocator holds u32::MAX slots -- index would overflow"
             );
             let generation = 1;
-            self.slots.push(Slot { generation, next_free: 0 });
+            self.slots.push(Slot {
+                generation,
+                next_free: 0,
+            });
             self.free_head = free_head + 1;
             self.live_count += 1;
-            GenerationalIndex { index: free_head, generation }
+            GenerationalIndex {
+                index: free_head,
+                generation,
+            }
         }
     }
 
@@ -261,7 +270,11 @@ mod tests {
         let mut a = GenerationalIndexAllocator::new();
         let k = a.allocate();
         assert_eq!(k.index(), 0);
-        assert_eq!(k.generation(), 1, "first generation on a fresh slot must be odd (occupied), i.e. 1");
+        assert_eq!(
+            k.generation(),
+            1,
+            "first generation on a fresh slot must be odd (occupied), i.e. 1"
+        );
     }
 
     #[test]
@@ -296,14 +309,20 @@ mod tests {
         let mut a = GenerationalIndexAllocator::new();
         let k = a.allocate();
         assert!(a.deallocate(k));
-        assert!(!a.deallocate(k), "second deallocate of the same handle must be a safe no-op");
+        assert!(
+            !a.deallocate(k),
+            "second deallocate of the same handle must be a safe no-op"
+        );
     }
 
     #[test]
     fn deallocate_never_issued_handle_returns_false() {
         let mut a = GenerationalIndexAllocator::new();
         a.allocate(); // slot 0 exists, but...
-        let fake = GenerationalIndex { index: 999, generation: 1 };
+        let fake = GenerationalIndex {
+            index: 999,
+            generation: 1,
+        };
         assert!(!a.deallocate(fake));
         assert!(!a.is_alive(fake));
     }
@@ -311,7 +330,10 @@ mod tests {
     #[test]
     fn is_alive_out_of_range_index_is_false_not_panic() {
         let a = GenerationalIndexAllocator::new();
-        let fake = GenerationalIndex { index: 0, generation: 1 };
+        let fake = GenerationalIndex {
+            index: 0,
+            generation: 1,
+        };
         assert!(!a.is_alive(fake));
     }
 
@@ -336,7 +358,10 @@ mod tests {
             "the reused slot must carry a different generation"
         );
         assert!(a.is_alive(second));
-        assert!(!a.is_alive(first), "the stale first handle must not alias the reused slot");
+        assert!(
+            !a.is_alive(first),
+            "the stale first handle must not alias the reused slot"
+        );
     }
 
     #[test]
@@ -344,10 +369,16 @@ mod tests {
         let mut a = GenerationalIndexAllocator::new();
         let g1 = a.allocate().generation();
         assert_eq!(g1, 1);
-        let k = GenerationalIndex { index: 0, generation: g1 };
+        let k = GenerationalIndex {
+            index: 0,
+            generation: g1,
+        };
         a.deallocate(k);
         let g2 = a.allocate().generation();
-        assert_eq!(g2, 3, "vacant(0->1 occupied)->deallocate(1->2 vacant)->allocate(2->3 occupied)");
+        assert_eq!(
+            g2, 3,
+            "vacant(0->1 occupied)->deallocate(1->2 vacant)->allocate(2->3 occupied)"
+        );
     }
 
     #[test]
@@ -378,7 +409,11 @@ mod tests {
         a.allocate();
         assert_eq!(a.slot_count(), 3);
         a.deallocate(k0);
-        assert_eq!(a.slot_count(), 3, "freeing doesn't shrink slot_count, the slot still exists");
+        assert_eq!(
+            a.slot_count(),
+            3,
+            "freeing doesn't shrink slot_count, the slot still exists"
+        );
         assert_eq!(a.len(), 2);
         a.allocate(); // reuses k0's freed slot
         assert_eq!(a.slot_count(), 3, "reuse shouldn't grow it either");
@@ -402,7 +437,10 @@ mod tests {
             }
             assert_eq!(a.len(), live.len());
             for &k in &live {
-                assert!(a.is_alive(k), "every handle still held live must read as alive");
+                assert!(
+                    a.is_alive(k),
+                    "every handle still held live must read as alive"
+                );
             }
         }
     }
