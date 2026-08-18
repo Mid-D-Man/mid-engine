@@ -6,11 +6,12 @@
 //! Multiplayer-first: the sync module marks components for
 //! mid-net replication from day one.
 
-pub mod world;
 pub mod archetype;
+pub mod component;
+pub mod ffi;
 pub mod query;
 pub mod sync;
-pub mod ffi;
+pub mod world;
 
 // Restored: world.rs now actually defines World (and Entity), as of the
 // generational-arena/entity-allocation pass -- see world.rs's own doc
@@ -20,4 +21,5 @@ pub mod ffi;
 // that was caught); kept as a note for anyone re-deriving this crate's
 // history, not because the bug risk still applies now that the type is
 // real.
+pub use component::{ComponentId, SparseShell};
 pub use world::{Entity, World};

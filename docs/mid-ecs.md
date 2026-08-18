@@ -4,17 +4,44 @@ Data-oriented ECS using Structure of Arrays (SoA) layout.
 
 ## Status
 
-**Entity allocation is real.** `World` (`crates/mid-ecs/src/world.rs`) —
-`spawn`/`despawn`/`is_alive`, generation-checked handles via
-`Entity`/`mid_collections::GenerationalIndexAllocator` — 12/12 real
-tests passing (verified by temporarily stripping the `rayon` dependency
-locally, same technique used the first time this exact MSRV wall was
-hit, restored unchanged afterward). `Archetype`, `Query`, `sync`, `ffi`
-are still stubs — no component storage exists yet, so a spawned entity
-today has an identity and nothing else attached to it. That's the next
-real step: wiring `mid_collections::SparseSet` (already built, already
-generic over `SparseSetIndex`, which `Entity` already implements) in as
-the Sparse Shell's actual storage.
+**Entity allocation and the Sparse Shell are both real now.** `World`
+(`crates/mid-ecs/src/world.rs`) — `spawn`/`despawn`/`is_alive`,
+generation-checked handles via `Entity`/
+`mid_collections::GenerationalIndexAllocator`. `World::insert`/`get`/
+`get_mut`/`remove`/`has` (`crates/mid-ecs/src/component.rs`'s
+`SparseShell`) — any `T: 'static` attachable to any entity, no upfront
+declaration, type-erased via a dense `ComponentId` (registered once per
+type, `TypeId` only used at that registration step) rather than a
+`TypeId`-keyed `HashMap` on the hot path — design grounded directly in
+Bevy ECS's real `Components`/`ComponentId`/`Table` source, not invented
+independently. 66/66 real tests passing across `mid-collections` +
+`mid-ecs` (verified by temporarily stripping `rayon` and `criterion`
+locally, same technique used every time these MSRV walls come up,
+restored unchanged afterward).
+
+`despawn` correctly removes every attached component *before* freeing
+the entity's generational slot — load-bearing ordering, not incidental,
+since `SparseSet` looks up purely by raw index and can't itself tell a
+stale handle from a live one sharing a reused index. Every `World`
+component method checks liveness first for the same reason. Both
+properties have dedicated tests proving them directly
+(`reused_slot_does_not_inherit_the_old_entitys_components`,
+`stale_handle_cannot_read_the_live_entity_now_sharing_its_index`), not
+just described in a comment.
+
+One real self-caught inconsistency worth noting: `insert` initially had
+a `debug_assert!` for the dead-entity case, on the reasoning that it's
+"almost always a caller logic bug." The test written to prove the safe
+fallback immediately panicked instead, in a debug/test build — which
+was the actual bug: that `debug_assert!` directly contradicted this
+codebase's own established convention everywhere else
+(`SparseSet::remove`, `GenerationalIndexAllocator::deallocate`) of never
+panicking on this class of misuse. Removed, not worked around.
+
+`Archetype`, `Query`, `sync`, `ffi` are still stubs. The Archetype Core
+(dense/table storage for stable, always-present components — the other
+half of the Hybrid ECS Architecture below) doesn't exist yet; nothing in
+`component.rs` is trying to be both.
 
 ## Target
 
@@ -32,7 +59,7 @@ Mid Engine completely avoids the traditional Object-Oriented memory traps by spl
 
 ### 2. The Sparse Shell (Volatile Logic)
 * Status effects or states that flicker on and off constantly—like `IsPoisoned`, `Disabled`, or `Hidden`—are managed using Sparse Sets or highly efficient Bitsets.
-* The Sparse Set this shell will be built on is real now — `mid_collections::SparseSet` (`crates/mid-collections`, see `docs/mid-collections.md`), 18/18 real tests passing. `Entity` (`crates/mid-ecs/src/world.rs`) already implements `SparseSetIndex`, so the two compose with no adapter needed — wiring an actual component type through as the first real Sparse Shell storage is the next step, not yet done.
+* The Sparse Shell is real now — `World::insert`/`get`/`get_mut`/`remove`/`has` (`crates/mid-ecs/src/component.rs`), any `T: 'static` attachable to any entity, backed by `mid_collections::SparseSet` per component type, keyed by a dense `ComponentId` rather than a `TypeId` hash (design grounded in Bevy ECS's own real `ComponentId` source — see `component.rs`'s doc comment). `despawn` correctly cleans up every attached component before freeing the entity's slot, closing the exact stale-handle gap `SparseSet` can't close on its own.
 * **The "Stutter" Fix:** If you poison 1,000 goblins, the engine just flips a bitmask or adds a tiny entry in a sparse set. 
 * Result: Zero memory is physically moved between archetype tables. The engine stays fast, and we avoid the memory-copying lag spikes that plague pure archetype architectures during massive state changes.
 * For lightning-fast entity querying, the engine utilizes a `BitVec` layout (1 boolean into 1 bit), allowing us to filter hundreds of thousands of entities in microseconds using simple bitwise AND operations.

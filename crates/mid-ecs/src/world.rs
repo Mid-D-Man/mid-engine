@@ -1,6 +1,5 @@
-//! The ECS world — entity allocator + archetype registry.
+//! The ECS world — entity allocator + component storage.
 //!
-//! Entity allocation is the entire real behavior here today.
 //! `World::spawn`/`despawn`/`is_alive` are a thin wrapper over
 //! `mid_collections::GenerationalIndexAllocator` — see that module's own
 //! doc comment for why staleness detection works the way it does
@@ -9,24 +8,48 @@
 //! why it's ranked directly above the rest of that doc's list for
 //! `mid-ecs` specifically.
 //!
-//! Component storage doesn't exist here yet. The Archetype Core (the
-//! "Static Core" of the Hybrid ECS Architecture — `docs/mid-ecs.md`) and
-//! the Sparse Shell wiring (`mid_collections::SparseSet`, keyed by
-//! `Entity` — which already implements `SparseSetIndex` for exactly this
-//! purpose) are both the next real step, not this one. Spawning an
-//! entity today gets a live, generation-checked handle and nothing
-//! else — no components attach to it, because there's nowhere for them
-//! to live yet.
+//! `World::insert`/`get`/`get_mut`/`remove`/`has` are a thin wrapper over
+//! `SparseShell` (`crate::component`) — the "Sparse Shell" half of the
+//! Hybrid ECS Architecture (`docs/mid-ecs.md`). Any `T: 'static` can be
+//! attached to any entity with no upfront declaration; see
+//! `component.rs`'s own doc comment for the type-erasure mechanism
+//! (grounded in Bevy ECS's real `ComponentId`-based design, not a naive
+//! `TypeId`-keyed `HashMap`) and for the specific correctness property
+//! `World` has to enforce that `SparseShell` alone can't (checking
+//! liveness before every component access, to reject a stale handle that
+//! happens to share a reused index with a live entity).
+//!
+//! The Archetype Core (dense/table storage for stable, always-present
+//! components — the other half of the hybrid design) is a separate,
+//! not-yet-built piece. Nothing here is trying to be both.
 
 use std::fmt;
 
 use mid_collections::{GenerationalIndex, GenerationalIndexAllocator, SparseSetIndex};
 
+use crate::component::SparseShell;
+
 /// A handle to an entity. Detects its own staleness after despawn — a
 /// thin wrapper over `mid_collections::GenerationalIndex`, not a
 /// reimplementation of its mechanism.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct Entity(GenerationalIndex);
+pub struct Entity(pub(crate) GenerationalIndex);
+
+impl Entity {
+    /// Wraps a raw `GenerationalIndex` as an `Entity`. `pub(crate)` and
+    /// `#[cfg(test)]` deliberately -- outside this crate, an `Entity`
+    /// should only ever come from `World::spawn`, never fabricated; the
+    /// only current caller is `component.rs`'s own test module, which
+    /// needs real, distinct `Entity` values without a full `World` in
+    /// scope. Gated to `test` specifically so it doesn't sit as an
+    /// always-there-but-only-used-by-tests function generating a
+    /// dead-code warning in ordinary builds.
+    #[cfg(test)]
+    #[inline]
+    pub(crate) fn from_generational_index(index: GenerationalIndex) -> Self {
+        Self(index)
+    }
+}
 
 impl Entity {
     /// The raw slot index. Not meaningful alone — two different
@@ -62,6 +85,7 @@ impl fmt::Display for Entity {
 /// storage (Archetype Core + Sparse Shell) once that exists.
 pub struct World {
     entities: GenerationalIndexAllocator,
+    components: SparseShell,
 }
 
 impl World {
@@ -69,6 +93,7 @@ impl World {
     pub fn new() -> Self {
         Self {
             entities: GenerationalIndexAllocator::new(),
+            components: SparseShell::new(),
         }
     }
 
@@ -77,6 +102,7 @@ impl World {
     pub fn with_capacity(capacity: usize) -> Self {
         Self {
             entities: GenerationalIndexAllocator::with_capacity(capacity),
+            components: SparseShell::new(),
         }
     }
 
@@ -90,17 +116,18 @@ impl World {
     /// is a safe no-op, not a panic, matching
     /// `GenerationalIndexAllocator::deallocate`'s own contract.
     ///
-    /// Does **not** remove any component data attached to `entity` —
-    /// there's no component storage to remove it from yet (see this
-    /// module's doc comment). Once Sparse Shell/Archetype storage
-    /// exists, this is exactly where their removal has to be threaded
-    /// through, *before* the entity's slot gets freed and reused —
-    /// otherwise a reused slot's new entity would silently inherit the
-    /// old one's leftover component data. `SparseSet` doesn't protect
-    /// against this on its own; `World` has to. Demonstrated directly in
-    /// `mid_collections::generational_index`'s own
-    /// `usable_as_a_real_sparse_set_key` test, not just asserted here.
+    /// Removes every component attached to `entity` from the Sparse
+    /// Shell **before** freeing its generational slot — that ordering is
+    /// load-bearing, not incidental. `SparseSet` looks up purely by raw
+    /// index, not generation (see `component.rs`'s own doc comment), so
+    /// freeing the slot first and cleaning up components after would
+    /// leave a window where a freshly-reused index's new entity could
+    /// read the dead entity's stale leftover data.
     pub fn despawn(&mut self, entity: Entity) -> bool {
+        if !self.is_alive(entity) {
+            return false;
+        }
+        self.components.remove_entity_from_all(entity);
         self.entities.deallocate(entity.0)
     }
 
@@ -120,6 +147,59 @@ impl World {
     #[inline]
     pub fn is_empty(&self) -> bool {
         self.entities.is_empty()
+    }
+
+    /// Attaches `component` to `entity`. A safe no-op (returns `None`,
+    /// nothing is stored) if `entity` isn't alive — checked explicitly,
+    /// not left to chance, because `SparseSet`'s own index-only lookup
+    /// can't tell a stale handle from a live one sharing the same raw
+    /// index (see `component.rs`'s doc comment). No panic in any build
+    /// configuration, matching every other fallible operation in this
+    /// codebase (`SparseSet::remove`, `GenerationalIndexAllocator::
+    /// deallocate`, ...) — a `debug_assert!` was tried here first and
+    /// removed: it directly contradicted that established convention,
+    /// and the test written for the safe-fallback case immediately
+    /// caught the contradiction by panicking in the very test meant to
+    /// prove it doesn't.
+    pub fn insert<T: 'static>(&mut self, entity: Entity, component: T) -> Option<T> {
+        if !self.is_alive(entity) {
+            return None;
+        }
+        self.components.insert(entity, component)
+    }
+
+    /// Looks up `entity`'s `T` component, if attached and `entity` is
+    /// still alive.
+    pub fn get<T: 'static>(&self, entity: Entity) -> Option<&T> {
+        if !self.is_alive(entity) {
+            return None;
+        }
+        self.components.get(entity)
+    }
+
+    /// Looks up `entity`'s `T` component mutably, if attached and
+    /// `entity` is still alive.
+    pub fn get_mut<T: 'static>(&mut self, entity: Entity) -> Option<&mut T> {
+        if !self.is_alive(entity) {
+            return None;
+        }
+        self.components.get_mut(entity)
+    }
+
+    /// Removes and returns `entity`'s `T` component, if attached and
+    /// `entity` is still alive.
+    pub fn remove<T: 'static>(&mut self, entity: Entity) -> Option<T> {
+        if !self.is_alive(entity) {
+            return None;
+        }
+        self.components.remove(entity)
+    }
+
+    /// Whether `entity` is alive and currently has a `T` component
+    /// attached.
+    #[inline]
+    pub fn has<T: 'static>(&self, entity: Entity) -> bool {
+        self.is_alive(entity) && self.components.has::<T>(entity)
     }
 }
 
@@ -172,7 +252,10 @@ mod tests {
         let mut w = World::new();
         let e = w.spawn();
         assert!(w.despawn(e));
-        assert!(!w.despawn(e), "second despawn of the same entity must not panic or double-free");
+        assert!(
+            !w.despawn(e),
+            "second despawn of the same entity must not panic or double-free"
+        );
     }
 
     #[test]
@@ -197,8 +280,14 @@ mod tests {
         w.despawn(e1);
         let e2 = w.spawn(); // reuses e1's slot, different generation
 
-        assert!(!w.despawn(e1), "despawning the stale e1 handle must fail, not succeed");
-        assert!(w.is_alive(e2), "e2 must be untouched by the failed despawn(e1) call");
+        assert!(
+            !w.despawn(e1),
+            "despawning the stale e1 handle must fail, not succeed"
+        );
+        assert!(
+            w.is_alive(e2),
+            "e2 must be untouched by the failed despawn(e1) call"
+        );
     }
 
     #[test]
@@ -213,7 +302,10 @@ mod tests {
         assert_eq!(e2.index(), e1.index(), "the freed slot should be reused");
         assert_ne!(e2.generation(), e1.generation());
         assert!(w.is_alive(e2));
-        assert!(!w.is_alive(e1), "the stale handle from before the reuse must not alias e2");
+        assert!(
+            !w.is_alive(e1),
+            "the stale handle from before the reuse must not alias e2"
+        );
     }
 
     #[test]
@@ -261,5 +353,120 @@ mod tests {
                 assert!(w.is_alive(e));
             }
         }
+    }
+
+    #[derive(Debug, PartialEq)]
+    struct Health(u32);
+
+    #[test]
+    fn insert_then_get_component() {
+        let mut w = World::new();
+        let e = w.spawn();
+        assert_eq!(w.insert(e, Health(100)), None);
+        assert_eq!(w.get::<Health>(e), Some(&Health(100)));
+        assert!(w.has::<Health>(e));
+    }
+
+    #[test]
+    fn get_component_on_dead_entity_returns_none() {
+        let mut w = World::new();
+        let e = w.spawn();
+        w.insert(e, Health(50));
+        w.despawn(e);
+        assert_eq!(
+            w.get::<Health>(e),
+            None,
+            "a dead entity must not still report its old component"
+        );
+    }
+
+    #[test]
+    fn insert_on_dead_entity_is_a_safe_no_op() {
+        let mut w = World::new();
+        let e = w.spawn();
+        w.despawn(e);
+        assert_eq!(w.insert(e, Health(999)), None);
+        assert_eq!(w.get::<Health>(e), None);
+    }
+
+    #[test]
+    fn despawn_removes_all_attached_components() {
+        #[derive(Debug, PartialEq)]
+        struct Mana(u32);
+
+        let mut w = World::new();
+        let e = w.spawn();
+        w.insert(e, Health(100));
+        w.insert(e, Mana(50));
+
+        assert!(w.despawn(e));
+
+        assert_eq!(w.get::<Health>(e), None);
+        assert_eq!(w.get::<Mana>(e), None);
+    }
+
+    #[test]
+    fn despawn_does_not_touch_other_entities_components() {
+        let mut w = World::new();
+        let e1 = w.spawn();
+        let e2 = w.spawn();
+        w.insert(e1, Health(10));
+        w.insert(e2, Health(20));
+
+        w.despawn(e1);
+
+        assert_eq!(
+            w.get::<Health>(e2),
+            Some(&Health(20)),
+            "e2 must be untouched by e1's despawn"
+        );
+    }
+
+    #[test]
+    fn reused_slot_does_not_inherit_the_old_entitys_components() {
+        // The actual point of checking `is_alive` before every component
+        // access in World, not just SparseShell's own tests: a *new*
+        // entity reusing a freed slot must never read the *old* dead
+        // entity's leftover data, even transiently.
+        let mut w = World::new();
+        let e1 = w.spawn();
+        w.insert(e1, Health(77));
+        w.despawn(e1);
+
+        let e2 = w.spawn(); // reuses e1's slot, different generation
+        assert_eq!(
+            w.get::<Health>(e2),
+            None,
+            "e2 must not inherit e1's old Health component"
+        );
+
+        w.insert(e2, Health(5));
+        assert_eq!(w.get::<Health>(e2), Some(&Health(5)));
+    }
+
+    #[test]
+    fn stale_handle_cannot_read_the_live_entity_now_sharing_its_index() {
+        // The specific gap `SparseSet` alone can't close, documented in
+        // component.rs's doc comment: a *stale* Entity handle (e1) and a
+        // *live* Entity (e2) can share the same raw index after reuse.
+        // World's own liveness check is what makes get(e1) correctly
+        // fail here, rather than accidentally returning e2's real data.
+        let mut w = World::new();
+        let e1 = w.spawn();
+        w.despawn(e1);
+        let e2 = w.spawn(); // same raw index as e1, higher generation
+        w.insert(e2, Health(42));
+
+        assert_eq!(
+            e1.index(),
+            e2.index(),
+            "this test only proves anything if the index was actually reused"
+        );
+        assert_eq!(
+            w.get::<Health>(e1),
+            None,
+            "the stale e1 handle must not see e2's Health component"
+        );
+        assert_eq!(w.get::<Health>(e2), Some(&Health(42)));
     }
 }
