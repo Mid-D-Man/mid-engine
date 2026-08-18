@@ -43,6 +43,27 @@ panicking on this class of misuse. Removed, not worked around.
 half of the Hybrid ECS Architecture below) doesn't exist yet; nothing in
 `component.rs` is trying to be both.
 
+**Query — real for one and two component types.**
+`World::query<T>()` iterates every `(Entity, &T)` currently alive with a
+`T` attached; `World::query2<A, B>()` intersects two — every
+`(Entity, &A, &B)` for entities alive with *both*. 7 new tests (39/39 in
+`mid-ecs` total, 73/73 across `mid-collections` + `mid-ecs`), all passing
+on the actual first run — including the two that matter most:
+`query_excludes_despawned_entities` and
+`query2_excludes_a_despawned_entity_even_if_it_had_both`, proving
+`despawn`'s component cleanup and `query`'s iteration agree with each
+other, not just each independently claiming to be correct.
+
+Deliberate v1 scope, not an oversight: `query2` always drives iteration
+off its first type parameter and checks the second per-entity, rather
+than picking whichever side is actually smaller — a real optimization
+for a mismatched pair, but nothing in this workspace has a real query
+shape yet that would justify the extra complexity over shipping the
+correct, simpler version first. No `query3`+, and no generic tuple-based
+`Query<T>` trait system (the shape real ECS crates converge on for
+arbitrary arity) — both are natural follow-ons once real usage patterns
+exist to design against, not before.
+
 ## Target
 
 100 000+ entities at 60 Hz physics on a single core.

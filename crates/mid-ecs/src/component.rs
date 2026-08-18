@@ -202,6 +202,33 @@ impl SparseShell {
         self.get::<T>(entity).is_some()
     }
 
+    /// Iterates every `(Entity, &T)` pair currently stored for `T`. Empty
+    /// (not an error) if `T` was never registered — nothing has ever
+    /// been inserted for it, so there's nothing to iterate.
+    ///
+    /// Boxed rather than an inline `impl Iterator`, deliberately: the
+    /// two possible cases (`T` registered vs not) are different concrete
+    /// iterator types (`SparseSet::iter`'s real type vs
+    /// `core::iter::Empty`), and boxing is the simplest way to unify
+    /// them without a hand-rolled `Either`-style enum for a single call
+    /// site. Revisit if this ever shows up in a real profile — it
+    /// hasn't been built for one.
+    pub(crate) fn iter<T: 'static>(&self) -> Box<dyn Iterator<Item = (Entity, &T)> + '_> {
+        match self
+            .existing_component_id::<T>()
+            .and_then(|id| self.columns.get(id))
+        {
+            Some(column) => {
+                let set = column
+                    .as_any()
+                    .downcast_ref::<SparseSet<Entity, T>>()
+                    .expect("ComponentId must always map to a column of its own registered type");
+                Box::new(set.iter())
+            }
+            None => Box::new(core::iter::empty()),
+        }
+    }
+
     /// Removes `entity` from every registered component column,
     /// regardless of type. Used by `World::despawn`, which must call
     /// this *before* freeing the entity's generational slot — see this
