@@ -46,7 +46,38 @@ half of the Hybrid ECS Architecture below) doesn't exist yet; nothing in
 ## Target
 
 100 000+ entities at 60 Hz physics on a single core.
-Parallelised queries via rayon.
+Parallelised queries via rayon — on native. See Platform below.
+
+## Platform
+
+`mid-ecs` targets native *and* wasm32 (browser), same as the rest of the
+workspace (`docs/architecture.md`'s core commitments). `rayon` — real
+OS threads under the hood — doesn't work on `wasm32-unknown-unknown` the
+way it needs to, so it's gated to non-wasm32 targets only in
+`crates/mid-ecs/Cargo.toml`, under
+`[target.'cfg(not(target_arch = "wasm32"))'.dependencies]` — the same
+target-gating pattern already established in
+`crates/mid-net/transport-wasm/Cargo.toml`.
+
+Confirmed directly, not assumed: `cargo tree --target
+wasm32-unknown-unknown -p mid-ecs` showed rayon's entire transitive tree
+(`rayon-core`, `crossbeam-deque`/`epoch`/`utils`, `either`) resolving
+into the wasm32 dependency graph *before* the gate existed, and cleanly
+absent after — `mid-ecs` resolves to depending on only
+`mid-collections` for that target. `.github/workflows/mid-ecs-test.yml`
+now has a real "Check wasm32 build" step
+(`cargo check --target wasm32-unknown-unknown`) proving the crate
+actually compiles clean for that target on real CI, not just that its
+dependency graph looks right — the sandbox this was developed in has no
+wasm32 target installed at all, so dependency-graph resolution was as
+far as local verification could go.
+
+`query.rs`'s eventual rayon-based parallel iteration will need the
+matching `#[cfg(not(target_arch = "wasm32"))]` split at the *code* level
+too, once it's actually built — not needed yet, it's still a stub. FFI
+work for `mid-ecs` (`ffi.rs`) is deliberately last in the build order —
+the FFI-span data structure design (`docs/mid-collections.md`'s "FFI
+wrapper" section) will inform it once that's reached.
 
 ## The Hybrid ECS Architecture: Static Core, Dynamic Shell
 

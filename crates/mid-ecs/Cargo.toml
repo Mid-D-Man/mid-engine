@@ -9,6 +9,18 @@ crate-type = ["lib", "cdylib", "staticlib"]
 
 [dependencies]
 mid-collections = { path = "../mid-collections" }
+
+# rayon and its whole transitive tree (crossbeam-deque/epoch/utils, either,
+# rayon-core) depend on real OS threads, which wasm32-unknown-unknown
+# doesn't provide the way rayon needs -- confirmed directly via
+# `cargo tree --target wasm32-unknown-unknown -p mid-ecs`, which pulled
+# the entire tree into the wasm32 graph before this gate existed. Same
+# target-gating pattern already established in
+# crates/mid-net/transport-wasm/Cargo.toml for the same class of problem.
+# `query.rs`'s own eventual rayon-based parallel iteration will need the
+# matching `#[cfg(not(target_arch = "wasm32"))]` code-level split when it's
+# actually built -- not needed yet, query.rs is still a stub.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 rayon = "1.8"
 
 [features]
