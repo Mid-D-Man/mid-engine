@@ -64,6 +64,68 @@ correct, simpler version first. No `query3`+, and no generic tuple-based
 arbitrary arity) — both are natural follow-ons once real usage patterns
 exist to design against, not before.
 
+Organizational fix caught, not by review: `query`/`query2` were first
+written directly on `World` in `world.rs`. Moved to `query.rs` shortly
+after — the file that already existed specifically for this — where
+they belonged from the start. Implementations unchanged, `World`'s
+fields made `pub(crate)` so `query.rs` can reach them.
+
+**Archetype Core — real, with full dynamic migration, not a simplified
+static-at-spawn version.** `crates/mid-ecs/src/archetype.rs`:
+`Archetypes` — dense SoA [`Table`]s (one contiguous `Vec<T>` per
+component type, in lockstep by row), keyed by exact component-type-set
+signature, with real migration when `World::insert_static`/
+`remove_static` change an entity's set. `World::get_static`/
+`get_static_mut`/`has_static` round out the API — named distinctly from
+the Sparse Shell's `insert`/`get`/etc. since a component type has to
+live in exactly one of the two systems, and there's no enforcement yet
+beyond caller discipline (a `Component` trait fixing each type's
+storage strategy once, matching where Bevy eventually landed, is a real
+future refinement).
+
+Grounded in Bevy ECS's real source, cloned and read directly (not
+memory, not search-result excerpts) — `archetype.rs` (1002 lines),
+`storage/table/{mod,column}.rs` (1428 lines). Confirmed, not assumed:
+`Table` really is `{ columns: SparseSet<ComponentId, Column>, entities:
+Vec<Entity> }`, the same shape `component.rs`'s `SparseShell` converged
+on independently, now confirmed twice as the right structure for this
+class of problem. `Edges`-style memoized add/remove transition caching
+is real here too (`Archetype::add_edges`/`remove_edges`), same idea as
+Bevy's, simpler storage (`HashMap` over a dedicated sparse-array type
+this project doesn't have and didn't need to build for this alone).
+
+Deliberate, stated divergence from Bevy, not an oversimplification:
+Bevy's real row-migration is `unsafe`, raw-pointer, merge-join code with
+change-detection ticks this project doesn't have yet. This module gets
+the *same real capability* — genuine dynamic migration, any entity, any
+component, at any time, no "components fixed at spawn" restriction —
+through safe Rust instead: each migrated value is briefly boxed
+(`Column::swap_remove_and_forget`/`push_any`) rather than raw-copied.
+One heap allocation per moved component per structural change — not per
+frame, not per query, only on the path this whole Sparse-Shell-vs-
+Archetype-Core split exists specifically to keep rare. Zero `unsafe`,
+matching `SparseSet`/`GenerationalIndexAllocator`'s own precedent
+throughout this project.
+
+Single-component structural changes only (not Bevy's general `Bundle`
+trait for atomic multi-component changes) — deliberate, not a
+limitation nobody noticed: a single-component add is always a strict
+superset transition, a single-component remove always a strict subset,
+which is exactly what lets every *other* column move unconditionally
+with no merge-join needed to work out what's actually shared.
+
+24 new tests (15 in `archetype.rs` + 9 `World`-level integration tests),
+99/99 total across `mid-collections` + `mid-ecs`, all passing on the
+actual first real run after two real, caught-by-clippy `Box::new(_)`
+lint fixes and two doc-link fixes. The test that matters most:
+`swap_remove_during_migration_fixes_up_the_swapped_entitys_row` —
+proves that when a *middle* entity migrates out of a shared archetype,
+the entity swapped into its old row stays correct not just for reading
+afterward, but for *its own future migrations* too. Still wasm32-clean:
+re-checked via `cargo tree --target wasm32-unknown-unknown` after —
+`mid-ecs` still resolves to depending on only `mid-collections` for
+that target, this module added no new dependencies.
+
 ## Target
 
 100 000+ entities at 60 Hz physics on a single core.

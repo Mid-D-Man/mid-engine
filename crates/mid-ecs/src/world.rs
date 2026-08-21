@@ -19,14 +19,23 @@
 //! liveness before every component access, to reject a stale handle that
 //! happens to share a reused index with a live entity).
 //!
-//! The Archetype Core (dense/table storage for stable, always-present
-//! components — the other half of the hybrid design) is a separate,
-//! not-yet-built piece. Nothing here is trying to be both.
+//! `World::insert_static`/`get_static`/`get_static_mut`/`remove_static`/
+//! `has_static` are a thin wrapper over `Archetypes`
+//! (`crate::archetype`) — the "Archetype Core" half of the Hybrid ECS
+//! Architecture, real dynamic table storage with migration between
+//! archetypes as components are added/removed. See `archetype.rs`'s own
+//! doc comment for the design (grounded in Bevy ECS's real source, read
+//! directly) and for why it uses a completely separate `ComponentId`
+//! numbering space from `SparseShell`'s own.
+//!
+//! Iterating this storage (`World::query`/`query2`) lives in `query.rs`,
+//! not here — a distinct concern from owning the storage itself.
 
 use std::fmt;
 
 use mid_collections::{GenerationalIndex, GenerationalIndexAllocator, SparseSetIndex};
 
+use crate::archetype::Archetypes;
 use crate::component::SparseShell;
 
 /// A handle to an entity. Detects its own staleness after despawn — a
@@ -81,11 +90,12 @@ impl fmt::Display for Entity {
     }
 }
 
-/// The ECS world. Owns entity lifecycle today; will own component
-/// storage (Archetype Core + Sparse Shell) once that exists.
+/// The ECS world. Owns entity lifecycle, the Sparse Shell, and the
+/// Archetype Core.
 pub struct World {
-    entities: GenerationalIndexAllocator,
-    components: SparseShell,
+    pub(crate) entities: GenerationalIndexAllocator,
+    pub(crate) components: SparseShell,
+    pub(crate) archetypes: Archetypes,
 }
 
 impl World {
@@ -94,6 +104,7 @@ impl World {
         Self {
             entities: GenerationalIndexAllocator::new(),
             components: SparseShell::new(),
+            archetypes: Archetypes::new(),
         }
     }
 
@@ -103,12 +114,16 @@ impl World {
         Self {
             entities: GenerationalIndexAllocator::with_capacity(capacity),
             components: SparseShell::new(),
+            archetypes: Archetypes::new(),
         }
     }
 
-    /// Spawns a new, live entity.
+    /// Spawns a new, live entity — into the empty archetype, with no
+    /// components attached yet in either storage system.
     pub fn spawn(&mut self) -> Entity {
-        Entity(self.entities.allocate())
+        let entity = Entity(self.entities.allocate());
+        self.archetypes.spawn(entity);
+        entity
     }
 
     /// Despawns `entity`, if it's still alive. Returns whether it
@@ -116,18 +131,21 @@ impl World {
     /// is a safe no-op, not a panic, matching
     /// `GenerationalIndexAllocator::deallocate`'s own contract.
     ///
-    /// Removes every component attached to `entity` from the Sparse
-    /// Shell **before** freeing its generational slot — that ordering is
-    /// load-bearing, not incidental. `SparseSet` looks up purely by raw
-    /// index, not generation (see `component.rs`'s own doc comment), so
-    /// freeing the slot first and cleaning up components after would
-    /// leave a window where a freshly-reused index's new entity could
-    /// read the dead entity's stale leftover data.
+    /// Removes every component attached to `entity` from *both* storage
+    /// systems (Sparse Shell and Archetype Core) **before** freeing its
+    /// generational slot — that ordering is load-bearing, not
+    /// incidental, for both. Neither `SparseSet`-backed storage looks up
+    /// by anything but raw index, not generation (see `component.rs`'s
+    /// and `archetype.rs`'s own doc comments), so freeing the slot first
+    /// and cleaning up after would leave a window where a
+    /// freshly-reused index's new entity could read the dead entity's
+    /// stale leftover data from either system.
     pub fn despawn(&mut self, entity: Entity) -> bool {
         if !self.is_alive(entity) {
             return false;
         }
         self.components.remove_entity_from_all(entity);
+        self.archetypes.despawn(entity);
         self.entities.deallocate(entity.0)
     }
 
@@ -202,29 +220,70 @@ impl World {
         self.is_alive(entity) && self.components.has::<T>(entity)
     }
 
-    /// Iterates every `(Entity, &T)` currently alive with a `T`
-    /// component attached. Doesn't separately check liveness per
-    /// entity — every entity in `T`'s storage is alive by construction,
-    /// since `despawn` removes an entity from every component column
-    /// before its slot is ever freed (see `despawn`'s own doc comment).
-    pub fn query<T: 'static>(&self) -> impl Iterator<Item = (Entity, &T)> + '_ {
-        self.components.iter::<T>()
+    /// Attaches `component` to `entity` as an **archetype-tracked**
+    /// component — migrating `entity`'s row into whichever archetype
+    /// matches its new, larger component set (see `archetype.rs`'s doc
+    /// comment for what "migrating" actually does). A safe no-op
+    /// (returns `false`) if `entity` isn't alive, or already has a `T`
+    /// attached this way — the same liveness-check requirement
+    /// `insert`/`get`/etc. have for the Sparse Shell applies here too,
+    /// for the identical reason (index-only lookup, can't tell a stale
+    /// handle from a live one sharing a reused index on its own).
+    ///
+    /// Distinct method name from `insert` deliberately — a given `T`
+    /// should live in exactly one of the two storage systems, never
+    /// both, and there's no enforcement of that yet beyond the caller
+    /// being consistent about which method they call for a given type.
+    /// A `Component` trait fixing each type's storage strategy once
+    /// (matching where Bevy eventually landed) is a real future
+    /// refinement, not needed to get real, correct behavior today.
+    pub fn insert_static<T: 'static>(&mut self, entity: Entity, component: T) -> bool {
+        if !self.is_alive(entity) {
+            return false;
+        }
+        let id = self.archetypes.component_id::<T>();
+        self.archetypes.insert(entity, id, component)
     }
 
-    /// Iterates every `(Entity, &A, &B)` for entities alive with *both*
-    /// an `A` and a `B` component attached.
-    ///
-    /// Drives iteration off `A`'s storage and checks `B` per entity —
-    /// not off whichever of the two is actually smaller. A real
-    /// deliberate v1 simplification, not an oversight: picking the
-    /// smaller side is a real optimization or larger-vs-smaller
-    /// mismatches, but there's no consumer yet whose real query shapes
-    /// would justify it over just shipping the correct, simpler version
-    /// first. Revisit against a real workload, not speculatively.
-    pub fn query2<A: 'static, B: 'static>(&self) -> impl Iterator<Item = (Entity, &A, &B)> + '_ {
-        self.components
-            .iter::<A>()
-            .filter_map(move |(entity, a)| self.components.get::<B>(entity).map(|b| (entity, a, b)))
+    /// Removes and returns `entity`'s archetype-tracked `T` component,
+    /// if attached and `entity` is alive — migrating its row back into
+    /// the archetype matching its new, smaller component set.
+    pub fn remove_static<T: 'static>(&mut self, entity: Entity) -> Option<T> {
+        if !self.is_alive(entity) {
+            return None;
+        }
+        let id = self.archetypes.existing_component_id::<T>()?;
+        self.archetypes.remove(entity, id)
+    }
+
+    /// Looks up `entity`'s archetype-tracked `T` component, if attached
+    /// and `entity` is alive.
+    pub fn get_static<T: 'static>(&self, entity: Entity) -> Option<&T> {
+        if !self.is_alive(entity) {
+            return None;
+        }
+        let id = self.archetypes.existing_component_id::<T>()?;
+        self.archetypes.get(entity, id)
+    }
+
+    /// Looks up `entity`'s archetype-tracked `T` component mutably, if
+    /// attached and `entity` is alive.
+    pub fn get_static_mut<T: 'static>(&mut self, entity: Entity) -> Option<&mut T> {
+        if !self.is_alive(entity) {
+            return None;
+        }
+        let id = self.archetypes.existing_component_id::<T>()?;
+        self.archetypes.get_mut(entity, id)
+    }
+
+    /// Whether `entity` is alive and currently has an archetype-tracked
+    /// `T` component attached.
+    #[inline]
+    pub fn has_static<T: 'static>(&self, entity: Entity) -> bool {
+        let Some(id) = self.archetypes.existing_component_id::<T>() else {
+            return false;
+        };
+        self.is_alive(entity) && self.archetypes.has(entity, id)
     }
 }
 
@@ -495,110 +554,155 @@ mod tests {
         assert_eq!(w.get::<Health>(e2), Some(&Health(42)));
     }
 
-    #[derive(Debug, PartialEq, Clone, Copy)]
-    struct Position {
-        x: f32,
-        y: f32,
-    }
+    #[derive(Debug, PartialEq)]
+    struct Mass(f32);
+    #[derive(Debug, PartialEq)]
+    struct Charge(f32);
 
-    #[derive(Debug, PartialEq, Clone, Copy)]
-    struct Velocity {
-        dx: f32,
-        dy: f32,
+    #[test]
+    fn insert_static_then_get_static() {
+        let mut w = World::new();
+        let e = w.spawn();
+        assert!(w.insert_static(e, Mass(10.0)));
+        assert_eq!(w.get_static::<Mass>(e), Some(&Mass(10.0)));
+        assert!(w.has_static::<Mass>(e));
     }
 
     #[test]
-    fn query_iterates_every_entity_with_the_component() {
+    fn insert_static_two_components_preserves_both() {
         let mut w = World::new();
-        let e1 = w.spawn();
-        let e2 = w.spawn();
-        let e3 = w.spawn(); // no Position at all
-        w.insert(e1, Position { x: 1.0, y: 1.0 });
-        w.insert(e2, Position { x: 2.0, y: 2.0 });
-        let _ = e3;
+        let e = w.spawn();
+        w.insert_static(e, Mass(1.0));
+        w.insert_static(e, Charge(2.0));
+        assert_eq!(w.get_static::<Mass>(e), Some(&Mass(1.0)));
+        assert_eq!(w.get_static::<Charge>(e), Some(&Charge(2.0)));
+    }
 
-        let mut found: Vec<(Entity, Position)> =
-            w.query::<Position>().map(|(e, p)| (e, *p)).collect();
-        found.sort_by_key(|(e, _)| e.index());
-
+    #[test]
+    fn get_static_component_on_dead_entity_returns_none() {
+        let mut w = World::new();
+        let e = w.spawn();
+        w.insert_static(e, Mass(5.0));
+        w.despawn(e);
         assert_eq!(
-            found,
-            vec![
-                (e1, Position { x: 1.0, y: 1.0 }),
-                (e2, Position { x: 2.0, y: 2.0 })
-            ]
+            w.get_static::<Mass>(e),
+            None,
+            "a dead entity must not still report its old static component"
         );
     }
 
     #[test]
-    fn query_on_never_inserted_type_is_empty() {
-        let w = World::new();
-        assert_eq!(w.query::<Position>().count(), 0);
+    fn insert_static_on_dead_entity_is_a_safe_no_op() {
+        let mut w = World::new();
+        let e = w.spawn();
+        w.despawn(e);
+        assert!(!w.insert_static(e, Mass(999.0)));
+        assert_eq!(w.get_static::<Mass>(e), None);
     }
 
     #[test]
-    fn query_excludes_despawned_entities() {
+    fn despawn_removes_static_components_too() {
+        let mut w = World::new();
+        let e = w.spawn();
+        w.insert_static(e, Mass(1.0));
+        w.insert_static(e, Charge(2.0));
+
+        assert!(w.despawn(e));
+
+        assert_eq!(w.get_static::<Mass>(e), None);
+        assert_eq!(w.get_static::<Charge>(e), None);
+    }
+
+    #[test]
+    fn despawn_does_not_touch_other_entities_static_components() {
         let mut w = World::new();
         let e1 = w.spawn();
         let e2 = w.spawn();
-        w.insert(e1, Position { x: 0.0, y: 0.0 });
-        w.insert(e2, Position { x: 0.0, y: 0.0 });
+        w.insert_static(e1, Mass(1.0));
+        w.insert_static(e2, Mass(2.0));
 
         w.despawn(e1);
 
-        let found: Vec<Entity> = w.query::<Position>().map(|(e, _)| e).collect();
-        assert_eq!(found, vec![e2]);
+        assert_eq!(
+            w.get_static::<Mass>(e2),
+            Some(&Mass(2.0)),
+            "e2 must be untouched by e1's despawn"
+        );
     }
 
     #[test]
-    fn query2_yields_only_entities_with_both_components() {
+    fn reused_slot_does_not_inherit_the_old_entitys_static_components() {
         let mut w = World::new();
-        let both = w.spawn();
-        let position_only = w.spawn();
-        let velocity_only = w.spawn();
+        let e1 = w.spawn();
+        w.insert_static(e1, Mass(77.0));
+        w.despawn(e1);
 
-        w.insert(both, Position { x: 1.0, y: 1.0 });
-        w.insert(both, Velocity { dx: 0.5, dy: 0.5 });
-        w.insert(position_only, Position { x: 2.0, y: 2.0 });
-        w.insert(velocity_only, Velocity { dx: 9.0, dy: 9.0 });
+        let e2 = w.spawn(); // reuses e1's slot, different generation
+        assert_eq!(
+            w.get_static::<Mass>(e2),
+            None,
+            "e2 must not inherit e1's old static Mass component"
+        );
 
-        let found: Vec<Entity> = w
-            .query2::<Position, Velocity>()
-            .map(|(e, _, _)| e)
-            .collect();
-        assert_eq!(found, vec![both]);
+        w.insert_static(e2, Mass(5.0));
+        assert_eq!(w.get_static::<Mass>(e2), Some(&Mass(5.0)));
     }
 
     #[test]
-    fn query2_returns_matching_component_references() {
+    fn stale_handle_cannot_read_the_live_entitys_static_component() {
+        let mut w = World::new();
+        let e1 = w.spawn();
+        w.despawn(e1);
+        let e2 = w.spawn(); // same raw index as e1, higher generation
+        w.insert_static(e2, Mass(42.0));
+
+        assert_eq!(
+            e1.index(),
+            e2.index(),
+            "this test only proves anything if the index was actually reused"
+        );
+        assert_eq!(
+            w.get_static::<Mass>(e1),
+            None,
+            "the stale e1 handle must not see e2's static Mass component"
+        );
+        assert_eq!(w.get_static::<Mass>(e2), Some(&Mass(42.0)));
+    }
+
+    #[test]
+    fn remove_static_returns_value_and_clears_it() {
         let mut w = World::new();
         let e = w.spawn();
-        w.insert(e, Position { x: 3.0, y: 4.0 });
-        w.insert(e, Velocity { dx: 1.0, dy: -1.0 });
-
-        let (found_entity, pos, vel) = w.query2::<Position, Velocity>().next().unwrap();
-        assert_eq!(found_entity, e);
-        assert_eq!(*pos, Position { x: 3.0, y: 4.0 });
-        assert_eq!(*vel, Velocity { dx: 1.0, dy: -1.0 });
+        w.insert_static(e, Mass(3.0));
+        assert_eq!(w.remove_static::<Mass>(e), Some(Mass(3.0)));
+        assert_eq!(w.get_static::<Mass>(e), None);
+        assert!(!w.has_static::<Mass>(e));
     }
 
     #[test]
-    fn query2_empty_when_one_side_was_never_registered() {
+    fn get_static_mut_actually_mutates() {
         let mut w = World::new();
         let e = w.spawn();
-        w.insert(e, Position { x: 0.0, y: 0.0 });
-        // Velocity has never been inserted for anything, anywhere.
-        assert_eq!(w.query2::<Position, Velocity>().count(), 0);
+        w.insert_static(e, Mass(1.0));
+        w.get_static_mut::<Mass>(e).unwrap().0 = 50.0;
+        assert_eq!(w.get_static::<Mass>(e), Some(&Mass(50.0)));
     }
 
     #[test]
-    fn query2_excludes_a_despawned_entity_even_if_it_had_both() {
+    fn static_and_sparse_shell_storage_are_independent() {
+        // Position (sparse-shell, via `insert`) and Mass (archetype-core,
+        // via `insert_static`) coexisting on the same entity, each
+        // readable only through its own matching accessor.
         let mut w = World::new();
         let e = w.spawn();
-        w.insert(e, Position { x: 0.0, y: 0.0 });
-        w.insert(e, Velocity { dx: 0.0, dy: 0.0 });
+        w.insert(e, Health(100));
+        w.insert_static(e, Mass(2.5));
+
+        assert_eq!(w.get::<Health>(e), Some(&Health(100)));
+        assert_eq!(w.get_static::<Mass>(e), Some(&Mass(2.5)));
+
         w.despawn(e);
-
-        assert_eq!(w.query2::<Position, Velocity>().count(), 0);
+        assert_eq!(w.get::<Health>(e), None);
+        assert_eq!(w.get_static::<Mass>(e), None);
     }
 }

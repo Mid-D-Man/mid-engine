@@ -67,7 +67,7 @@ use crate::world::Entity;
 /// module's doc comment for why the distinction matters. Only meaningful
 /// relative to the `SparseShell` that issued it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct ComponentId(u32);
+pub struct ComponentId(pub(crate) u32);
 
 impl SparseSetIndex for ComponentId {
     #[inline]
