@@ -131,6 +131,26 @@ jobs:
             --no-fail-fast \
             -- --show-output 2>&1 | tee mid-ecs-test-raw.txt
 
+      # Real end-to-end verification, not just Rust-side unit tests: an
+      # actual C program, compiled with gcc, linked against the
+      # libmid_ecs.so this job just built (see the "Build" step above) --
+      # same pattern as mid-net-test.yml's own FFI smoke test step,
+      # mirrored here, not reinvented. World lifecycle only for now
+      # (spawn/despawn/is_alive/entity_count) -- see ffi.rs's own doc
+      # comment for why component data access isn't covered yet.
+      - name: FFI smoke test (real C program via gcc, not just Rust tests)
+        continue-on-error: true
+        run: |
+          echo "=== Compiling C smoke test against mid_ecs.h ==="
+          gcc -o crates/mid-ecs/ffi-smoke-test/test \
+            crates/mid-ecs/ffi-smoke-test/test.c \
+            -I crates/mid-ecs/ffi-smoke-test \
+            -L target/debug \
+            -lmid_ecs -Wall -Wextra
+          echo ""
+          echo "=== Running against the real compiled libmid_ecs.so ==="
+          LD_LIBRARY_PATH=target/debug crates/mid-ecs/ffi-smoke-test/test 2>&1 | tee mid-ecs-ffi-smoke-raw.txt
+
       - name: Parse results to JSON
         env:
           BUILD_NUM:    ${{ github.run_number }}
@@ -384,6 +404,7 @@ jobs:
           path: |
             mid-ecs-test-results.json
             mid-ecs-test-index.html
+            mid-ecs-ffi-smoke-raw.txt
           retention-days: 7
 
   deploy-results:
