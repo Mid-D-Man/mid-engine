@@ -75,6 +75,31 @@ impl Entity {
     pub fn generation(&self) -> u32 {
         self.0.generation()
     }
+
+    /// Packs this entity into a single `u64` for handing to non-Rust
+    /// code as one opaque, easy-to-pass-by-value handle — see
+    /// `mid_collections::GenerationalIndex::as_ffi`'s own doc comment
+    /// for the exact bit layout and the reasoning (grounded in
+    /// `slotmap::KeyData::as_ffi`'s real design). This is `ffi.rs`'s
+    /// whole reason for existing as a *thin* wrapper here: the real
+    /// packing logic lives in `mid_collections`, not duplicated.
+    #[inline]
+    pub fn as_ffi(self) -> u64 {
+        self.0.as_ffi()
+    }
+
+    /// Reconstructs an `Entity` from a `u64` produced by
+    /// [`as_ffi`](Self::as_ffi). Safe even for a bogus `value` that
+    /// never actually came from a real `as_ffi()` call — see
+    /// `GenerationalIndex::from_ffi`'s own doc comment for exactly why:
+    /// every real `World` operation re-validates the handle's
+    /// generation against the slot's current one regardless of where it
+    /// came from, so a bogus reconstructed `Entity` just reads back as
+    /// not alive, never as some other real, live entity.
+    #[inline]
+    pub fn from_ffi(value: u64) -> Self {
+        Self(GenerationalIndex::from_ffi(value))
+    }
 }
 
 impl SparseSetIndex for Entity {
@@ -704,5 +729,31 @@ mod tests {
         w.despawn(e);
         assert_eq!(w.get::<Health>(e), None);
         assert_eq!(w.get_static::<Mass>(e), None);
+    }
+
+    #[test]
+    fn entity_as_ffi_from_ffi_round_trips() {
+        let mut w = World::new();
+        let e = w.spawn();
+        let packed = e.as_ffi();
+        let unpacked = Entity::from_ffi(packed);
+        assert_eq!(unpacked, e);
+        assert!(w.is_alive(unpacked));
+    }
+
+    #[test]
+    fn entity_from_ffi_after_reuse_correctly_rejects_the_stale_packed_value() {
+        let mut w = World::new();
+        let e1 = w.spawn();
+        let packed_e1 = e1.as_ffi();
+        w.despawn(e1);
+        let e2 = w.spawn(); // reuses e1's slot
+
+        let reconstructed_stale = Entity::from_ffi(packed_e1);
+        assert!(
+            !w.is_alive(reconstructed_stale),
+            "a stale packed handle must not read as alive after its slot was reused"
+        );
+        assert!(w.is_alive(e2));
     }
 }

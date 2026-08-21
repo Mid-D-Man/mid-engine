@@ -95,6 +95,42 @@ impl GenerationalIndex {
     pub fn generation(&self) -> u32 {
         self.generation
     }
+
+    /// Packs this handle into a single `u64` — `index` in the low 32
+    /// bits, `generation` in the high 32 bits. For handing a handle to
+    /// non-Rust code as one opaque, easy-to-pass-by-value integer,
+    /// rather than a two-field struct every FFI caller's language would
+    /// need to agree on the layout of.
+    ///
+    /// Directly grounded in `slotmap::KeyData::as_ffi`/`from_ffi` (real
+    /// source, checked directly, not assumed) — same bit layout, same
+    /// reasoning, not independently invented. No guarantee about the
+    /// packed value's meaning beyond round-tripping through
+    /// [`from_ffi`](Self::from_ffi) — callers should treat it as opaque,
+    /// not parse the two halves out themselves.
+    #[inline]
+    pub fn as_ffi(self) -> u64 {
+        (u64::from(self.generation) << 32) | u64::from(self.index)
+    }
+
+    /// Reconstructs a handle from a `u64` produced by
+    /// [`as_ffi`](Self::as_ffi). If `value` didn't actually come from a
+    /// real `as_ffi()` call, this is still **safe** — it can only ever
+    /// produce *some* `GenerationalIndex`, and every real operation
+    /// (`GenerationalIndexAllocator::is_alive`/`deallocate`, or
+    /// anything built on top of it) validates the handle's generation
+    /// against the slot's real current one regardless of where the
+    /// handle came from. A bogus `value` just reads back as "not
+    /// alive" — it can never alias a real, live slot it wasn't actually
+    /// issued for. Same safety property `slotmap`'s own `from_ffi`
+    /// documents, not a new invariant introduced here.
+    #[inline]
+    pub fn from_ffi(value: u64) -> Self {
+        Self {
+            index: (value & 0xFFFF_FFFF) as u32,
+            generation: (value >> 32) as u32,
+        }
+    }
 }
 
 impl SparseSetIndex for GenerationalIndex {
@@ -456,6 +492,57 @@ mod tests {
         let mut a = GenerationalIndexAllocator::new();
         let k = a.allocate();
         assert_eq!(k.sparse_index(), k.index());
+    }
+
+    #[test]
+    fn as_ffi_from_ffi_round_trips() {
+        let mut a = GenerationalIndexAllocator::new();
+        let k = a.allocate();
+        let packed = k.as_ffi();
+        let unpacked = GenerationalIndex::from_ffi(packed);
+        assert_eq!(unpacked, k);
+        assert_eq!(unpacked.index(), k.index());
+        assert_eq!(unpacked.generation(), k.generation());
+    }
+
+    #[test]
+    fn as_ffi_round_trips_after_reuse_with_a_different_generation() {
+        let mut a = GenerationalIndexAllocator::new();
+        let first = a.allocate();
+        a.deallocate(first);
+        let second = a.allocate(); // same index, different generation
+
+        assert_eq!(GenerationalIndex::from_ffi(second.as_ffi()), second);
+        assert_ne!(
+            GenerationalIndex::from_ffi(first.as_ffi()),
+            second,
+            "the stale packed value must not round-trip into the live handle sharing its index"
+        );
+    }
+
+    #[test]
+    fn from_ffi_on_a_bogus_value_is_safe_and_reads_as_not_alive() {
+        // The actual point of from_ffi's safety contract: garbage in,
+        // no memory unsafety, and the allocator correctly reports it as
+        // dead rather than aliasing whatever real slot happens to share
+        // that raw index.
+        let mut a = GenerationalIndexAllocator::new();
+        let real = a.allocate();
+        assert!(a.is_alive(real));
+
+        let bogus = GenerationalIndex::from_ffi(0xDEAD_BEEF_0000_0000 | u64::from(real.index()));
+        assert_ne!(
+            bogus, real,
+            "a bogus generation must not coincidentally match the real one"
+        );
+        assert!(
+            !a.is_alive(bogus),
+            "a bogus handle must read as not alive, never as the real live one"
+        );
+        assert!(
+            a.is_alive(real),
+            "checking the bogus handle must not have disturbed the real one"
+        );
     }
 
     #[test]

@@ -158,9 +158,74 @@ far as local verification could go.
 `query.rs`'s eventual rayon-based parallel iteration will need the
 matching `#[cfg(not(target_arch = "wasm32"))]` split at the *code* level
 too, once it's actually built — not needed yet, it's still a stub. FFI
-work for `mid-ecs` (`ffi.rs`) is deliberately last in the build order —
-the FFI-span data structure design (`docs/mid-collections.md`'s "FFI
-wrapper" section) will inform it once that's reached.
+work for `mid-ecs` is no longer saved for the end — see the FFI section
+below for the real, incremental strategy and what's already built.
+
+## FFI — built incrementally as we go, not saved for the end
+
+The original plan deferred all FFI work until the ECS was otherwise
+"done." Revisited: `mid-ecs`'s whole reason for existing separately from
+being embedded directly in a monolithic engine is that its crates are
+meant to be genuinely usable from *any* game engine or language, at
+real performance — which means FFI correctness isn't a final coat of
+paint, it's a core requirement that needs proving as each real piece
+lands, the same way every other piece in this project has been proven
+as it was built rather than asserted afterward.
+
+**`World` lifecycle — real, tested, verified against actual compiled C.**
+`crates/mid-ecs/src/ffi.rs`: `mid_ecs_world_new`/`free`/`spawn`/
+`despawn`/`is_alive`/`entity_count`. Conventions copied directly from
+`mid-net`'s real, already-proven `ffi.rs` — `MidEcsStatus` codes,
+`ffi_guard`/`catch_unwind` on every function body, null-pointer checks
+before every dereference, `unsafe extern "C" fn` + `# Safety` docs,
+opaque heap handle for `World` (not `repr(C)` — nothing about it is
+C-representable).
+
+The one genuinely new piece: `Entity` can't cross the boundary as a
+Rust value (its fields are deliberately private — only `World::spawn`
+should ever produce one) and a two-field `repr(C)` struct would make
+every caller's language agree on a layout for no real benefit. Instead,
+`Entity::as_ffi`/`from_ffi` (thin wrappers over `mid_collections::
+GenerationalIndex::as_ffi`/`from_ffi`, which do the real packing) hand
+out one plain `u64` — directly grounded in `slotmap::KeyData::as_ffi`/
+`from_ffi`'s real, shipped design (checked directly, not assumed),
+including the property that matters most: reconstructing from a `u64`
+that never actually came from a real `as_ffi()` call is still *safe* —
+every `World` method re-validates the handle's generation against the
+slot's current one regardless of where the value came from, so a bogus
+handle just reads back as not alive. It can never alias a real, live
+entity it wasn't issued for. Proven directly, not just documented:
+`generational_index.rs`'s `from_ffi_on_a_bogus_value_is_safe_and_reads_as_not_alive`
+and `ffi.rs`'s `bogus_packed_entity_is_safe_and_reads_as_not_alive`
+both construct a genuinely bogus value and confirm exactly this.
+
+**Verified the same way `mid-net`'s FFI was — real gcc, real C, real
+memory, not just Rust-side `unsafe {}` blocks calling into themselves.**
+`crates/mid-ecs/ffi-smoke-test/{mid_ecs.h, test.c}`: hand-written header
+(matching `mid-net`'s own "hand-written, not cbindgen-generated, updated
+by hand alongside `ffi.rs`" convention), 19 real checks. Compiled with
+real gcc, linked against the real built `libmid_ecs.so` *and*
+`libmid_ecs.a` separately, both run, both 19/19 — including the stale-
+handle-after-slot-reuse case and the bogus-packed-`u64` case, proven
+through actual C memory, not simulated. `.github/workflows/
+mid-ecs-test.yml` now runs this on every CI trigger too, mirroring
+`mid-net-test.yml`'s own FFI smoke test step exactly.
+
+**Deliberately not covered yet, and why it's genuinely harder, not just
+more of the same:** reading component data (a `Position` column, say)
+from C. Every function in this pass either passes a value by-value or
+goes through an opaque handle with no live pointer into mutable interior
+storage — nothing here has to reason about a pointer that a *later*
+call could invalidate. Component data lives in `Vec<T>` columns
+(`SparseShell`'s `SparseSet`s, `Archetypes`' `Table`s) that `insert`/
+`remove`/migration can reallocate or move out from under a previously
+handed-out pointer. This is what the "FFI span" idea
+(`docs/mid-collections.md`'s FFI wrapper section) is actually for — a
+real design question, not a naming exercise, and not attempted in this
+pass. Next real FFI increment, once its safety contract (most likely:
+short-lived, explicitly invalidated-by-any-mutating-call, matching how
+`Vec::as_ptr()` itself already works and callers already have to know)
+is actually worked out rather than assumed.
 
 ## The Hybrid ECS Architecture: Static Core, Dynamic Shell
 
