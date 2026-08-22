@@ -52,11 +52,14 @@ on:
       wide_type:
         description: >
           Which wide-int type(s) to bench, via a criterion name filter.
-          all = every group in vs_wide_int.rs (i32x4/u32x4/i16x8/u16x8/
-          i8x16/u8x16 + bulk_entity_id_scan + bulk_u8_sum). Picking one
-          type also picks up any bulk_* case that names it (e.g. i32x4
-          catches bulk_entity_id_scan's i32x4_find_id row). The new AVX2
-          types (i32x8 etc.) have no bench coverage yet — not listed.
+          all = every group in vs_wide_int.rs. Picking a type also picks
+          up any bulk_* case that names it (e.g. i32x4 catches
+          bulk_entity_id_scan's i32x4_find_id row). i32x8/u32x8/i16x16/
+          u16x16/i8x32/u8x32 only run — and only exist to select — when
+          target_cpu is native/x86-64-v3/x86-64-v4 (they need
+          target_feature=avx2 to compile at all; picking one of these
+          with target_cpu=scalar/x86-64/x86-64-v2/neon/wasm will just
+          match nothing, not fail).
         required: true
         default: 'all'
         type: choice
@@ -68,6 +71,12 @@ on:
           - u16x8
           - i8x16
           - u8x16
+          - i32x8
+          - u32x8
+          - i16x16
+          - u16x16
+          - i8x32
+          - u8x32
 
 env:
   CARGO_TERM_COLOR: never
