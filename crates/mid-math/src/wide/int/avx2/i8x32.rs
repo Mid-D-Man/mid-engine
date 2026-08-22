@@ -5,16 +5,17 @@
 //! `_mm256_min_epi8`/`_mm256_max_epi8`/`_mm256_abs_epi8` (SSE2 had none
 //! of these — SSE2's i8x16 needed cmplt+blend for both abs and min/max).
 //!
-//! Deliberately omits sse2/i8x16.rs's `shuffle_bytes` (SSSE3
-//! `_mm_shuffle_epi8`) and `as_i16x8_lo`/`as_i16x8_hi` widening: AVX2's
-//! `_mm256_shuffle_epi8`/`_mm256_unpacklo_epi8`/`_mm256_unpackhi_epi8`
-//! all operate PER 128-BIT LANE, not across the full 32 bytes — a direct
-//! port would silently restrict shuffle indices to their own 16-byte
-//! half and scramble the widen split (lanes [0..8)+[16..24) instead of
-//! [0..16)), which is a correctness bug, not a style choice. Doing this
-//! right needs an explicit lane-fixup (`_mm256_permute4x64_epi64` or
-//! `_mm256_permute2x128_si256`) that I didn't want to ship without being
-//! able to compile-check it here — flagging as a follow-up.
+//! `as_i16x16_lo`/`as_i16x16_hi` sign-extend via the dedicated
+//! `_mm256_cvtepi8_epi16` widen instruction — not a shuffle, so no
+//! per-128-bit-lane cross-lane hazard (see i16x16.rs's module docs).
+//!
+//! `shuffle_bytes` uses `_mm256_shuffle_epi8` directly. That genuinely
+//! IS per-128-bit-lane (it's a real shuffle, unlike the cvt widen
+//! instructions above) — documented explicitly on the method itself
+//! rather than silently ported as if it behaved like a flat 32-byte
+//! shuffle. See `to_i8x16_pair`/`from_i8x16_pair` below for splitting
+//! into two independently-shuffleable `sse2::i8x16` halves if a true
+//! cross-half shuffle is ever needed.
 //!
 //! No multiply, same as sse2/i8x16.rs — no native 8-bit SIMD multiply on
 //! x86 (SSE2 or AVX2). No shift, same as sse2/i8x16.rs — no byte-granularity
@@ -74,6 +75,65 @@ impl i8x32 {
     #[inline(always)]
     pub fn to_bytes(self) -> [u8; 32] {
         unsafe { let mut a=[0u8;32]; _mm256_storeu_si256(a.as_mut_ptr() as *mut __m256i, self.0); a }
+    }
+
+    /// Sign-extend the low 16 lanes (indices 0-15) to `i16x16`.
+    /// AVX2 native `_mm256_cvtepi8_epi16` — a dedicated widen
+    /// instruction, not a shuffle, so no cross-lane hazard.
+    #[inline(always)]
+    pub fn as_i16x16_lo(self) -> super::i16x16::i16x16 {
+        unsafe {
+            let lo_128 = _mm256_castsi256_si128(self.0);
+            super::i16x16::i16x16(_mm256_cvtepi8_epi16(lo_128))
+        }
+    }
+    /// Sign-extend the high 16 lanes (indices 16-31) to `i16x16`.
+    #[inline(always)]
+    pub fn as_i16x16_hi(self) -> super::i16x16::i16x16 {
+        unsafe {
+            let hi_128 = _mm256_extracti128_si256::<1>(self.0);
+            super::i16x16::i16x16(_mm256_cvtepi8_epi16(hi_128))
+        }
+    }
+
+    /// Split into two `sse2::i8x16` halves (low 16 bytes, high 16 bytes).
+    /// Use this to run `sse2::i8x16::shuffle_bytes` independently on each
+    /// half if you need indices that logically reach across the 32-byte
+    /// boundary — a single `_mm256_shuffle_epi8` call can't do that (see
+    /// this file's `shuffle_bytes` and the module docs).
+    #[inline(always)]
+    pub fn to_i8x16_pair(self) -> (super::super::sse2::i8x16::i8x16, super::super::sse2::i8x16::i8x16) {
+        unsafe {
+            let lo = _mm256_castsi256_si128(self.0);
+            let hi = _mm256_extracti128_si256::<1>(self.0);
+            (
+                super::super::sse2::i8x16::i8x16(lo),
+                super::super::sse2::i8x16::i8x16(hi),
+            )
+        }
+    }
+    /// Combine two `sse2::i8x16` halves back into one `i8x32` (inverse of `to_i8x16_pair`).
+    #[inline(always)]
+    pub fn from_i8x16_pair(lo: super::super::sse2::i8x16::i8x16, hi: super::super::sse2::i8x16::i8x16) -> Self {
+        unsafe {
+            let joined = _mm256_set_m128i(hi.0, lo.0);
+            Self(joined)
+        }
+    }
+
+    /// Byte shuffle **within each 16-byte half independently** —
+    /// `_mm256_shuffle_epi8` is a per-128-bit-lane instruction, NOT a
+    /// full 32-byte cross-lane shuffle. An index byte `i` in `[0,15]`
+    /// selects byte `i` of the LOW half for output bytes 0-15, and
+    /// selects byte `i` of the HIGH half for output bytes 16-31 (i.e.
+    /// each half only ever draws from its own 16 source bytes — an
+    /// index of, say, 20 in the low half's output position does NOT
+    /// reach into the high half). Index bytes with the high bit set
+    /// zero that output byte, same as SSE2's `_mm_shuffle_epi8`. If you
+    /// need a true cross-half shuffle, split via `to_i8x16_pair` first.
+    #[inline(always)]
+    pub fn shuffle_bytes(self, indices: Self) -> Self {
+        Self(unsafe { _mm256_shuffle_epi8(self.0, indices.0) })
     }
 
     #[inline]

@@ -174,6 +174,12 @@ pub use wide::int::{IMask4, IMask8, IMask16};
 #[allow(non_camel_case_types)]
 pub use wide::int::{i32x4, u32x4, i16x8, u16x8, i8x16, u8x16};
 
+#[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), target_feature = "avx2"))]
+pub use wide::int::{IMask32x8, IMask16x16, IMask8x32};
+#[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), target_feature = "avx2"))]
+#[allow(non_camel_case_types)]
+pub use wide::int::{i32x8, u32x8, i16x16, u16x16, i8x32, u8x32};
+
 // ── Wide SIMD — float ─────────────────────────────────────────────────────────
 pub use wide::float::{Mask4, Mask4LaneIter};
 #[allow(non_camel_case_types)]

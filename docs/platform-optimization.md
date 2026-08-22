@@ -340,28 +340,65 @@ none of these exist in SSE2, which emulates each via a
 compare+blend or shuffle/unpack chain. The AVX2 tier is therefore
 simpler code in several places, not just wider.
 
-### Known omission — cross-lane ops
+### Cross-lane fix (this pass)
 
-`_mm256_shuffle_epi8`/`_mm256_unpacklo_epi8`/`_mm256_unpackhi_epi8` (and
-the 16-bit equivalents) operate **per 128-bit lane**, not across the full
-256 bits. SSE2's `i8x16::shuffle_bytes` and the `as_i16x8_lo`/`as_i16x8_hi`
-sign-extend-widen methods were deliberately **not** ported to the AVX2
-i8x32/i16x16 types this pass — a naive port would silently scope shuffle
-indices to the wrong 16-byte half and scramble the widen split. Needs an
-explicit `_mm256_permute2x128_si256` lane-fixup; deferred until it can be
-compile-checked (no local Rust toolchain in the pass that wrote this).
+`as_i32x8_lo`/`as_i32x8_hi` (i16x16→i32x8), `as_i16x16_lo`/`as_i16x16_hi`
+(i8x32→i16x16), and their unsigned equivalents are now implemented —
+turns out the permute-based lane-fixup flagged as a follow-up wasn't
+needed at all. AVX2 has dedicated widen/convert instructions
+(`_mm256_cvtepi16_epi32`, `_mm256_cvtepi8_epi16`, and the `epu` unsigned
+variants) that aren't shuffles in the first place, so the per-128-bit-lane
+hazard that affects `unpacklo`/`unpackhi`/`shuffle_epi8` doesn't apply to
+them — extract each 128-bit half (`_mm256_castsi256_si128` /
+`_mm256_extracti128_si256`) and convert it directly.
+
+`shuffle_bytes` (i8x32/u8x32) uses `_mm256_shuffle_epi8` directly. That
+one genuinely IS per-128-bit-lane — it's a real shuffle, not a widen —
+so it's documented on the method itself with the real (correct, just
+scoped) semantics rather than faked into looking like a flat 32-byte
+shuffle. `to_i8x16_pair`/`from_i8x16_pair` (and the `u8x16` equivalents)
+are provided for splitting into two independently-shuffleable SSE2
+halves if a true cross-half shuffle is ever needed.
+
+### Bench comparison targets
+
+Investigated whether nalgebra/ultraviolet have anything comparable to
+bench wide-int against, alongside glam and the `wide` crate (new dev-dep
+this pass, version 1.6):
+- **ultraviolet**: checked its published `int.rs` directly — only narrow
+  `IVec2/3/4`/`UVec2/3/4`, same category as glam. Its `x4`/`x8` wide
+  concept is float-only (`Vec3x4`/`Vec3x8` rotor batch types).
+- **nalgebra**: SIMD goes through `simba`. `simba`'s `wide`-crate
+  integration (`WideF32x4` etc.) is float-only. Integer SIMD in `simba`
+  exists only behind Rust's nightly `#![feature(portable_simd)]` —
+  incompatible with this project's stable-only toolchain.
+- **`wide` crate itself**: the actual apples-to-apples comparison —
+  same concept as mid-math's wide/int (N packed scalar lanes), covers
+  every width mid-math has plus i64/u64 lanes mid-math doesn't have yet.
+  Added as a dev-dependency; `vs_wide_int.rs` now benches against it
+  alongside glam for ops verified against its published source (`add`,
+  `sub`, `mul`, `min`, `max`, `abs`, `saturating_add`, `saturating_sub`)
+  — its shift and equality-comparison calling conventions weren't
+  verified confidently enough to bench against blind.
 
 ### Bench coverage
 
-`crates/mid-math/benches/vs_wide_int.rs` covers the SSE2/NEON/scalar
-6-type family (i32x4/u32x4/i16x8/u16x8/i8x16/u8x16) plus two bulk
-ECS-shaped workloads (`bulk_entity_id_scan`, `bulk_u8_sum`). The new AVX2
-types (i32x8 etc.) have **no bench coverage yet** — follow-up.
+`crates/mid-math/benches/vs_wide_int.rs` now covers all 12 wide-int
+types: the SSE2/NEON/scalar 6-type family (i32x4/u32x4/i16x8/u16x8/
+i8x16/u8x16, vs glam + `wide`) plus the AVX2 6-type family (i32x8/
+u32x8/i16x16/u16x16/i8x32/u8x32, vs `wide` only — no glam equivalent
+exists at these widths), plus two bulk ECS-shaped workloads
+(`bulk_entity_id_scan`, `bulk_u8_sum`). The AVX2 bench functions are
+`#[cfg(target_feature = "avx2")]`-gated and called through a small
+always-present dispatch wrapper so `criterion_group!` doesn't need a
+conditionally-assembled function list.
 
-`.github/workflows/bench-vs-wide-int.yml` gained the same `target_cpu`
+`.github/workflows/bench-vs-wide-int.yml` has the same `target_cpu`
 platform-firing dropdown as `A-mid-math — bench vs all`
 (native/x86-64-v4/x86-64-v3/x86-64-v2/x86-64/neon/wasm/scalar) plus a
-`wide_type` dropdown (`all` or one of the 6 covered types, mapped to a
-criterion name filter) this pass. `wasm` currently exercises the scalar
-fallback cross-compiled to wasm32 — no WASM SIMD128 backend exists for
-wide/int yet (see above).
+`wide_type` dropdown covering all 12 types (mapped to a criterion name
+filter). Selecting an AVX2 type with a non-AVX2 target_cpu just matches
+nothing (criterion doesn't error on an empty filter match) — documented
+in the dropdown description rather than added as extra yml logic.
+`wasm` currently exercises the scalar fallback cross-compiled to
+wasm32 — no WASM SIMD128 backend exists for wide/int yet (see above).

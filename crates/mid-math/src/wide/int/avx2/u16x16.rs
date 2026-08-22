@@ -6,6 +6,11 @@
 //! the XOR-sign-flip cmpgt + blend trick (see sse2/u16x8.rs's
 //! `ucmpgt_u16`). That trick is still needed here for `cmpgt` itself
 //! (no native unsigned compare in AVX2, same gap as SSE2).
+//!
+//! `as_u32x8_lo`/`as_u32x8_hi` zero-extend via the dedicated
+//! `_mm256_cvtepu16_epi32` widen instruction — not a shuffle, so no
+//! per-128-bit-lane cross-lane hazard (see i16x16.rs's module docs for
+//! the general explanation of why that hazard doesn't apply here).
 
 #![allow(non_camel_case_types)]
 
@@ -67,6 +72,23 @@ impl u16x16 {
     pub fn get(self, i: usize) -> u16 {
         assert!(i < 16, "u16x16::get — lane {i} out of bounds (max 15)");
         unsafe { UnionCast { v: self }.u[i] }
+    }
+
+    /// Zero-extend the low 8 lanes (indices 0-7) to `u32x8`.
+    #[inline(always)]
+    pub fn as_u32x8_lo(self) -> super::u32x8::u32x8 {
+        unsafe {
+            let lo_128 = _mm256_castsi256_si128(self.0);
+            super::u32x8::u32x8(_mm256_cvtepu16_epi32(lo_128))
+        }
+    }
+    /// Zero-extend the high 8 lanes (indices 8-15) to `u32x8`.
+    #[inline(always)]
+    pub fn as_u32x8_hi(self) -> super::u32x8::u32x8 {
+        unsafe {
+            let hi_128 = _mm256_extracti128_si256::<1>(self.0);
+            super::u32x8::u32x8(_mm256_cvtepu16_epi32(hi_128))
+        }
     }
 
     /// Per-lane minimum. AVX2 native `_mm256_min_epu16`.

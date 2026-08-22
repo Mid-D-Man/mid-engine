@@ -5,16 +5,12 @@
 //! (add/sub/cmp/min/max/mul/shift/saturating) so widening from the SSE2
 //! 128-bit forms is direct — no cross-lane shuffle involved.
 //!
-//! Deliberately omits `as_i32x8_lo`/`as_i32x8_hi`/`pack_i32x8` widen/pack
-//! bridges that sse2/i16x8.rs has (`as_i32x4_lo`/`as_i32x4_hi`/
-//! `pack_i32x4`): AVX2's `_mm256_unpacklo_epi16`/`_mm256_unpackhi_epi16`
-//! operate PER 128-BIT LANE, not across the full 256 bits — a naive port
-//! of the SSE2 sign-extend-via-unpack trick would silently interleave
-//! lanes [0..4) with [8..12) instead of [0..8) with [8..16), which is a
-//! correctness bug, not a style choice. Doing this right needs an extra
-//! `_mm256_permute4x64_epi64` lane-fixup that I didn't want to ship
-//! without being able to compile-check it here — flagging as a follow-up
-//! rather than guessing.
+//! `as_i32x8_lo`/`as_i32x8_hi` sign-extend to `i32x8` via the dedicated
+//! `_mm256_cvtepi16_epi32` widen instruction — NOT the `unpacklo`/
+//! `unpackhi` shuffle trick sse2/i16x8.rs uses (that trick IS a
+//! per-128-bit-lane hazard on AVX2; the dedicated convert instruction
+//! isn't a shuffle at all, so it sidesteps the hazard entirely rather
+//! than needing a permute fixup).
 
 #![allow(non_camel_case_types)]
 
@@ -72,6 +68,25 @@ impl i16x16 {
     /// Absolute value per lane. AVX2 native `_mm256_abs_epi16`.
     #[inline(always)]
     pub fn abs(self) -> Self { Self(unsafe { _mm256_abs_epi16(self.0) }) }
+
+    /// Sign-extend the low 8 lanes (indices 0-7) to `i32x8`.
+    /// AVX2 native `_mm256_cvtepi16_epi32` — a dedicated widen
+    /// instruction, not a shuffle, so no cross-lane hazard (see module docs).
+    #[inline(always)]
+    pub fn as_i32x8_lo(self) -> super::i32x8::i32x8 {
+        unsafe {
+            let lo_128 = _mm256_castsi256_si128(self.0);
+            super::i32x8::i32x8(_mm256_cvtepi16_epi32(lo_128))
+        }
+    }
+    /// Sign-extend the high 8 lanes (indices 8-15) to `i32x8`.
+    #[inline(always)]
+    pub fn as_i32x8_hi(self) -> super::i32x8::i32x8 {
+        unsafe {
+            let hi_128 = _mm256_extracti128_si256::<1>(self.0);
+            super::i32x8::i32x8(_mm256_cvtepi16_epi32(hi_128))
+        }
+    }
 
     #[inline(always)] pub fn min(self, rhs: Self) -> Self { Self(unsafe{_mm256_min_epi16(self.0,rhs.0)}) }
     #[inline(always)] pub fn max(self, rhs: Self) -> Self { Self(unsafe{_mm256_max_epi16(self.0,rhs.0)}) }

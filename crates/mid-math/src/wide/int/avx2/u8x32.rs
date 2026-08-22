@@ -12,9 +12,12 @@
 //! independently per 8-byte group and simply produces four 64-bit
 //! partial sums instead of SSE2's two, extracted via `_mm256_extract_epi64`.
 //!
-//! Deliberately omits `shuffle_bytes` (SSSE3 `_mm_shuffle_epi8`) and
-//! `as_u16x8_lo`/`as_u16x8_hi` widening — same per-128-bit-lane
-//! correctness hazard as i8x32.rs, see that file's header for detail.
+//! `as_u16x16_lo`/`as_u16x16_hi` zero-extend via `_mm256_cvtepu8_epi16`
+//! (dedicated widen instruction, no cross-lane hazard) and
+//! `shuffle_bytes`/`to_i8x16_pair`-equivalent (`to_u8x16_pair`) are
+//! implemented the same way as i8x32.rs — see that file's header for
+//! the full reasoning on why the widen is safe but shuffle_bytes stays
+//! scoped per-16-byte-half.
 //!
 //! No multiply, same as sse2/u8x16.rs — no native 8-bit SIMD multiply.
 
@@ -71,6 +74,50 @@ impl u8x32 {
     #[inline(always)]
     pub fn to_array(self) -> [u8; 32] {
         unsafe { let mut a=[0u8;32]; _mm256_storeu_si256(a.as_mut_ptr() as *mut __m256i, self.0); a }
+    }
+
+    /// Zero-extend the low 16 lanes (indices 0-15) to `u16x16`.
+    #[inline(always)]
+    pub fn as_u16x16_lo(self) -> super::u16x16::u16x16 {
+        unsafe {
+            let lo_128 = _mm256_castsi256_si128(self.0);
+            super::u16x16::u16x16(_mm256_cvtepu8_epi16(lo_128))
+        }
+    }
+    /// Zero-extend the high 16 lanes (indices 16-31) to `u16x16`.
+    #[inline(always)]
+    pub fn as_u16x16_hi(self) -> super::u16x16::u16x16 {
+        unsafe {
+            let hi_128 = _mm256_extracti128_si256::<1>(self.0);
+            super::u16x16::u16x16(_mm256_cvtepu8_epi16(hi_128))
+        }
+    }
+
+    /// Split into two `sse2::u8x16` halves. See i8x32.rs's
+    /// `to_i8x16_pair` — same reasoning, unsigned lanes.
+    #[inline(always)]
+    pub fn to_u8x16_pair(self) -> (super::super::sse2::u8x16::u8x16, super::super::sse2::u8x16::u8x16) {
+        unsafe {
+            let lo = _mm256_castsi256_si128(self.0);
+            let hi = _mm256_extracti128_si256::<1>(self.0);
+            (
+                super::super::sse2::u8x16::u8x16(lo),
+                super::super::sse2::u8x16::u8x16(hi),
+            )
+        }
+    }
+    /// Inverse of `to_u8x16_pair`.
+    #[inline(always)]
+    pub fn from_u8x16_pair(lo: super::super::sse2::u8x16::u8x16, hi: super::super::sse2::u8x16::u8x16) -> Self {
+        unsafe { Self(_mm256_set_m128i(hi.0, lo.0)) }
+    }
+
+    /// Byte shuffle within each 16-byte half independently. See
+    /// i8x32.rs's `shuffle_bytes` doc comment — identical semantics,
+    /// unsigned lanes.
+    #[inline(always)]
+    pub fn shuffle_bytes(self, indices: super::i8x32::i8x32) -> Self {
+        Self(unsafe { _mm256_shuffle_epi8(self.0, indices.0) })
     }
 
     #[inline]
