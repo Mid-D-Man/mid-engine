@@ -31,7 +31,7 @@
 //! the per-op advantage table and this pass's known omissions.
 //!
 //! WASM (same widths as SSE2/NEON, mirrors `wide/float/wasm/`) is
-//! landing in a follow-up pass — see docs/mid-math.md.
+//! landing in a follow-up pass — see docs/platform-optimization.md §9.
 
 // ── Scalar fallback — always compiled ────────────────────────────────────────
 pub(crate) mod scalar;

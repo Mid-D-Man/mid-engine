@@ -312,3 +312,56 @@ Need to optimize a hot path?
 │   └─ No → Not worth the maintenance cost. Close the PR.
 │
 └─ Add benchmark comment, Step Summary, run --mid-all, merge.
+---
+
+## 9. Wide Integer SIMD (`wide/int/`)
+
+Tracks `crates/mid-math/src/wide/int/` specifically — batch integer types
+(`i32x4`, `u32x4`, `i16x8`, `u16x8`, `i8x16`, `u8x16` and the AVX2
+additions below), not the narrow per-component vectors (`IVec4` etc.,
+which stay scalar-only, matching glam's own convention — see Section 4
+for why that split exists).
+
+### Platform matrix
+
+| Backend | Target                        | Types                                                    | Status |
+|---------|-------------------------------|-----------------------------------------------------------|--------|
+| SSE2    | x86 / x86_64                  | i32x4, u32x4, i16x8, u16x8, i8x16, u8x16, IMask4/8/16     | ✅ |
+| NEON    | aarch64                       | i32x4, u32x4, i16x8, u16x8, i8x16, u8x16, IMask4/8/16     | ✅ fixed — was implemented but not wired into dispatch, silently falling back to scalar |
+| AVX2    | x86 / x86_64 + avx2 feature   | i32x8, u32x8, i16x16, u16x16, i8x32, u8x32, IMask32x8/16x16/8x32 | ✅ additive, not a replacement — same relationship as `Vec3x8` to `Vec3x4` |
+| WASM    | wasm32/64 + simd128 feature   | i32x4, u32x4, i16x8, u16x8, i8x16, u8x16                 | ⬜ not started |
+| Scalar  | all others                    | i32x4, u32x4, i16x8, u16x8, i8x16, u8x16, IMask4/8/16     | ✅ |
+
+### AVX2 native wins over SSE2
+
+AVX2 has native `_mm256_min/max_epi32`, `_mm256_min/max_epu32`,
+`_mm256_min/max_epu16`, `_mm256_mullo_epi32`, `_mm256_abs_epi8/16/32` —
+none of these exist in SSE2, which emulates each via a
+compare+blend or shuffle/unpack chain. The AVX2 tier is therefore
+simpler code in several places, not just wider.
+
+### Known omission — cross-lane ops
+
+`_mm256_shuffle_epi8`/`_mm256_unpacklo_epi8`/`_mm256_unpackhi_epi8` (and
+the 16-bit equivalents) operate **per 128-bit lane**, not across the full
+256 bits. SSE2's `i8x16::shuffle_bytes` and the `as_i16x8_lo`/`as_i16x8_hi`
+sign-extend-widen methods were deliberately **not** ported to the AVX2
+i8x32/i16x16 types this pass — a naive port would silently scope shuffle
+indices to the wrong 16-byte half and scramble the widen split. Needs an
+explicit `_mm256_permute2x128_si256` lane-fixup; deferred until it can be
+compile-checked (no local Rust toolchain in the pass that wrote this).
+
+### Bench coverage
+
+`crates/mid-math/benches/vs_wide_int.rs` covers the SSE2/NEON/scalar
+6-type family (i32x4/u32x4/i16x8/u16x8/i8x16/u8x16) plus two bulk
+ECS-shaped workloads (`bulk_entity_id_scan`, `bulk_u8_sum`). The new AVX2
+types (i32x8 etc.) have **no bench coverage yet** — follow-up.
+
+`.github/workflows/bench-vs-wide-int.yml` gained the same `target_cpu`
+platform-firing dropdown as `A-mid-math — bench vs all`
+(native/x86-64-v4/x86-64-v3/x86-64-v2/x86-64/neon/wasm/scalar) plus a
+`wide_type` dropdown (`all` or one of the 6 covered types, mapped to a
+criterion name filter) this pass. `wasm` currently exercises the scalar
+fallback cross-compiled to wasm32 — no WASM SIMD128 backend exists for
+wide/int yet (see above).
