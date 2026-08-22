@@ -105,7 +105,7 @@ use zerocopy::{FromBytes, Immutable, IntoBytes, KnownLayout};
 /// count. The "FFI span" wire shape -- see this module's doc comment
 /// for the full design and its safety contract.
 #[repr(C)]
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FfiSpan {
     pub ptr: *const u8,
     pub stride: usize,

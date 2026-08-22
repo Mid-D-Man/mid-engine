@@ -33,10 +33,11 @@
 
 use std::fmt;
 
-use mid_collections::{GenerationalIndex, GenerationalIndexAllocator, SparseSetIndex};
+use mid_collections::{FfiSpan, GenerationalIndex, GenerationalIndexAllocator, SparseSetIndex};
+use zerocopy::{Immutable, IntoBytes, KnownLayout};
 
 use crate::archetype::Archetypes;
-use crate::component::SparseShell;
+use crate::component::{ComponentId, SparseShell};
 
 /// A handle to an entity. Detects its own staleness after despawn — a
 /// thin wrapper over `mid_collections::GenerationalIndex`, not a
@@ -243,6 +244,40 @@ impl World {
     #[inline]
     pub fn has<T: 'static>(&self, entity: Entity) -> bool {
         self.is_alive(entity) && self.components.has::<T>(entity)
+    }
+
+    /// Opts `T` into FFI span exposure under `name`, for the Sparse
+    /// Shell — thin wrapper over `SparseShell::register_ffi`, which
+    /// carries the full design reasoning (why this is generic and has
+    /// to be called from Rust, why the extra `IntoBytes`/`Immutable`/
+    /// `KnownLayout` bounds don't apply to every component type in the
+    /// shell, just this one).
+    pub fn register_ffi_component<T>(&mut self, name: &'static str) -> ComponentId
+    where
+        T: 'static + IntoBytes + Immutable + KnownLayout,
+    {
+        self.components.register_ffi::<T>(name)
+    }
+
+    /// Non-generic, `ComponentId`-keyed raw span over every currently-
+    /// attached instance of a Sparse-Shell component type — thin
+    /// wrapper over `SparseShell::raw_span`. `None` if `id` doesn't
+    /// exist or was never opted in via
+    /// [`Self::register_ffi_component`]. See `SparseShell::raw_span`'s
+    /// own doc comment for the entity-correlation gap this doesn't
+    /// close yet, and `mid_collections::FfiSpan`'s own doc comment for
+    /// the invalidation contract the caller has to honor.
+    pub fn component_raw_span(&self, id: ComponentId) -> Option<FfiSpan> {
+        self.components.raw_span(id)
+    }
+
+    /// Looks up the `ComponentId` a Sparse-Shell type was registered
+    /// under via [`Self::register_ffi_component`], by name — thin
+    /// wrapper over `SparseShell::lookup_ffi_id`. This is how a C
+    /// caller, which has no way to name a Rust type directly, actually
+    /// obtains a `ComponentId` at all.
+    pub fn lookup_ffi_component_id(&self, name: &str) -> Option<ComponentId> {
+        self.components.lookup_ffi_id(name)
     }
 
     /// Attaches `component` to `entity` as an **archetype-tracked**
@@ -755,5 +790,44 @@ mod tests {
             "a stale packed handle must not read as alive after its slot was reused"
         );
         assert!(w.is_alive(e2));
+    }
+
+    #[derive(Debug, Clone, Copy, PartialEq, IntoBytes, KnownLayout, Immutable)]
+    #[repr(C)]
+    struct FfiHealth {
+        hp: u32,
+    }
+
+    #[test]
+    fn register_ffi_component_then_span_reflects_attached_values() {
+        let mut w = World::new();
+        let id = w.register_ffi_component::<FfiHealth>("FfiHealth");
+        let e1 = w.spawn();
+        let e2 = w.spawn();
+        w.insert(e1, FfiHealth { hp: 10 });
+        w.insert(e2, FfiHealth { hp: 20 });
+
+        let span = w.component_raw_span(id).expect("registered and populated");
+        assert_eq!(span.count, 2);
+        // SAFETY: span points at World's own live storage, unmutated
+        // since the calls above.
+        let values =
+            unsafe { core::slice::from_raw_parts(span.ptr.cast::<FfiHealth>(), span.count) };
+        assert_eq!(values[0], FfiHealth { hp: 10 });
+        assert_eq!(values[1], FfiHealth { hp: 20 });
+    }
+
+    #[test]
+    fn component_raw_span_on_never_registered_id_is_none() {
+        let w = World::new();
+        assert_eq!(w.component_raw_span(ComponentId(0)), None);
+    }
+
+    #[test]
+    fn lookup_ffi_component_id_round_trips_through_world() {
+        let mut w = World::new();
+        let id = w.register_ffi_component::<FfiHealth>("FfiHealth");
+        assert_eq!(w.lookup_ffi_component_id("FfiHealth"), Some(id));
+        assert_eq!(w.lookup_ffi_component_id("NeverRegistered"), None);
     }
 }

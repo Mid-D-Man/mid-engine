@@ -285,6 +285,18 @@ impl<I: SparseSetIndex, T> SparseSet<I, T> {
         self.dense_values.iter()
     }
 
+    /// The same contiguous, no-gaps dense storage `values()` iterates
+    /// over, as a real `&[T]` slice rather than an iterator. Added
+    /// alongside the FFI span mechanism (`mid_collections::FfiSpan`,
+    /// behind the `ffi` feature) — `FfiSpan::from_slice` needs an
+    /// actual slice to read a pointer/length from; an opaque
+    /// `impl Iterator` has neither. Not feature-gated itself (unlike
+    /// `ffi_span`): a `&[T]` is a completely ordinary, zero-cost thing
+    /// to expose regardless of whether any FFI consumer ever uses it.
+    pub fn values_slice(&self) -> &[T] {
+        &self.dense_values
+    }
+
     /// Iterates every live value by mutable reference.
     pub fn values_mut(&mut self) -> impl Iterator<Item = &mut T> + '_ {
         self.dense_values.iter_mut()
@@ -498,6 +510,29 @@ mod tests {
         // Reinserting after clear must behave like a fresh insert.
         assert_eq!(s.insert(2, 99), None);
         assert_eq!(s.get(2), Some(&99));
+    }
+
+    #[test]
+    fn values_slice_matches_values_iterator_exactly() {
+        let mut s = SparseSet::new();
+        s.insert(1u32, 1);
+        s.insert(2u32, 2);
+        s.insert(3u32, 3);
+        s.remove(2);
+
+        let from_iter: Vec<_> = s.values().copied().collect();
+        assert_eq!(s.values_slice(), from_iter.as_slice());
+        assert_eq!(
+            s.values_slice().len(),
+            2,
+            "no gap/tombstone left where the removed element was"
+        );
+    }
+
+    #[test]
+    fn values_slice_on_empty_set_is_an_empty_slice_not_a_panic() {
+        let s: SparseSet<u32, i32> = SparseSet::new();
+        assert!(s.values_slice().is_empty());
     }
 
     #[test]

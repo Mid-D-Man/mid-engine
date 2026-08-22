@@ -8,7 +8,14 @@ name = "mid_ecs"
 crate-type = ["lib", "cdylib", "staticlib"]
 
 [dependencies]
-mid-collections = { path = "../mid-collections" }
+# `features = ["ffi"]`: pulls in `zerocopy` transitively, needed for
+# `component.rs`'s new `register_ffi`/`raw_span` (the FFI-span
+# mechanism, see docs/mid-collections.md and docs/mid-ecs.md's FFI
+# sections). mid-ecs's own `ffi.rs` module is always compiled (not
+# feature-gated), so this is unconditional too, rather than adding a
+# second, redundant `ffi` feature flag on mid-ecs itself.
+mid-collections = { path = "../mid-collections", features = ["ffi"] }
+zerocopy = { version = "0.8.56", features = ["derive"] }
 
 # rayon and its whole transitive tree (crossbeam-deque/epoch/utils, either,
 # rayon-core) depend on real OS threads, which wasm32-unknown-unknown

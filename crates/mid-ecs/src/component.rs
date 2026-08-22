@@ -58,9 +58,27 @@
 use std::any::{Any, TypeId};
 use std::collections::HashMap;
 
-use mid_collections::{SparseSet, SparseSetIndex};
+use mid_collections::{FfiSpan, SparseSet, SparseSetIndex};
+use zerocopy::{Immutable, IntoBytes, KnownLayout};
 
 use crate::world::Entity;
+
+/// Type-erased accessor for reading a registered component column as a
+/// raw [`FfiSpan`], without the caller needing to know the concrete
+/// component type. A plain function pointer (not a trait object) --
+/// monomorphized once per `T` at [`SparseShell::register_ffi`] time,
+/// where `T` *is* known generically, then called later purely by
+/// [`ComponentId`]. This is what makes a non-generic, `extern "C"`-
+/// compatible span accessor possible at all in stable Rust, without
+/// trait specialization (still unstable): the base [`ComponentColumn`]
+/// trait deliberately does *not* require `IntoBytes`/`Immutable` on
+/// every `T` ever used with [`SparseShell`] -- that would force every
+/// component type in the whole crate (including plain Rust-only types
+/// with no FFI intent, like a hypothetical `Name(String)`) to be
+/// zerocopy-compatible, which is a real, unnecessary restriction the
+/// existing test types (`Position`/`Velocity`, no `#[repr(C)]`) already
+/// wouldn't satisfy. Opting a type in is explicit and per-type instead.
+type FfiSpanAccessor = fn(&dyn Any) -> FfiSpan;
 
 /// Dense identifier for a registered component type within one
 /// [`SparseShell`]. **Not** the same thing as `TypeId` — see this
@@ -107,6 +125,15 @@ pub struct SparseShell {
     component_ids: HashMap<TypeId, ComponentId>,
     columns: SparseSet<ComponentId, Box<dyn ComponentColumn>>,
     next_id: u32,
+    /// Populated only for component types opted into FFI exposure via
+    /// [`Self::register_ffi`] -- most types will never have an entry
+    /// here, which is the point (see [`FfiSpanAccessor`]'s doc comment).
+    ffi_accessors: HashMap<ComponentId, FfiSpanAccessor>,
+    /// The FFI-facing counterpart to Rust's own `TypeId`-based lookup:
+    /// a C caller has no `TypeId`, so [`Self::register_ffi`] also
+    /// records a plain string name a C caller *can* supply, resolved
+    /// via [`Self::lookup_ffi_id`].
+    ffi_names: HashMap<&'static str, ComponentId>,
 }
 
 impl SparseShell {
@@ -116,6 +143,8 @@ impl SparseShell {
             component_ids: HashMap::new(),
             columns: SparseSet::new(),
             next_id: 0,
+            ffi_accessors: HashMap::new(),
+            ffi_names: HashMap::new(),
         }
     }
 
@@ -244,6 +273,97 @@ impl SparseShell {
         for (_, column) in self.columns.iter_mut() {
             column.remove_entity(entity);
         }
+    }
+
+    /// Opts `T` into FFI span exposure under `name` — the FFI-facing
+    /// counterpart to Rust's own generic `component_id::<T>()`. Must be
+    /// called from Rust (this is generic; an `extern "C"` function
+    /// can't be) — real, unavoidable one-time setup glue, not something
+    /// a C caller does for an arbitrary type it defines itself. See
+    /// `docs/mid-ecs.md`'s FFI section for that scope call.
+    ///
+    /// Idempotent for the same `T` — registering twice is a no-op, not
+    /// a duplicate entry or an error.
+    ///
+    /// `T: IntoBytes + Immutable + KnownLayout` (from `zerocopy`) is
+    /// exactly the same bound `mid_collections::FfiSpan::from_slice`
+    /// itself requires, for the same reason: no uninitialized padding
+    /// bytes can leak across the boundary, and no interior mutability
+    /// can make "read-only from C" a lie.
+    ///
+    /// # Panics
+    /// If `name` was already registered for a *different* component
+    /// type — a real setup-time bug (two distinct Rust types registered
+    /// under the same name), not a condition any C caller can trigger,
+    /// so panicking here rather than returning a runtime error matches
+    /// how this codebase already treats other setup-only invariants.
+    pub fn register_ffi<T>(&mut self, name: &'static str) -> ComponentId
+    where
+        T: 'static + IntoBytes + Immutable + KnownLayout,
+    {
+        let id = self.component_id::<T>();
+        self.ffi_accessors.entry(id).or_insert_with(|| {
+            (|column: &dyn Any| -> FfiSpan {
+                let set = column
+                    .downcast_ref::<SparseSet<Entity, T>>()
+                    .expect("ComponentId must always map to a column of its own registered type");
+                FfiSpan::from_slice(set.values_slice())
+            }) as FfiSpanAccessor
+        });
+        match self.ffi_names.get(name) {
+            Some(&existing) if existing != id => panic!(
+                "SparseShell::register_ffi: name {name:?} is already registered for a different component type"
+            ),
+            _ => {
+                self.ffi_names.insert(name, id);
+            }
+        }
+        id
+    }
+
+    /// Non-generic, `ComponentId`-keyed raw span over every currently-
+    /// attached instance of that component type — dense (`SparseSet`'s
+    /// own dense storage order, not entity-index order). `None` if `id`
+    /// doesn't exist, or exists but was never opted into FFI exposure
+    /// via [`Self::register_ffi`].
+    ///
+    /// **Not yet paired with an entity-correlation span** — a caller
+    /// can read the raw values but can't yet tell which `Entity` each
+    /// one belongs to. Real, flagged gap, not an oversight: `Entity`
+    /// itself isn't `#[repr(C)]`/zerocopy-compatible today (its fields
+    /// are deliberately private — see `Entity::as_ffi`/`from_ffi`'s own
+    /// doc comment in `world.rs`), so a zero-copy `FfiSpan` over the
+    /// dense entity array isn't possible without a real decision about
+    /// how `Entity` itself should cross this specific boundary. Next
+    /// real increment, not attempted here.
+    ///
+    /// # Safety contract for the caller (documented, not compiler-
+    /// enforced past this point — see `FfiSpan`'s own doc comment)
+    /// Valid only until the next call that mutates *this exact*
+    /// component type (`insert`/`remove` for `T`, through any path).
+    pub fn raw_span(&self, id: ComponentId) -> Option<FfiSpan> {
+        let accessor = self.ffi_accessors.get(&id)?;
+        match self.columns.get(id) {
+            Some(column) => Some(accessor(column.as_any())),
+            // Registered for FFI, but nothing has been inserted for it
+            // yet -- a real, valid state, not a "not found". `columns`
+            // entries are only created lazily on first `insert`, so
+            // this is expected right after `register_ffi` alone.
+            // Matches `iter<T>`'s own established convention just above
+            // (empty, not a special not-found signal, for "nothing
+            // inserted yet") rather than introducing a second one.
+            None => Some(FfiSpan::empty()),
+        }
+    }
+
+    /// Looks up the [`ComponentId`] a Rust type was registered under
+    /// via [`Self::register_ffi`], by the name it was given then. The
+    /// FFI-facing counterpart to `register_ffi`'s Rust-facing generic
+    /// registration — this is how a C caller, which has no way to name
+    /// a Rust type directly, actually obtains a `ComponentId` at all.
+    /// `None` if `name` was never registered.
+    pub fn lookup_ffi_id(&self, name: &str) -> Option<ComponentId> {
+        self.ffi_names.get(name).copied()
     }
 }
 
@@ -420,5 +540,101 @@ mod tests {
         let shell = SparseShell::default();
         let e = spawn();
         assert_eq!(shell.get::<Position>(e), None);
+    }
+
+    // A separate, real zerocopy-compatible type -- deliberately distinct
+    // from `Position`/`Velocity` above, which are NOT `#[repr(C)]` and
+    // must stay that way to prove `register_ffi`'s extra bounds don't
+    // leak onto every component type in the shell, only ones that opt
+    // in.
+    #[derive(Debug, Clone, Copy, PartialEq, IntoBytes, KnownLayout, Immutable)]
+    #[repr(C)]
+    struct FfiPosition {
+        x: f32,
+        y: f32,
+    }
+
+    #[test]
+    fn raw_span_on_a_never_registered_component_id_is_none() {
+        let shell = SparseShell::new();
+        assert_eq!(shell.raw_span(ComponentId(0)), None);
+    }
+
+    #[test]
+    fn raw_span_before_register_ffi_is_none_even_if_the_type_is_in_use() {
+        let mut spawn = entity_factory();
+        let mut shell = SparseShell::new();
+        let e = spawn();
+        // Ordinary, non-FFI insert -- the type is real and in use, but
+        // never opted into FFI exposure.
+        shell.insert(e, FfiPosition { x: 1.0, y: 2.0 });
+        let id = shell
+            .existing_component_id::<FfiPosition>()
+            .expect("just inserted, must be registered");
+        assert_eq!(shell.raw_span(id), None);
+    }
+
+    #[test]
+    fn register_ffi_then_raw_span_reflects_all_attached_values() {
+        let mut spawn = entity_factory();
+        let mut shell = SparseShell::new();
+        let id = shell.register_ffi::<FfiPosition>("FfiPosition");
+        let e1 = spawn();
+        let e2 = spawn();
+        shell.insert(e1, FfiPosition { x: 1.0, y: 2.0 });
+        shell.insert(e2, FfiPosition { x: 3.0, y: 4.0 });
+
+        let span = shell.raw_span(id).expect("registered and populated");
+        assert_eq!(span.count, 2);
+        assert_eq!(span.stride, core::mem::size_of::<FfiPosition>());
+        // SAFETY: span points at the shell's own live dense storage,
+        // which outlives this read (shell is not mutated in between).
+        let values =
+            unsafe { core::slice::from_raw_parts(span.ptr.cast::<FfiPosition>(), span.count) };
+        assert_eq!(values[0], FfiPosition { x: 1.0, y: 2.0 });
+        assert_eq!(values[1], FfiPosition { x: 3.0, y: 4.0 });
+    }
+
+    #[test]
+    fn register_ffi_before_any_insert_still_gives_a_valid_empty_span() {
+        let mut shell = SparseShell::new();
+        let id = shell.register_ffi::<FfiPosition>("FfiPosition");
+        let span = shell.raw_span(id).expect("registered, even if empty");
+        assert_eq!(span.count, 0);
+        assert!(span.is_empty());
+    }
+
+    #[test]
+    fn register_ffi_is_idempotent_for_the_same_type() {
+        let mut shell = SparseShell::new();
+        let id1 = shell.register_ffi::<FfiPosition>("FfiPosition");
+        let id2 = shell.register_ffi::<FfiPosition>("FfiPosition");
+        assert_eq!(id1, id2);
+    }
+
+    #[test]
+    fn lookup_ffi_id_resolves_a_registered_name() {
+        let mut shell = SparseShell::new();
+        let id = shell.register_ffi::<FfiPosition>("FfiPosition");
+        assert_eq!(shell.lookup_ffi_id("FfiPosition"), Some(id));
+    }
+
+    #[test]
+    fn lookup_ffi_id_on_an_unregistered_name_is_none() {
+        let shell = SparseShell::new();
+        assert_eq!(shell.lookup_ffi_id("NeverRegistered"), None);
+    }
+
+    #[test]
+    #[should_panic(expected = "already registered for a different component type")]
+    fn register_ffi_panics_on_a_name_collision_between_distinct_types() {
+        #[derive(Debug, Clone, Copy, PartialEq, IntoBytes, KnownLayout, Immutable)]
+        #[repr(C)]
+        struct OtherFfiType {
+            v: u32,
+        }
+        let mut shell = SparseShell::new();
+        shell.register_ffi::<FfiPosition>("SameName");
+        shell.register_ffi::<OtherFfiType>("SameName");
     }
 }

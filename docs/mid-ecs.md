@@ -211,21 +211,84 @@ through actual C memory, not simulated. `.github/workflows/
 mid-ecs-test.yml` now runs this on every CI trigger too, mirroring
 `mid-net-test.yml`'s own FFI smoke test step exactly.
 
-**Deliberately not covered yet, and why it's genuinely harder, not just
-more of the same:** reading component data (a `Position` column, say)
-from C. Every function in this pass either passes a value by-value or
-goes through an opaque handle with no live pointer into mutable interior
-storage — nothing here has to reason about a pointer that a *later*
-call could invalidate. Component data lives in `Vec<T>` columns
-(`SparseShell`'s `SparseSet`s, `Archetypes`' `Table`s) that `insert`/
-`remove`/migration can reallocate or move out from under a previously
-handed-out pointer. This is what the "FFI span" idea
-(`docs/mid-collections.md`'s FFI wrapper section) is actually for — a
-real design question, not a naming exercise, and not attempted in this
-pass. Next real FFI increment, once its safety contract (most likely:
-short-lived, explicitly invalidated-by-any-mutating-call, matching how
-`Vec::as_ptr()` itself already works and callers already have to know)
-is actually worked out rather than assumed.
+**Deliberately not covered yet in the `World`-lifecycle pass above, and
+why it was genuinely harder, not just more of the same:** reading
+component data (a `Position` column, say) from C. Every function in
+that pass either passed a value by-value or went through an opaque
+handle with no live pointer into mutable interior storage — nothing had
+to reason about a pointer a *later* call could invalidate. Component
+data lives in `Vec<T>`-backed columns (`SparseShell`'s `SparseSet`s,
+`Archetypes`' `Table`s) that `insert`/`remove`/migration can reallocate
+or move out from under a previously handed-out pointer. This is what
+the "FFI span" idea (`docs/mid-collections.md`'s FFI wrapper section)
+was actually for.
+
+**Sparse Shell span access — real, tested, done for v1.**
+`SparseShell::register_ffi<T>`/`raw_span`/`lookup_ffi_id`
+(`crates/mid-ecs/src/component.rs`), thin-wrapped at `World::
+register_ffi_component`/`component_raw_span`/`lookup_ffi_component_id`.
+The real problem this had to solve, worked out rather than assumed:
+producing a byte-erased `(ptr, stride, count)` view through a
+`ComponentId` (an opaque `u32` at the FFI boundary) *without* the
+caller knowing the concrete Rust type `T` — while `Box<dyn
+ComponentColumn>`'s existing type-erasure mechanism only supports
+downcasting when the caller already supplies `T` generically, which an
+`extern "C"` function structurally can't do. Resolved with a type-erased
+accessor function (`fn(&dyn Any) -> FfiSpan`), monomorphized once per
+`T` at `register_ffi::<T>()` time (where `T` *is* known, generically)
+and stored in a side table keyed by `ComponentId`, called later purely
+non-generically — deliberately *not* baked into the base
+`ComponentColumn` trait itself as a required method, since that would
+force `IntoBytes + Immutable + KnownLayout` (from `zerocopy`) onto
+every component type in the Sparse Shell, including plain Rust-only
+types with no FFI intent (this crate's own `Position`/`Velocity` test
+types, not `#[repr(C)]`, would have stopped compiling). Opting a type
+in is explicit and per-type instead — real test coverage confirms both
+halves: `register_ffi_before_any_insert_still_gives_a_valid_empty_span`
+etc. exercise the opted-in path, while `Position`/`Velocity`'s own
+existing tests keep passing completely untouched, proving the
+restriction really is scoped to only what opts in.
+
+A real bug caught by actually running the tests, not by review: the
+first `raw_span` returned `None` for a type that was `register_ffi`'d
+but had nothing inserted for it yet, since `columns` entries are only
+created lazily on first `insert` — inconsistent with this same file's
+own already-established convention (`SparseShell::iter<T>` already
+treats "nothing inserted yet" as an *empty* result, not a *not-found*
+one). Fixed to match the existing convention, not patched around it.
+
+C-side `ComponentId` registration, scoped concretely: `register_ffi`
+also records a plain string name, resolved later via `lookup_ffi_id`/
+`lookup_ffi_component_id` — this is *not* C defining an entirely new,
+Rust-unknown component layout (that would need a parallel byte-blob
+storage mode this pass doesn't touch, a real, much larger undertaking
+flagged rather than attempted); it's C obtaining the `ComponentId` for
+a type Rust already opted in, by the name Rust gave it. `register_ffi`
+itself is necessarily still a Rust-side, generic call — an `extern "C"`
+function can't be generic over `T` — real, unavoidable one-time setup
+glue, not an oversight.
+
+**Not yet done, real next increment — flagged, not silently dropped:**
+
+- **Entity correlation.** `raw_span` alone can't tell a caller *which*
+  entity each element belongs to — `Entity` itself isn't `#[repr(C)]`/
+  zerocopy-compatible today (its fields are deliberately private, see
+  `Entity::as_ffi`/`from_ffi` above), so a zero-copy span over the
+  dense entity array isn't possible without a real decision about how
+  `Entity` should cross this specific boundary. Needed to make
+  `raw_span` genuinely usable, not just callable.
+- **Archetype Core span access.** Same underlying problem, a real
+  additional wrinkle on top: a `Position` column isn't one stable thing
+  across the whole `Archetype Core the way a Sparse Shell type is — an
+  entity's row lives in whichever archetype currently matches its
+  component set, so the data for one component type is fragmented
+  across every archetype containing it. Needs per-archetype span access
+  plus a way to enumerate which archetypes contain a given
+  `ComponentId`, not attempted this pass.
+- Actual `extern "C"` functions in `ffi.rs` exposing any of this, plus
+  a real C smoke test and CI wiring, matching the rigor the `World`-
+  lifecycle pass above already has. Nothing above has been proven
+  against real compiled C yet — only real Rust-side tests so far.
 
 ## The Hybrid ECS Architecture: Static Core, Dynamic Shell
 
