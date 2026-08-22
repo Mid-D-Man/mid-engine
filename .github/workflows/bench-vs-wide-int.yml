@@ -1,7 +1,8 @@
 # .github/workflows/bench-vs-wide-int.yml
-# Wide integer benchmark: i32x4/u32x4/i16x8/u8x16 SSE2 vs scalar loops.
+# Wide integer benchmark: i32x4/u32x4/i16x8/u16x8/i8x16/u8x16 vs scalar
+# loops and vs glam integer types where applicable.
 # Validates throughput for ECS ID scanning, byte processing, entity flag ops.
-# Run: Actions → "mid-math: bench wide int" → Run workflow
+# Run: Actions → "mid-math — bench wide int" → Run workflow
 # DO NOT add push/pull_request triggers.
 
 name: mid-math — bench wide int
@@ -9,10 +10,68 @@ name: mid-math — bench wide int
 on:
   workflow_dispatch:
     inputs:
-      baseline_note:
-        description: 'Context for this run (e.g. "baseline i32x4 SSE2")'
-        required: false
-        default: 'manual wide int benchmark run'
+      target_cpu:
+        description: >
+          Compiler target-cpu or architecture configuration. Controls which
+          SIMD backend wide/int/mod.rs dispatches to.
+          native     = all hardware features the runner has.
+          x86-64-v4  = AVX-512F+BW+CD+DQ+VL requested — wide/int has no
+                       AVX-512 backend yet, so this activates the same
+                       AVX2 path as x86-64-v3. Kept for platform-matrix
+                       consistency and because requesting this target-cpu
+                       carries a real SIGILL risk on non-AVX-512 hardware
+                       regardless of whether we hand-write AVX-512 code
+                       (rustc's autovectorizer can emit it anywhere) — the
+                       same hardware soft-gate as the vs_all workflow
+                       applies here for that reason.
+          x86-64-v3  = AVX2+FMA+BMI2 guaranteed (Haswell+) — activates
+                       wide/int/avx2/ (i32x8/u32x8/i16x16/u16x16/i8x32/u8x32).
+          x86-64-v2  = SSE4.2 baseline — no AVX, wide/int/sse2/ only.
+          x86-64     = SSE2 only — wide/int/sse2/ only.
+          neon       = ARM NEON via -C target-cpu=native on a native
+                       aarch64 runner — activates wide/int/neon/ (fixed
+                       this pass; was implemented but not dispatched).
+          wasm       = WebAssembly wasm32-wasip1 + simd128 via wasmtime.
+                       wide/int has NO WASM SIMD128 backend yet — this
+                       currently exercises the scalar fallback cross-
+                       compiled to wasm32, not a true SIMD path.
+          scalar     = pure scalar fallback via --features force-scalar —
+                       wide/int/mod.rs respects this the same as wide/float.
+        required: true
+        default: 'native'
+        type: choice
+        options:
+          - native
+          - x86-64-v4
+          - x86-64-v3
+          - x86-64-v2
+          - x86-64
+          - neon
+          - wasm
+          - scalar
+      wide_type:
+        description: >
+          Which wide-int type(s) to bench, via a criterion name filter.
+          all = every group in vs_wide_int.rs (i32x4/u32x4/i16x8/u16x8/
+          i8x16/u8x16 + bulk_entity_id_scan + bulk_u8_sum). Picking one
+          type also picks up any bulk_* case that names it (e.g. i32x4
+          catches bulk_entity_id_scan's i32x4_find_id row). The new AVX2
+          types (i32x8 etc.) have no bench coverage yet — not listed.
+        required: true
+        default: 'all'
+        type: choice
+        options:
+          - all
+          - i32x4
+          - u32x4
+          - i16x8
+          - u16x8
+          - i8x16
+          - u8x16
+
+env:
+  CARGO_TERM_COLOR: never
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 permissions:
   contents: read
@@ -20,89 +79,154 @@ permissions:
 
 jobs:
   bench:
-    runs-on: ubuntu-latest
+    name: bench (${{ inputs.target_cpu }}, ${{ inputs.wide_type }})
+    runs-on: ${{ inputs.target_cpu == 'neon' && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}
+
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+      - name: Configure target environment
+        run: python3 scripts/bench_target_env.py "${{ inputs.target_cpu }}" >> "$GITHUB_ENV"
 
-      - name: Get Rust version
-        id: rustver
-        run: echo "ver=$(rustc --version)" >> $GITHUB_OUTPUT
+      # ── Soft hardware gate for x86-64-v4 — see target_cpu description above.
+      - name: Check AVX-512 hardware availability
+        id: hwcheck
+        if: inputs.target_cpu == 'x86-64-v4'
+        run: |
+          if grep -qw 'avx512f' /proc/cpuinfo; then
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            {
+              echo "## bench (x86-64-v4) — skipped"
+              echo ""
+              echo "> GitHub-hosted \`ubuntu-latest\` runners use AMD EPYC CPUs without AVX-512."
+              echo "> rustc will happily emit AVX-512 instructions for \`-C target-cpu=x86-64-v4\`"
+              echo "> regardless of the host's real capabilities — running the resulting binary"
+              echo "> here would SIGILL. This run is marked successful (skipped, not failed)."
+              echo ">"
+              echo "> wide/int has no hand-written AVX-512 backend anyway — x86-64-v3 gets you"
+              echo "> the same AVX2 path. This gate exists for the generic autovectorizer risk,"
+              echo "> not a missing feature."
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
 
-      - name: Cache cargo registry
-        uses: actions/cache@v3
+      - name: Set up Rust stable
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+          override: true
+          target: ${{ inputs.target_cpu == 'wasm' && 'wasm32-wasip1' || '' }}
+          rustflags: ""
+
+      - name: Install wasmtime
+        if: inputs.target_cpu == 'wasm'
+        uses: bytecodealliance/actions/wasmtime/setup@v1
+        with:
+          version: v25.0.2
+
+      - name: Configure WASM test runner
+        if: inputs.target_cpu == 'wasm'
+        run: |
+          mkdir -p .cargo
+          cat >> .cargo/config.toml << 'EOF'
+          [target.wasm32-wasip1]
+          runner = ["wasmtime", "run", "--dir", ".", "--env", "CRITERION_DEBUG=1", "--"]
+          EOF
+
+      - name: Confirm CPU and compiler features
+        run: |
+          {
+            echo "## CPU & Compiler — Build #${{ github.run_number }}"
+            echo ""
+            echo "| | |"
+            echo "|---|---|"
+            echo "| Runner        | \`${{ inputs.target_cpu == 'neon' && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}\` |"
+            echo "| target-cpu    | \`${{ inputs.target_cpu }}\` |"
+            echo "| wide_type     | \`${{ inputs.wide_type }}\` |"
+            echo "| ACTIVE_CPU_FLAGS | \`$ACTIVE_CPU_FLAGS\` |"
+            echo "| Rust          | \`$(rustc --version)\` |"
+            echo "| Branch        | \`${{ github.ref_name }}\` |"
+            echo "| Commit        | \`${GITHUB_SHA:0:8}\` |"
+            echo ""
+            echo "### Rustc target_feature cfg"
+            echo '```'
+            if [ "${{ inputs.target_cpu }}" = "wasm" ]; then
+              rustc --print cfg --target wasm32-wasip1 $RUSTFLAGS 2>&1 | grep '^target_feature' | sort
+            else
+              rustc --print cfg $ACTIVE_CPU_FLAGS 2>&1 | grep -E '^target_(arch|feature)' | sort
+            fi
+            echo '```'
+            echo ""
+
+            if [ "${{ inputs.target_cpu }}" = "scalar" ]; then
+              echo "> **Active path:** wide/int/scalar/ (--features force-scalar)" >> "$GITHUB_STEP_SUMMARY"
+            elif [ "${{ inputs.target_cpu }}" = "neon" ]; then
+              echo "> **Active path:** wide/int/neon/ (fixed this pass — was implemented, not dispatched)" >> "$GITHUB_STEP_SUMMARY"
+            elif [ "${{ inputs.target_cpu }}" = "wasm" ]; then
+              echo "> **Active path:** wide/int/scalar/ cross-compiled to wasm32 — no WASM SIMD128 backend yet" >> "$GITHUB_STEP_SUMMARY"
+            else
+              AVX2=$(rustc --print cfg $ACTIVE_CPU_FLAGS 2>&1 | grep -c 'target_feature="avx2"' || true)
+              if [ "$AVX2" -gt 0 ]; then
+                echo "> **Active path:** wide/int/sse2/ (+ wide/int/avx2/ additive types compiled in, not yet benched)" >> "$GITHUB_STEP_SUMMARY"
+              else
+                echo "> **Active path:** wide/int/sse2/" >> "$GITHUB_STEP_SUMMARY"
+              fi
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Cache cargo registry + build artifacts
+        if: steps.hwcheck.outputs.skip != 'true'
+        uses: actions/cache@v4
         with:
           path: |
-            ~/.cargo/bin/
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git/db/
-          key: cargo-registry-bench-wide-int-${{ hashFiles('crates/mid-math/Cargo.toml') }}
-          restore-keys: cargo-registry-
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-${{ runner.arch }}-bench-wide-int-${{ inputs.target_cpu }}-v1-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ runner.arch }}-bench-wide-int-${{ inputs.target_cpu }}-v1-
 
       - name: Run wide int criterion benchmarks
+        if: steps.hwcheck.outputs.skip != 'true'
         run: |
-          echo "Running: cargo bench --bench vs_wide_int -p mid-math"
-          echo "Note: ${{ inputs.baseline_note }}"
-          cargo bench --bench vs_wide_int -p mid-math 2>&1 | tee bench-wide-int-raw.txt
+          set -o pipefail
+          FILTER="${{ inputs.wide_type }}"
+          if [ "$FILTER" = "all" ]; then FILTER=""; fi
+          cargo bench --bench vs_wide_int -p mid-math $BENCH_TARGET $BENCH_FEATURES -- "$FILTER" 2>&1 | tee bench-wide-int-raw.txt
+          echo "Bench exit code: $?" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Surface bench diagnostics
+        if: steps.hwcheck.outputs.skip != 'true'
+        run: |
+          {
+            echo "### Diagnostics"
+            echo '```'
+            grep -E 'took zero time|Unable to complete|Warning:|panicked|Completed [0-9]+ iterations' \
+              bench-wide-int-raw.txt | head -60 || echo "(none found)"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Publish summary
+        if: steps.hwcheck.outputs.skip != 'true'
         run: |
           {
             echo "## mid-math wide int — Criterion Benchmarks"
             echo ""
-            echo "**Build:** #${{ github.run_number }} &nbsp; **Rust:** \`${{ steps.rustver.outputs.ver }}\`"
-            echo ""
-            echo "**Note:** ${{ inputs.baseline_note }}"
+            echo "Build: #${{ github.run_number }} &nbsp;|&nbsp; Rust: \`$(rustc --version | cut -d' ' -f2)\` &nbsp;|&nbsp; target-cpu: \`${{ inputs.target_cpu }}\` &nbsp;|&nbsp; wide_type: \`${{ inputs.wide_type }}\`"
             echo ""
             echo "> Lower is faster. Integer ALU runs independently from FPU — wide int ops"
             echo "> are 'free' throughput when FPU is busy with physics/transforms."
             echo "> bulk_entity_id_scan shows the ECS hot path: 4 comparisons per instruction."
             echo ""
-
-            python3 - << 'PYEOF'
-          import re, sys
-
-          RE_ANSI   = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
-          RE_RESULT = re.compile(
-              r'^(\S[^\n]+?)\s+time:\s+\[\s*([\d.]+\s+\S+)\s+([\d.]+\s+\S+)\s+([\d.]+\s+\S+)\s*\]',
-              re.MULTILINE,
-          )
-
-          try:
-              raw = open('bench-wide-int-raw.txt', encoding='utf-8', errors='replace').read()
-          except FileNotFoundError:
-              print("*(bench-wide-int-raw.txt not found)*")
-              sys.exit(0)
-
-          text = RE_ANSI.sub('', raw)
-          current_group = None
-
-          for m in RE_RESULT.finditer(text):
-              name = m.group(1).strip()
-              mean = m.group(3).strip()
-              parts = name.split('/')
-              group   = '/'.join(parts[:-1]) if len(parts) >= 2 else name
-              variant = parts[-1] if len(parts) >= 2 else ''
-              if group != current_group:
-                  if current_group is not None:
-                      print()
-                  print(f"#### {group}")
-                  print("| Impl | Mean |")
-                  print("|---|---|")
-                  current_group = group
-              print(f"| {variant} | {mean} |")
-          PYEOF
-
-          } >> $GITHUB_STEP_SUMMARY
+            BENCH_RAW_FILE=bench-wide-int-raw.txt python3 scripts/bench_vs_all.py
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload artifacts
+        if: steps.hwcheck.outputs.skip != 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: bench-wide-int-${{ github.run_number }}
+          name: bench-wide-int-${{ github.run_number }}-${{ inputs.target_cpu }}-${{ inputs.wide_type }}
           path: |
             bench-wide-int-raw.txt
             target/criterion/
