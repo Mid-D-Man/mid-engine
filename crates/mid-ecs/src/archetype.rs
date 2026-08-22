@@ -75,10 +75,23 @@
 use std::any::{Any, TypeId};
 use std::collections::HashMap;
 
-use mid_collections::{SparseSet, SparseSetIndex};
+use mid_collections::{FfiSpan, SparseSet, SparseSetIndex};
+use zerocopy::{Immutable, IntoBytes, KnownLayout};
 
 use crate::component::ComponentId;
 use crate::world::Entity;
+
+/// Type-erased accessor for reading one archetype's column as a raw
+/// [`FfiSpan`], without the caller needing to know the concrete
+/// component type. Identical mechanism and identical reasoning to
+/// `component.rs`'s own `FfiSpanAccessor` — see that module's doc
+/// comment for the full explanation of why this exists as a plain `fn`
+/// pointer rather than a required trait method. Kept as a distinct type
+/// (not reused from `component.rs`) because it closes over `Vec<T>`
+/// directly here (`Column`'s own concrete backing type), not
+/// `SparseSet<Entity, T>` — a real, if small, difference in what the
+/// two systems actually store.
+type FfiSpanAccessor = fn(&dyn Any) -> FfiSpan;
 
 /// Dense identifier for one archetype (one exact component-type set).
 /// `ArchetypeId(0)` is always the empty archetype — every entity starts
@@ -243,6 +256,18 @@ pub(crate) struct Archetypes {
     /// Sparse-Shell-vs-Archetype-Core architectural split.
     component_ids: HashMap<TypeId, ComponentId>,
     next_component_id: u32,
+    /// Populated only for component types opted into FFI exposure via
+    /// [`Self::register_ffi`] — mirrors `SparseShell`'s own field of the
+    /// same name exactly (`component.rs`), same reasoning: most types
+    /// will never have an entry here, which is the point.
+    ffi_accessors: HashMap<ComponentId, FfiSpanAccessor>,
+    /// The FFI-facing counterpart to Rust's own `TypeId`-based lookup —
+    /// mirrors `SparseShell::ffi_names` exactly. A *separate* name
+    /// space from `SparseShell`'s own, matching this whole struct's
+    /// already-established separate `ComponentId` numbering space: the
+    /// same name could resolve to a different `ComponentId` in each
+    /// system, by design.
+    ffi_names: HashMap<&'static str, ComponentId>,
 }
 
 const EMPTY_ARCHETYPE: ArchetypeId = ArchetypeId(0);
@@ -260,6 +285,8 @@ impl Archetypes {
             next_id: 1,
             component_ids: HashMap::new(),
             next_component_id: 0,
+            ffi_accessors: HashMap::new(),
+            ffi_names: HashMap::new(),
         }
     }
 
@@ -285,6 +312,100 @@ impl Archetypes {
     /// `ComponentId` slot on a type that's never actually been used.
     pub(crate) fn existing_component_id<T: 'static>(&self) -> Option<ComponentId> {
         self.component_ids.get(&TypeId::of::<T>()).copied()
+    }
+
+    /// Opts `T` into FFI span exposure under `name` — the Archetype
+    /// Core's own counterpart to `SparseShell::register_ffi`, identical
+    /// reasoning throughout (see that method's doc comment). Must be
+    /// called from Rust; idempotent for the same `T`.
+    ///
+    /// # Panics
+    /// If `name` was already registered for a *different* component
+    /// type — see `SparseShell::register_ffi`'s identical panic
+    /// condition and rationale.
+    pub(crate) fn register_ffi<T>(&mut self, name: &'static str) -> ComponentId
+    where
+        T: 'static + IntoBytes + Immutable + KnownLayout,
+    {
+        let id = self.component_id::<T>();
+        self.ffi_accessors.entry(id).or_insert_with(|| {
+            (|column: &dyn Any| -> FfiSpan {
+                let vec = column
+                    .downcast_ref::<Vec<T>>()
+                    .expect("column type must match component_id's T");
+                FfiSpan::from_slice(vec)
+            }) as FfiSpanAccessor
+        });
+        match self.ffi_names.get(name) {
+            Some(&existing) if existing != id => panic!(
+                "Archetypes::register_ffi: name {name:?} is already registered for a different component type"
+            ),
+            _ => {
+                self.ffi_names.insert(name, id);
+            }
+        }
+        id
+    }
+
+    /// Non-generic, per-archetype raw span over `component_id`'s column
+    /// within `archetype_id`'s table. `None` if `component_id` was
+    /// never opted into FFI exposure, `archetype_id` doesn't exist, or
+    /// — a real, permanent structural fact, not a transient "not
+    /// populated yet" — `archetype_id`'s exact signature doesn't
+    /// include `component_id` at all. That last case deliberately does
+    /// *not* fall back to an empty span the way `SparseShell::raw_span`
+    /// does for its own "registered but nothing inserted yet" case:
+    /// unlike a Sparse Shell type (one global column, genuinely absent
+    /// vs. genuinely empty are different points in the *same* column's
+    /// life), a component simply not being part of one specific
+    /// archetype's signature is permanent for that archetype — matches
+    /// `has`'s own established `false`-not-panic convention for exactly
+    /// this. A real, *empty-but-present* column (the component is in
+    /// the signature, but every entity that ever had it has since
+    /// migrated away) is a genuinely different case and does return
+    /// `Some` with `count == 0` — proven by a real test, not assumed,
+    /// since `ensure_column` only ever adds columns, never removes them
+    /// once an archetype has been created with that signature.
+    ///
+    /// This is the real, unavoidable difference from `SparseShell`'s
+    /// side of the FFI-span mechanism: a component type here isn't one
+    /// stable thing to read — it's fragmented across every archetype
+    /// that currently contains it. Pair with [`Self::archetypes_with`]
+    /// to enumerate all of them.
+    pub(crate) fn raw_span(
+        &self,
+        archetype_id: ArchetypeId,
+        component_id: ComponentId,
+    ) -> Option<FfiSpan> {
+        let accessor = self.ffi_accessors.get(&component_id)?;
+        let archetype = self.archetypes.get(archetype_id)?;
+        let column = archetype.table.columns.get(component_id)?;
+        Some(accessor(column.as_any()))
+    }
+
+    /// Enumerates every currently-existing archetype whose signature
+    /// includes `component_id` — the real fragmentation
+    /// [`Self::raw_span`]'s own doc comment describes. Not gated by
+    /// FFI registration itself (a pure structural query, matching
+    /// `has`'s own spirit) — `raw_span` is what actually enforces that,
+    /// per archetype, when the caller gets there.
+    pub(crate) fn archetypes_with(
+        &self,
+        component_id: ComponentId,
+    ) -> impl Iterator<Item = ArchetypeId> + '_ {
+        self.archetypes.iter().filter_map(move |(id, archetype)| {
+            archetype
+                .component_ids
+                .contains(&component_id)
+                .then_some(id)
+        })
+    }
+
+    /// Looks up the [`ComponentId`] a type was registered under via
+    /// [`Self::register_ffi`], by name. The FFI-facing counterpart to
+    /// `register_ffi`'s Rust-facing generic registration.
+    pub(crate) fn lookup_ffi_id(&self, name: &str) -> Option<ComponentId> {
+        self.ffi_names.get(name).copied()
     }
 
     fn get_or_create(&mut self, signature: Vec<ComponentId>) -> ArchetypeId {
@@ -979,5 +1100,151 @@ mod tests {
                 assert_eq!(ar.get::<C>(e, id_c), Some(&C(i * 100)));
             }
         }
+    }
+
+    // Deliberately distinct from A/B/C above, which are NOT
+    // `#[repr(C)]` and must stay that way to prove `register_ffi`'s
+    // extra bounds don't leak onto every component type here, only
+    // ones that opt in -- mirrors `component.rs::tests::FfiPosition`'s
+    // exact reasoning.
+    #[derive(Debug, Clone, Copy, PartialEq, IntoBytes, KnownLayout, Immutable)]
+    #[repr(C)]
+    struct FfiHealth {
+        hp: u32,
+    }
+
+    #[test]
+    fn raw_span_on_a_never_registered_component_id_is_none() {
+        let ar = Archetypes::new();
+        assert_eq!(ar.raw_span(EMPTY_ARCHETYPE, ComponentId(0)), None);
+    }
+
+    #[test]
+    fn raw_span_on_an_archetype_that_does_not_have_this_component_is_none() {
+        let mut spawn = entity_factory();
+        let mut ar = Archetypes::new();
+        let id = ar.register_ffi::<FfiHealth>("FfiHealth");
+        let e = spawn();
+        ar.spawn(e);
+        // e lives in the empty archetype -- FfiHealth is registered for
+        // FFI, but this specific archetype's signature doesn't include
+        // it, which is a real, permanent fact about this archetype, not
+        // "not populated yet".
+        assert_eq!(ar.raw_span(EMPTY_ARCHETYPE, id), None);
+    }
+
+    #[test]
+    fn register_ffi_then_raw_span_reflects_attached_values() {
+        let mut spawn = entity_factory();
+        let mut ar = Archetypes::new();
+        let id = ar.register_ffi::<FfiHealth>("FfiHealth");
+        let e1 = spawn();
+        let e2 = spawn();
+        ar.spawn(e1);
+        ar.spawn(e2);
+        assert!(ar.insert(e1, id, FfiHealth { hp: 10 }));
+        assert!(ar.insert(e2, id, FfiHealth { hp: 20 }));
+
+        let archetype_id = ar
+            .archetypes_with(id)
+            .next()
+            .expect("both entities must share one archetype");
+        let span = ar
+            .raw_span(archetype_id, id)
+            .expect("registered and populated");
+        assert_eq!(span.count, 2);
+        // SAFETY: span points at ar's own live storage, unmutated since
+        // the inserts above.
+        let values =
+            unsafe { core::slice::from_raw_parts(span.ptr.cast::<FfiHealth>(), span.count) };
+        assert_eq!(values[0], FfiHealth { hp: 10 });
+        assert_eq!(values[1], FfiHealth { hp: 20 });
+    }
+
+    #[test]
+    fn raw_span_is_some_and_empty_after_every_entity_migrates_away() {
+        let mut spawn = entity_factory();
+        let mut ar = Archetypes::new();
+        let id = ar.register_ffi::<FfiHealth>("FfiHealth");
+        let e = spawn();
+        ar.spawn(e);
+        assert!(ar.insert(e, id, FfiHealth { hp: 5 }));
+        let archetype_id = ar
+            .archetypes_with(id)
+            .next()
+            .expect("must exist right after insert");
+
+        // Remove the component -- e migrates back to the empty
+        // archetype, leaving `archetype_id`'s table with zero rows but
+        // its FfiHealth column still present (columns are never removed
+        // once an archetype has been created with that signature).
+        assert_eq!(ar.remove::<FfiHealth>(e, id), Some(FfiHealth { hp: 5 }));
+
+        let span = ar
+            .raw_span(archetype_id, id)
+            .expect("the column itself is still genuinely present, just empty");
+        assert_eq!(
+            span.count, 0,
+            "empty-but-present must be Some(count=0), not None"
+        );
+    }
+
+    #[test]
+    fn archetypes_with_is_empty_for_an_unregistered_component() {
+        let ar = Archetypes::new();
+        assert_eq!(ar.archetypes_with(ComponentId(0)).count(), 0);
+    }
+
+    #[test]
+    fn archetypes_with_finds_every_archetype_containing_the_component() {
+        let mut spawn = entity_factory();
+        let mut ar = Archetypes::new();
+        let health_id = ar.register_ffi::<FfiHealth>("FfiHealth");
+        let a_id = ar.component_id::<A>();
+
+        // e1: just FfiHealth. e2: FfiHealth + A (a different archetype).
+        let e1 = spawn();
+        let e2 = spawn();
+        ar.spawn(e1);
+        ar.spawn(e2);
+        assert!(ar.insert(e1, health_id, FfiHealth { hp: 1 }));
+        assert!(ar.insert(e2, health_id, FfiHealth { hp: 2 }));
+        assert!(ar.insert(e2, a_id, A(99)));
+
+        let archetypes_with_health: Vec<_> = ar.archetypes_with(health_id).collect();
+        assert_eq!(
+            archetypes_with_health.len(),
+            2,
+            "e1 and e2 ended up in two distinct archetypes, both containing FfiHealth"
+        );
+    }
+
+    #[test]
+    fn lookup_ffi_id_resolves_a_registered_name() {
+        let mut ar = Archetypes::new();
+        let id = ar.register_ffi::<FfiHealth>("FfiHealth");
+        assert_eq!(ar.lookup_ffi_id("FfiHealth"), Some(id));
+        assert_eq!(ar.lookup_ffi_id("NeverRegistered"), None);
+    }
+
+    #[test]
+    fn register_ffi_is_idempotent_for_the_same_type() {
+        let mut ar = Archetypes::new();
+        let id1 = ar.register_ffi::<FfiHealth>("FfiHealth");
+        let id2 = ar.register_ffi::<FfiHealth>("FfiHealth");
+        assert_eq!(id1, id2);
+    }
+
+    #[test]
+    #[should_panic(expected = "already registered for a different component type")]
+    fn register_ffi_panics_on_a_name_collision_between_distinct_types() {
+        #[derive(Debug, Clone, Copy, PartialEq, IntoBytes, KnownLayout, Immutable)]
+        #[repr(C)]
+        struct OtherFfiType {
+            v: u32,
+        }
+        let mut ar = Archetypes::new();
+        ar.register_ffi::<FfiHealth>("SameName");
+        ar.register_ffi::<OtherFfiType>("SameName");
     }
 }

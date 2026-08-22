@@ -268,27 +268,67 @@ itself is necessarily still a Rust-side, generic call — an `extern "C"`
 function can't be generic over `T` — real, unavoidable one-time setup
 glue, not an oversight.
 
+**Archetype Core span access — real, tested, done for v1, and
+genuinely harder than the Sparse Shell side above.** `Archetypes::
+register_ffi<T>`/`raw_span`/`archetypes_with`/`lookup_ffi_id`
+(`crates/mid-ecs/src/archetype.rs`), thin-wrapped at `World::
+register_ffi_static_component`/`static_component_raw_span`/
+`archetypes_with_static_component`/`lookup_ffi_static_component_id`.
+Same type-erased-accessor mechanism as the Sparse Shell side (a
+`fn(&dyn Any) -> FfiSpan`, monomorphized per `T` at registration time),
+same reasoning for not baking it into the base `Column` trait — but one
+real, unavoidable additional wrinkle: a component type here isn't one
+stable thing to read. An entity's row lives in whichever archetype
+currently matches its exact component set, so one type's data is
+fragmented across every archetype containing it. `raw_span` is
+necessarily per-`(ArchetypeId, ComponentId)`, not just per-`ComponentId`
+the way the Sparse Shell's is; `archetypes_with` enumerates the
+fragments.
+
+A real, non-obvious distinction worked through and confirmed by
+dedicated tests, not glossed over: unlike the Sparse Shell's own
+"registered but nothing inserted yet" case (fixed to return an empty
+span, not `None`, per the bug above), an archetype's signature simply
+not including a given component is a *different*, *permanent* fact
+about that specific archetype — `raw_span` correctly returns `None`
+there (matching `Archetypes::has`'s own established `false`-not-panic
+convention), while a real *empty-but-present* column (the component is
+in the signature, every entity that had it has since migrated away)
+correctly returns `Some` with `count == 0` — proven directly:
+`raw_span_on_an_archetype_that_does_not_have_this_component_is_none`
+and `raw_span_is_some_and_empty_after_every_entity_migrates_away` are
+two separate tests because they're two genuinely separate cases, not
+one case described two ways. Grounded in a real check of `ensure_column`
+before trusting the "empty-but-present" case could even happen: columns
+are only ever added to a table, never removed, once an archetype has
+been created with a given signature — confirmed by reading that
+function, not assumed.
+
+A completely separate `ComponentId` name space from the Sparse Shell's
+own `register_ffi`/`lookup_ffi_id`, matching `Archetypes`' own
+already-established separate `ComponentId` numbering space from
+`SparseShell`'s (see this doc's Sparse Shell section above) — the same
+name string can resolve to a different `ComponentId` in each system,
+proven directly by
+`sparse_and_static_ffi_registrations_use_independent_name_spaces`.
+
 **Not yet done, real next increment — flagged, not silently dropped:**
 
-- **Entity correlation.** `raw_span` alone can't tell a caller *which*
-  entity each element belongs to — `Entity` itself isn't `#[repr(C)]`/
-  zerocopy-compatible today (its fields are deliberately private, see
-  `Entity::as_ffi`/`from_ffi` above), so a zero-copy span over the
-  dense entity array isn't possible without a real decision about how
-  `Entity` should cross this specific boundary. Needed to make
-  `raw_span` genuinely usable, not just callable.
-- **Archetype Core span access.** Same underlying problem, a real
-  additional wrinkle on top: a `Position` column isn't one stable thing
-  across the whole `Archetype Core the way a Sparse Shell type is — an
-  entity's row lives in whichever archetype currently matches its
-  component set, so the data for one component type is fragmented
-  across every archetype containing it. Needs per-archetype span access
-  plus a way to enumerate which archetypes contain a given
-  `ComponentId`, not attempted this pass.
+- **Entity correlation**, for *both* storage systems now. Neither
+  `raw_span` can tell a caller *which* entity each element belongs to
+  — `Entity` itself isn't `#[repr(C)]`/zerocopy-compatible today (its
+  fields are deliberately private, see `Entity::as_ffi`/`from_ffi`
+  above), so a zero-copy span over either system's dense entity array
+  isn't possible without a real decision about how `Entity` should
+  cross this specific boundary. This is now the single real blocker
+  standing between "callable" and "actually usable" for the whole FFI-
+  span mechanism.
 - Actual `extern "C"` functions in `ffi.rs` exposing any of this, plus
   a real C smoke test and CI wiring, matching the rigor the `World`-
   lifecycle pass above already has. Nothing above has been proven
-  against real compiled C yet — only real Rust-side tests so far.
+  against real compiled C yet — only real Rust-side tests so far, 147
+  of them across `mid-collections` (49, `--features ffi`) + `mid-ecs`
+  (98) combined as of this pass, none of them C.
 
 ## The Hybrid ECS Architecture: Static Core, Dynamic Shell
 

@@ -21,5 +21,6 @@ pub mod world;
 // that was caught); kept as a note for anyone re-deriving this crate's
 // history, not because the bug risk still applies now that the type is
 // real.
+pub use archetype::ArchetypeId;
 pub use component::{ComponentId, SparseShell};
 pub use world::{Entity, World};

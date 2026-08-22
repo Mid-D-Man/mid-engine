@@ -36,7 +36,7 @@ use std::fmt;
 use mid_collections::{FfiSpan, GenerationalIndex, GenerationalIndexAllocator, SparseSetIndex};
 use zerocopy::{Immutable, IntoBytes, KnownLayout};
 
-use crate::archetype::Archetypes;
+use crate::archetype::{ArchetypeId, Archetypes};
 use crate::component::{ComponentId, SparseShell};
 
 /// A handle to an entity. Detects its own staleness after despawn — a
@@ -344,6 +344,52 @@ impl World {
             return false;
         };
         self.is_alive(entity) && self.archetypes.has(entity, id)
+    }
+
+    /// Opts `T` into FFI span exposure under `name`, for the Archetype
+    /// Core — thin wrapper over `Archetypes::register_ffi`. A *separate*
+    /// name space from [`Self::register_ffi_component`]'s own (Sparse
+    /// Shell), matching `Archetypes`' already-separate `ComponentId`
+    /// numbering space — the same `name` can resolve to a different
+    /// `ComponentId` in each system, by design.
+    pub fn register_ffi_static_component<T>(&mut self, name: &'static str) -> ComponentId
+    where
+        T: 'static + IntoBytes + Immutable + KnownLayout,
+    {
+        self.archetypes.register_ffi::<T>(name)
+    }
+
+    /// Non-generic, per-archetype raw span over `component_id`'s column
+    /// within `archetype_id`'s table — thin wrapper over
+    /// `Archetypes::raw_span`. See that method's own doc comment for
+    /// the real fragmentation this has that
+    /// [`Self::component_raw_span`] (Sparse Shell) doesn't: one
+    /// component type's data isn't one stable thing here, it's spread
+    /// across every archetype currently containing it. Pair with
+    /// [`Self::archetypes_with_static_component`] to enumerate them.
+    pub fn static_component_raw_span(
+        &self,
+        archetype_id: ArchetypeId,
+        component_id: ComponentId,
+    ) -> Option<FfiSpan> {
+        self.archetypes.raw_span(archetype_id, component_id)
+    }
+
+    /// Enumerates every currently-existing archetype whose signature
+    /// includes `component_id` — thin wrapper over
+    /// `Archetypes::archetypes_with`.
+    pub fn archetypes_with_static_component(
+        &self,
+        component_id: ComponentId,
+    ) -> impl Iterator<Item = ArchetypeId> + '_ {
+        self.archetypes.archetypes_with(component_id)
+    }
+
+    /// Looks up the `ComponentId` an Archetype-Core type was registered
+    /// under via [`Self::register_ffi_static_component`], by name —
+    /// thin wrapper over `Archetypes::lookup_ffi_id`.
+    pub fn lookup_ffi_static_component_id(&self, name: &str) -> Option<ComponentId> {
+        self.archetypes.lookup_ffi_id(name)
     }
 }
 
@@ -829,5 +875,77 @@ mod tests {
         let id = w.register_ffi_component::<FfiHealth>("FfiHealth");
         assert_eq!(w.lookup_ffi_component_id("FfiHealth"), Some(id));
         assert_eq!(w.lookup_ffi_component_id("NeverRegistered"), None);
+    }
+
+    #[test]
+    fn register_ffi_static_component_then_span_reflects_attached_values() {
+        let mut w = World::new();
+        let id = w.register_ffi_static_component::<FfiHealth>("FfiHealthStatic");
+        let e1 = w.spawn();
+        let e2 = w.spawn();
+        assert!(w.insert_static(e1, FfiHealth { hp: 100 }));
+        assert!(w.insert_static(e2, FfiHealth { hp: 200 }));
+
+        let archetype_id = w
+            .archetypes_with_static_component(id)
+            .next()
+            .expect("both entities must share one archetype");
+        let span = w
+            .static_component_raw_span(archetype_id, id)
+            .expect("registered and populated");
+        assert_eq!(span.count, 2);
+        // SAFETY: span points at World's own live storage, unmutated
+        // since the calls above.
+        let values =
+            unsafe { core::slice::from_raw_parts(span.ptr.cast::<FfiHealth>(), span.count) };
+        assert_eq!(values[0], FfiHealth { hp: 100 });
+        assert_eq!(values[1], FfiHealth { hp: 200 });
+    }
+
+    #[test]
+    fn static_component_raw_span_on_never_registered_id_is_none() {
+        let mut w = World::new();
+        // A real, legitimately-obtained ArchetypeId -- ArchetypeId can't
+        // be constructed directly from outside archetype.rs, so this
+        // test exercises the "component never registered" branch
+        // (checked first in `raw_span`) against a real archetype rather
+        // than a value that can't exist in the first place.
+        let health_id = w.register_ffi_static_component::<FfiHealth>("FfiHealthStatic");
+        let e = w.spawn();
+        assert!(w.insert_static(e, FfiHealth { hp: 1 }));
+        let archetype_id = w
+            .archetypes_with_static_component(health_id)
+            .next()
+            .expect("just inserted, must exist");
+
+        assert_eq!(
+            w.static_component_raw_span(archetype_id, ComponentId(9999)),
+            None,
+            "9999 was never registered, unlike `health_id` itself"
+        );
+    }
+
+    #[test]
+    fn lookup_ffi_static_component_id_round_trips_through_world() {
+        let mut w = World::new();
+        let id = w.register_ffi_static_component::<FfiHealth>("FfiHealthStatic");
+        assert_eq!(
+            w.lookup_ffi_static_component_id("FfiHealthStatic"),
+            Some(id)
+        );
+        assert_eq!(w.lookup_ffi_static_component_id("NeverRegistered"), None);
+    }
+
+    #[test]
+    fn sparse_and_static_ffi_registrations_use_independent_name_spaces() {
+        // Same name, two different storage systems -- must not collide,
+        // matching Archetypes' already-independent ComponentId numbering
+        // space from SparseShell's own (component.rs/archetype.rs's own
+        // doc comments).
+        let mut w = World::new();
+        let sparse_id = w.register_ffi_component::<FfiHealth>("Health");
+        let static_id = w.register_ffi_static_component::<FfiHealth>("Health");
+        assert_eq!(w.lookup_ffi_component_id("Health"), Some(sparse_id));
+        assert_eq!(w.lookup_ffi_static_component_id("Health"), Some(static_id));
     }
 }
