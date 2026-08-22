@@ -14,7 +14,7 @@ crate-type = ["lib", "cdylib", "staticlib"]
 # sections). mid-ecs's own `ffi.rs` module is always compiled (not
 # feature-gated), so this is unconditional too, rather than adding a
 # second, redundant `ffi` feature flag on mid-ecs itself.
-mid-collections = { path = "../mid-collections", features = ["ffi"] }
+mid-collections = { path = "../mid-collections", features = ["default"] }
 zerocopy = { version = "0.8.56", features = ["derive"] }
 
 # rayon and its whole transitive tree (crossbeam-deque/epoch/utils, either,
