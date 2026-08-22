@@ -26,12 +26,32 @@
 //!   reused — `mid-ecs`'s `Entity` type and `World::spawn`/`despawn` are
 //!   a thin wrapper over this. Implements `SparseSetIndex` directly, so
 //!   it composes with `sparse_set` above with no adapter needed.
+//! - `ffi_span` — third piece, **behind the `ffi` feature, off by
+//!   default.** `docs/mid-collections.md`'s "FFI wrapper" section calls
+//!   for building this on `zerocopy` — a real external dependency,
+//!   which is real tension against this crate's own "zero external
+//!   dependencies, not just minimal ones" line two paragraphs up.
+//!   Resolved as a feature gate rather than by picking one doc over the
+//!   other: a plain `cargo build -p mid-collections` (what every
+//!   non-FFI consumer, including every `wasm32` build of `mid-ecs` that
+//!   never touches the boundary, actually does) stays exactly as
+//!   zero-dependency as stated; `zerocopy` only enters the graph for
+//!   whichever crate explicitly opts in with `features = ["ffi"]` —
+//!   `mid-net`'s and `mid-ecs`'s own `ffi.rs` files, specifically.
+//!   Matches this workspace's own established precedent for exactly
+//!   this shape of problem (`rayon` gated to non-`wasm32` targets in
+//!   `mid-ecs`; `tokio`/`reqwest` gated behind DixScript-Rust's
+//!   `cloud-import` feature) rather than introducing a new pattern.
 
 #![no_std]
 extern crate alloc;
 
+#[cfg(feature = "ffi")]
+pub mod ffi_span;
 pub mod generational_index;
 pub mod sparse_set;
 
+#[cfg(feature = "ffi")]
+pub use ffi_span::{checked_slice, checked_slice_mut, FfiBufError, FfiSpan};
 pub use generational_index::{GenerationalIndex, GenerationalIndexAllocator};
 pub use sparse_set::{SparseSet, SparseSetIndex};

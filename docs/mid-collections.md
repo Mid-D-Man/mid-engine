@@ -215,34 +215,96 @@ inserted or erased, O(1) erase without the shift-everything cost of a
 identified yet the way sparse-set has one from day one — flagged here so
 it's not forgotten, not scheduled.
 
-## The FFI wrapper (`FfiBuf`-shaped, name not settled)
+## The FFI wrapper — built (`crates/mid-collections/src/ffi_span.rs`, behind the `ffi` feature)
 
-Not speculative — grounded in a real, already-visible cost in this
-codebase. Every `PlayerState`/`PlayerEvent` getter in `mid-net`'s
-`ffi.rs` hand-rolls its own null-check + buffer-size-check +
-`catch_unwind` boundary, one function at a time (this is exactly what
-the `dangerous_implicit_autorefs` fix earlier this project touched). A
-shared wrapper owning that logic once, with individual FFI functions
-becoming thin calls into it, would consolidate duplication that's
-already real and growing with every new FFI function added.
+**Status: real, tested, done for v1.** Name settled: [`FfiSpan`] (the
+outbound `#[repr(C)]` wire struct) + [`checked_slice`]/
+[`checked_slice_mut`] (the inbound validated-view functions) —
+`FfiBuf` was the placeholder name; `FfiSpan` matches what both `mid-ecs`
+and `mid-net` actually call this idea ("the FFI span"). 10 real tests,
+real `cargo clippy -- -D warnings` clean in both feature states, real
+`cargo doc` clean.
 
-Scope call: **build on `zerocopy`, don't reimplement alignment-checked
-casting by hand.** Checked directly (not assumed): `zerocopy`'s
-`FromBytes` family does real runtime alignment checking as part of the
-trait itself — `ref_from_bytes`/`mut_from_prefix` return `Err` on
-misaligned input, not UB — and it's maintained by Google/Amazon
-engineers, used in the Linux kernel's own Rust bindings for this exact
-byte-casting problem. What it doesn't have, and what this wrapper would
-actually add: a sentinel/canary corruption check, and folding the
-null-check + `catch_unwind` boundary into the type itself so it isn't
-repeated at every call site. `bytemuck` is the lighter sibling with
-similar but less rigorous guarantees — mentioned for completeness, not
-the pick.
+Not speculative when originally scoped — grounded in a real,
+already-visible cost in this codebase. Every `PlayerState`/`PlayerEvent`
+getter in `mid-net`'s `ffi.rs` hand-rolls its own null-check +
+buffer-size-check + `catch_unwind` boundary, one function at a time
+(this is exactly what the `dangerous_implicit_autorefs` fix earlier this
+project touched). `mid-ecs`'s own FFI section (`docs/mid-ecs.md`) needs
+the same mechanism for a harder reason: component data lives in `Vec<T>`
+columns that `insert`/`remove`/migration can reallocate or move out from
+under a previously handed-out pointer. One shared shape for both: a
+`mid-net` byte buffer is `stride == 1`; a `mid-ecs` component column is
+`stride == size_of::<T>()`.
 
-Debug/release split (from the same discussion, worth keeping): checks
-active in debug builds, compiled away to a zero-cost pass-through in
-release — the same "prove it during testing, pay nothing in production"
-shape mid-net's own hot paths already follow.
+Scope call carried through as originally written: **built on
+`zerocopy`, not reimplemented by hand.** Checked directly against
+`zerocopy` 0.8.56's real behavior (not assumed) before committing:
+`<[T]>::ref_from_bytes`/`mut_from_bytes` do real runtime length *and*
+alignment checking as part of the call itself, `Err` on mismatch, not
+UB. Also checked directly: 0.8.56 with the `derive` feature builds and
+runs clean on this project's rustc 1.75 floor — no MSRV wall, unlike
+five other dependencies this project has hit that exact problem with.
+
+**Real tension surfaced, not silently resolved either direction:**
+`mid-collections`' own `lib.rs` states "zero external dependencies, not
+just minimal ones" — directly in conflict with "build on zerocopy"
+above. Resolved as a Cargo feature (`ffi`, off by default,
+`zerocopy` marked `optional = true`) rather than by picking one doc's
+claim over the other: confirmed directly via `cargo tree -p
+mid-collections` that a plain `cargo build -p mid-collections` (what
+every non-FFI consumer — including every `wasm32` build of `mid-ecs`
+that never touches the boundary — actually does) still resolves to
+zero real dependencies; `zerocopy` only enters the graph for whichever
+crate opts in with `features = ["ffi"]`. Matches this workspace's
+existing precedent for the same shape of problem (`rayon` gated to
+non-`wasm32` in `mid-ecs`; `tokio`/`reqwest` behind DixScript-Rust's
+`cloud-import` feature) rather than a new pattern.
+
+What the wrapper adds beyond raw `zerocopy`: folding the null-check
+into the checked-construction functions themselves (so it isn't
+repeated at every FFI call site), and a **debug-only self-check**
+implementing the "sentinel/canary corruption check" line from the
+original scoping discussion — concretely, `debug_assert!`-verifying
+that the constructed slice's pointer and byte length match the exact
+inputs, which is a *postcondition* of `zerocopy`'s own contract once
+its real check already passed, not an independent runtime concern. Real
+distinction worth keeping precise (came up again while building this):
+type-checked Rust input (`FfiSpan::from_slice`) needs zero runtime
+checks at all, since the compiler already proved everything needed;
+raw FFI input (`checked_slice`/`checked_slice_mut`'s null + zerocopy
+length/alignment checks) needs real checks that can never be elided in
+*any* build profile, since nothing proved those values in advance;
+re-verifying a callee's already-proven postcondition is the one case
+that's legitimately debug-only. `catch_unwind` boundary folding
+deferred — that's per-crate (`MidNetStatus` vs `MidEcsStatus` are
+different enums), not something one shared type can own; each crate's
+own `ffi.rs` still wraps its own `ffi_guard`, now calling into
+`checked_slice`/`checked_slice_mut` internally instead of hand-rolling
+the pointer/length checks itself. `bytemuck` was considered as the
+lighter sibling — same conclusion as originally scoped, not the pick,
+`zerocopy`'s stronger guarantees are worth the derive-macro overhead
+for a boundary this unsafe.
+
+Debug/release split (as originally scoped): the self-check above is
+debug-only, compiled to nothing in release — the same "prove it during
+testing, pay nothing in production" shape `mid-net`'s own hot paths
+already follow. The null-check and `zerocopy`'s own length/alignment
+check are **not** part of this split — they stay in every build
+profile, release included, since they're the actual thing standing
+between a C caller's arbitrary input and undefined behavior.
+
+**Not yet done, real next increment:** wiring this into `mid-ecs`
+itself — a non-generic, `ComponentId`-keyed accessor path doesn't exist
+anywhere yet (every `World`/`SparseShell`/`Archetypes` data-access
+method is Rust-generic today), and FFI callers have no way to obtain a
+`ComponentId` at all. Both storage systems (Sparse Shell + Archetype
+Core) confirmed in scope for that pass, and C-side `ComponentId`
+registration confirmed in scope too — not yet built. Retrofitting
+`mid-net`'s existing getters to call through `checked_slice`/
+`checked_slice_mut` instead of their own hand-rolled checks is also not
+yet done — real, but lower-stakes than the `mid-ecs` piece since
+`mid-net`'s current code is already correct, just duplicated.
 
 ## Explicitly out of scope for this doc
 
