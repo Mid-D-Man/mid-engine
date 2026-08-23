@@ -9,7 +9,7 @@ name       = "mid_collections"
 crate-type = ["lib"]
 
 [dependencies]
-zerocopy       = { version = "", optional = true }
+zerocopy       = { version = "0.8.50", optional = true }
 [dev-dependencies]
 # Same version/feature choice as mid-math's own criterion dev-dependency
 # (crates/mid-math/Cargo.toml) — html_reports for the local `target/criterion`
