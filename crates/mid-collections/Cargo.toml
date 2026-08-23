@@ -9,7 +9,18 @@ name       = "mid_collections"
 crate-type = ["lib"]
 
 [dependencies]
-zerocopy       = { version = "0.8.50", optional = true }
+# `derive` is not optional weight here -- it's the actual, only reason
+# this dependency exists at all (docs/mid-collections.md's FFI wrapper
+# section: "build on zerocopy" means its FromBytes/IntoBytes family,
+# which needs the derive macros to be usable on real component types).
+# No other zerocopy feature (`alloc`, `std`, `simd`) is used anywhere in
+# ffi_span.rs -- checked directly against its actual imports, not left
+# assumed. `default-features = false`: confirmed via `cargo metadata`
+# that zerocopy 0.8.56 declares no default features at all today, so
+# this is a no-op right now -- kept anyway as cheap insurance against a
+# future release adding one we didn't ask for and haven't reviewed.
+zerocopy = { version = "0.8.56", default-features = false, features = ["derive"], optional = true }
+
 [dev-dependencies]
 # Same version/feature choice as mid-math's own criterion dev-dependency
 # (crates/mid-math/Cargo.toml) — html_reports for the local `target/criterion`
@@ -17,6 +28,16 @@ zerocopy       = { version = "0.8.50", optional = true }
 # execution. No wasm-target split like mid-math's: nothing here targets
 # wasm32 for benching, so there's no rayon/wasi conflict to route around.
 criterion = { version = "0.5", features = ["html_reports"] }
+# Unconditional (not gated by the `ffi` feature) so this crate's own
+# tests are self-sufficient under a standalone `cargo test -p
+# mid-collections --features ffi` -- confirmed by a real, isolated
+# build that this is NOT redundant: without this, the crate only
+# compiles by accident, via Cargo's feature unification with mid-ecs's
+# own separate `zerocopy` dependency, whenever both happen to be built
+# in the same invocation (as CI's "-p mid-collections -p mid-ecs" does).
+# 26 real compile errors, confirmed directly, building this crate alone
+# with the unification safety net removed.
+zerocopy = { version = "0.8.56", default-features = false, features = ["derive"] }
 
 [[bench]]
 name    = "sparse_set"
@@ -24,4 +45,4 @@ harness = false
 
 [features]
 default = []
-ffi  = ["dep:zerocopy"]
+ffi = ["dep:zerocopy"]

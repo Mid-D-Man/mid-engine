@@ -15,7 +15,12 @@ crate-type = ["lib", "cdylib", "staticlib"]
 # feature-gated), so this is unconditional too, rather than adding a
 # second, redundant `ffi` feature flag on mid-ecs itself.
 mid-collections = { path = "../mid-collections", features = ["ffi"] }
-zerocopy = { version = "0.8.56", features = ["derive"] }
+# Version pinned to match mid-collections' own declaration exactly
+# (both 0.8.56) -- avoids relying on semver-range resolution picking
+# the same version by coincidence. `default-features = false` for the
+# same reason as mid-collections' own declaration: zerocopy has no
+# default features today, kept explicit as insurance anyway.
+zerocopy = { version = "0.8.56", default-features = false, features = ["derive"] }
 
 # rayon and its whole transitive tree (crossbeam-deque/epoch/utils, either,
 # rayon-core) depend on real OS threads, which wasm32-unknown-unknown
