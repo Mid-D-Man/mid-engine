@@ -39,10 +39,9 @@ use criterion::{
     BatchSize, Criterion, Throughput,
 };
 use mid_math::{
-    IMask4, i32x4, u32x4,
+    i32x4, u32x4,
     i16x8, u16x8,
     i8x16, u8x16,
-    IVec4, UVec4,
 };
 
 #[cfg(target_feature = "avx2")]
