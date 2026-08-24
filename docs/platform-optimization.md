@@ -402,3 +402,39 @@ nothing (criterion doesn't error on an empty filter match) — documented
 in the dropdown description rather than added as extra yml logic.
 `wasm` currently exercises the scalar fallback cross-compiled to
 wasm32 — no WASM SIMD128 backend exists for wide/int yet (see above).
+
+### `wide`-crate comparison numbers were misleading — missing `[profile.bench]`
+
+Build #5's `wide-i32x4/add` benched ~14ns — 13x slower than our own
+`i32x4/add`, and even slower than glam's scalar `IVec4/add`. That's not
+a real property of the `wide` crate. Traced it to its actual source:
+
+`wide::i32x4::add` doesn't call a raw intrinsic directly — it does
+`cast::<i32x4,u32x4>(self) + cast::<i32x4,u32x4>(rhs)` then casts back
+(wrapping add is identical for signed/unsigned, so it shares the impl),
+which means it delegates into **`u32x4`'s own `Add` impl** as a second
+hop. Compare to `min`/`max`, which call `pick! { if #[cfg(...)] { ...
+raw intrinsic... } }` directly, one hop, no delegation. Both are marked
+`#[inline]` (not `#[inline(always)]`), so collapsing that longer add/sub
+chain down to a single instruction depends on the compiler's cross-crate
+inlining being aggressive enough to see through it.
+
+`cargo bench` does **not** use `[profile.release]` — it has its own
+default profile with `opt-level=3` but no `lto`/`codegen-units=1`. Our
+own mid-math methods are all `#[inline(always)]`, which survives
+regardless of LTO; a 2-hop cross-crate `#[inline]` chain into another
+crate is exactly the case that needs LTO to reliably collapse. Added a
+`[profile.bench]` section to the workspace root `Cargo.toml` mirroring
+`[profile.release]`'s `opt-level`/`lto`/`codegen-units` (keeping
+`debug = true` instead of `release`'s `false` — useful for profiling
+bench binaries with `perf`, costs nothing at runtime).
+
+**Not yet confirmed this actually fixes it** — needs a re-run to see if
+`wide-i32x4/add` drops into the same range as `min`/`max` (~2-7ns) once
+the profile change is applied. If it doesn't move, the hypothesis above
+is wrong and it's something else — worth checking before trusting any
+absolute `wide-*` timing, though the *relative* ranking (our types
+consistently fastest, glam's scalar-storage types consistently slowest)
+held across both this run and the previous one, so that comparison is
+probably still meaningful even if the exact `wide` numbers move on
+the next run.
