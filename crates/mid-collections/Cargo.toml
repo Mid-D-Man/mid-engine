@@ -19,6 +19,9 @@ crate-type = ["lib"]
 # that zerocopy 0.8.56 declares no default features at all today, so
 # this is a no-op right now -- kept anyway as cheap insurance against a
 # future release adding one we didn't ask for and haven't reviewed.
+# Version pinned to match mid-ecs's own direct `zerocopy` dependency
+# exactly (both 0.8.56) rather than relying on semver-range resolution
+# picking the same version by coincidence.
 zerocopy = { version = "0.8.56", default-features = false, features = ["derive"], optional = true }
 
 [dev-dependencies]
@@ -32,11 +35,11 @@ criterion = { version = "0.5", features = ["html_reports"] }
 # tests are self-sufficient under a standalone `cargo test -p
 # mid-collections --features ffi` -- confirmed by a real, isolated
 # build that this is NOT redundant: without this, the crate only
-# compiles by accident, via Cargo's feature unification with mid-ecs's
-# own separate `zerocopy` dependency, whenever both happen to be built
-# in the same invocation (as CI's "-p mid-collections -p mid-ecs" does).
-# 26 real compile errors, confirmed directly, building this crate alone
-# with the unification safety net removed.
+# compiled by accident, via Cargo's feature unification with mid-ecs's
+# own separate `zerocopy` dependency, whenever both happened to be
+# built in the same invocation (as CI's "-p mid-collections -p mid-ecs"
+# does). 26 real compile errors, confirmed directly, building this
+# crate alone with that unification safety net removed.
 zerocopy = { version = "0.8.56", default-features = false, features = ["derive"] }
 
 [[bench]]
@@ -45,4 +48,4 @@ harness = false
 
 [features]
 default = []
-ffi = ["dep:zerocopy"]
+ffi  = ["dep:zerocopy"]

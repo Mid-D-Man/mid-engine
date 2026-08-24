@@ -3,18 +3,18 @@
 //! Two real, already-documented needs converge on this one module:
 //!
 //! - `mid-net`'s own `ffi.rs` hand-rolls "null-check + buffer-size-check
-//!   + `catch_unwind` boundary" per function, one call site at a time
-//!   (`mid_net_player_state_encode`/`decode`,
-//!   `mid_net_player_event_encode`/`decode`, and every future one).
-//!   Real, already-visible duplication -- not speculative.
+//!     + `catch_unwind` boundary" per function, one call site at a time
+//!     (`mid_net_player_state_encode`/`decode`,
+//!     `mid_net_player_event_encode`/`decode`, and every future one).
+//!     Real, already-visible duplication -- not speculative.
 //! - `mid-ecs`'s FFI section (`docs/mid-ecs.md`) needs a way to expose
-//!   component-column data (`Vec<T>` inside `SparseShell`'s `SparseSet`s
-//!   and `Archetypes`' `Table`s) across the boundary, where `insert`/
-//!   `remove`/migration can reallocate or move the backing storage out
-//!   from under a previously handed-out pointer -- unlike anything in
-//!   either crate's `ffi.rs` today, where every value crosses by-value
-//!   or through an opaque handle with no live pointer into mutable
-//!   interior storage.
+//!     component-column data (`Vec<T>` inside `SparseShell`'s `SparseSet`s
+//!     and `Archetypes`' `Table`s) across the boundary, where `insert`/
+//!     `remove`/migration can reallocate or move the backing storage out
+//!     from under a previously handed-out pointer -- unlike anything in
+//!     either crate's `ffi.rs` today, where every value crosses by-value
+//!     or through an opaque handle with no live pointer into mutable
+//!     interior storage.
 //!
 //! `docs/mid-collections.md`'s "FFI wrapper" section calls this the
 //! `FfiBuf`-shaped idea (name not settled) and makes one scope call
@@ -32,17 +32,17 @@
 //! # Two directions, one shared shape
 //!
 //! - **Outbound** (Rust -> C): [`FfiSpan`], a plain `#[repr(C)]` struct
-//!   (`ptr`/`stride`/`count`) built from an already-valid Rust `&[T]`
-//!   via [`FfiSpan::from_slice`]. Nothing to validate on this side --
-//!   Rust already knows the data is valid. The real requirement is that
-//!   `T`'s layout is actually meaningful to a non-Rust reader, which is
-//!   what the `IntoBytes` bound statically guarantees: no uninitialized
-//!   padding bytes can leak across the boundary, and no interior
-//!   mutability (`Immutable`) can make "read-only from C" a lie.
+//!     (`ptr`/`stride`/`count`) built from an already-valid Rust `&[T]`
+//!     via [`FfiSpan::from_slice`]. Nothing to validate on this side --
+//!     Rust already knows the data is valid. The real requirement is that
+//!     `T`'s layout is actually meaningful to a non-Rust reader, which is
+//!     what the `IntoBytes` bound statically guarantees: no uninitialized
+//!     padding bytes can leak across the boundary, and no interior
+//!     mutability (`Immutable`) can make "read-only from C" a lie.
 //! - **Inbound** (C -> Rust): [`checked_slice`]/[`checked_slice_mut`],
-//!   turning a caller-supplied `(ptr, len_bytes)` pair into a real,
-//!   validated `&[T]`/`&mut [T]` -- null-checked here, length- and
-//!   alignment-checked by `zerocopy`.
+//!     turning a caller-supplied `(ptr, len_bytes)` pair into a real,
+//!     validated `&[T]`/`&mut [T]` -- null-checked here, length- and
+//!     alignment-checked by `zerocopy`.
 //!
 //! Deliberately one shape for both crates' needs, not an `mid-ecs`-only
 //! or `mid-net`-only type: a `mid-net` byte buffer is just `stride ==
@@ -67,36 +67,36 @@
 //! # Three tiers of "how much runtime checking", not two
 //!
 //! - **Type-checked Rust input needs zero runtime checks.**
-//!   [`FfiSpan::from_slice`] validates nothing -- by the time a caller
-//!   has a real `&[T]`, the borrow checker and type system already
-//!   proved it's non-null, aligned, and live. A runtime null-check there
-//!   would be re-checking something the compiler already ruled out.
+//!     [`FfiSpan::from_slice`] validates nothing -- by the time a caller
+//!     has a real `&[T]`, the borrow checker and type system already
+//!     proved it's non-null, aligned, and live. A runtime null-check there
+//!     would be re-checking something the compiler already ruled out.
 //! - **A raw pointer crossing the FFI boundary needs real runtime
-//!   checks that can never be elided, in *any* build profile.**
-//!   [`checked_slice`]/[`checked_slice_mut`] take a bare pointer +
-//!   length from a caller the Rust compiler has zero visibility into --
-//!   nothing proved it's non-null, correctly aligned, or the length it
-//!   claims. The null check and `zerocopy`'s length/alignment check stay
-//!   in release too: there's no compile-time proof to lean on for
-//!   adversarial-by-construction input.
+//!     checks that can never be elided, in *any* build profile.**
+//!     [`checked_slice`]/[`checked_slice_mut`] take a bare pointer +
+//!     length from a caller the Rust compiler has zero visibility into --
+//!     nothing proved it's non-null, correctly aligned, or the length it
+//!     claims. The null check and `zerocopy`'s length/alignment check stay
+//!     in release too: there's no compile-time proof to lean on for
+//!     adversarial-by-construction input.
 //! - **A postcondition of a call already trusted needs no independent
-//!   re-check in production, only in testing.** The two `debug_assert!`s
-//!   in each function (`slice.as_ptr() == ptr`,
-//!   `slice.len() * size_of::<T>() == len_bytes`) aren't checking
-//!   anything that could independently vary -- they're true by
-//!   construction *given* `ref_from_bytes`/`mut_from_bytes` already
-//!   returned `Ok`, per that function's own documented contract. Kept
-//!   as a debug-only self-check against a bug in this wrapper's own
-//!   reasoning (or a future `zerocopy` behavior change), not compiled
-//!   into release, matching this workspace's established "prove it
-//!   during testing, pay nothing in production" shape (`mid-net`'s own
-//!   hot paths already follow this). This is what
-//!   `docs/mid-collections.md`'s "sentinel/canary corruption check" line
-//!   is implemented as here -- a self-check against this module's own
-//!   logic, not a guard-byte pattern around caller-owned memory (which
-//!   would need a different shape entirely, and isn't what the actual
-//!   risk here calls for: nothing in this module owns or allocates
-//!   memory across a call boundary for a guard pattern to protect).
+//!     re-check in production, only in testing.** The two `debug_assert!`s
+//!     in each function (`slice.as_ptr() == ptr`,
+//!     `slice.len() * size_of::<T>() == len_bytes`) aren't checking
+//!     anything that could independently vary -- they're true by
+//!     construction *given* `ref_from_bytes`/`mut_from_bytes` already
+//!     returned `Ok`, per that function's own documented contract. Kept
+//!     as a debug-only self-check against a bug in this wrapper's own
+//!     reasoning (or a future `zerocopy` behavior change), not compiled
+//!     into release, matching this workspace's established "prove it
+//!     during testing, pay nothing in production" shape (`mid-net`'s own
+//!     hot paths already follow this). This is what
+//!     `docs/mid-collections.md`'s "sentinel/canary corruption check" line
+//!     is implemented as here -- a self-check against this module's own
+//!     logic, not a guard-byte pattern around caller-owned memory (which
+//!     would need a different shape entirely, and isn't what the actual
+//!     risk here calls for: nothing in this module owns or allocates
+//!     memory across a call boundary for a guard pattern to protect).
 
 use zerocopy::{FromBytes, Immutable, IntoBytes, KnownLayout};
 
@@ -208,7 +208,18 @@ where
         // zerocopy folds "wrong length" and "misaligned" into one error
         // type here; length is cheap to re-check ourselves to give the
         // caller the more specific of the two.
-        if len_bytes % core::mem::size_of::<T>() != 0 {
+        //
+        // `usize::is_multiple_of` (stabilized in Rust 1.87 -- confirmed
+        // via a real search, not assumed; this sandbox's rustc 1.75
+        // floor predates it and cannot compile this line, confirmed
+        // directly) is what real CI's clippy (rustc 1.98) wants in
+        // place of the `%` form below. Neither toolchain gap is a
+        // concern here -- CI's 1.98 postdates 1.87 comfortably -- but
+        // this specific line is unverified by me: nothing I have
+        // access to has compiled it. Flagged plainly rather than
+        // quietly claimed as tested, unlike everything else in this
+        // delivery.
+        if !len_bytes.is_multiple_of(core::mem::size_of::<T>()) {
             FfiBufError::LengthMismatch
         } else {
             FfiBufError::Misaligned
@@ -248,7 +259,9 @@ where
     // `len_bytes` bytes for `'a`, exclusively; null already ruled out.
     let bytes = unsafe { core::slice::from_raw_parts_mut(ptr.cast::<u8>(), len_bytes) };
     let slice = <[T]>::mut_from_bytes(bytes).map_err(|_| {
-        if len_bytes % core::mem::size_of::<T>() != 0 {
+        // Same `is_multiple_of` swap as `checked_slice` above, same
+        // unverified-by-me caveat -- see that function's comment.
+        if !len_bytes.is_multiple_of(core::mem::size_of::<T>()) {
             FfiBufError::LengthMismatch
         } else {
             FfiBufError::Misaligned
