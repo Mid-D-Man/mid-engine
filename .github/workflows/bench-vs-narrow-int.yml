@@ -1,0 +1,204 @@
+# .github/workflows/bench-vs-narrow-int.yml
+# Narrow (non-wide) integer vector benchmark: I8Vec/I16Vec/IVec/I64Vec
+# (and unsigned equivalents) vs glam's equivalents.
+# Run: Actions → "mid-math — bench narrow int" → Run workflow
+# DO NOT add push/pull_request triggers.
+
+name: mid-math — bench narrow int
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_cpu:
+        description: >
+          Compiler target-cpu or architecture configuration.
+          IMPORTANT — different meaning here than in the wide-int/vs_all
+          workflows: narrow int vecs (IVec4, I8Vec4, etc.) have NO
+          hand-dispatched SIMD backend at all — they're scalar-only by
+          design, matching glam's own convention (checked directly
+          against glam's source; see docs/platform-optimization.md §4).
+          target_cpu here does NOT select between backends the way it
+          does for wide/int or f32 — there's nothing to select between.
+          What it CAN still affect is LLVM's autovectorization: the
+          compiler may (or may not) recognize a scalar-storage struct op
+          as vectorizable and emit SIMD instructions anyway, and that
+          opportunity varies by available target features. This
+          dropdown exists so you can compare that autovectorization
+          effect across targets, not to pick a hand-written backend.
+          native/x86-64-v4/x86-64-v3/x86-64-v2/x86-64 = standard tiers.
+          neon = native aarch64 runner. wasm = wasm32-wasip1 + simd128
+          via wasmtime, autovectorization only, no hand-written path.
+          scalar = --features force-scalar (has no effect on narrow int
+          vecs specifically, since they're always scalar — included
+          only for dropdown consistency with the other bench workflows).
+        required: true
+        default: 'native'
+        type: choice
+        options:
+          - native
+          - x86-64-v4
+          - x86-64-v3
+          - x86-64-v2
+          - x86-64
+          - neon
+          - wasm
+          - scalar
+      int_type:
+        description: >
+          Which narrow int width to bench. Unlike wide-int (one file,
+          filtered by criterion name), each width here is a SEPARATE
+          bench target (vs_int8/vs_int16/vs_int32/vs_int64 — no single
+          file covers all of them), so this picks which target(s) to
+          run rather than filtering within one. all = every width, run
+          back to back, combined into one summary.
+        required: true
+        default: 'all'
+        type: choice
+        options:
+          - all
+          - i8
+          - i16
+          - i32
+          - i64
+
+env:
+  CARGO_TERM_COLOR: never
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+permissions:
+  contents: read
+  actions:  read
+
+jobs:
+  bench:
+    name: bench (${{ inputs.target_cpu }}, ${{ inputs.int_type }})
+    runs-on: ${{ inputs.target_cpu == 'neon' && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure target environment
+        run: python3 scripts/bench_target_env.py "${{ inputs.target_cpu }}" >> "$GITHUB_ENV"
+
+      # ── Soft hardware gate for x86-64-v4 — same generic autovectorizer
+      # SIGILL risk as the wide-int/vs_all workflows; applies regardless
+      # of narrow int having no hand-written AVX-512 path.
+      - name: Check AVX-512 hardware availability
+        id: hwcheck
+        if: inputs.target_cpu == 'x86-64-v4'
+        run: |
+          if grep -qw 'avx512f' /proc/cpuinfo; then
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            {
+              echo "## bench (x86-64-v4) — skipped"
+              echo ""
+              echo "> GitHub-hosted \`ubuntu-latest\` runners use AMD EPYC CPUs without AVX-512."
+              echo "> Requesting \`-C target-cpu=x86-64-v4\` on hardware that doesn't have it risks"
+              echo "> a SIGILL if rustc's autovectorizer emits AVX-512 anywhere in the build —"
+              echo "> this applies here even though narrow int vecs have no hand-written"
+              echo "> AVX-512 (or any SIMD) backend at all. This run is marked successful"
+              echo "> (skipped, not failed)."
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Set up Rust stable
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+          override: true
+          target: ${{ inputs.target_cpu == 'wasm' && 'wasm32-wasip1' || '' }}
+          rustflags: ""
+
+      - name: Install wasmtime
+        if: inputs.target_cpu == 'wasm'
+        uses: bytecodealliance/actions/wasmtime/setup@v1
+        with:
+          version: v25.0.2
+
+      - name: Configure WASM test runner
+        if: inputs.target_cpu == 'wasm'
+        run: |
+          mkdir -p .cargo
+          cat >> .cargo/config.toml << 'EOF'
+          [target.wasm32-wasip1]
+          runner = ["wasmtime", "run", "--dir", ".", "--env", "CRITERION_DEBUG=1", "--"]
+          EOF
+
+      - name: Confirm CPU and compiler features
+        run: |
+          {
+            echo "## CPU & Compiler — Build #${{ github.run_number }}"
+            echo ""
+            echo "| | |"
+            echo "|---|---|"
+            echo "| Runner        | \`${{ inputs.target_cpu == 'neon' && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}\` |"
+            echo "| target-cpu    | \`${{ inputs.target_cpu }}\` |"
+            echo "| int_type      | \`${{ inputs.int_type }}\` |"
+            echo "| ACTIVE_CPU_FLAGS | \`$ACTIVE_CPU_FLAGS\` |"
+            echo "| Rust          | \`$(rustc --version)\` |"
+            echo "| Branch        | \`${{ github.ref_name }}\` |"
+            echo "| Commit        | \`${GITHUB_SHA:0:8}\` |"
+            echo ""
+            echo "> **Active path:** narrow int vecs (IVec4/I8Vec4/etc.) are scalar-only"
+            echo "> regardless of target_cpu — no hand-dispatched SIMD backend exists for"
+            echo "> them (matches glam's own design). target_cpu here only affects whatever"
+            echo "> LLVM's autovectorizer decides to do with the scalar code, which is why"
+            echo "> the numbers can still shift between targets despite no explicit backend."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Cache cargo registry + build artifacts
+        if: steps.hwcheck.outputs.skip != 'true'
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-${{ runner.arch }}-bench-narrow-int-${{ inputs.target_cpu }}-v1-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ runner.arch }}-bench-narrow-int-${{ inputs.target_cpu }}-v1-
+
+      - name: Run narrow int criterion benchmarks
+        if: steps.hwcheck.outputs.skip != 'true'
+        run: |
+          set -o pipefail
+          python3 scripts/bench_run_narrow_int.py "${{ inputs.int_type }}" bench-narrow-int-raw.txt
+          echo "Bench exit code: $?" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Surface bench diagnostics
+        if: steps.hwcheck.outputs.skip != 'true'
+        run: |
+          {
+            echo "### Diagnostics"
+            echo '```'
+            grep -E 'took zero time|Unable to complete|Warning:|panicked|Completed [0-9]+ iterations|^error' \
+              bench-narrow-int-raw.txt | head -60 || echo "(none found)"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Publish summary
+        if: steps.hwcheck.outputs.skip != 'true'
+        run: |
+          {
+            echo "## mid-math narrow int — Criterion Benchmarks"
+            echo ""
+            echo "Build: #${{ github.run_number }} &nbsp;|&nbsp; Rust: \`$(rustc --version | cut -d' ' -f2)\` &nbsp;|&nbsp; target-cpu: \`${{ inputs.target_cpu }}\` &nbsp;|&nbsp; int_type: \`${{ inputs.int_type }}\`"
+            echo ""
+            echo "> Widths run this build: $([ '${{ inputs.int_type }}' = 'all' ] && echo 'i8, i16, i32, i64' || echo '${{ inputs.int_type }}')."
+            echo "> Group names: i8vec2/i16vec2/i64vec2 are width-prefixed; i32's are bare"
+            echo "> (ivec2/uvec2) — matches glam's own naming, i32 being the \"default\" width."
+            echo ""
+            BENCH_RAW_FILE=bench-narrow-int-raw.txt python3 scripts/bench_vs_all.py
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload artifacts
+        if: steps.hwcheck.outputs.skip != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: bench-narrow-int-${{ github.run_number }}-${{ inputs.target_cpu }}-${{ inputs.int_type }}
+          path: |
+            bench-narrow-int-raw.txt
+            target/criterion/
+          retention-days: 30
