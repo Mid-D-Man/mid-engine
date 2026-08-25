@@ -195,6 +195,22 @@ impl DVec3 {
 
     #[inline(always)]
     pub fn as_vec3a(self) -> crate::Vec3 { self.as_vec3() }
+
+    /// Large World Coordinates: shifts `self` so `origin` becomes the
+    /// new coordinate zero, in f64 (the subtraction that matters for
+    /// precision), then truncates to f32. Unlike a plain [`Self::as_vec3`]
+    /// cast, this is safe to call regardless of how far `self` is from
+    /// the *world* origin — jitter comes from the magnitude of the
+    /// value being cast, not from anything about `self` on its own, so
+    /// shifting first (typically `origin` = the camera's own current
+    /// `DVec3` position) is what actually prevents it. Precision is
+    /// highest exactly where `origin` is, which is the point of calling
+    /// this with the camera's position specifically before sending
+    /// per-vertex or per-instance data to the GPU.
+    #[inline(always)]
+    pub fn to_view_relative(self, origin: Self) -> crate::Vec3 {
+        (self - origin).as_vec3()
+    }
 }
 
 impl Add  for DVec3 { type Output=Self; #[inline(always)] fn add(self,r:Self)->Self{Self::new(self.x+r.x,self.y+r.y,self.z+r.z)} }

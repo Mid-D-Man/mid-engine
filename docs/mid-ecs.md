@@ -346,6 +346,68 @@ Mid Engine completely avoids the traditional Object-Oriented memory traps by spl
 * Result: Zero memory is physically moved between archetype tables. The engine stays fast, and we avoid the memory-copying lag spikes that plague pure archetype architectures during massive state changes.
 * For lightning-fast entity querying, the engine utilizes a `BitVec` layout (1 boolean into 1 bit), allowing us to filter hundreds of thousands of entities in microseconds using simple bitwise AND operations.
 
+## Large World Coordinates: GlobalTransform
+
+**Status: design only, not yet implemented.** No `GlobalTransform`
+component exists in this crate yet. This section records the design
+decided for it, so implementation starts from an agreed shape rather
+than getting re-litigated. The actual `f64` math primitives this
+design depends on already exist and are real — see `docs/mid-math.md`.
+
+**The decision: two component types, `f32` default, `f64` opt-in —
+not one type, and not `f64` everywhere.**
+
+- `GlobalTransform` — `f32`, backed by `mid-math`'s existing `Affine3`.
+  The default. Lives in the Archetype Core, same as any other static,
+  every-frame-touched component (see "The Archetype Core" above).
+- `GlobalTransformLWC` — `f64`, backed by `mid-math`'s `DAffine3`. Opt-in,
+  for entities that actually travel far enough from world origin to
+  need it (open-world terrain, distant structures, anything a camera
+  might travel tens of kilometers to reach). A distinct archetype
+  family from `GlobalTransform`, not the same component with a
+  runtime-branching representation — a tagged union inside one
+  Archetype Core column would break the homogeneous-`Vec<T>`-column
+  assumption `component.rs`'s FFI-span mechanism (and every other
+  system that reads a column) already depends on, and would cost
+  exactly the cache/branch overhead this split exists to avoid.
+
+**Why `f32` default, not `f64` default:** `DAffine3` is 96 bytes;
+`Affine3` is 48. `GlobalTransform` is about the hottest, most-iterated
+component this engine will ever have — read every frame for every
+visible entity, exactly the access pattern the Archetype Core exists
+to make cache-friendly. Most entities in most scenes (UI-anchored
+objects, particle effects, interior/local gameplay) never travel far
+enough from origin to need `f64` at all. Doubling the stride of the
+hottest column engine-wide, to solve a problem only some entities
+have, is in direct tension with this project's own performance
+mandate — so the cost is opt-in, paid only by the entities that
+actually need it.
+
+**The pipeline this feeds into**, once built: `GlobalTransformLWC`
+holds true world-space state in `f64`. Once per frame, for the
+active camera, every visible `GlobalTransformLWC` gets passed through
+`DAffine3::to_view_relative(camera_position)` (see `docs/mid-math.md`)
+— composing the camera-relative shift and the `f64`→`f32` truncation
+in one step, safe regardless of how far the entity is from world
+origin, because only the shifted (small) translation gets truncated,
+never the raw world-magnitude one. The result is a plain `f32`
+`Affine3`, indistinguishable downstream from a `GlobalTransform`
+entity's own data — rendering, culling, and anything else consuming
+"the" transform for a draw call never needs to know or care which
+storage precision an entity actually used. That narrow point (right
+before GPU upload) is the only place the two component types'
+consumers actually have to know both exist.
+
+**Not yet decided:** how `LocalTransform`/hierarchy (parent-relative,
+always small-magnitude, always `f32` regardless of world size)
+composes into either `GlobalTransform` variant — that's the actual
+"Integrating f64 global transform components into archetype storage
+tables" implementation work, not yet started. `mid-camera` (planned,
+not started — this engine's Cinemachine equivalent, sitting on top of
+both this system and `mid-math`'s existing `camera/` module) is what
+will eventually own "which entity is the active camera" and drive the
+per-frame `to_view_relative` call above.
+
 ## The Ubel Stratum Bridge (The OOP Illusion)
 
 While the Rust core handles the raw, flat memory arrays, the gameplay programmer never has to think about Archetypes or Bitsets.

@@ -179,6 +179,47 @@ mod tests {
         assert!(vec3_approx(back, v3));
     }
 
+    #[test]
+    fn dvec3_to_view_relative_matches_plain_subtraction_and_cast() {
+        let p = DVec3::new(100_000.5, -250.25, 42.0);
+        let origin = DVec3::new(100_000.0, -250.0, 40.0);
+        let got = p.to_view_relative(origin);
+        let expected = (p - origin).as_vec3();
+        assert_eq!(got, expected);
+        assert!((got.x - 0.5).abs() < 1e-4);
+        assert!((got.y - -0.25).abs() < 1e-4);
+        assert!((got.z - 2.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn dvec3_to_view_relative_is_the_actual_fix_for_the_jitter_this_exists_for() {
+        // The whole reason this method exists: a coordinate magnitude
+        // large enough that f32 can no longer represent a small offset
+        // exactly (this is real f32 precision loss, not a contrived
+        // number -- 100_000.1f32 does not round-trip through f32 at
+        // this magnitude). A plain `as_vec3()` cast loses the offset
+        // entirely; shifting by a nearby origin first does not.
+        let camera = DVec3::new(100_000.0, 0.0, 0.0);
+        let point = DVec3::new(100_000.1, 0.0, 0.0);
+
+        let naive = point.as_vec3();
+        let naive_offset = (naive.x - camera.as_vec3().x) as f64;
+        assert!(
+            (naive_offset - 0.1).abs() > 1e-3,
+            "sanity check that this magnitude really does lose precision \
+             under a naive f32 cast -- if this assert fails, the test \
+             number needs to be larger, not the fix removed"
+        );
+
+        let relative = point.to_view_relative(camera);
+        assert!(
+            (relative.x - 0.1).abs() < 1e-4,
+            "to_view_relative must preserve the small offset that a naive \
+             cast just lost: got {}, expected ~0.1",
+            relative.x
+        );
+    }
+
     // ── DQuat ─────────────────────────────────────────────────────────────────
 
     #[test]
@@ -609,6 +650,48 @@ mod tests {
             assert!(d < 1e-10,
                 "col={} row={}: {:.12} vs {:.12}", c, row, m.cols[c][row], m2.cols[c][row]);
         }}
+    }
+
+    #[test]
+    fn daffine3_to_view_relative_shifts_translation_only() {
+        let rotation = DQuat::from_axis_angle(DVec3::Y, 0.5);
+        let scale = DVec3::new(2.0, 3.0, 4.0);
+        let camera = DVec3::new(100_000.0, 200.0, -50.0);
+        let world = DAffine3::from_trs(
+            DVec3::new(100_000.1, 200.2, -49.8),
+            rotation,
+            scale,
+        );
+
+        let relative = world.to_view_relative(camera);
+
+        // Rotation/scale are position-magnitude-independent -- they must
+        // come through completely unaffected by the shift, cast aside.
+        let world_f32 = world.as_affine3();
+        assert!((relative.x_axis - world_f32.x_axis).length() < 1e-4);
+        assert!((relative.y_axis - world_f32.y_axis).length() < 1e-4);
+        assert!((relative.z_axis - world_f32.z_axis).length() < 1e-4);
+
+        // Translation is what actually gets shifted -- and this is the
+        // whole point: the small camera-relative offset survives, where
+        // a plain as_affine3() cast on `world` directly would already
+        // have lost sub-meter precision at this magnitude.
+        assert!((relative.translation.x - 0.1).abs() < 1e-4);
+        assert!((relative.translation.y - 0.2).abs() < 1e-4);
+        assert!((relative.translation.z - 0.2).abs() < 1e-4);
+    }
+
+    #[test]
+    fn daffine3_to_view_relative_at_the_origin_matches_as_affine3() {
+        let a = DAffine3::from_trs(
+            DVec3::new(1.0, 2.0, 3.0),
+            DQuat::from_axis_angle(DVec3::Z, 0.3),
+            DVec3::new(1.0, 1.0, 1.0),
+        );
+        let relative = a.to_view_relative(DVec3::ZERO);
+        let direct = a.as_affine3();
+        assert!((relative.translation - direct.translation).length() < 1e-6);
+        assert!((relative.x_axis - direct.x_axis).length() < 1e-6);
     }
 
     // ── FFI round-trips ───────────────────────────────────────────────────────

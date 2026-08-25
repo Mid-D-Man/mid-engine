@@ -208,6 +208,26 @@ impl DAffine3 {
             translation: self.translation.as_vec3(),
         }
     }
+
+    /// Large World Coordinates: the real "View Space Shift" step —
+    /// shifts `self` so `origin` (typically the camera's own current
+    /// `DAffine3`/`DVec3` position) becomes the new coordinate zero,
+    /// composed in f64, *then* truncates to f32 via [`Self::as_affine3`].
+    /// Unlike calling `as_affine3` directly, this is safe regardless of
+    /// how far `self` is from the *world* origin: rotation and scale
+    /// (`matrix3`) are unaffected by the shift (they're not
+    /// position-magnitude-dependent, so they never needed f64 in the
+    /// first place) — only `translation` is shifted, from a
+    /// world-magnitude value down to a small, camera-relative one,
+    /// which is what makes truncating it to f32 safe. Precision is
+    /// highest exactly where `origin` is, i.e. right where the camera
+    /// is looking, which is the whole point of calling this once per
+    /// frame with the camera's own current transform before sending
+    /// per-vertex or per-instance data to the GPU.
+    #[inline]
+    pub fn to_view_relative(self, origin: DVec3) -> crate::Affine3 {
+        (Self::from_translation(-origin) * self).as_affine3()
+    }
 }
 
 // ── Mul: compose two affine transforms ───────────────────────────────────────
