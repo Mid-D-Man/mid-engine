@@ -32,9 +32,10 @@ on:
                        aarch64 runner — activates wide/int/neon/ (fixed
                        this pass; was implemented but not dispatched).
           wasm       = WebAssembly wasm32-wasip1 + simd128 via wasmtime.
-                       wide/int has NO WASM SIMD128 backend yet — this
-                       currently exercises the scalar fallback cross-
-                       compiled to wasm32, not a true SIMD path.
+                       activates wide/int/wasm/ (landed this pass —
+                       every function name checked against stdarch's
+                       simd128.rs source, not yet confirmed by an
+                       actual wasm32 CI run).
           scalar     = pure scalar fallback via --features force-scalar —
                        wide/int/mod.rs respects this the same as wide/float.
         required: true
@@ -173,7 +174,7 @@ jobs:
             elif [ "${{ inputs.target_cpu }}" = "neon" ]; then
               echo "> **Active path:** wide/int/neon/ (fixed this pass — was implemented, not dispatched)" >> "$GITHUB_STEP_SUMMARY"
             elif [ "${{ inputs.target_cpu }}" = "wasm" ]; then
-              echo "> **Active path:** wide/int/scalar/ cross-compiled to wasm32 — no WASM SIMD128 backend yet" >> "$GITHUB_STEP_SUMMARY"
+              echo "> **Active path:** wide/int/wasm/ (landed this pass)" >> "$GITHUB_STEP_SUMMARY"
             else
               AVX2=$(rustc --print cfg $ACTIVE_CPU_FLAGS 2>&1 | grep -c 'target_feature="avx2"' || true)
               if [ "$AVX2" -gt 0 ]; then
