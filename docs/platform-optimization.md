@@ -461,3 +461,31 @@ consistently fastest, glam's scalar-storage types consistently slowest)
 held across both this run and the previous one, so that comparison is
 probably still meaningful even if the exact `wide` numbers move on
 the next run.
+
+### Narrow-int bench workflow — consolidated
+
+`.github/workflows/bench-vs-narrow-int.yml` covers all four narrow
+widths (i8/i16/i32/i64) in one workflow, same `target_cpu` + a new
+`int_type` dropdown pattern as the wide-int workflow — but the meaning
+of `target_cpu` is genuinely different here and the dropdown description
+says so explicitly: narrow int vecs have **no hand-dispatched SIMD
+backend at all** (scalar-only by design, matches glam — see §4).
+`target_cpu` only affects whatever LLVM's autovectorizer decides to do
+with the scalar code, not a manual backend selection like wide-int or f32.
+
+Unlike `vs_wide_int.rs` (one file, filtered by criterion name), the four
+narrow widths are four separate bench targets (`vs_int8`/`vs_int16`/
+`vs_int32`/`vs_int64` — no combined file). `int_type` therefore picks
+which target(s) to *run*, not a name filter within one. That branching
+logic lives in the new `scripts/bench_run_narrow_int.py`, which runs
+the selected target(s) in sequence and concatenates their raw output
+into one file for `scripts/bench_vs_all.py` to summarize — verified
+its regex-based parser is a permissive scan over the whole file (not a
+strict per-line state machine), so interleaved `=== vs_int8 ===`-style
+separator lines between runs don't break it; they're simply skipped.
+
+Group naming across the four bench files isn't uniform — i8/i16/i64
+prefix their group names with the width (`i8vec2`, `i64vec2`), i32's
+don't (`ivec2`, `uvec2` — the "default" width, matching glam's own
+convention of leaving `IVec4` unprefixed). Noted in the workflow's
+summary step so it doesn't read as inconsistent.
