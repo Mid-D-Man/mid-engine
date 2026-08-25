@@ -100,6 +100,32 @@ type FfiSpanAccessor = fn(&dyn Any) -> FfiSpan;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ArchetypeId(u32);
 
+impl ArchetypeId {
+    /// Unpacks this id as a plain `u32`, for crossing the FFI boundary.
+    /// Same shape as `ComponentId::as_u32`, for the same reason —
+    /// `ffi.rs` needs a real accessor since this field is private even
+    /// within this crate (more so than `ComponentId`'s own
+    /// `pub(crate)` field), by design: nothing outside this module
+    /// should construct an `ArchetypeId` except through a real
+    /// `Archetypes` operation, and this accessor doesn't weaken that —
+    /// it only ever hands out the `u32` of an `ArchetypeId` that
+    /// already exists.
+    #[inline]
+    pub fn as_u32(self) -> u32 {
+        self.0
+    }
+
+    /// Reconstructs an `ArchetypeId` from a `u32` produced by
+    /// [`Self::as_u32`]. Safe even for a bogus value — every real
+    /// `Archetypes` method looks it up in `self.archetypes` before
+    /// touching anything, so a bogus id just reads back as "doesn't
+    /// exist" everywhere it's used, never as some other real archetype.
+    #[inline]
+    pub fn from_u32(value: u32) -> Self {
+        Self(value)
+    }
+}
+
 impl SparseSetIndex for ArchetypeId {
     #[inline]
     fn sparse_index(&self) -> u32 {
@@ -1262,6 +1288,22 @@ mod tests {
     fn entity_ids_on_a_never_registered_component_id_is_none() {
         let ar = Archetypes::new();
         assert_eq!(ar.entity_ids(EMPTY_ARCHETYPE, ComponentId(0)), None);
+    }
+
+    #[test]
+    fn archetype_id_as_u32_from_u32_round_trips() {
+        assert_eq!(
+            ArchetypeId::from_u32(EMPTY_ARCHETYPE.as_u32()),
+            EMPTY_ARCHETYPE
+        );
+        let mut spawn = entity_factory();
+        let mut ar = Archetypes::new();
+        let id = ar.register_ffi::<FfiHealth>("FfiHealth");
+        let e = spawn();
+        ar.spawn(e);
+        assert!(ar.insert(e, id, FfiHealth { hp: 1 }));
+        let archetype_id = ar.archetypes_with(id).next().expect("just inserted");
+        assert_eq!(ArchetypeId::from_u32(archetype_id.as_u32()), archetype_id);
     }
 
     #[test]

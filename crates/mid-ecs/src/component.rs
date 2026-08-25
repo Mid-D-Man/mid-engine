@@ -107,6 +107,30 @@ type EntityFfiAccessor = fn(&dyn Any) -> Vec<u64>;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ComponentId(pub(crate) u32);
 
+impl ComponentId {
+    /// Unpacks this id as a plain `u32`, for crossing the FFI boundary
+    /// — `ffi.rs` uses this so it never has to reach into this type's
+    /// `pub(crate)` field directly from a sibling module. Unlike
+    /// `Entity::as_ffi`, there's no generation/validity concept to
+    /// preserve here: a `ComponentId` is already just a dense index,
+    /// so this is a plain unwrap, not a real pack.
+    #[inline]
+    pub fn as_u32(self) -> u32 {
+        self.0
+    }
+
+    /// Reconstructs a `ComponentId` from a `u32` produced by
+    /// [`Self::as_u32`]. Safe even for a bogus value that never came
+    /// from a real registration — it just won't match any entry in a
+    /// `SparseShell`'s accessor maps, reading back as "not registered"
+    /// everywhere it's used, the same safety shape `Entity::from_ffi`
+    /// documents for its own bogus-input case.
+    #[inline]
+    pub fn from_u32(value: u32) -> Self {
+        Self(value)
+    }
+}
+
 impl SparseSetIndex for ComponentId {
     #[inline]
     fn sparse_index(&self) -> u32 {
@@ -702,6 +726,13 @@ mod tests {
     fn entity_ids_on_a_never_registered_component_id_is_none() {
         let shell = SparseShell::new();
         assert_eq!(shell.entity_ids(ComponentId(0)), None);
+    }
+
+    #[test]
+    fn component_id_as_u32_from_u32_round_trips() {
+        let mut shell = SparseShell::new();
+        let id = shell.register_ffi::<FfiPosition>("FfiPosition");
+        assert_eq!(ComponentId::from_u32(id.as_u32()), id);
     }
 
     #[test]
