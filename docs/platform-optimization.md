@@ -327,9 +327,9 @@ for why that split exists).
 | Backend | Target                        | Types                                                    | Status |
 |---------|-------------------------------|-----------------------------------------------------------|--------|
 | SSE2    | x86 / x86_64                  | i32x4, u32x4, i16x8, u16x8, i8x16, u8x16, IMask4/8/16     | ✅ |
-| NEON    | aarch64                       | i32x4, u32x4, i16x8, u16x8, i8x16, u8x16, IMask4/8/16     | ✅ fixed — was implemented but not wired into dispatch, silently falling back to scalar |
+| NEON    | aarch64                       | i32x4, u32x4, i16x8, u16x8, i8x16, u8x16, IMask4/8/16     | ✅ fixed — was implemented but not wired into dispatch, silently falling back to scalar. Wiring it in exposed a real pre-existing bug (i8x16/u8x16 `element_sum` declared `i32`/`u32` return but `vaddlvq_s8`/`u8` actually return `i16`/`u16` — dead code that had literally never been compiled before) — fixed with `.into()` |
 | AVX2    | x86 / x86_64 + avx2 feature   | i32x8, u32x8, i16x16, u16x16, i8x32, u8x32, IMask32x8/16x16/8x32 | ✅ additive, not a replacement — same relationship as `Vec3x8` to `Vec3x4` |
-| WASM    | wasm32/64 + simd128 feature   | i32x4, u32x4, i16x8, u16x8, i8x16, u8x16                 | ⬜ not started |
+| WASM    | wasm32/64 + simd128 feature   | i32x4, u32x4, i16x8, u16x8, i8x16, u8x16, IMask4/8/16     | ✅ every function name checked directly against stdarch's `simd128.rs` source before use |
 | Scalar  | all others                    | i32x4, u32x4, i16x8, u16x8, i8x16, u8x16, IMask4/8/16     | ✅ |
 
 ### AVX2 native wins over SSE2
@@ -400,8 +400,31 @@ platform-firing dropdown as `A-mid-math — bench vs all`
 filter). Selecting an AVX2 type with a non-AVX2 target_cpu just matches
 nothing (criterion doesn't error on an empty filter match) — documented
 in the dropdown description rather than added as extra yml logic.
-`wasm` currently exercises the scalar fallback cross-compiled to
-wasm32 — no WASM SIMD128 backend exists for wide/int yet (see above).
+`wasm` now exercises a real WASM SIMD128 backend for wide/int (`i32x4`
+etc.) as of this pass — previously fell back to scalar cross-compiled to
+wasm32. Every WASM function name used (`i32x4_mul`, `v128_bitselect`,
+`extend_low`/`extend_high`, `i8x16_swizzle`, etc.) was checked directly
+against stdarch's `core_arch/src/wasm32/simd128.rs` source rather than
+recalled from memory, given there's no compiler in this pass's sandbox
+to catch a wrong name — still worth a real `cargo test --target
+wasm32-wasip1` pass to confirm, same caveat as the NEON/AVX2 work.
+
+### WASM vs SSE2 — where WASM turned out simpler
+
+`i32x4_mul` is native (SSE2 needs a shuffle/unpack chain). `i32x4_min`/
+`max` and all four `u32x4` comparisons are native (SSE2 emulates via
+compare+blend, or the XOR-sign-flip trick for unsigned). `v128_bitselect`
+is a single instruction for blend (SSE2 needs and+andnot+or). The
+`extend_low`/`extend_high` widen instructions take the whole register
+as one argument and return the correct half directly — no separate
+extract-then-convert step, unlike x86 needing a 128-bit half pulled out
+first on AVX2. `i8x16_swizzle` is a genuine flat 16-byte shuffle with no
+cross-lane hazard — v128 only has one 128-bit lane, so the per-lane
+restriction that AVX2's `i8x32::shuffle_bytes` has to document doesn't
+exist here at all. `u8x16::element_sum` is the one place WASM is
+*worse* than SSE2 — no SAD-style horizontal-byte-sum instruction, so it
+falls back to a widen-and-fold loop instead of SSE2's single
+`_mm_sad_epu8`.
 
 ### `wide`-crate comparison numbers were misleading — missing `[profile.bench]`
 

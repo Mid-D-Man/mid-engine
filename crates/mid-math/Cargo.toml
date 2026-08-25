@@ -72,6 +72,14 @@ harness = false
 [[bench]]
 name    = "vs_int32"
 harness = false
+
+[[bench]]
+name    = "vs_int8"
+harness = false
+
+[[bench]]
+name    = "vs_int16"
+harness = false
  
 [[bench]]
 name    = "vs_int64"

@@ -8,7 +8,7 @@
 //! | SSE2    | x86 / x86_64                  | i32x4, u32x4, i16x8, u16x8, i8x16, u8x16, IMask4/8/16     |
 //! | NEON    | aarch64                       | i32x4, u32x4, i16x8, u16x8, i8x16, u8x16, IMask4/8/16     |
 //! | AVX2    | x86 / x86_64 + avx2 feature   | i32x8, u32x8, i16x16, u16x16, i8x32, u8x32, IMask32x8/16x16/8x32 (additional) |
-//! | WASM    | wasm32/64 + simd128 feature   | i32x4, u32x4, i16x8, u16x8, i8x16, u8x16 (next pass)      |
+//! | WASM    | wasm32/64 + simd128 feature   | i32x4, u32x4, i16x8, u16x8, i8x16, u8x16, IMask4/8/16     |
 //! | Scalar  | all others                    | i32x4, u32x4, i16x8, u16x8, i8x16, u8x16, IMask4/8/16     |
 //!
 //! Mirrors `wide/float/mod.rs`'s dispatch shape.
@@ -28,10 +28,16 @@
 //!
 //! AVX2 adds i32x8/u32x8/i16x16/u16x16/i8x32/u8x32 (additive like
 //! Vec3x8, not gated by force-scalar) — see `wide/int/avx2/mod.rs` for
-//! the per-op advantage table and this pass's known omissions.
+//! the per-op advantage table and known omissions/fixes.
 //!
-//! WASM (same widths as SSE2/NEON, mirrors `wide/float/wasm/`) is
-//! landing in a follow-up pass — see docs/platform-optimization.md §9.
+//! WASM (same widths as SSE2/NEON) is wired in this pass — see
+//! `wide/int/wasm/mod.rs` for the per-op WASM-vs-SSE2 comparison. The
+//! scalar fallback's exclusion list needed the SAME fix NEON needed:
+//! narrowed to also exclude `wasm32`/`wasm64` — but conditionally, only
+//! when `target_feature = "simd128"` is actually enabled, since a wasm
+//! target *without* simd128 still needs scalar as a real fallback (this
+//! is why it's `all(wasm-arch, simd128)` inside the `not(any(...))`
+//! below, not a bare arch check like aarch64's).
 
 // ── Scalar fallback — always compiled ────────────────────────────────────────
 pub(crate) mod scalar;
@@ -107,10 +113,36 @@ pub use avx2::{
     i8x32::i8x32, u8x32::u8x32,
 };
 
-// ── WASM SIMD128 (next pass) ───────────────────────────────────────────────────
+// ── WASM SIMD128 — wasm32 / wasm64 + simd128 ──────────────────────────────────
 //
-// Same i32x4/u32x4/i16x8/u16x8/i8x16/u8x16 widths as SSE2/NEON above,
-// mirrors wide/float/wasm/'s approach.
+// Same widths as SSE2/NEON above — see wide/int/wasm/mod.rs for the
+// per-op WASM-vs-SSE2 comparison table and the (SSE2-matching, hardware-
+// inherent) gaps: no i32/u32 saturating add/sub, no i8/u8 multiply.
+
+#[cfg(all(
+    any(target_arch = "wasm32", target_arch = "wasm64"),
+    target_feature = "simd128",
+))]
+pub(crate) mod wasm;
+
+#[cfg(all(
+    any(target_arch = "wasm32", target_arch = "wasm64"),
+    target_feature = "simd128",
+    not(feature = "force-scalar"),
+))]
+pub use wasm::{IMask4, IMask8, IMask16};
+
+#[cfg(all(
+    any(target_arch = "wasm32", target_arch = "wasm64"),
+    target_feature = "simd128",
+    not(feature = "force-scalar"),
+))]
+#[allow(non_camel_case_types)]
+pub use wasm::{
+    i32x4::i32x4, u32x4::u32x4,
+    i16x8::i16x8, u16x8::u16x8,
+    i8x16::i8x16, u8x16::u8x16,
+};
 
 // ── Scalar fallback ───────────────────────────────────────────────────────────
 //
@@ -120,12 +152,19 @@ pub use avx2::{
 // aarch64 simultaneously (a duplicate-definition compile error) the
 // moment the neon mod/pub-use pair above was added.
 
+// Scalar fallback — narrowed each time a new backend gets wired in
+// above (aarch64 excluded when NEON landed; wasm32/wasm64+simd128
+// excluded now that WASM has too). The wasm exclusion is conditional
+// on simd128 specifically, not the bare arch — a wasm32 target WITHOUT
+// simd128 enabled still needs to fall through to scalar correctly.
+
 #[cfg(any(
     feature = "force-scalar",
     not(any(
         target_arch = "x86",
         target_arch = "x86_64",
         target_arch = "aarch64",
+        all(any(target_arch = "wasm32", target_arch = "wasm64"), target_feature = "simd128"),
     )),
 ))]
 pub use scalar::{IMask4, IMask8, IMask16};
@@ -136,6 +175,7 @@ pub use scalar::{IMask4, IMask8, IMask16};
         target_arch = "x86",
         target_arch = "x86_64",
         target_arch = "aarch64",
+        all(any(target_arch = "wasm32", target_arch = "wasm64"), target_feature = "simd128"),
     )),
 ))]
 #[allow(non_camel_case_types)]

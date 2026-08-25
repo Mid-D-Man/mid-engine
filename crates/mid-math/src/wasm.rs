@@ -22,6 +22,23 @@ pub(crate) const fn v128_from_f32x4(a: [f32; 4]) -> v128 {
     unsafe { core::mem::transmute(a) }
 }
 
+// Integer variants — used by wide/int/wasm/ for compile-time constants
+// (ZERO/ONE/MIN/MAX etc). Only the signed-array forms exist: an
+// unsigned array's bit pattern is identical to its signed counterpart
+// at every width (transmute doesn't care about signedness), so
+// u32x4::MAX etc. is built by passing `u32::MAX as i32` into
+// `v128_from_i32x4` rather than duplicating a `[u32; N]` overload —
+// same approach the AVX2 backend's `UnionCast` helpers use.
+pub(crate) const fn v128_from_i32x4(a: [i32; 4]) -> v128 {
+    unsafe { core::mem::transmute(a) }
+}
+pub(crate) const fn v128_from_i16x8(a: [i16; 8]) -> v128 {
+    unsafe { core::mem::transmute(a) }
+}
+pub(crate) const fn v128_from_i8x16(a: [i8; 16]) -> v128 {
+    unsafe { core::mem::transmute(a) }
+}
+
 /// 3-lane dot product.  Result lands in lane 0; lanes 1-3 are unspecified.
 ///
 /// Horizontal add pattern:

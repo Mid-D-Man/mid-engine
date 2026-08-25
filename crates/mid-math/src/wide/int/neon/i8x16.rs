@@ -88,7 +88,7 @@ impl i8x16 {
     #[inline] pub fn max_element(self) -> i8 { unsafe { vmaxvq_s8(self.0) } }
 
     /// `vaddlvq_s8` — sign-widened sum → i32, avoids i8 overflow entirely.
-    #[inline] pub fn element_sum(self) -> i32 { unsafe { vaddlvq_s8(self.0) } }
+    #[inline] pub fn element_sum(self) -> i32 { unsafe { vaddlvq_s8(self.0).into() } }
 
     // ── Saturating ────────────────────────────────────────────────────────────
 

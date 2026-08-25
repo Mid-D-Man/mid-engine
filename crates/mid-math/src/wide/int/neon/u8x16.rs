@@ -82,7 +82,7 @@ impl u8x16 {
     /// `vmaxvq_u8` — single UMAXV instruction.
     #[inline] pub fn max_element(self) -> u8 { unsafe { vmaxvq_u8(self.0) } }
     /// `vaddlvq_u8` — zero-widened sum → u32, avoids u8 overflow.
-    #[inline] pub fn element_sum(self) -> u32 { unsafe { vaddlvq_u8(self.0) } }
+    #[inline] pub fn element_sum(self) -> u32 { unsafe { vaddlvq_u8(self.0).into() } }
 
     // ── Saturating ────────────────────────────────────────────────────────────
 
