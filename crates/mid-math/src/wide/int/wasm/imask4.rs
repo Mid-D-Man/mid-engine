@@ -53,7 +53,3 @@ impl Eq for IMask4 {}
 impl fmt::Debug for IMask4 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result { write!(f, "IMask4({:04b})", self.bitmask()) }
 }
-
-// unused import silencer for i32x4_splat brought in for symmetry with sibling files
-#[allow(unused_imports)]
-use i32x4_splat as _unused_i32x4_splat_reexport_guard;

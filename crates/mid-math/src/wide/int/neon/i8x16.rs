@@ -60,6 +60,15 @@ impl i8x16 {
         Self(unsafe { vld1q_s8(a.as_ptr()) })
     }
 
+    /// Load from a `[u8; 16]` — common when processing raw byte streams.
+    /// Added to match sse2/scalar (was missing — surfaced by a
+    /// backend-agnostic bench calling it, which compiled fine against
+    /// sse2/scalar but not neon).
+    #[inline(always)]
+    pub fn from_bytes(b: [u8; 16]) -> Self {
+        Self(unsafe { vld1q_s8(b.as_ptr() as *const i8) })
+    }
+
     #[inline(always)]
     pub fn to_array(self) -> [i8; 16] {
         let mut a = [0i8; 16];
@@ -67,10 +76,33 @@ impl i8x16 {
         a
     }
 
+    /// Matches sse2/scalar — see `from_bytes`.
+    #[inline(always)]
+    pub fn to_bytes(self) -> [u8; 16] {
+        let mut a = [0u8; 16];
+        unsafe { vst1q_s8(a.as_mut_ptr() as *mut i8, self.0) };
+        a
+    }
+
     #[inline]
     pub fn get(self, idx: usize) -> i8 {
         assert!(idx < 16, "i8x16::get — lane {idx} out of bounds");
         unsafe { UnionCast { v: self }.i[idx] }
+    }
+
+    // ── Count / population ───────────────────────────────────────────────────
+    // Matches sse2/scalar — see `from_bytes`'s note.
+
+    /// Number of lanes that compare equal to `needle`.
+    #[inline]
+    pub fn count_eq(self, needle: Self) -> u32 {
+        self.cmpeq(needle).count_true()
+    }
+
+    /// True if any lane equals `needle`.
+    #[inline]
+    pub fn contains(self, needle: i8) -> bool {
+        self.count_eq(Self::splat(needle)) > 0
     }
 
     // ── Arithmetic ────────────────────────────────────────────────────────────

@@ -57,6 +57,12 @@ impl u8x16 {
         Self(unsafe { vld1q_u8(a.as_ptr()) })
     }
 
+    /// Alias for `from_array` — u8 already IS the byte type. Added to
+    /// match sse2/scalar (was missing — same gap as i8x16's, surfaced
+    /// by a backend-agnostic bench calling it).
+    #[inline(always)]
+    pub fn from_bytes(b: [u8; 16]) -> Self { Self::from_array(b) }
+
     #[inline(always)]
     pub fn to_array(self) -> [u8; 16] {
         let mut a = [0u8; 16];
@@ -68,6 +74,21 @@ impl u8x16 {
     pub fn get(self, idx: usize) -> u8 {
         assert!(idx < 16, "u8x16::get — lane {idx} out of bounds");
         unsafe { UnionCast { v: self }.u[idx] }
+    }
+
+    // ── Count / population ───────────────────────────────────────────────────
+    // Matches sse2/scalar — see `from_bytes`'s note.
+
+    /// Number of lanes that compare equal to `needle`.
+    #[inline]
+    pub fn count_eq(self, needle: Self) -> u32 {
+        self.cmpeq(needle).count_true()
+    }
+
+    /// True if any lane equals `needle`.
+    #[inline]
+    pub fn contains(self, needle: u8) -> bool {
+        self.count_eq(Self::splat(needle)) > 0
     }
 
     // ── Arithmetic ────────────────────────────────────────────────────────────
