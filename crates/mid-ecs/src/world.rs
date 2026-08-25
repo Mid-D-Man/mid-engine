@@ -263,12 +263,21 @@ impl World {
     /// attached instance of a Sparse-Shell component type — thin
     /// wrapper over `SparseShell::raw_span`. `None` if `id` doesn't
     /// exist or was never opted in via
-    /// [`Self::register_ffi_component`]. See `SparseShell::raw_span`'s
-    /// own doc comment for the entity-correlation gap this doesn't
-    /// close yet, and `mid_collections::FfiSpan`'s own doc comment for
-    /// the invalidation contract the caller has to honor.
+    /// [`Self::register_ffi_component`]. Pair with
+    /// [`Self::component_entity_ids`] for which `Entity` owns each
+    /// element of the span this returns. See
+    /// `mid_collections::FfiSpan`'s own doc comment for the
+    /// invalidation contract the caller has to honor.
     pub fn component_raw_span(&self, id: ComponentId) -> Option<FfiSpan> {
         self.components.raw_span(id)
+    }
+
+    /// Entity-correlation counterpart to [`Self::component_raw_span`] —
+    /// thin wrapper over `SparseShell::entity_ids`. `component_entity_ids(id)[i]`
+    /// is the `Entity` that owns `component_raw_span(id)`'s element
+    /// `i`, for every valid `i`.
+    pub fn component_entity_ids(&self, id: ComponentId) -> Option<Vec<u64>> {
+        self.components.entity_ids(id)
     }
 
     /// Looks up the `ComponentId` a Sparse-Shell type was registered
@@ -366,13 +375,27 @@ impl World {
     /// [`Self::component_raw_span`] (Sparse Shell) doesn't: one
     /// component type's data isn't one stable thing here, it's spread
     /// across every archetype currently containing it. Pair with
-    /// [`Self::archetypes_with_static_component`] to enumerate them.
+    /// [`Self::archetypes_with_static_component`] to enumerate them,
+    /// and with [`Self::static_component_entity_ids`] for which
+    /// `Entity` owns each element of the span this returns.
     pub fn static_component_raw_span(
         &self,
         archetype_id: ArchetypeId,
         component_id: ComponentId,
     ) -> Option<FfiSpan> {
         self.archetypes.raw_span(archetype_id, component_id)
+    }
+
+    /// Entity-correlation counterpart to
+    /// [`Self::static_component_raw_span`] — thin wrapper over
+    /// `Archetypes::entity_ids`, for the same `(archetype_id,
+    /// component_id)` pair.
+    pub fn static_component_entity_ids(
+        &self,
+        archetype_id: ArchetypeId,
+        component_id: ComponentId,
+    ) -> Option<Vec<u64>> {
+        self.archetypes.entity_ids(archetype_id, component_id)
     }
 
     /// Enumerates every currently-existing archetype whose signature
@@ -870,6 +893,39 @@ mod tests {
     }
 
     #[test]
+    fn component_entity_ids_correlate_with_raw_span_through_world() {
+        let mut w = World::new();
+        let id = w.register_ffi_component::<FfiHealth>("FfiHealth");
+        let e1 = w.spawn();
+        let e2 = w.spawn();
+        w.insert(e1, FfiHealth { hp: 10 });
+        w.insert(e2, FfiHealth { hp: 20 });
+
+        let ids = w
+            .component_entity_ids(id)
+            .expect("registered and populated");
+        let span = w.component_raw_span(id).expect("registered and populated");
+        assert_eq!(ids.len(), span.count);
+        // SAFETY: span points at World's own live storage, unmutated
+        // since the calls above.
+        let values =
+            unsafe { core::slice::from_raw_parts(span.ptr.cast::<FfiHealth>(), span.count) };
+        // Real round trip through the same packing every other Entity
+        // FFI path already uses (World::spawn/despawn's own
+        // as_ffi/from_ffi), not just "some u64 at this index".
+        assert_eq!(Entity::from_ffi(ids[0]), e1);
+        assert_eq!(Entity::from_ffi(ids[1]), e2);
+        assert_eq!(values[0], FfiHealth { hp: 10 });
+        assert_eq!(values[1], FfiHealth { hp: 20 });
+    }
+
+    #[test]
+    fn component_entity_ids_on_never_registered_id_is_none() {
+        let w = World::new();
+        assert_eq!(w.component_entity_ids(ComponentId(0)), None);
+    }
+
+    #[test]
     fn lookup_ffi_component_id_round_trips_through_world() {
         let mut w = World::new();
         let id = w.register_ffi_component::<FfiHealth>("FfiHealth");
@@ -900,6 +956,54 @@ mod tests {
             unsafe { core::slice::from_raw_parts(span.ptr.cast::<FfiHealth>(), span.count) };
         assert_eq!(values[0], FfiHealth { hp: 100 });
         assert_eq!(values[1], FfiHealth { hp: 200 });
+    }
+
+    #[test]
+    fn static_component_entity_ids_correlate_with_raw_span_through_world() {
+        let mut w = World::new();
+        let id = w.register_ffi_static_component::<FfiHealth>("FfiHealthStatic");
+        let e1 = w.spawn();
+        let e2 = w.spawn();
+        assert!(w.insert_static(e1, FfiHealth { hp: 100 }));
+        assert!(w.insert_static(e2, FfiHealth { hp: 200 }));
+
+        let archetype_id = w
+            .archetypes_with_static_component(id)
+            .next()
+            .expect("both entities must share one archetype");
+        let ids = w
+            .static_component_entity_ids(archetype_id, id)
+            .expect("registered and populated");
+        let span = w
+            .static_component_raw_span(archetype_id, id)
+            .expect("registered and populated");
+        assert_eq!(ids.len(), span.count);
+        // SAFETY: span points at World's own live storage, unmutated
+        // since the calls above.
+        let values =
+            unsafe { core::slice::from_raw_parts(span.ptr.cast::<FfiHealth>(), span.count) };
+        assert_eq!(Entity::from_ffi(ids[0]), e1);
+        assert_eq!(Entity::from_ffi(ids[1]), e2);
+        assert_eq!(values[0], FfiHealth { hp: 100 });
+        assert_eq!(values[1], FfiHealth { hp: 200 });
+    }
+
+    #[test]
+    fn static_component_entity_ids_on_never_registered_id_is_none() {
+        let mut w = World::new();
+        let health_id = w.register_ffi_static_component::<FfiHealth>("FfiHealthStatic");
+        let e = w.spawn();
+        assert!(w.insert_static(e, FfiHealth { hp: 1 }));
+        let archetype_id = w
+            .archetypes_with_static_component(health_id)
+            .next()
+            .expect("just inserted, must exist");
+
+        assert_eq!(
+            w.static_component_entity_ids(archetype_id, ComponentId(9999)),
+            None,
+            "9999 was never registered, unlike `health_id` itself"
+        );
     }
 
     #[test]

@@ -80,6 +80,26 @@ use crate::world::Entity;
 /// wouldn't satisfy. Opting a type in is explicit and per-type instead.
 type FfiSpanAccessor = fn(&dyn Any) -> FfiSpan;
 
+/// Type-erased accessor for reading a registered component column's
+/// **entity correlation** -- which live `Entity` each element of the
+/// matching [`FfiSpanAccessor`]'s [`FfiSpan`] belongs to, in the same
+/// dense order. Same monomorphize-once-per-`T`-at-registration shape as
+/// [`FfiSpanAccessor`], for the same reason (needs `T` to downcast the
+/// type-erased column).
+///
+/// Returns an owned `Vec<u64>` rather than a zero-copy view: `Entity`
+/// itself isn't `#[repr(C)]`/zerocopy-compatible (its fields are
+/// deliberately private -- see `Entity::as_ffi`'s own doc comment in
+/// `world.rs`), so there is no live, reinterpretable memory to point
+/// into the way [`FfiSpan::from_slice`] points into an already-real
+/// `&[T]`. Packing each dense-order `Entity` through [`Entity::as_ffi`]
+/// necessarily produces new data, not a view of existing data. Real,
+/// deliberate scope for *this* increment: this is Rust-internal only --
+/// no `extern "C"` function hands this `Vec` across the FFI boundary
+/// yet, so no cross-language ownership question needs answering here.
+/// That question is the next real increment, not this one.
+type EntityFfiAccessor = fn(&dyn Any) -> Vec<u64>;
+
 /// Dense identifier for a registered component type within one
 /// [`SparseShell`]. **Not** the same thing as `TypeId` — see this
 /// module's doc comment for why the distinction matters. Only meaningful
@@ -129,6 +149,16 @@ pub struct SparseShell {
     /// [`Self::register_ffi`] -- most types will never have an entry
     /// here, which is the point (see [`FfiSpanAccessor`]'s doc comment).
     ffi_accessors: HashMap<ComponentId, FfiSpanAccessor>,
+    /// Entity-correlation counterpart to `ffi_accessors` -- populated
+    /// for the exact same set of `ComponentId`s, at the same time (see
+    /// [`Self::register_ffi`]). Kept as a second map rather than
+    /// widening `FfiSpanAccessor`'s own return type: the two accessors
+    /// have genuinely different shapes (a zero-copy `FfiSpan` view vs.
+    /// an owned, freshly-packed `Vec<u64>`, see [`EntityFfiAccessor`]'s
+    /// own doc comment for why), so folding them into one closure would
+    /// mean paying the entity-packing cost even for a caller that only
+    /// ever wants [`Self::raw_span`] and never [`Self::entity_ids`].
+    ffi_entity_accessors: HashMap<ComponentId, EntityFfiAccessor>,
     /// The FFI-facing counterpart to Rust's own `TypeId`-based lookup:
     /// a C caller has no `TypeId`, so [`Self::register_ffi`] also
     /// records a plain string name a C caller *can* supply, resolved
@@ -144,6 +174,7 @@ impl SparseShell {
             columns: SparseSet::new(),
             next_id: 0,
             ffi_accessors: HashMap::new(),
+            ffi_entity_accessors: HashMap::new(),
             ffi_names: HashMap::new(),
         }
     }
@@ -310,6 +341,14 @@ impl SparseShell {
                 FfiSpan::from_slice(set.values_slice())
             }) as FfiSpanAccessor
         });
+        self.ffi_entity_accessors.entry(id).or_insert_with(|| {
+            (|column: &dyn Any| -> Vec<u64> {
+                let set = column
+                    .downcast_ref::<SparseSet<Entity, T>>()
+                    .expect("ComponentId must always map to a column of its own registered type");
+                set.keys().map(|entity| entity.as_ffi()).collect()
+            }) as EntityFfiAccessor
+        });
         match self.ffi_names.get(name) {
             Some(&existing) if existing != id => panic!(
                 "SparseShell::register_ffi: name {name:?} is already registered for a different component type"
@@ -327,15 +366,12 @@ impl SparseShell {
     /// doesn't exist, or exists but was never opted into FFI exposure
     /// via [`Self::register_ffi`].
     ///
-    /// **Not yet paired with an entity-correlation span** — a caller
-    /// can read the raw values but can't yet tell which `Entity` each
-    /// one belongs to. Real, flagged gap, not an oversight: `Entity`
-    /// itself isn't `#[repr(C)]`/zerocopy-compatible today (its fields
-    /// are deliberately private — see `Entity::as_ffi`/`from_ffi`'s own
-    /// doc comment in `world.rs`), so a zero-copy `FfiSpan` over the
-    /// dense entity array isn't possible without a real decision about
-    /// how `Entity` itself should cross this specific boundary. Next
-    /// real increment, not attempted here.
+    /// Paired with [`Self::entity_ids`]: `entity_ids(id)[i]` is the
+    /// `Entity` that owns `raw_span(id)`'s element `i`, for every valid
+    /// `i` — same dense order, same registration gate, same `None`/
+    /// empty-`Some` conventions. See [`Self::entity_ids`]'s own doc
+    /// comment for why that's a separate, owned `Vec<u64>` rather than
+    /// a second field folded into [`FfiSpan`] itself.
     ///
     /// # Safety contract for the caller (documented, not compiler-
     /// enforced past this point — see `FfiSpan`'s own doc comment)
@@ -353,6 +389,30 @@ impl SparseShell {
             // (empty, not a special not-found signal, for "nothing
             // inserted yet") rather than introducing a second one.
             None => Some(FfiSpan::empty()),
+        }
+    }
+
+    /// Entity-correlation counterpart to [`Self::raw_span`]: for the
+    /// same `id`, returns which live `Entity` owns each element of
+    /// `raw_span(id)`'s span, in the same dense order —
+    /// `entity_ids(id)[i]` and `raw_span(id)`'s element `i` always
+    /// describe the same entity. Same gate, same `None`/empty-`Some`
+    /// conventions as `raw_span`, deliberately: `None` if `id` was
+    /// never opted into FFI exposure via [`Self::register_ffi`];
+    /// `Some(vec![])` (not `None`) if it was registered but nothing has
+    /// been inserted for it yet, matching `raw_span`'s own established
+    /// "registered-but-empty is empty, not not-found" convention.
+    ///
+    /// Each `u64` is a packed `Entity` handle — see [`Entity::as_ffi`]
+    /// to unpack one back into a live `Entity`. Returns a fresh, owned
+    /// `Vec` on every call rather than a cached or zero-copy view —
+    /// see this module's private `EntityFfiAccessor` type for why
+    /// that's the correct shape for *this* increment, not a shortcut.
+    pub fn entity_ids(&self, id: ComponentId) -> Option<Vec<u64>> {
+        let accessor = self.ffi_entity_accessors.get(&id)?;
+        match self.columns.get(id) {
+            Some(column) => Some(accessor(column.as_any())),
+            None => Some(Vec::new()),
         }
     }
 
@@ -636,5 +696,105 @@ mod tests {
         let mut shell = SparseShell::new();
         shell.register_ffi::<FfiPosition>("SameName");
         shell.register_ffi::<OtherFfiType>("SameName");
+    }
+
+    #[test]
+    fn entity_ids_on_a_never_registered_component_id_is_none() {
+        let shell = SparseShell::new();
+        assert_eq!(shell.entity_ids(ComponentId(0)), None);
+    }
+
+    #[test]
+    fn entity_ids_before_register_ffi_is_none_even_if_the_type_is_in_use() {
+        let mut spawn = entity_factory();
+        let mut shell = SparseShell::new();
+        let e = spawn();
+        shell.insert(e, FfiPosition { x: 1.0, y: 2.0 });
+        let id = shell
+            .existing_component_id::<FfiPosition>()
+            .expect("just inserted, must be registered");
+        assert_eq!(shell.entity_ids(id), None);
+    }
+
+    #[test]
+    fn register_ffi_before_any_insert_gives_entity_ids_some_empty() {
+        let mut shell = SparseShell::new();
+        let id = shell.register_ffi::<FfiPosition>("FfiPosition");
+        // Matches raw_span's own "registered but nothing inserted yet"
+        // convention exactly: Some(empty), not None.
+        assert_eq!(shell.entity_ids(id), Some(Vec::new()));
+    }
+
+    #[test]
+    fn entity_ids_correlate_with_raw_span_in_dense_order() {
+        let mut spawn = entity_factory();
+        let mut shell = SparseShell::new();
+        let id = shell.register_ffi::<FfiPosition>("FfiPosition");
+        let e1 = spawn();
+        let e2 = spawn();
+        let e3 = spawn();
+        shell.insert(e1, FfiPosition { x: 1.0, y: 1.0 });
+        shell.insert(e2, FfiPosition { x: 2.0, y: 2.0 });
+        shell.insert(e3, FfiPosition { x: 3.0, y: 3.0 });
+
+        let ids = shell.entity_ids(id).expect("registered and populated");
+        let span = shell.raw_span(id).expect("registered and populated");
+        assert_eq!(ids.len(), span.count);
+        // SAFETY: span points at the shell's own live dense storage,
+        // which outlives this read (shell is not mutated in between).
+        let values =
+            unsafe { core::slice::from_raw_parts(span.ptr.cast::<FfiPosition>(), span.count) };
+        assert_eq!(ids[0], e1.as_ffi());
+        assert_eq!(ids[1], e2.as_ffi());
+        assert_eq!(ids[2], e3.as_ffi());
+        assert_eq!(values[0], FfiPosition { x: 1.0, y: 1.0 });
+        assert_eq!(values[1], FfiPosition { x: 2.0, y: 2.0 });
+        assert_eq!(values[2], FfiPosition { x: 3.0, y: 3.0 });
+        // And the packed ids round-trip back to the real entities --
+        // this is the actual point of entity correlation, not just
+        // "some u64 happens to be at this index".
+        assert_eq!(Entity::from_ffi(ids[0]), e1);
+        assert_eq!(Entity::from_ffi(ids[1]), e2);
+        assert_eq!(Entity::from_ffi(ids[2]), e3);
+    }
+
+    #[test]
+    fn entity_ids_still_correlate_after_a_swap_remove_reshuffle() {
+        let mut spawn = entity_factory();
+        let mut shell = SparseShell::new();
+        let id = shell.register_ffi::<FfiPosition>("FfiPosition");
+        let e1 = spawn();
+        let e2 = spawn();
+        let e3 = spawn();
+        shell.insert(e1, FfiPosition { x: 1.0, y: 1.0 });
+        shell.insert(e2, FfiPosition { x: 2.0, y: 2.0 });
+        shell.insert(e3, FfiPosition { x: 3.0, y: 3.0 });
+
+        // Removing e1 (the first dense slot) forces SparseSet's own
+        // swap-and-pop: e3's data moves into slot 0. If entity_ids
+        // didn't track the *same* swap, this test would catch it.
+        shell.remove::<FfiPosition>(e1);
+
+        let ids = shell.entity_ids(id).expect("registered and populated");
+        let span = shell.raw_span(id).expect("registered and populated");
+        assert_eq!(ids.len(), 2);
+        assert_eq!(span.count, 2);
+        // SAFETY: span points at the shell's own live dense storage,
+        // which outlives this read (shell is not mutated in between).
+        let values =
+            unsafe { core::slice::from_raw_parts(span.ptr.cast::<FfiPosition>(), span.count) };
+        // Whatever order the swap left them in, ids[i] must still name
+        // the entity that actually owns values[i].
+        for i in 0..2 {
+            let owner = Entity::from_ffi(ids[i]);
+            let expected = if owner == e2 {
+                FfiPosition { x: 2.0, y: 2.0 }
+            } else if owner == e3 {
+                FfiPosition { x: 3.0, y: 3.0 }
+            } else {
+                panic!("entity_ids[{i}] names an entity that was never inserted: {owner:?}");
+            };
+            assert_eq!(values[i], expected);
+        }
     }
 }

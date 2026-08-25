@@ -371,7 +371,8 @@ impl Archetypes {
     /// side of the FFI-span mechanism: a component type here isn't one
     /// stable thing to read — it's fragmented across every archetype
     /// that currently contains it. Pair with [`Self::archetypes_with`]
-    /// to enumerate all of them.
+    /// to enumerate all of them, and with [`Self::entity_ids`] for
+    /// which `Entity` owns each element of the span this returns.
     pub(crate) fn raw_span(
         &self,
         archetype_id: ArchetypeId,
@@ -381,6 +382,44 @@ impl Archetypes {
         let archetype = self.archetypes.get(archetype_id)?;
         let column = archetype.table.columns.get(component_id)?;
         Some(accessor(column.as_any()))
+    }
+
+    /// Entity-correlation counterpart to [`Self::raw_span`], for the
+    /// same `(archetype_id, component_id)` pair: `entity_ids(a, c)[i]`
+    /// is the `Entity` that owns `raw_span(a, c)`'s element `i`, for
+    /// every valid `i`.
+    ///
+    /// Deliberately takes the same two-key signature as `raw_span` even
+    /// though a `Table`'s `entities` list doesn't actually vary by
+    /// `component_id` — every column in one archetype's table shares
+    /// the same row index space, `component_id` here only *gates*
+    /// which pairs are valid, exactly the way `raw_span`'s own
+    /// `component_id` does. Requiring both keys keeps the two calls a
+    /// matched pair: a caller can't get a real entity list back for a
+    /// `component_id` it could never have gotten a real data span for
+    /// in the first place. Same `None`/permanent-vs-empty distinction
+    /// as `raw_span`'s own doc comment describes, for the same reason
+    /// (an archetype either has this component in its signature or it
+    /// permanently doesn't; whether any entities currently populate
+    /// that archetype is a separate, transient fact).
+    pub(crate) fn entity_ids(
+        &self,
+        archetype_id: ArchetypeId,
+        component_id: ComponentId,
+    ) -> Option<Vec<u64>> {
+        self.ffi_accessors.get(&component_id)?;
+        let archetype = self.archetypes.get(archetype_id)?;
+        if !archetype.component_ids.contains(&component_id) {
+            return None;
+        }
+        Some(
+            archetype
+                .table
+                .entities
+                .iter()
+                .map(|entity| entity.as_ffi())
+                .collect(),
+        )
     }
 
     /// Enumerates every currently-existing archetype whose signature
@@ -1217,6 +1256,141 @@ mod tests {
             2,
             "e1 and e2 ended up in two distinct archetypes, both containing FfiHealth"
         );
+    }
+
+    #[test]
+    fn entity_ids_on_a_never_registered_component_id_is_none() {
+        let ar = Archetypes::new();
+        assert_eq!(ar.entity_ids(EMPTY_ARCHETYPE, ComponentId(0)), None);
+    }
+
+    #[test]
+    fn entity_ids_on_an_archetype_that_does_not_have_this_component_is_none() {
+        let mut spawn = entity_factory();
+        let mut ar = Archetypes::new();
+        let id = ar.register_ffi::<FfiHealth>("FfiHealth");
+        let e = spawn();
+        ar.spawn(e);
+        // Same permanent-not-transient distinction as raw_span: e lives
+        // in the empty archetype, whose signature will never include
+        // FfiHealth.
+        assert_eq!(ar.entity_ids(EMPTY_ARCHETYPE, id), None);
+    }
+
+    #[test]
+    fn entity_ids_is_some_and_empty_after_every_entity_migrates_away() {
+        let mut spawn = entity_factory();
+        let mut ar = Archetypes::new();
+        let id = ar.register_ffi::<FfiHealth>("FfiHealth");
+        let e = spawn();
+        ar.spawn(e);
+        assert!(ar.insert(e, id, FfiHealth { hp: 5 }));
+        let archetype_id = ar
+            .archetypes_with(id)
+            .next()
+            .expect("must exist right after insert");
+
+        assert_eq!(ar.remove::<FfiHealth>(e, id), Some(FfiHealth { hp: 5 }));
+
+        assert_eq!(
+            ar.entity_ids(archetype_id, id),
+            Some(Vec::new()),
+            "empty-but-present must be Some(empty), not None, matching raw_span's own convention"
+        );
+    }
+
+    #[test]
+    fn entity_ids_correlate_with_raw_span_in_dense_order() {
+        let mut spawn = entity_factory();
+        let mut ar = Archetypes::new();
+        let id = ar.register_ffi::<FfiHealth>("FfiHealth");
+        let e1 = spawn();
+        let e2 = spawn();
+        ar.spawn(e1);
+        ar.spawn(e2);
+        assert!(ar.insert(e1, id, FfiHealth { hp: 10 }));
+        assert!(ar.insert(e2, id, FfiHealth { hp: 20 }));
+
+        let archetype_id = ar
+            .archetypes_with(id)
+            .next()
+            .expect("both entities must share one archetype");
+        let ids = ar
+            .entity_ids(archetype_id, id)
+            .expect("registered and present");
+        let span = ar
+            .raw_span(archetype_id, id)
+            .expect("registered and populated");
+        assert_eq!(ids.len(), span.count);
+        // SAFETY: span points at ar's own live storage, unmutated since
+        // the inserts above.
+        let values =
+            unsafe { core::slice::from_raw_parts(span.ptr.cast::<FfiHealth>(), span.count) };
+        assert_eq!(Entity::from_ffi(ids[0]), e1);
+        assert_eq!(Entity::from_ffi(ids[1]), e2);
+        assert_eq!(values[0], FfiHealth { hp: 10 });
+        assert_eq!(values[1], FfiHealth { hp: 20 });
+    }
+
+    #[test]
+    fn entity_ids_still_correlate_after_a_swap_remove_during_migration() {
+        // Same setup as swap_remove_during_migration_fixes_up_the_swapped_entitys_row
+        // above, but checking entity_ids/raw_span correlation survives
+        // the fixup rather than checking get() directly.
+        let mut spawn = entity_factory();
+        let mut ar = Archetypes::new();
+        let health_id = ar.register_ffi::<FfiHealth>("FfiHealth");
+        let a_id = ar.component_id::<A>();
+
+        let e1 = spawn();
+        let e2 = spawn();
+        let e3 = spawn();
+        ar.spawn(e1);
+        ar.spawn(e2);
+        ar.spawn(e3);
+
+        // All three land in the same {FfiHealth} archetype, e1 row 0,
+        // e2 row 1, e3 row 2 (insertion order). The archetype itself
+        // doesn't exist until the first insert creates it via
+        // migration, so it's captured after, not before.
+        assert!(ar.insert(e1, health_id, FfiHealth { hp: 1 }));
+        assert!(ar.insert(e2, health_id, FfiHealth { hp: 2 }));
+        assert!(ar.insert(e3, health_id, FfiHealth { hp: 3 }));
+        let archetype_id = ar
+            .archetypes_with(health_id)
+            .next()
+            .expect("must exist right after the inserts above");
+
+        // e2 (the middle one, not the last) migrates out of
+        // archetype_id by gaining A. e3 (currently last in
+        // archetype_id's table) gets swapped into e2's old row.
+        assert!(ar.insert(e2, a_id, A(200)));
+
+        let ids = ar
+            .entity_ids(archetype_id, health_id)
+            .expect("still registered and present (e1, and now e3, remain)");
+        let span = ar
+            .raw_span(archetype_id, health_id)
+            .expect("still registered and present");
+        assert_eq!(ids.len(), 2);
+        assert_eq!(span.count, 2);
+        // SAFETY: span points at ar's own live storage, unmutated since
+        // the insert above.
+        let values =
+            unsafe { core::slice::from_raw_parts(span.ptr.cast::<FfiHealth>(), span.count) };
+        for i in 0..2 {
+            let owner = Entity::from_ffi(ids[i]);
+            let expected = if owner == e1 {
+                FfiHealth { hp: 1 }
+            } else if owner == e3 {
+                FfiHealth { hp: 3 }
+            } else {
+                panic!(
+                    "entity_ids[{i}] names an entity that was never in this archetype: {owner:?}"
+                );
+            };
+            assert_eq!(values[i], expected);
+        }
     }
 
     #[test]
