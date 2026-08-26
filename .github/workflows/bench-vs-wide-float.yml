@@ -1,7 +1,8 @@
 # .github/workflows/bench-vs-wide-float.yml
-# Wide float benchmark: Vec3x4 / QuatX4 wide vs scalar.
-# Measures 4× throughput claim: equal wall-clock = 4× throughput.
-# Run: Actions → "mid-math: bench wide float" → Run workflow
+# Wide float benchmark: f32x4/Vec3x4/QuatX4/Vec3x8 vs scalar loops,
+# vs glam, and vs ultraviolet's own wide vector/rotor types.
+# Measures 4×/8× throughput claim: equal wall-clock = 4×/8× throughput.
+# Run: Actions → "mid-math — bench wide float" → Run workflow
 # DO NOT add push/pull_request triggers.
 
 name: mid-math — bench wide float
@@ -9,10 +10,89 @@ name: mid-math — bench wide float
 on:
   workflow_dispatch:
     inputs:
-      baseline_note:
-        description: 'Context for this run (e.g. "baseline Vec3x4 SSE2")'
-        required: false
-        default: 'manual wide float benchmark run'
+      target_cpu:
+        description: >
+          Compiler target-cpu or architecture configuration. Controls which
+          SIMD backend wide/float/mod.rs dispatches to.
+          native     = all hardware features the runner has.
+          x86-64-v4  = AVX-512F+BW+CD+DQ+VL requested — wide/float has no
+                       AVX-512 backend (same as wide/int), so this
+                       activates the same AVX2 path as x86-64-v3. Kept
+                       for platform-matrix consistency and because
+                       requesting this target-cpu carries a real SIGILL
+                       risk on non-AVX-512 hardware regardless of
+                       whether we hand-write AVX-512 code (rustc's
+                       autovectorizer can emit it anywhere) — the same
+                       hardware soft-gate as the vs_all / vs_wide_int
+                       workflows applies here for that reason.
+          x86-64-v3  = AVX2+FMA+BMI2 guaranteed (Haswell+) — activates
+                       wide/float/avx2/ (Vec3x8), now covered by its own
+                       vec3_8wide bench group as of this pass (previously
+                       only exercised indirectly via a two-Vec3x4-passes
+                       workaround inside 100k_entity_transforms_wide).
+          x86-64-v2  = SSE4.2 baseline — no AVX, wide/float/sse2/ only.
+          x86-64     = SSE2 only — wide/float/sse2/ only.
+          neon       = ARM NEON via -C target-cpu=native on a native
+                       aarch64 runner — activates wide/float/neon/
+                       (already fully wired before this pass — confirmed
+                       via a fresh cross-backend method-parity audit
+                       against sse2/wasm/scalar, no gaps found, unlike
+                       the wide/int NEON dispatch bug an earlier pass
+                       had to fix).
+          wasm       = WebAssembly wasm32-wasip1 + simd128 via wasmtime.
+                       activates wide/float/wasm/ — the backend already
+                       existed, but this is its first run through *this*
+                       workflow (the previous single-shot version of
+                       this workflow had no target_cpu selector at all).
+                       Note: ultraviolet is excluded from this crate's
+                       wasm32 dev-dependencies (checked directly in
+                       Cargo.toml) — the ultraviolet comparison rows in
+                       vec3_4wide/quat_4wide are compiled out under this
+                       target via #[cfg(not(target_arch = "wasm32"))];
+                       glam and wide rows are unaffected.
+          scalar     = pure scalar fallback via --features force-scalar —
+                       wide/float/mod.rs respects this the same as wide/int.
+        required: true
+        default: 'native'
+        type: choice
+        options:
+          - native
+          - x86-64-v4
+          - x86-64-v3
+          - x86-64-v2
+          - x86-64
+          - neon
+          - wasm
+          - scalar
+      float_type:
+        description: >
+          Which wide-float group(s) to bench, via a criterion name
+          filter matched against the exact criterion_group! names below
+          — not the Rust type names (e.g. "vec3_4wide", not "Vec3x4").
+          all = every group in vs_wide_float.rs, including the
+          100k_entity_transforms_wide / 100k_quat_rotations_wide /
+          wide_transpose scenario groups, which are not separately
+          selectable here (their names don't collide with any of the
+          type filters below, so picking a single type never sweeps
+          them in incidentally the way vs_wide_int.rs's bulk_* cases
+          do). vec3_8wide only runs — and only exists to select — when
+          target_cpu is native/x86-64-v3/x86-64-v4 (needs
+          target_feature=avx2 to compile at all; picking it with
+          target_cpu=scalar/x86-64/x86-64-v2/neon/wasm will just match
+          nothing, not fail).
+        required: true
+        default: 'all'
+        type: choice
+        options:
+          - all
+          - f32x4
+          - vec3_4wide
+          - quat_4wide
+          - vec3_8wide
+
+env:
+  CARGO_TERM_COLOR: never
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 permissions:
   contents: read
@@ -20,88 +100,154 @@ permissions:
 
 jobs:
   bench:
-    runs-on: ubuntu-latest
+    name: bench (${{ inputs.target_cpu }}, ${{ inputs.float_type }})
+    runs-on: ${{ inputs.target_cpu == 'neon' && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}
+
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+      - name: Configure target environment
+        run: python3 scripts/bench_target_env.py "${{ inputs.target_cpu }}" >> "$GITHUB_ENV"
 
-      - name: Get Rust version
-        id: rustver
-        run: echo "ver=$(rustc --version)" >> $GITHUB_OUTPUT
+      # ── Soft hardware gate for x86-64-v4 — see target_cpu description above.
+      - name: Check AVX-512 hardware availability
+        id: hwcheck
+        if: inputs.target_cpu == 'x86-64-v4'
+        run: |
+          if grep -qw 'avx512f' /proc/cpuinfo; then
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            {
+              echo "## bench (x86-64-v4) — skipped"
+              echo ""
+              echo "> GitHub-hosted \`ubuntu-latest\` runners use AMD EPYC CPUs without AVX-512."
+              echo "> rustc will happily emit AVX-512 instructions for \`-C target-cpu=x86-64-v4\`"
+              echo "> regardless of the host's real capabilities — running the resulting binary"
+              echo "> here would SIGILL. This run is marked successful (skipped, not failed)."
+              echo ">"
+              echo "> wide/float has no hand-written AVX-512 backend anyway — x86-64-v3 gets you"
+              echo "> the same AVX2 path. This gate exists for the generic autovectorizer risk,"
+              echo "> not a missing feature."
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
 
-      - name: Cache cargo registry
-        uses: actions/cache@v3
+      - name: Set up Rust stable
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+          override: true
+          target: ${{ inputs.target_cpu == 'wasm' && 'wasm32-wasip1' || '' }}
+          rustflags: ""
+
+      - name: Install wasmtime
+        if: inputs.target_cpu == 'wasm'
+        uses: bytecodealliance/actions/wasmtime/setup@v1
+        with:
+          version: v25.0.2
+
+      - name: Configure WASM test runner
+        if: inputs.target_cpu == 'wasm'
+        run: |
+          mkdir -p .cargo
+          cat >> .cargo/config.toml << 'EOF'
+          [target.wasm32-wasip1]
+          runner = ["wasmtime", "run", "--dir", ".", "--env", "CRITERION_DEBUG=1", "--"]
+          EOF
+
+      - name: Confirm CPU and compiler features
+        run: |
+          {
+            echo "## CPU & Compiler — Build #${{ github.run_number }}"
+            echo ""
+            echo "| | |"
+            echo "|---|---|"
+            echo "| Runner        | \`${{ inputs.target_cpu == 'neon' && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}\` |"
+            echo "| target-cpu    | \`${{ inputs.target_cpu }}\` |"
+            echo "| float_type    | \`${{ inputs.float_type }}\` |"
+            echo "| ACTIVE_CPU_FLAGS | \`$ACTIVE_CPU_FLAGS\` |"
+            echo "| Rust          | \`$(rustc --version)\` |"
+            echo "| Branch        | \`${{ github.ref_name }}\` |"
+            echo "| Commit        | \`${GITHUB_SHA:0:8}\` |"
+            echo ""
+            echo "### Rustc target_feature cfg"
+            echo '```'
+            if [ "${{ inputs.target_cpu }}" = "wasm" ]; then
+              rustc --print cfg --target wasm32-wasip1 $RUSTFLAGS 2>&1 | grep '^target_feature' | sort
+            else
+              rustc --print cfg $ACTIVE_CPU_FLAGS 2>&1 | grep -E '^target_(arch|feature)' | sort
+            fi
+            echo '```'
+            echo ""
+
+            if [ "${{ inputs.target_cpu }}" = "scalar" ]; then
+              echo "> **Active path:** wide/float/scalar/ (--features force-scalar)" >> "$GITHUB_STEP_SUMMARY"
+            elif [ "${{ inputs.target_cpu }}" = "neon" ]; then
+              echo "> **Active path:** wide/float/neon/" >> "$GITHUB_STEP_SUMMARY"
+            elif [ "${{ inputs.target_cpu }}" = "wasm" ]; then
+              echo "> **Active path:** wide/float/wasm/ (ultraviolet comparison rows compiled out on this target — see target_cpu description)" >> "$GITHUB_STEP_SUMMARY"
+            else
+              AVX2=$(rustc --print cfg $ACTIVE_CPU_FLAGS 2>&1 | grep -c 'target_feature="avx2"' || true)
+              if [ "$AVX2" -gt 0 ]; then
+                echo "> **Active path:** wide/float/sse2/ (+ wide/float/avx2/ Vec3x8, now benched via the vec3_8wide group)" >> "$GITHUB_STEP_SUMMARY"
+              else
+                echo "> **Active path:** wide/float/sse2/" >> "$GITHUB_STEP_SUMMARY"
+              fi
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Cache cargo registry + build artifacts
+        if: steps.hwcheck.outputs.skip != 'true'
+        uses: actions/cache@v4
         with:
           path: |
-            ~/.cargo/bin/
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git/db/
-          key: cargo-registry-bench-wide-float-${{ hashFiles('crates/mid-math/Cargo.toml') }}
-          restore-keys: cargo-registry-
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-${{ runner.arch }}-bench-wide-float-${{ inputs.target_cpu }}-v1-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ runner.arch }}-bench-wide-float-${{ inputs.target_cpu }}-v1-
 
       - name: Run wide float criterion benchmarks
+        if: steps.hwcheck.outputs.skip != 'true'
         run: |
-          echo "Running: cargo bench --bench vs_wide_float -p mid-math"
-          echo "Note: ${{ inputs.baseline_note }}"
-          cargo bench --bench vs_wide_float -p mid-math 2>&1 | tee bench-wide-float-raw.txt
+          set -o pipefail
+          FILTER="${{ inputs.float_type }}"
+          if [ "$FILTER" = "all" ]; then FILTER=""; fi
+          cargo bench --bench vs_wide_float -p mid-math $BENCH_TARGET $BENCH_FEATURES -- "$FILTER" 2>&1 | tee bench-wide-float-raw.txt
+          echo "Bench exit code: $?" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Surface bench diagnostics
+        if: steps.hwcheck.outputs.skip != 'true'
+        run: |
+          {
+            echo "### Diagnostics"
+            echo '```'
+            grep -E 'took zero time|Unable to complete|Warning:|panicked|Completed [0-9]+ iterations' \
+              bench-wide-float-raw.txt | head -60 || echo "(none found)"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Publish summary
+        if: steps.hwcheck.outputs.skip != 'true'
         run: |
           {
             echo "## mid-math wide float — Criterion Benchmarks"
             echo ""
-            echo "**Build:** #${{ github.run_number }} &nbsp; **Rust:** \`${{ steps.rustver.outputs.ver }}\`"
-            echo ""
-            echo "**Note:** ${{ inputs.baseline_note }}"
+            echo "Build: #${{ github.run_number }} &nbsp;|&nbsp; Rust: \`$(rustc --version | cut -d' ' -f2)\` &nbsp;|&nbsp; target-cpu: \`${{ inputs.target_cpu }}\` &nbsp;|&nbsp; float_type: \`${{ inputs.float_type }}\`"
             echo ""
             echo "> Lower is faster. Wide-x4 vs scalar-x1: equal wall-clock = 4× throughput."
+            echo "> wide-x8 vs scalar-x1: equal wall-clock = 8× throughput (AVX2 only)."
             echo "> 100k_entity_transforms_wide shows the engine-critical bulk transform path."
             echo ""
-
-            python3 - << 'PYEOF'
-          import re, sys
-
-          RE_ANSI   = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
-          RE_RESULT = re.compile(
-              r'^(\S[^\n]+?)\s+time:\s+\[\s*([\d.]+\s+\S+)\s+([\d.]+\s+\S+)\s+([\d.]+\s+\S+)\s*\]',
-              re.MULTILINE,
-          )
-
-          try:
-              raw = open('bench-wide-float-raw.txt', encoding='utf-8', errors='replace').read()
-          except FileNotFoundError:
-              print("*(bench-wide-float-raw.txt not found)*")
-              sys.exit(0)
-
-          text = RE_ANSI.sub('', raw)
-          current_group = None
-
-          for m in RE_RESULT.finditer(text):
-              name = m.group(1).strip()
-              mean = m.group(3).strip()
-              parts = name.split('/')
-              group   = '/'.join(parts[:-1]) if len(parts) >= 2 else name
-              variant = parts[-1] if len(parts) >= 2 else ''
-              if group != current_group:
-                  if current_group is not None:
-                      print()
-                  print(f"#### {group}")
-                  print("| Impl | Mean |")
-                  print("|---|---|")
-                  current_group = group
-              print(f"| {variant} | {mean} |")
-          PYEOF
-
-          } >> $GITHUB_STEP_SUMMARY
+            BENCH_RAW_FILE=bench-wide-float-raw.txt python3 scripts/bench_vs_all.py
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload artifacts
+        if: steps.hwcheck.outputs.skip != 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: bench-wide-float-${{ github.run_number }}
+          name: bench-wide-float-${{ github.run_number }}-${{ inputs.target_cpu }}-${{ inputs.float_type }}
           path: |
             bench-wide-float-raw.txt
             target/criterion/
