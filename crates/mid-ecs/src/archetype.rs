@@ -340,6 +340,65 @@ impl Archetypes {
         self.component_ids.get(&TypeId::of::<T>()).copied()
     }
 
+    /// Iterates every `(Entity, &T)` currently alive with an
+    /// archetype-tracked `T` attached — the Archetype Core's own
+    /// counterpart to `query.rs`'s `World::query::<T>()` (Sparse
+    /// Shell). The one real difference from that method, not present
+    /// on the Sparse Shell side at all: `T`'s data isn't in one place
+    /// here — it's spread across every archetype whose signature
+    /// includes it (see [`Self::archetypes_with`]/[`Self::raw_span`]'s
+    /// own doc comments for the same fragmentation), so this chains
+    /// across all of them rather than reading one column. Doesn't
+    /// separately check liveness per entity, for the same reason
+    /// `query.rs`'s own doc comment gives: every entity in an
+    /// archetype's table is alive by construction (`despawn` removes
+    /// the entity's row from its table before the slot is ever freed —
+    /// see `Archetypes::despawn`). Empty (not a panic or a special
+    /// case) if `T` was never inserted as an archetype-tracked
+    /// component for anything.
+    pub(crate) fn iter<T: 'static>(&self) -> impl Iterator<Item = (Entity, &T)> + '_ {
+        let component_id = self.existing_component_id::<T>();
+        component_id.into_iter().flat_map(move |component_id| {
+            self.archetypes_with(component_id).flat_map(move |archetype_id| {
+                let archetype = self
+                    .archetypes
+                    .get(archetype_id)
+                    .expect("archetypes_with only ever yields real, currently-existing archetype ids");
+                let column = archetype
+                    .table
+                    .columns
+                    .get(component_id)
+                    .expect("archetypes_with guarantees component_id is in this archetype's own signature")
+                    .as_any()
+                    .downcast_ref::<Vec<T>>()
+                    .expect("column type must match component_id's T");
+                archetype.table.entities.iter().copied().zip(column.iter())
+            })
+        })
+    }
+
+    /// Iterates every `(Entity, &A, &B)` for entities alive with *both*
+    /// an archetype-tracked `A` and `B` attached. Same "drive off one
+    /// side, look up the other per entity" v1 shape `query.rs`'s own
+    /// `World::query2` deliberately picked, for the same reason (see
+    /// that method's doc comment) — not the smaller-side optimization,
+    /// there's no real workload yet to justify it over the simpler
+    /// correct version. Drives off `A` specifically (via
+    /// [`Self::iter`]) and looks up `B` with [`Self::get`] per entity —
+    /// which, unlike the Sparse Shell's own `query2`, means a `B` in
+    /// the *same* archetype as a matched `A` still costs one full
+    /// `get` (row + column downcast), because there's no cheaper path
+    /// here that doesn't already assume something about how `A` and
+    /// `B`'s archetypes relate. Empty if either `A` or `B` was never
+    /// inserted as an archetype-tracked component for anything.
+    pub(crate) fn iter2<A: 'static, B: 'static>(
+        &self,
+    ) -> impl Iterator<Item = (Entity, &A, &B)> + '_ {
+        let b_id = self.existing_component_id::<B>();
+        self.iter::<A>()
+            .filter_map(move |(entity, a)| self.get::<B>(entity, b_id?).map(|b| (entity, a, b)))
+    }
+
     /// Opts `T` into FFI span exposure under `name` — the Archetype
     /// Core's own counterpart to `SparseShell::register_ffi`, identical
     /// reasoning throughout (see that method's doc comment). Must be
