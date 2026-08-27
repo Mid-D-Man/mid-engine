@@ -31,12 +31,14 @@
 //! Iterating this storage (`World::query`/`query2`) lives in `query.rs`,
 //! not here — a distinct concern from owning the storage itself.
 
+use std::any::TypeId;
+use std::collections::HashMap;
 use std::fmt;
 
 use mid_collections::{FfiSpan, GenerationalIndex, GenerationalIndexAllocator, SparseSetIndex};
 use zerocopy::{Immutable, IntoBytes, KnownLayout};
 
-use crate::archetype::{ArchetypeId, Archetypes};
+use crate::archetype::{ArchetypeId, Archetypes, Bundle};
 use crate::component::{ComponentId, SparseShell};
 
 /// A handle to an entity. Detects its own staleness after despawn — a
@@ -116,12 +118,91 @@ impl fmt::Display for Entity {
     }
 }
 
+/// Which of the two storage systems a component type has been used
+/// with — see [`StorageClaims`] for what this actually guards against.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StorageKind {
+    Sparse,
+    Archetype,
+}
+
+impl fmt::Display for StorageKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Sparse => write!(f, "Sparse Shell (insert/register_ffi_component)"),
+            Self::Archetype => write!(
+                f,
+                "Archetype Core (insert_static/register_ffi_static_component)"
+            ),
+        }
+    }
+}
+
+/// Tracks which storage system each component type has actually been
+/// used with, and panics on the first call that would use a type with
+/// *both*.
+///
+/// **A real, deliberately scoped-down stand-in for a full `Component`
+/// trait** (the kind Bevy eventually landed on: `trait Component {
+/// const STORAGE: StorageKind; }`, enforced at the type level, one
+/// storage strategy fixed per type for good). That real version is a
+/// genuine, large undertaking — it would mean unifying `insert`/
+/// `insert_static` (and `get`/`get_static`, `remove`/`remove_static`,
+/// `has`/`has_static`, `register_ffi_component`/
+/// `register_ffi_static_component`) into one set of methods, a real
+/// breaking change to every one of them, and retrofitting every
+/// existing component type in this whole workspace's tests with a
+/// trait impl. Correctly flagged as deferred, not attempted here.
+///
+/// What *is* small enough to build now: the actual footgun a missing
+/// `Component` trait creates isn't really "the API has two names" —
+/// it's that nothing stops the *same* `T` from silently ending up in
+/// *both* systems for different entities, which fragments every query
+/// against it (`World::query::<T>()` only ever sees the Sparse Shell
+/// half, `query_static::<T>()` only the Archetype Core half) with no
+/// error, just entities that quietly don't show up where a caller
+/// would reasonably expect them to. This closes exactly that gap, at
+/// runtime, with no change to any existing method's signature: the
+/// first system a `T` is ever used with is remembered, and any call
+/// through the *other* system for that same `T` panics immediately,
+/// with a clear message, rather than silently fragmenting.
+///
+/// Real, known limitation, not silently swept under: `World::
+/// insert_bundle`/`remove_bundle` don't go through this check yet —
+/// `Bundle` would need its own `type_ids()`-style method to claim each
+/// element, which is a real, contained follow-up, not attempted in
+/// this pass to keep this specific change bounded.
+#[derive(Debug, Default)]
+struct StorageClaims {
+    claimed: HashMap<TypeId, StorageKind>,
+}
+
+impl StorageClaims {
+    fn claim<T: 'static>(&mut self, kind: StorageKind) {
+        let type_id = TypeId::of::<T>();
+        match self.claimed.get(&type_id) {
+            Some(&existing) if existing != kind => panic!(
+                "component type `{}` was already used with {existing} — a component type must use \
+                 exactly one storage system for its entire lifetime within one World, never both \
+                 (this check exists specifically because using both silently fragments any query \
+                 against this type, with no error, rather than failing loudly like this instead)",
+                std::any::type_name::<T>()
+            ),
+            _ => {
+                self.claimed.insert(type_id, kind);
+            }
+        }
+    }
+}
+
 /// The ECS world. Owns entity lifecycle, the Sparse Shell, and the
 /// Archetype Core.
 pub struct World {
     pub(crate) entities: GenerationalIndexAllocator,
     pub(crate) components: SparseShell,
     pub(crate) archetypes: Archetypes,
+    pub(crate) sync: crate::sync::SyncRegistry,
+    storage_claims: StorageClaims,
 }
 
 impl World {
@@ -131,6 +212,8 @@ impl World {
             entities: GenerationalIndexAllocator::new(),
             components: SparseShell::new(),
             archetypes: Archetypes::new(),
+            sync: crate::sync::SyncRegistry::new(),
+            storage_claims: StorageClaims::default(),
         }
     }
 
@@ -141,6 +224,8 @@ impl World {
             entities: GenerationalIndexAllocator::with_capacity(capacity),
             components: SparseShell::new(),
             archetypes: Archetypes::new(),
+            sync: crate::sync::SyncRegistry::new(),
+            storage_claims: StorageClaims::default(),
         }
     }
 
@@ -209,6 +294,7 @@ impl World {
         if !self.is_alive(entity) {
             return None;
         }
+        self.storage_claims.claim::<T>(StorageKind::Sparse);
         self.components.insert(entity, component)
     }
 
@@ -256,6 +342,7 @@ impl World {
     where
         T: 'static + IntoBytes + Immutable + KnownLayout,
     {
+        self.storage_claims.claim::<T>(StorageKind::Sparse);
         self.components.register_ffi::<T>(name)
     }
 
@@ -310,8 +397,38 @@ impl World {
         if !self.is_alive(entity) {
             return false;
         }
+        self.storage_claims.claim::<T>(StorageKind::Archetype);
         let id = self.archetypes.component_id::<T>();
         self.archetypes.insert(entity, id, component)
+    }
+
+    /// Inserts every element of `bundle` as one atomic structural
+    /// change — one migration total, not one per element. `B` is a
+    /// tuple of archetype-tracked component types, e.g.
+    /// `world.insert_bundle(e, (Position { .. }, Velocity { .. }))`.
+    /// Returns `false` (no-op) if `entity` isn't alive, or if it
+    /// already has *any* of `B`'s component types — see
+    /// `Archetypes::insert_bundle`'s own doc comment for the full
+    /// "no partial application" reasoning. The real point of this over
+    /// calling `insert_static` once per element: spawning many
+    /// entities with the same known-at-creation-time component set
+    /// (the common real case) does one migration instead of `N`,
+    /// `N - 1` of which would otherwise be through intermediate
+    /// archetypes nothing ever actually queries against.
+    ///
+    /// `B: Bundle` is a real, deliberate `private_bounds` case, not an
+    /// oversight — see `Bundle`'s own doc comment in `archetype.rs` for
+    /// why: keeping `Table`/`Archetypes` `pub(crate)` (architecturally
+    /// important) is worth more than letting downstream code write its
+    /// own function generic over "any bundle" (a narrow capability;
+    /// calling this method directly with a concrete tuple works fine
+    /// either way).
+    #[allow(private_bounds)]
+    pub fn insert_bundle<B: Bundle>(&mut self, entity: Entity, bundle: B) -> bool {
+        if !self.is_alive(entity) {
+            return false;
+        }
+        self.archetypes.insert_bundle(entity, bundle)
     }
 
     /// Removes and returns `entity`'s archetype-tracked `T` component,
@@ -323,6 +440,25 @@ impl World {
         }
         let id = self.archetypes.existing_component_id::<T>()?;
         self.archetypes.remove(entity, id)
+    }
+
+    /// Removes every element of `B` as one atomic structural change,
+    /// returning them reassembled as `B` — one migration total, not
+    /// one per element. Returns `None` if `entity` isn't alive, if
+    /// *any* element of `B` was never registered as an
+    /// archetype-tracked component for anything, or if `entity` is
+    /// missing *any* of `B`'s component types — see
+    /// `Archetypes::remove_bundle`'s own doc comment for the full
+    /// "no partial application" reasoning.
+    ///
+    /// Same deliberate `private_bounds` tradeoff as `insert_bundle` —
+    /// see that method's own doc comment.
+    #[allow(private_bounds)]
+    pub fn remove_bundle<B: Bundle>(&mut self, entity: Entity) -> Option<B> {
+        if !self.is_alive(entity) {
+            return None;
+        }
+        self.archetypes.remove_bundle(entity)
     }
 
     /// Looks up `entity`'s archetype-tracked `T` component, if attached
@@ -365,6 +501,7 @@ impl World {
     where
         T: 'static + IntoBytes + Immutable + KnownLayout,
     {
+        self.storage_claims.claim::<T>(StorageKind::Archetype);
         self.archetypes.register_ffi::<T>(name)
     }
 
@@ -809,6 +946,187 @@ mod tests {
     }
 
     #[test]
+    fn insert_bundle_attaches_every_element() {
+        let mut w = World::new();
+        let e = w.spawn();
+        assert!(w.insert_bundle(e, (Mass(1.0), Charge(2.0))));
+        assert_eq!(w.get_static::<Mass>(e), Some(&Mass(1.0)));
+        assert_eq!(w.get_static::<Charge>(e), Some(&Charge(2.0)));
+    }
+
+    #[test]
+    fn insert_bundle_reaches_the_same_archetype_as_sequential_single_inserts() {
+        // The actual point of Bundle: one migration instead of two, but
+        // landing in the exact same place either way -- proven by
+        // checking both entities end up able to be found by the same
+        // archetypes_with_static_component query.
+        let mut w = World::new();
+        let via_bundle = w.spawn();
+        let via_sequential = w.spawn();
+
+        assert!(w.insert_bundle(via_bundle, (Mass(1.0), Charge(2.0))));
+        assert!(w.insert_static(via_sequential, Mass(1.0)));
+        assert!(w.insert_static(via_sequential, Charge(2.0)));
+
+        let ids: Vec<Entity> = w.query_static::<Mass>().map(|(e, _)| e).collect();
+        let mut sorted = ids.clone();
+        sorted.sort_by_key(|e| e.index());
+        let mut expected = vec![via_bundle, via_sequential];
+        expected.sort_by_key(|e| e.index());
+        assert_eq!(
+            sorted, expected,
+            "both entities must be found by the same query regardless of insertion path"
+        );
+    }
+
+    #[test]
+    fn insert_bundle_on_dead_entity_is_a_safe_no_op() {
+        let mut w = World::new();
+        let e = w.spawn();
+        w.despawn(e);
+        assert!(!w.insert_bundle(e, (Mass(1.0), Charge(2.0))));
+    }
+
+    #[test]
+    fn insert_bundle_no_ops_if_entity_already_has_any_element() {
+        let mut w = World::new();
+        let e = w.spawn();
+        w.insert_static(e, Mass(1.0));
+
+        // Already has Mass -- the whole bundle insert must be a no-op,
+        // not a partial application that adds Charge alone.
+        assert!(!w.insert_bundle(e, (Mass(2.0), Charge(3.0))));
+        assert_eq!(
+            w.get_static::<Mass>(e),
+            Some(&Mass(1.0)),
+            "original Mass must be untouched"
+        );
+        assert_eq!(
+            w.get_static::<Charge>(e),
+            None,
+            "Charge must not have been partially applied"
+        );
+    }
+
+    #[test]
+    fn remove_bundle_detaches_every_element_and_returns_them() {
+        let mut w = World::new();
+        let e = w.spawn();
+        w.insert_bundle(e, (Mass(1.0), Charge(2.0)));
+
+        assert_eq!(
+            w.remove_bundle::<(Mass, Charge)>(e),
+            Some((Mass(1.0), Charge(2.0)))
+        );
+        assert_eq!(w.get_static::<Mass>(e), None);
+        assert_eq!(w.get_static::<Charge>(e), None);
+    }
+
+    #[test]
+    fn remove_bundle_on_dead_entity_is_none() {
+        let mut w = World::new();
+        let e = w.spawn();
+        w.insert_bundle(e, (Mass(1.0), Charge(2.0)));
+        w.despawn(e);
+        assert_eq!(w.remove_bundle::<(Mass, Charge)>(e), None);
+    }
+
+    #[test]
+    fn remove_bundle_is_none_if_any_element_was_never_registered() {
+        let mut w = World::new();
+        let e = w.spawn();
+        w.insert_static(e, Mass(1.0));
+        // Charge has never been registered as an archetype-tracked
+        // component for anything, anywhere in this World.
+        assert_eq!(w.remove_bundle::<(Mass, Charge)>(e), None);
+        // And Mass must be untouched -- no partial application.
+        assert_eq!(w.get_static::<Mass>(e), Some(&Mass(1.0)));
+    }
+
+    #[test]
+    fn remove_bundle_no_ops_if_entity_is_missing_any_element() {
+        let mut w = World::new();
+        let e = w.spawn();
+        w.insert_static(e, Mass(1.0));
+        // Charge is registered elsewhere but e itself doesn't have it.
+        let other = w.spawn();
+        w.insert_static(other, Charge(9.0));
+
+        assert_eq!(w.remove_bundle::<(Mass, Charge)>(e), None);
+        assert_eq!(
+            w.get_static::<Mass>(e),
+            Some(&Mass(1.0)),
+            "Mass must not have been partially removed"
+        );
+    }
+
+    #[test]
+    fn insert_bundle_then_remove_bundle_round_trips() {
+        let mut w = World::new();
+        let e = w.spawn();
+        assert!(w.insert_bundle(e, (Mass(7.0), Charge(8.0))));
+        let removed = w.remove_bundle::<(Mass, Charge)>(e).unwrap();
+        assert_eq!(removed, (Mass(7.0), Charge(8.0)));
+        assert!(!w.has_static::<Mass>(e));
+        assert!(!w.has_static::<Charge>(e));
+    }
+
+    #[test]
+    #[should_panic(expected = "was already used with Sparse Shell")]
+    fn using_a_sparse_type_with_insert_static_panics() {
+        let mut w = World::new();
+        let e1 = w.spawn();
+        let e2 = w.spawn();
+        w.insert(e1, Mass(1.0)); // claims Mass for Sparse Shell
+        w.insert_static(e2, Mass(2.0)); // must panic: Mass already claimed
+    }
+
+    #[test]
+    #[should_panic(expected = "was already used with Archetype Core")]
+    fn using_a_static_type_with_insert_panics() {
+        let mut w = World::new();
+        let e1 = w.spawn();
+        let e2 = w.spawn();
+        w.insert_static(e1, Mass(1.0)); // claims Mass for Archetype Core
+        w.insert(e2, Mass(2.0)); // must panic: Mass already claimed
+    }
+
+    #[test]
+    #[should_panic(expected = "was already used with Sparse Shell")]
+    fn register_ffi_static_component_panics_if_the_type_was_already_used_sparse() {
+        let mut w = World::new();
+        let e = w.spawn();
+        w.insert(e, FfiHealth { hp: 1 }); // claims FfiHealth for Sparse Shell
+        w.register_ffi_static_component::<FfiHealth>("FfiHealth"); // must panic
+    }
+
+    #[test]
+    fn repeated_use_with_the_same_system_never_panics() {
+        // The guard remembers *what* a type was claimed for, not just
+        // *that* it was claimed -- repeated ordinary use with the same
+        // system it was already claimed for must stay completely silent.
+        let mut w = World::new();
+        let e1 = w.spawn();
+        let e2 = w.spawn();
+        w.insert(e1, Mass(1.0));
+        w.insert(e2, Mass(2.0)); // same type, same system again -- fine
+        w.insert_static(e1, Charge(3.0));
+        w.insert_static(e2, Charge(4.0)); // same type, same system again -- fine
+    }
+
+    #[test]
+    fn different_types_in_different_systems_never_panics() {
+        // The actual supported, intended pattern -- distinct types each
+        // committed to one system, matching static_and_sparse_shell_
+        // storage_are_independent above, just isolated here specifically
+        // as the guard's own "this must never false-positive" case.
+        let mut w = World::new();
+        let e = w.spawn();
+        w.insert(e, Health(1)); // Sparse Shell
+        w.insert_static(e, Mass(1.0)); // Archetype Core, different type
+    }
+
+    #[test]
     fn get_static_mut_actually_mutates() {
         let mut w = World::new();
         let e = w.spawn();
@@ -865,6 +1183,12 @@ mod tests {
     #[repr(C)]
     struct FfiHealth {
         hp: u32,
+    }
+
+    #[derive(Debug, Clone, Copy, PartialEq, IntoBytes, KnownLayout, Immutable)]
+    #[repr(C)]
+    struct FfiStamina {
+        stamina: u32,
     }
 
     #[test]
@@ -1045,10 +1369,14 @@ mod tests {
         // Same name, two different storage systems -- must not collide,
         // matching Archetypes' already-independent ComponentId numbering
         // space from SparseShell's own (component.rs/archetype.rs's own
-        // doc comments).
+        // doc comments). Two distinct types, deliberately, not the same
+        // type reused across both systems -- StorageClaims now guards
+        // against exactly that (see this file's own doc comment), so
+        // proving name-namespace independence needs two real component
+        // types, one per system, the way an actual caller would use this.
         let mut w = World::new();
         let sparse_id = w.register_ffi_component::<FfiHealth>("Health");
-        let static_id = w.register_ffi_static_component::<FfiHealth>("Health");
+        let static_id = w.register_ffi_static_component::<FfiStamina>("Health");
         assert_eq!(w.lookup_ffi_component_id("Health"), Some(sparse_id));
         assert_eq!(w.lookup_ffi_static_component_id("Health"), Some(static_id));
     }

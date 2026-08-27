@@ -410,9 +410,33 @@ per-frame `to_view_relative` call above.
 
 ## The Ubel Stratum Bridge (The OOP Illusion)
 
-While the Rust core handles the raw, flat memory arrays, the gameplay programmer never has to think about Archetypes or Bitsets.
-* **HIGH Tier:** Developers interact with what looks like standard OOP classes (e.g., an `Actor` or `Entity` object).
-* **LOW Tier:** The Ubel compiler acts as the "Middle Man," secretly lowering high-level code (e.g., `player.health -= 10`) into raw, memory-safe array accesses in the `mid-ecs` core.
+**Design vision, not confirmed integration.** `docs/mid-collections.md`
+is explicit about this: Ubel is *"a separate project... deliberately
+not folded in here."* `mid-log.md`/`mid-net.md` both hedge the same
+way (*"prepared for"*, *"a plausible future consumer"*). This section
+previously read as settled architecture with no such hedge — a real
+contradiction with those three docs, not just a tone mismatch, since
+it described the bridge mechanism as if it already existed. Fixed to
+match the same framing used everywhere else in this workspace: the
+idea below is real and worth recording, but Ubel's actual integration
+with `mid-ecs` specifically is not decided, designed in detail, or
+started.
+
+The vision, as discussed: gameplay code never touches Archetypes or
+Bitsets directly.
+* **HIGH Tier:** a gameplay programmer would interact with what reads
+  like standard OOP classes (an `Actor`/`Entity` object).
+* **LOW Tier:** if built, an Ubel compiler would lower that high-level
+  code (`player.health -= 10`) into raw, memory-safe array accesses
+  against `mid-ecs`'s own storage — Sparse Shell or Archetype Core,
+  whichever the accessed component actually lives in.
+
+Real open question this doc doesn't answer, and shouldn't pretend to:
+whether that lowering targets this crate's own Rust API directly, or
+goes through the FFI-span mechanism `component.rs`/`archetype.rs`
+already expose — the latter would make Ubel just another FFI
+consumer, no different in kind from any other non-Rust caller this
+crate already supports, rather than a special-cased integration.
 
 ## Network Sync (Multiplayer-First)
 

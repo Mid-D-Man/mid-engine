@@ -303,19 +303,23 @@ mod tests {
 
     #[test]
     fn query_and_query_static_are_genuinely_independent_storage() {
-        // Same Rust type, inserted into both systems for different
-        // entities -- real proof Sparse Shell and Archetype Core don't
-        // leak into each other's query results, matching their own
-        // already-independent ComponentId namespaces at the storage
-        // level (see archetype.rs's own dedicated test for that).
+        // Two distinct types, one per storage system -- real proof
+        // Sparse Shell and Archetype Core are independent storage
+        // systems, matching their own already-independent ComponentId
+        // namespaces at the storage level (see archetype.rs's own
+        // dedicated test for that). Deliberately NOT the same type used
+        // with both systems: World's own StorageClaims guard forbids
+        // exactly that now (see world.rs's own doc comment on it) --
+        // using one type with both is the actual footgun this test used
+        // to (accidentally) demonstrate, not a supported pattern.
         let mut w = World::new();
         let sparse_entity = w.spawn();
         let static_entity = w.spawn();
         w.insert(sparse_entity, Position { x: 1.0, y: 1.0 });
-        assert!(w.insert_static(static_entity, Position { x: 2.0, y: 2.0 }));
+        assert!(w.insert_static(static_entity, Velocity { dx: 2.0, dy: 2.0 }));
 
         let sparse_found: Vec<Entity> = w.query::<Position>().map(|(e, _)| e).collect();
-        let static_found: Vec<Entity> = w.query_static::<Position>().map(|(e, _)| e).collect();
+        let static_found: Vec<Entity> = w.query_static::<Velocity>().map(|(e, _)| e).collect();
         assert_eq!(sparse_found, vec![sparse_entity]);
         assert_eq!(static_found, vec![static_entity]);
     }

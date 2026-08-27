@@ -154,11 +154,14 @@ int32_t mid_ecs_world_archetypes_with_static_component(const MidEcsWorld *world,
 // so a pure C program (which has no way to call the generic
 // register_ffi_*/insert*/insert_static Rust functions itself) can
 // exercise the real component-data round trip below. Returns a fresh
-// World with a fixed component type ("FfiHealth" in Sparse Shell,
-// "FfiHealthStatic" in Archetype Core, both `{ uint32_t hp; }`) already
-// registered, two entities spawned, and known values already inserted
-// (hp 10/20 in Sparse Shell, hp 100/200 in Archetype Core) -- exactly
-// the fixed values test.c checks against. Never returns NULL.
+// World with a component type registered in each storage system
+// ("FfiHealth" in Sparse Shell, "FfiHealthStatic" in Archetype Core --
+// two distinct Rust types on that side, since one type can't be used
+// with both storage systems in the same World, but both are
+// `{ uint32_t hp; }` and indistinguishable from here), two entities
+// spawned, and known values already inserted (hp 10/20 in Sparse
+// Shell, hp 100/200 in Archetype Core) -- exactly the fixed values
+// test.c checks against. Never returns NULL.
 MidEcsWorld *mid_ecs_test_fixture_world_new(void);
 
 #ifdef __cplusplus

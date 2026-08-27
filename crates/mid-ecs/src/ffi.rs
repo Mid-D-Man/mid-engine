@@ -220,9 +220,28 @@ pub unsafe extern "C" fn mid_ecs_world_entity_count(world: *const MidEcsWorld) -
 /// `#[cfg(test)]` `FfiHealth` (used by this file's *Rust*-level tests)
 /// deliberately — that one only exists in `cargo test` builds, and
 /// can't be what a separately-compiled C program links against.
+///
+/// Sparse Shell's own fixture type — see [`MidEcsTestHealthStatic`]
+/// for why this isn't the *same* type shared across both storage
+/// systems, the way an earlier version of this fixture actually did.
 #[derive(zerocopy::IntoBytes, zerocopy::Immutable, zerocopy::KnownLayout)]
 #[repr(C)]
 pub struct MidEcsTestHealth {
+    pub hp: u32,
+}
+
+/// The Archetype Core's own fixture type — deliberately a *distinct*
+/// Rust type from [`MidEcsTestHealth`], even though both are
+/// `{ hp: u32 }` and identical from C's side of the FFI boundary.
+/// An earlier version of this fixture used the same Rust type for
+/// both storage systems; `World`'s own `StorageClaims` guard (see
+/// `world.rs`) correctly panicked on that — using one component type
+/// with both storage systems is a real footgun it exists specifically
+/// to catch, and the test fixture itself wasn't exempt from that just
+/// because it's test-only code.
+#[derive(zerocopy::IntoBytes, zerocopy::Immutable, zerocopy::KnownLayout)]
+#[repr(C)]
+pub struct MidEcsTestHealthStatic {
     pub hp: u32,
 }
 
@@ -239,11 +258,13 @@ pub struct MidEcsTestHealth {
 /// null-pointer and not-found paths, never real data through real
 /// compiled C memory. This function does the necessary Rust-side setup
 /// once, in Rust, and hands back an already-populated `World`:
-/// registers [`MidEcsTestHealth`] into *both* storage systems (Sparse
-/// Shell as `"FfiHealth"`, Archetype Core as `"FfiHealthStatic"` —
-/// matching this file's own Rust-level test names, deliberately, so
-/// the same fixture shape is verified from both directions), spawns
-/// two entities, and inserts `{hp: 10}`/`{hp: 20}` (Sparse Shell) and
+/// registers [`MidEcsTestHealth`] with Sparse Shell (as `"FfiHealth"`)
+/// and [`MidEcsTestHealthStatic`] with Archetype Core (as
+/// `"FfiHealthStatic"`) — two distinct Rust types, not one shared
+/// across both (see [`MidEcsTestHealthStatic`]'s own doc comment for
+/// why), matching this file's own Rust-level test names, deliberately,
+/// so the same fixture shape is verified from both directions. Spawns
+/// two entities and inserts `{hp: 10}`/`{hp: 20}` (Sparse Shell) and
 /// `{hp: 100}`/`{hp: 200}` (Archetype Core) on them respectively —
 /// exactly the fixed values `test.c` asserts against. Never returns
 /// NULL, matching `mid_ecs_world_new`'s own convention.
@@ -251,13 +272,13 @@ pub struct MidEcsTestHealth {
 pub extern "C" fn mid_ecs_test_fixture_world_new() -> *mut MidEcsWorld {
     let mut world = World::new();
     world.register_ffi_component::<MidEcsTestHealth>("FfiHealth");
-    world.register_ffi_static_component::<MidEcsTestHealth>("FfiHealthStatic");
+    world.register_ffi_static_component::<MidEcsTestHealthStatic>("FfiHealthStatic");
     let e1 = world.spawn();
     let e2 = world.spawn();
     world.insert(e1, MidEcsTestHealth { hp: 10 });
     world.insert(e2, MidEcsTestHealth { hp: 20 });
-    world.insert_static(e1, MidEcsTestHealth { hp: 100 });
-    world.insert_static(e2, MidEcsTestHealth { hp: 200 });
+    world.insert_static(e1, MidEcsTestHealthStatic { hp: 100 });
+    world.insert_static(e2, MidEcsTestHealthStatic { hp: 200 });
     Box::into_raw(Box::new(MidEcsWorld(world)))
 }
 
@@ -580,6 +601,12 @@ mod tests {
         hp: u32,
     }
 
+    #[derive(Debug, Clone, Copy, PartialEq, IntoBytes, KnownLayout, Immutable)]
+    #[repr(C)]
+    struct FfiStamina {
+        stamina: u32,
+    }
+
     #[test]
     fn world_new_free_round_trips() {
         let world = mid_ecs_world_new();
@@ -899,13 +926,16 @@ mod tests {
     fn lookup_ffi_static_component_id_uses_an_independent_namespace_from_sparse_shell() {
         let world_ptr = mid_ecs_world_new();
         let world = unsafe { &mut *world_ptr };
-        // Same Rust type, same name, registered into both systems --
-        // real proof the two id namespaces are independent, matching
-        // Archetypes/SparseShell's own separate registries.
+        // Same name, two different types, one per storage system -- real
+        // proof the two id namespaces are independent, matching
+        // Archetypes/SparseShell's own separate registries. Two distinct
+        // types deliberately, not the same type reused across both
+        // systems -- World's own StorageClaims guard now forbids exactly
+        // that (see world.rs's own doc comment on it).
         let sparse_id = world.0.register_ffi_component::<FfiHealth>("FfiHealth");
         let static_id = world
             .0
-            .register_ffi_static_component::<FfiHealth>("FfiHealth");
+            .register_ffi_static_component::<FfiStamina>("FfiHealth");
 
         let name = std::ffi::CString::new("FfiHealth").unwrap();
         // SAFETY: world_ptr non-null; name is a real C string.

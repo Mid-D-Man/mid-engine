@@ -60,17 +60,24 @@
 //! exactly one `Table`, with no separate archetype-row-vs-table-row
 //! indirection the way Bevy needs for its own unified design.
 //!
-//! Single-component structural changes only (`World::insert_static`/
-//! `remove_static`, one `T` at a time) — not Bevy's general `Bundle`
-//! trait (insert/remove several components as one atomic structural
-//! change). A single-component add always makes the destination
+//! Single-component structural changes (`World::insert_static`/
+//! `remove_static`, one `T` at a time) plus atomic multi-component
+//! `Bundle`-style structural changes (`World::insert_bundle`/
+//! `remove_bundle`, several `T`s as one migration). Both rely on the
+//! same real property: a single-component add (or a `Bundle` insert of
+//! several genuinely new components) always makes the destination
 //! signature a strict superset of the source, and a single-component
-//! remove always makes it a strict subset — which is what lets the
-//! migration code below move every *other* column unconditionally
+//! remove (or a `Bundle` remove of several genuinely present
+//! components) always makes it a strict subset — which is what lets
+//! the migration code below move every *other* column unconditionally
 //! without a merge-join to figure out which columns are actually
-//! shared. Multi-component `Bundle`-style spawning is a real, natural
-//! extension once something in this workspace actually needs to add or
-//! remove several components as one atomic step — not needed yet.
+//! shared, whether one component is changing or several are at once.
+//! `Bundle` was deliberately deferred past the initial single-component
+//! pass ("not needed yet, a real extension once something in this
+//! workspace actually needs it") — this is that extension, once
+//! spawning entities with a known, fixed component set at creation
+//! time (the actual common case, per Bevy's own real `Bundle` design)
+//! became a real, present need rather than a speculative one.
 
 use std::any::{Any, TypeId};
 use std::collections::HashMap;
@@ -186,7 +193,7 @@ impl<T: 'static> Column for Vec<T> {
 /// Dense SoA storage for every entity sharing one exact archetype: one
 /// [`Column`] per component type, one [`Entity`] per row, all in
 /// lockstep. See this module's doc comment for the full design.
-struct Table {
+pub(crate) struct Table {
     columns: SparseSet<ComponentId, Box<dyn Column>>,
     entities: Vec<Entity>,
 }
@@ -261,6 +268,120 @@ struct EntityLocation {
     archetype_id: ArchetypeId,
     row: usize,
 }
+
+/// Several component types inserted or removed as one atomic
+/// structural change — see `insert_bundle`/`remove_bundle` on
+/// [`Archetypes`], and the module doc comment above for why this
+/// doesn't need a merge-join even though it moves several columns at
+/// once. Implemented for tuples `(A,)` through `(A, B, C, D, E, F, G,
+/// H)` below, via a macro — not hand-written per arity, and not
+/// implemented for the unit type `()`: a zero-component bundle isn't a
+/// meaningful structural change to atomically apply, and every real
+/// caller already has at least one component in mind.
+///
+/// `pub(crate)`, deliberately, even though `World::insert_bundle`/
+/// `remove_bundle` (see `world.rs`) are real public API and reference
+/// it in their own `B: Bundle` bound. Tried making this genuinely
+/// `pub` first, including the standard sealed-supertrait pattern (an
+/// empty `pub trait Bundle: sealed::SealedBundle {}` with the real
+/// methods on a `SealedBundle` inside a private module) — it doesn't
+/// actually avoid the warning here, because the supertrait bound
+/// itself makes `SealedBundle` transitively reachable from `Bundle`'s
+/// own public bound, which is what the lint is actually checking, not
+/// the enclosing module's privacy. The real fix would be widening
+/// `Table`/`Archetypes` to `pub` so every `Bundle` method's signature
+/// only mentions already-public types — the wrong tradeoff: those two
+/// staying internal is far more architecturally important than
+/// silencing this one lint. Net effect, accepted deliberately: a
+/// downstream crate can still call `world.insert_bundle(e, (a, b))`
+/// directly with concrete tuple types (that works fine, `Bundle`'s own
+/// visibility doesn't block the call), it just can't write its own
+/// function generic over `B: Bundle` — a real, narrow limitation,
+/// flagged here rather than worked around at real architectural cost.
+pub(crate) trait Bundle: Sized + 'static {
+    /// Component ids for every element, in the same tuple-position
+    /// order every other method here expects them back in —
+    /// registering each type in `archetypes`'s own numbering space on
+    /// first use. Matches plain `insert::<T>`'s own registering
+    /// `Archetypes::component_id::<T>()` convention (see
+    /// `World::insert_static`), generalized to every element.
+    fn component_ids(archetypes: &mut Archetypes) -> Vec<ComponentId>;
+
+    /// Same ids, without registering — `None` if *any* element was
+    /// never registered as an archetype-tracked component for
+    /// anything. Matches plain `remove::<T>`'s own non-registering
+    /// `Archetypes::existing_component_id::<T>()` convention (see
+    /// `World::remove_static`), generalized: one missing registration
+    /// anywhere in the bundle means the whole bundle can't possibly be
+    /// present on any entity, by construction.
+    fn existing_component_ids(archetypes: &Archetypes) -> Option<Vec<ComponentId>>;
+
+    /// Pushes every element into its matching column of `table`, in
+    /// the exact order `ids` gives them back in. `table` must already
+    /// have a same-typed column ensured for every id in `ids` — by the
+    /// time `insert_bundle` calls this, the target archetype (and
+    /// therefore its columns) already exists, so this only ever
+    /// appends, never creates a table.
+    fn push_into(self, table: &mut Table, ids: &[ComponentId]);
+
+    /// The `remove_bundle` counterpart to `push_into`: reassembles
+    /// `Self` from `removed`, a type-erased row value per id already
+    /// extracted from the source table's columns by the caller.
+    /// `removed` must have a real entry for every id in `ids` — it's
+    /// built by `remove_bundle` from the exact same `ids` this is
+    /// called with, so a missing entry here means a real bug in that
+    /// caller, not malformed input to guard against gracefully.
+    fn take_from(removed: &mut HashMap<ComponentId, Box<dyn Any>>, ids: &[ComponentId]) -> Self;
+}
+
+macro_rules! impl_bundle_for_tuple {
+    ($($t:ident : $idx:tt),+) => {
+        impl<$($t: 'static),+> Bundle for ($($t,)+) {
+            fn component_ids(archetypes: &mut Archetypes) -> Vec<ComponentId> {
+                vec![$(archetypes.component_id::<$t>()),+]
+            }
+
+            fn existing_component_ids(archetypes: &Archetypes) -> Option<Vec<ComponentId>> {
+                Some(vec![$(archetypes.existing_component_id::<$t>()?),+])
+            }
+
+            fn push_into(self, table: &mut Table, ids: &[ComponentId]) {
+                $(
+                    ensure_column(&mut table.columns, ids[$idx], || Box::<Vec<$t>>::default());
+                    table
+                        .columns
+                        .get_mut(ids[$idx])
+                        .expect("just ensured present")
+                        .as_any_mut()
+                        .downcast_mut::<Vec<$t>>()
+                        .expect("column type must match component_id's T — component_ids and push_into share one fixed tuple-position order")
+                        .push(self.$idx);
+                )+
+            }
+
+            fn take_from(removed: &mut HashMap<ComponentId, Box<dyn Any>>, ids: &[ComponentId]) -> Self {
+                (
+                    $(
+                        *removed
+                            .remove(&ids[$idx])
+                            .expect("remove_bundle must have collected every id in the bundle before calling take_from")
+                            .downcast::<$t>()
+                            .expect("column type must match component_id's T — existing_component_ids and take_from share one fixed tuple-position order"),
+                    )+
+                )
+            }
+        }
+    };
+}
+
+impl_bundle_for_tuple!(A: 0);
+impl_bundle_for_tuple!(A: 0, B: 1);
+impl_bundle_for_tuple!(A: 0, B: 1, C: 2);
+impl_bundle_for_tuple!(A: 0, B: 1, C: 2, D: 3);
+impl_bundle_for_tuple!(A: 0, B: 1, C: 2, D: 3, E: 4);
+impl_bundle_for_tuple!(A: 0, B: 1, C: 2, D: 3, E: 4, F: 5);
+impl_bundle_for_tuple!(A: 0, B: 1, C: 2, D: 3, E: 4, F: 5, G: 6);
+impl_bundle_for_tuple!(A: 0, B: 1, C: 2, D: 3, E: 4, F: 5, G: 6, H: 7);
 
 /// The Archetype Core itself: every [`Archetype`] that exists, looked up
 /// by exact component-type-set signature, plus where every
@@ -790,6 +911,186 @@ impl Archetypes {
             .expect("checked by caller")
             .remove_edges
             .insert(component_id, to_id);
+        to_id
+    }
+
+    /// Moves `entity` from its current archetype into the one for
+    /// `current signature ∪ B`, migrating every existing column across
+    /// and pushing every element of `bundle` into its own new column —
+    /// one migration total, not one per element of `B`. Returns
+    /// `false` (no-op) if `entity` has no tracked location, or if it
+    /// already has *any* of `B`'s component types — the bundle
+    /// equivalent of [`Self::insert`]'s own "already has it" no-op
+    /// convention, generalized: a partial bundle insert would leave
+    /// the entity in an archetype matching neither its old signature
+    /// nor a signature the caller actually asked for.
+    ///
+    /// The final target archetype is computed by chaining
+    /// [`Self::edge_for_insert`] once per element of `B`, reusing the
+    /// exact same per-source-archetype cache single-component inserts
+    /// already populate and benefit from — a repeated
+    /// `insert_bundle::<SameBundle>` call (spawning many entities with
+    /// the same component set, the common real case a `Bundle` API
+    /// exists for) hits a fully warm cache after the first call, same
+    /// as repeated single-component inserts already do.
+    pub(crate) fn insert_bundle<B: Bundle>(&mut self, entity: Entity, bundle: B) -> bool {
+        let Some(&from_location) = self.locations.get(entity) else {
+            return false;
+        };
+        let from_id = from_location.archetype_id;
+        let ids = B::component_ids(self);
+
+        debug_assert!(
+            {
+                let mut sorted = ids.clone();
+                sorted.sort_by_key(|id| id.as_u32());
+                sorted.windows(2).all(|pair| pair[0] != pair[1])
+            },
+            "Bundle must not repeat the same component type twice — every element needs its own column"
+        );
+
+        if self
+            .archetypes
+            .get(from_id)
+            .is_some_and(|a| ids.iter().any(|id| a.component_ids.contains(id)))
+        {
+            return false;
+        }
+
+        let mut to_id = from_id;
+        for &id in &ids {
+            to_id = self.edge_for_insert(to_id, id);
+        }
+
+        let (mut from_archetype, mut to_archetype) = self.take_two(from_id, to_id);
+
+        for (comp, column) in from_archetype.table.columns.iter_mut() {
+            let moved = column.swap_remove_and_forget(from_location.row);
+            ensure_column(&mut to_archetype.table.columns, comp, || {
+                column.new_same_type()
+            });
+            to_archetype
+                .table
+                .columns
+                .get_mut(comp)
+                .expect("just ensured present")
+                .push_any(moved);
+        }
+        let old_last = from_archetype.table.entities.len() - 1;
+        from_archetype.table.entities.swap_remove(from_location.row);
+        let swapped_entity = (from_location.row != old_last)
+            .then(|| from_archetype.table.entities[from_location.row]);
+
+        let new_row = to_archetype.table.entities.len();
+        to_archetype.table.entities.push(entity);
+        bundle.push_into(&mut to_archetype.table, &ids);
+
+        self.give_back_two(from_id, from_archetype, to_id, to_archetype);
+        self.locations.insert(
+            entity,
+            EntityLocation {
+                archetype_id: to_id,
+                row: new_row,
+            },
+        );
+        if let Some(swapped) = swapped_entity {
+            self.fix_up_row_after_swap(swapped, from_location.row);
+        }
+        true
+    }
+
+    /// Moves `entity` from its current archetype into the one for
+    /// `current signature ∖ B`, migrating every other column across and
+    /// handing back every element of `B` reassembled from the columns
+    /// it's removed from — one migration total, not one per element of
+    /// `B`. Returns `None` if `entity` has no tracked location, if
+    /// *any* element of `B` was never registered as an
+    /// archetype-tracked component for anything (mirrors
+    /// [`Self::remove`]'s own non-registering `existing_component_id`
+    /// lookup, generalized — see `World::remove_static`), or if the
+    /// entity is missing *any* of `B`'s component types — the bundle
+    /// equivalent of `remove`'s own "doesn't have it" `None` case, for
+    /// the same "no partial application" reasoning
+    /// [`Self::insert_bundle`]'s own doc comment gives.
+    pub(crate) fn remove_bundle<B: Bundle>(&mut self, entity: Entity) -> Option<B> {
+        let from_location = *self.locations.get(entity)?;
+        let from_id = from_location.archetype_id;
+        let ids = B::existing_component_ids(self)?;
+
+        debug_assert!(
+            {
+                let mut sorted = ids.clone();
+                sorted.sort_by_key(|id| id.as_u32());
+                sorted.windows(2).all(|pair| pair[0] != pair[1])
+            },
+            "Bundle must not repeat the same component type twice — every element needs its own column"
+        );
+
+        let has_all = self
+            .archetypes
+            .get(from_id)?
+            .component_ids
+            .iter()
+            .filter(|id| ids.contains(id))
+            .count()
+            == ids.len();
+        if !has_all {
+            return None;
+        }
+
+        let to_id = self.edge_for_remove_bundle(from_id, &ids);
+
+        let (mut from_archetype, mut to_archetype) = self.take_two(from_id, to_id);
+
+        let mut removed: HashMap<ComponentId, Box<dyn Any>> = HashMap::with_capacity(ids.len());
+        for (comp, column) in from_archetype.table.columns.iter_mut() {
+            let moved = column.swap_remove_and_forget(from_location.row);
+            if ids.contains(&comp) {
+                removed.insert(comp, moved);
+                continue;
+            }
+            ensure_column(&mut to_archetype.table.columns, comp, || {
+                column.new_same_type()
+            });
+            to_archetype
+                .table
+                .columns
+                .get_mut(comp)
+                .expect("just ensured present")
+                .push_any(moved);
+        }
+        let old_last = from_archetype.table.entities.len() - 1;
+        from_archetype.table.entities.swap_remove(from_location.row);
+        let swapped_entity = (from_location.row != old_last)
+            .then(|| from_archetype.table.entities[from_location.row]);
+
+        let new_row = to_archetype.table.entities.len();
+        to_archetype.table.entities.push(entity);
+
+        self.give_back_two(from_id, from_archetype, to_id, to_archetype);
+        self.locations.insert(
+            entity,
+            EntityLocation {
+                archetype_id: to_id,
+                row: new_row,
+            },
+        );
+        if let Some(swapped) = swapped_entity {
+            self.fix_up_row_after_swap(swapped, from_location.row);
+        }
+        Some(B::take_from(&mut removed, &ids))
+    }
+
+    /// Chains [`Self::edge_for_remove`] once per id in `ids` — the
+    /// `remove_bundle` counterpart to `insert_bundle`'s own
+    /// `edge_for_insert` chain, same reasoning: reuses the existing
+    /// per-source-archetype single-component cache rather than a new
+    /// multi-key one.
+    fn edge_for_remove_bundle(&mut self, from_id: ArchetypeId, ids: &[ComponentId]) -> ArchetypeId {
+        let mut to_id = from_id;
+        for &id in ids {
+            to_id = self.edge_for_remove(to_id, id);
+        }
         to_id
     }
 
