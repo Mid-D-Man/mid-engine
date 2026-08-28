@@ -72,7 +72,17 @@ jobs:
         continue-on-error: true
 
       - name: Clippy
-        run: cargo clippy -p mid-collections -p mid-ecs -- -D warnings
+        # `--no-deps`: as of the GlobalTransform pass, mid-ecs gained a real
+        # workspace path-dependency on mid-math (transform.rs wraps
+        # Affine3/DAffine3). Without --no-deps, `cargo clippy -p mid-ecs`
+        # also lints every workspace-member dependency pulled into the same
+        # build (confirmed directly: mid-math's own pre-existing, already-
+        # tracked clippy debt -- see docs/mid-math.md's "Known issue"
+        # section -- showed up here otherwise, even though this step only
+        # names mid-collections/mid-ecs). --no-deps scopes the lint pass to
+        # exactly the named packages, so this step reflects mid-ecs's own
+        # code quality, not a dependency's separately-tracked debt.
+        run: cargo clippy -p mid-collections -p mid-ecs --no-deps -- -D warnings
         continue-on-error: true
 
       - name: Build
