@@ -11,6 +11,7 @@ pub mod component;
 pub mod ffi;
 pub mod query;
 pub mod sync;
+pub mod transform;
 pub mod world;
 
 // Restored: world.rs now actually defines World (and Entity), as of the
@@ -23,4 +24,5 @@ pub mod world;
 // real.
 pub use archetype::ArchetypeId;
 pub use component::{ComponentId, SparseShell};
+pub use transform::{GlobalTransform, GlobalTransformLWC};
 pub use world::{Entity, World};

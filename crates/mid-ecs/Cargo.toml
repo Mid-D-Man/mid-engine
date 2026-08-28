@@ -15,6 +15,14 @@ crate-type = ["lib", "cdylib", "staticlib"]
 # feature-gated), so this is unconditional too, rather than adding a
 # second, redundant `ffi` feature flag on mid-ecs itself.
 mid-collections = { path = "../mid-collections", features = ["ffi"] }
+# `transform.rs`'s `GlobalTransform`/`GlobalTransformLWC` wrap mid-math's
+# `Affine3`/`DAffine3` directly rather than re-deriving affine-transform
+# math a second time in this crate -- see docs/mid-ecs.md's "Large World
+# Coordinates: GlobalTransform" section for the locked-in design this
+# implements. Workspace-internal path dependency, same discipline as the
+# `mid-collections` dependency above: hand-rolled and already built, not
+# a new external dependency.
+mid-math = { path = "../mid-math" }
 # Version pinned to match mid-collections' own declaration exactly
 # (both 0.8.56) -- avoids relying on semver-range resolution picking
 # the same version by coincidence. `default-features = false` for the

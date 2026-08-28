@@ -348,11 +348,12 @@ Mid Engine completely avoids the traditional Object-Oriented memory traps by spl
 
 ## Large World Coordinates: GlobalTransform
 
-**Status: design only, not yet implemented.** No `GlobalTransform`
-component exists in this crate yet. This section records the design
-decided for it, so implementation starts from an agreed shape rather
-than getting re-litigated. The actual `f64` math primitives this
-design depends on already exist and are real — see `docs/mid-math.md`.
+**Status: implemented.** `GlobalTransform` and `GlobalTransformLWC`
+are real, tested types in `crates/mid-ecs/src/transform.rs` — both
+usable with `World::insert_static`/`query_static` today. Not yet
+built: `LocalTransform`/hierarchy composition, and `mid-camera`'s own
+per-frame `to_view_relative` driver loop (see "Not yet decided" below
+— unchanged, still real, still not started).
 
 **The decision: two component types, `f32` default, `f64` opt-in —
 not one type, and not `f64` everywhere.**
@@ -372,7 +373,13 @@ not one type, and not `f64` everywhere.**
   exactly the cache/branch overhead this split exists to avoid.
 
 **Why `f32` default, not `f64` default:** `DAffine3` is 96 bytes;
-`Affine3` is 48. `GlobalTransform` is about the hottest, most-iterated
+`Affine3` is 64 (16-byte aligned, SSE2-backed on x86/x86_64 — corrected
+here from an earlier "48" figure in this doc that didn't match
+`Affine3`'s own doc comment; checked directly against
+`crates/mid-math/src/f32/affine3.rs` while implementing
+`GlobalTransform`, not left as a quiet inconsistency). `f64` is still
+1.5x the size, not 2x — the conclusion below is unchanged.
+`GlobalTransform` is about the hottest, most-iterated
 component this engine will ever have — read every frame for every
 visible entity, exactly the access pattern the Archetype Core exists
 to make cache-friendly. Most entities in most scenes (UI-anchored
