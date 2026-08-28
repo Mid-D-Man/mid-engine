@@ -1,13 +1,63 @@
 # .github/workflows/bench-vs-curves.yml
+# Bezier/BSpline/Cardinal/Catmull-Rom/Hermite evaluation. Upgraded from a single free-text-note input to the standard target_cpu dropdown; summary now uses the shared scripts/bench_vs_all.py parser instead of an inline heredoc copy of the same logic.
+# Run: Actions → "mid-math — bench curves" → Run workflow
+# DO NOT add push/pull_request triggers.
+
 name: mid-math — bench curves
 
 on:
   workflow_dispatch:
     inputs:
-      baseline_note:
-        description: 'Context for this run (e.g. "baseline curve evaluation")'
-        required: false
-        default: 'manual curves benchmark run'
+      target_cpu:
+        description: >
+          Compiler target-cpu or architecture configuration.
+          native     = all hardware features the runner has.
+          x86-64-v4  = AVX-512 requested — this crate has no hand-written
+                       AVX-512 backend anywhere, so this activates the same
+                       AVX2 path as x86-64-v3. Kept for platform-matrix
+                       consistency and because requesting this target-cpu
+                       carries a real SIGILL risk on non-AVX-512 hardware
+                       regardless of hand-written code (rustc's
+                       autovectorizer can emit it anywhere) — same hardware
+                       soft-gate as every other bench workflow in this repo.
+          x86-64-v3  = AVX2+FMA+BMI2 guaranteed (Haswell+).
+          x86-64-v2  = SSE4.2 baseline — no AVX.
+          x86-64     = SSE2 only.
+          neon       = ARM NEON via -C target-cpu=native on a native
+                       aarch64 runner.
+          wasm       = WebAssembly wasm32-wasip1 + simd128 via wasmtime.
+          scalar     = pure scalar fallback via --features force-scalar.
+        required: true
+        default: 'native'
+        type: choice
+        options:
+          - native
+          - x86-64-v4
+          - x86-64-v3
+          - x86-64-v2
+          - x86-64
+          - neon
+          - wasm
+          - scalar
+      curves_group:
+        description: >
+          Which curves criterion group to run, via a name filter matched against the exact criterion_group! names in benches/vs_curves.rs (without the curves/ prefix).
+        required: true
+        default: 'all'
+        type: choice
+        options:
+          - all
+          - bezier_cubic_evaluate
+          - bezier_quad_evaluate
+          - bspline_evaluate
+          - cardinal_evaluate
+          - catmull_rom_evaluate
+          - hermite_evaluate
+          - sample_bulk_1000pts
+
+env:
+  CARGO_TERM_COLOR: never
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 permissions:
   contents: read
@@ -15,91 +65,136 @@ permissions:
 
 jobs:
   bench:
-    runs-on: ubuntu-latest
+    name: bench (${{ inputs.target_cpu }}, ${{ inputs.curves_group }})
+    runs-on: ${{ inputs.target_cpu == 'neon' && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}
+
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+      - name: Configure target environment
+        run: python3 scripts/bench_target_env.py "${{ inputs.target_cpu }}" >> "$GITHUB_ENV"
 
-      - name: Get Rust version
-        id: rustver
-        run: echo "ver=$(rustc --version)" >> $GITHUB_OUTPUT
+      - name: Check AVX-512 hardware availability
+        id: hwcheck
+        if: inputs.target_cpu == 'x86-64-v4'
+        run: |
+          if grep -qw 'avx512f' /proc/cpuinfo; then
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            {
+              echo "## bench (x86-64-v4) — skipped"
+              echo ""
+              echo "> GitHub-hosted \`ubuntu-latest\` runners use AMD EPYC CPUs without AVX-512."
+              echo "> rustc will happily emit AVX-512 instructions for \`-C target-cpu=x86-64-v4\`"
+              echo "> regardless of the host's real capabilities — running the resulting binary"
+              echo "> here would SIGILL. This run is marked successful (skipped, not failed)."
+              echo "> x86-64-v3 gets you the same AVX2 path this crate actually has."
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
 
-      - name: Cache cargo registry
-        uses: actions/cache@v3
+      - name: Set up Rust stable
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+          override: true
+          target: ${{ inputs.target_cpu == 'wasm' && 'wasm32-wasip1' || '' }}
+          rustflags: ""
+
+      - name: Install wasmtime
+        if: inputs.target_cpu == 'wasm'
+        uses: bytecodealliance/actions/wasmtime/setup@v1
+        with:
+          version: v25.0.2
+
+      - name: Configure WASM test runner
+        if: inputs.target_cpu == 'wasm'
+        run: |
+          mkdir -p .cargo
+          cat >> .cargo/config.toml << 'EOF'
+          [target.wasm32-wasip1]
+          runner = ["wasmtime", "run", "--dir", ".", "--env", "CRITERION_DEBUG=1", "--"]
+          EOF
+
+      - name: Confirm CPU and compiler features
+        run: |
+          {
+            echo "## CPU & Compiler — Build #${{ github.run_number }}"
+            echo ""
+            echo "| | |"
+            echo "|---|---|"
+            echo "| Runner        | \`${{ inputs.target_cpu == 'neon' && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}\` |"
+            echo "| target-cpu    | \`${{ inputs.target_cpu }}\` |"
+            echo "| curves_group | \`${{ inputs.curves_group }}\` |"
+            echo "| ACTIVE_CPU_FLAGS | \`$ACTIVE_CPU_FLAGS\` |"
+            echo "| Rust          | \`$(rustc --version)\` |"
+            echo "| Branch        | \`${{ github.ref_name }}\` |"
+            echo "| Commit        | \`${GITHUB_SHA:0:8}\` |"
+            echo ""
+            echo "### Rustc target_feature cfg"
+            echo '```'
+            if [ "${{ inputs.target_cpu }}" = "wasm" ]; then
+              rustc --print cfg --target wasm32-wasip1 $RUSTFLAGS 2>&1 | grep '^target_feature' | sort
+            else
+              rustc --print cfg $ACTIVE_CPU_FLAGS 2>&1 | grep -E '^target_(arch|feature)' | sort
+            fi
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Cache cargo registry + build artifacts
+        if: steps.hwcheck.outputs.skip != 'true'
+        uses: actions/cache@v4
         with:
           path: |
-            ~/.cargo/bin/
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git/db/
-          key: cargo-registry-bench-curves-${{ hashFiles('crates/mid-math/Cargo.toml') }}
-          restore-keys: cargo-registry-
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-${{ runner.arch }}-bench-curves-${{ inputs.target_cpu }}-v1-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ runner.arch }}-bench-curves-${{ inputs.target_cpu }}-v1-
 
-      - name: Run curves criterion benchmarks
+      - name: Run vs_curves criterion benchmarks
+        if: steps.hwcheck.outputs.skip != 'true'
         run: |
-          echo "Running: cargo bench --bench vs_curves -p mid-math"
-          echo "Note: ${{ inputs.baseline_note }}"
-          cargo bench --bench vs_curves -p mid-math 2>&1 | tee bench-curves-raw.txt
+          set -o pipefail
+          SEL="${{ inputs.curves_group }}"
+          if [ "$SEL" = "all" ]; then FILTER=""; else FILTER="${SEL}"; fi
+          cargo bench --bench vs_curves -p mid-math $BENCH_TARGET $BENCH_FEATURES -- "$FILTER" 2>&1 | tee bench-curves-raw.txt
+          echo "Bench exit code: $?" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Surface bench diagnostics
+        if: steps.hwcheck.outputs.skip != 'true'
+        run: |
+          {
+            echo "### Diagnostics"
+            echo '```'
+            grep -E 'took zero time|Unable to complete|Warning:|panicked|Completed [0-9]+ iterations' \
+              bench-curves-raw.txt | head -60 || echo "(none found)"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Publish summary
+        if: steps.hwcheck.outputs.skip != 'true'
+        env:
+          BENCH_RAW_FILE: bench-curves-raw.txt
         run: |
           {
             echo "## mid-math Curve Benchmarks"
             echo ""
-            echo "**Build:** #${{ github.run_number }} &nbsp; **Rust:** \`${{ steps.rustver.outputs.ver }}\`"
-            echo ""
-            echo "**Note:** ${{ inputs.baseline_note }}"
+            echo "Build: #${{ github.run_number }} &nbsp;|&nbsp; Rust: \`$(rustc --version | cut -d' ' -f2)\` &nbsp;|&nbsp; target-cpu: \`${{ inputs.target_cpu }}\` &nbsp;|&nbsp; curves_group: \`${{ inputs.curves_group }}\`"
             echo ""
             echo "> All timings are per evaluate() call. Lower is faster."
             echo "> Bulk columns show cost per point in a 1000-point sample_uniform call."
+            echo "> No external-crate comparison yet (the splines crate would be the natural target — not added this pass)."
             echo ""
-
-            python3 - << 'PYEOF'
-          import re, sys
-
-          RE_ANSI   = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
-          RE_RESULT = re.compile(
-              r'^(\S[^\n]+?)\s+time:\s+\[\s*([\d.]+\s+\S+)\s+([\d.]+\s+\S+)\s+([\d.]+\s+\S+)\s*\]',
-              re.MULTILINE,
-          )
-
-          try:
-              raw  = open('bench-curves-raw.txt', encoding='utf-8', errors='replace').read()
-          except FileNotFoundError:
-              print("*(bench-curves-raw.txt not found)*")
-              sys.exit(0)
-
-          text    = RE_ANSI.sub('', raw)
-          results = RE_RESULT.findall(text)
-
-          if not results:
-              print("*(No benchmark results found — check bench-curves-raw.txt artifact)*")
-              sys.exit(0)
-
-          current_group = None
-          for name, lo, mean, hi in results:
-              parts   = name.strip().split('/')
-              group   = '/'.join(parts[:-1]) if len(parts) >= 2 else name.strip()
-              variant = parts[-1]            if len(parts) >= 2 else ''
-              if group != current_group:
-                  if current_group is not None:
-                      print()
-                  print(f"#### {group}")
-                  print("| Variant | Low | Mean | High |")
-                  print("|---|---|---|---|")
-                  current_group = group
-              print(f"| {variant} | {lo} | {mean} | {hi} |")
-          PYEOF
-
-          } >> $GITHUB_STEP_SUMMARY
+            python3 scripts/bench_vs_all.py
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload artifacts
+        if: steps.hwcheck.outputs.skip != 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: bench-curves-${{ github.run_number }}
+          name: bench-curves-${{ github.run_number }}-${{ inputs.target_cpu }}-${{ inputs.curves_group }}
           path: |
             bench-curves-raw.txt
             target/criterion/

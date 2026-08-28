@@ -1,67 +1,204 @@
 # .github/workflows/bench-vs-color.yml
+# HSL/HSV/YCbCr/LogLuv/RGBE/sRGB color ops. Upgraded from a single free-text-note input to the standard target_cpu dropdown; summary now uses the shared scripts/bench_vs_all.py parser instead of the bespoke scripts/bench_vs_color.py (identical group/impl table logic — scripts/bench_vs_color.py is now unused, kept in the repo in case anything else references it).
+# Run: Actions → "mid-math — bench color" → Run workflow
+# DO NOT add push/pull_request triggers.
+
 name: mid-math — bench color
 
 on:
   workflow_dispatch:
     inputs:
-      baseline_note:
-        description: 'Context (e.g. "baseline HSV/LogLuv color ops")'
-        required: false
-        default: 'manual color benchmark run'
+      target_cpu:
+        description: >
+          Compiler target-cpu or architecture configuration.
+          native     = all hardware features the runner has.
+          x86-64-v4  = AVX-512 requested — this crate has no hand-written
+                       AVX-512 backend anywhere, so this activates the same
+                       AVX2 path as x86-64-v3. Kept for platform-matrix
+                       consistency and because requesting this target-cpu
+                       carries a real SIGILL risk on non-AVX-512 hardware
+                       regardless of hand-written code (rustc's
+                       autovectorizer can emit it anywhere) — same hardware
+                       soft-gate as every other bench workflow in this repo.
+          x86-64-v3  = AVX2+FMA+BMI2 guaranteed (Haswell+).
+          x86-64-v2  = SSE4.2 baseline — no AVX.
+          x86-64     = SSE2 only.
+          neon       = ARM NEON via -C target-cpu=native on a native
+                       aarch64 runner.
+          wasm       = WebAssembly wasm32-wasip1 + simd128 via wasmtime.
+          scalar     = pure scalar fallback via --features force-scalar.
+        required: true
+        default: 'native'
+        type: choice
+        options:
+          - native
+          - x86-64-v4
+          - x86-64-v3
+          - x86-64-v2
+          - x86-64
+          - neon
+          - wasm
+          - scalar
+      color_group:
+        description: >
+          Which color criterion group to run, via a name filter matched against the exact criterion_group! names in benches/vs_color.rs (without the color/ prefix — e.g. 'hsv' matches 'color/hsv').
+        required: true
+        default: 'all'
+        type: choice
+        options:
+          - all
+          - blend
+          - bulk_100k
+          - hsl
+          - hsv
+          - lerp
+          - logluv
+          - premultiply
+          - rgbe
+          - srgb_linear
+          - tone_map
+          - ycbcr
+
+env:
+  CARGO_TERM_COLOR: never
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 permissions:
   contents: read
-  actions: read
+  actions:  read
 
 jobs:
   bench:
-    runs-on: ubuntu-latest
-    env:
-      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+    name: bench (${{ inputs.target_cpu }}, ${{ inputs.color_group }})
+    runs-on: ${{ inputs.target_cpu == 'neon' && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+      - name: Configure target environment
+        run: python3 scripts/bench_target_env.py "${{ inputs.target_cpu }}" >> "$GITHUB_ENV"
 
-      - name: Get Rust version
-        id: rustver
-        run: echo "ver=$(rustc --version)" >> $GITHUB_OUTPUT
+      - name: Check AVX-512 hardware availability
+        id: hwcheck
+        if: inputs.target_cpu == 'x86-64-v4'
+        run: |
+          if grep -qw 'avx512f' /proc/cpuinfo; then
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            {
+              echo "## bench (x86-64-v4) — skipped"
+              echo ""
+              echo "> GitHub-hosted \`ubuntu-latest\` runners use AMD EPYC CPUs without AVX-512."
+              echo "> rustc will happily emit AVX-512 instructions for \`-C target-cpu=x86-64-v4\`"
+              echo "> regardless of the host's real capabilities — running the resulting binary"
+              echo "> here would SIGILL. This run is marked successful (skipped, not failed)."
+              echo "> x86-64-v3 gets you the same AVX2 path this crate actually has."
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
 
-      - uses: actions/cache@v4
+      - name: Set up Rust stable
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+          override: true
+          target: ${{ inputs.target_cpu == 'wasm' && 'wasm32-wasip1' || '' }}
+          rustflags: ""
+
+      - name: Install wasmtime
+        if: inputs.target_cpu == 'wasm'
+        uses: bytecodealliance/actions/wasmtime/setup@v1
+        with:
+          version: v25.0.2
+
+      - name: Configure WASM test runner
+        if: inputs.target_cpu == 'wasm'
+        run: |
+          mkdir -p .cargo
+          cat >> .cargo/config.toml << 'EOF'
+          [target.wasm32-wasip1]
+          runner = ["wasmtime", "run", "--dir", ".", "--env", "CRITERION_DEBUG=1", "--"]
+          EOF
+
+      - name: Confirm CPU and compiler features
+        run: |
+          {
+            echo "## CPU & Compiler — Build #${{ github.run_number }}"
+            echo ""
+            echo "| | |"
+            echo "|---|---|"
+            echo "| Runner        | \`${{ inputs.target_cpu == 'neon' && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}\` |"
+            echo "| target-cpu    | \`${{ inputs.target_cpu }}\` |"
+            echo "| color_group | \`${{ inputs.color_group }}\` |"
+            echo "| ACTIVE_CPU_FLAGS | \`$ACTIVE_CPU_FLAGS\` |"
+            echo "| Rust          | \`$(rustc --version)\` |"
+            echo "| Branch        | \`${{ github.ref_name }}\` |"
+            echo "| Commit        | \`${GITHUB_SHA:0:8}\` |"
+            echo ""
+            echo "### Rustc target_feature cfg"
+            echo '```'
+            if [ "${{ inputs.target_cpu }}" = "wasm" ]; then
+              rustc --print cfg --target wasm32-wasip1 $RUSTFLAGS 2>&1 | grep '^target_feature' | sort
+            else
+              rustc --print cfg $ACTIVE_CPU_FLAGS 2>&1 | grep -E '^target_(arch|feature)' | sort
+            fi
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Cache cargo registry + build artifacts
+        if: steps.hwcheck.outputs.skip != 'true'
+        uses: actions/cache@v4
         with:
           path: |
-            ~/.cargo/bin/
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git/db/
-          key: cargo-bench-color-${{ hashFiles('crates/mid-math/Cargo.toml') }}
-          restore-keys: cargo-bench-color-
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-${{ runner.arch }}-bench-color-${{ inputs.target_cpu }}-v1-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ runner.arch }}-bench-color-${{ inputs.target_cpu }}-v1-
 
-      - name: Run color benchmarks
+      - name: Run vs_color criterion benchmarks
+        if: steps.hwcheck.outputs.skip != 'true'
         run: |
-          echo "Note: ${{ inputs.baseline_note }}"
-          cargo bench --bench vs_color -p mid-math 2>&1 | tee bench-color-raw.txt
+          set -o pipefail
+          SEL="${{ inputs.color_group }}"
+          if [ "$SEL" = "all" ]; then FILTER=""; else FILTER="${SEL}"; fi
+          cargo bench --bench vs_color -p mid-math $BENCH_TARGET $BENCH_FEATURES -- "$FILTER" 2>&1 | tee bench-color-raw.txt
+          echo "Bench exit code: $?" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Surface bench diagnostics
+        if: steps.hwcheck.outputs.skip != 'true'
+        run: |
+          {
+            echo "### Diagnostics"
+            echo '```'
+            grep -E 'took zero time|Unable to complete|Warning:|panicked|Completed [0-9]+ iterations' \
+              bench-color-raw.txt | head -60 || echo "(none found)"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Publish summary
+        if: steps.hwcheck.outputs.skip != 'true'
+        env:
+          BENCH_RAW_FILE: bench-color-raw.txt
         run: |
           {
             echo "## mid-math Color Benchmarks — Criterion"
             echo ""
-            echo "**Build:** #${{ github.run_number }} &nbsp; **Rust:** \`${{ steps.rustver.outputs.ver }}\`"
-            echo ""
-            echo "**Note:** ${{ inputs.baseline_note }}"
+            echo "Build: #${{ github.run_number }} &nbsp;|&nbsp; Rust: \`$(rustc --version | cut -d' ' -f2)\` &nbsp;|&nbsp; target-cpu: \`${{ inputs.target_cpu }}\` &nbsp;|&nbsp; color_group: \`${{ inputs.color_group }}\`"
             echo ""
             echo "> sRGB↔linear: IEC 61966-2-1 (powf 2.4). LogLuv32/RGBE use transcendentals — expect 10–50 ns."
-            echo "> bulk\_100k column is throughput; sample\_size=20 for stability."
+            echo "> bulk_100k column is throughput; sample_size=20 for stability."
+            echo "> No external-crate comparison yet (palette would be the natural target — not added this pass)."
             echo ""
-            python3 scripts/bench_vs_color.py
-          } >> $GITHUB_STEP_SUMMARY
+            python3 scripts/bench_vs_all.py
+          } >> "$GITHUB_STEP_SUMMARY"
 
-      - uses: actions/upload-artifact@v4
+      - name: Upload artifacts
+        if: steps.hwcheck.outputs.skip != 'true'
+        uses: actions/upload-artifact@v4
         with:
-          name: bench-color-${{ github.run_number }}
+          name: bench-color-${{ github.run_number }}-${{ inputs.target_cpu }}-${{ inputs.color_group }}
           path: |
             bench-color-raw.txt
             target/criterion/

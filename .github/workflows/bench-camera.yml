@@ -1,9 +1,9 @@
-# .github/workflows/bench-vs-rng.yml
-# Xorshift64 vs PCG32. Upgraded from a single free-text-note input to the standard target_cpu dropdown. Already used the shared scripts/bench_vs_all.py and had a diagnostics step — those are unchanged, this pass only adds the dropdown.
-# Run: Actions → "mid-math — bench rng" → Run workflow
+# .github/workflows/bench-camera.yml
+# Frustum culling, projections, unproject, CSM. Previously only ran via mid-math-ci.yml's bare bencher-format smoke test — this is its first dedicated criterion workflow.
+# Run: Actions → "mid-math — bench camera" → Run workflow
 # DO NOT add push/pull_request triggers.
 
-name: mid-math — bench rng
+name: mid-math — bench camera
 
 on:
   workflow_dispatch:
@@ -39,19 +39,20 @@ on:
           - neon
           - wasm
           - scalar
-      rng_group:
+      camera_group:
         description: >
-          Which rng criterion group to run, via a name filter matched against the exact criterion_group! names in benches/vs_rng.rs (without the rng/ prefix).
+          Which camera criterion group to run, via a name filter matched against the exact criterion_group! names in benches/camera.rs.
         required: true
         default: 'all'
         type: choice
         options:
           - all
-          - advance
-          - bool_p
-          - bulk_1m
-          - range
-          - throughput
+          - frustum_tests
+          - frustum_batch_100k
+          - projection_ops
+          - unproject
+          - csm
+          - frustum_world_geometry
 
 env:
   CARGO_TERM_COLOR: never
@@ -63,7 +64,7 @@ permissions:
 
 jobs:
   bench:
-    name: bench (${{ inputs.target_cpu }}, ${{ inputs.rng_group }})
+    name: bench (${{ inputs.target_cpu }}, ${{ inputs.camera_group }})
     runs-on: ${{ inputs.target_cpu == 'neon' && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}
 
     steps:
@@ -123,7 +124,7 @@ jobs:
             echo "|---|---|"
             echo "| Runner        | \`${{ inputs.target_cpu == 'neon' && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}\` |"
             echo "| target-cpu    | \`${{ inputs.target_cpu }}\` |"
-            echo "| rng_group | \`${{ inputs.rng_group }}\` |"
+            echo "| camera_group | \`${{ inputs.camera_group }}\` |"
             echo "| ACTIVE_CPU_FLAGS | \`$ACTIVE_CPU_FLAGS\` |"
             echo "| Rust          | \`$(rustc --version)\` |"
             echo "| Branch        | \`${{ github.ref_name }}\` |"
@@ -147,17 +148,17 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ runner.os }}-${{ runner.arch }}-bench-rng-${{ inputs.target_cpu }}-v1-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-${{ runner.arch }}-bench-camera-${{ inputs.target_cpu }}-v1-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-${{ runner.arch }}-bench-rng-${{ inputs.target_cpu }}-v1-
+            ${{ runner.os }}-${{ runner.arch }}-bench-camera-${{ inputs.target_cpu }}-v1-
 
-      - name: Run vs_rng criterion benchmarks
+      - name: Run camera criterion benchmarks
         if: steps.hwcheck.outputs.skip != 'true'
         run: |
           set -o pipefail
-          SEL="${{ inputs.rng_group }}"
+          SEL="${{ inputs.camera_group }}"
           if [ "$SEL" = "all" ]; then FILTER=""; else FILTER="${SEL}"; fi
-          cargo bench --bench vs_rng -p mid-math $BENCH_TARGET $BENCH_FEATURES -- "$FILTER" 2>&1 | tee bench-rng-raw.txt
+          cargo bench --bench camera -p mid-math $BENCH_TARGET $BENCH_FEATURES -- "$FILTER" 2>&1 | tee bench-camera-raw.txt
           echo "Bench exit code: $?" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Surface bench diagnostics
@@ -167,26 +168,22 @@ jobs:
             echo "### Diagnostics"
             echo '```'
             grep -E 'took zero time|Unable to complete|Warning:|panicked|Completed [0-9]+ iterations' \
-              bench-rng-raw.txt | head -60 || echo "(none found)"
+              bench-camera-raw.txt | head -60 || echo "(none found)"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Publish summary
         if: steps.hwcheck.outputs.skip != 'true'
         env:
-          BENCH_RAW_FILE: bench-rng-raw.txt
+          BENCH_RAW_FILE: bench-camera-raw.txt
         run: |
           {
-            echo "## mid-math RNG Benchmarks — Xorshift64 vs PCG32"
+            echo "## mid-math camera — Criterion Benchmarks"
             echo ""
-            echo "Build: #${{ github.run_number }} &nbsp;|&nbsp; Rust: \`$(rustc --version | cut -d' ' -f2)\` &nbsp;|&nbsp; target-cpu: \`${{ inputs.target_cpu }}\` &nbsp;|&nbsp; rng_group: \`${{ inputs.rng_group }}\`"
+            echo "Build: #${{ github.run_number }} &nbsp;|&nbsp; Rust: \`$(rustc --version | cut -d' ' -f2)\` &nbsp;|&nbsp; target-cpu: \`${{ inputs.target_cpu }}\` &nbsp;|&nbsp; camera_group: \`${{ inputs.camera_group }}\`"
             echo ""
-            echo "> Xorshift64: 3 XOR+shift ops ~1 ns. Best for hot simulation loops."
-            echo "> PCG32: 1 multiply + XSH-RR permutation ~1–2 ns. Better stats; independent streams."
-            echo "> PCG32 advance() is O(log n) — enables parallel skip-ahead."
-            echo "> Both are deterministic: same seed -> same sequence on x86, ARM, WASM."
-            echo "> bulk_1m sample_size=20."
-            echo "> No external-crate comparison yet (rand/rand_pcg would be the natural target — not added this pass)."
+            echo "> frustum_batch_100k is the engine-critical bulk culling path."
+            echo "> No external-crate comparison here — frustum/projection math is engine-internal, not a natural fit for a general-purpose math crate bakeoff."
             echo ""
             python3 scripts/bench_vs_all.py
           } >> "$GITHUB_STEP_SUMMARY"
@@ -195,8 +192,8 @@ jobs:
         if: steps.hwcheck.outputs.skip != 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: bench-rng-${{ github.run_number }}-${{ inputs.target_cpu }}-${{ inputs.rng_group }}
+          name: bench-camera-${{ github.run_number }}-${{ inputs.target_cpu }}-${{ inputs.camera_group }}
           path: |
-            bench-rng-raw.txt
+            bench-camera-raw.txt
             target/criterion/
           retention-days: 30

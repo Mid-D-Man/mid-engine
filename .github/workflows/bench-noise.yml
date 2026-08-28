@@ -1,9 +1,9 @@
-# .github/workflows/bench-vs-rng.yml
-# Xorshift64 vs PCG32. Upgraded from a single free-text-note input to the standard target_cpu dropdown. Already used the shared scripts/bench_vs_all.py and had a diagnostics step — those are unchanged, this pass only adds the dropdown.
-# Run: Actions → "mid-math — bench rng" → Run workflow
+# .github/workflows/bench-noise.yml
+# Perlin/Simplex/Value/Worley/fBm/domain-warp. Previously only ran via mid-math-ci.yml's bare bencher-format smoke test. NOTE: noise/ has no SIMD backend at all yet (scalar only) — this workflow's target_cpu selector still matters (the underlying f32 ops it calls are platform-dispatched) but won't show the 4x/8x wide-type story wide-int/wide-float do.
+# Run: Actions → "mid-math — bench noise" → Run workflow
 # DO NOT add push/pull_request triggers.
 
-name: mid-math — bench rng
+name: mid-math — bench noise
 
 on:
   workflow_dispatch:
@@ -39,19 +39,24 @@ on:
           - neon
           - wasm
           - scalar
-      rng_group:
+      noise_group:
         description: >
-          Which rng criterion group to run, via a name filter matched against the exact criterion_group! names in benches/vs_rng.rs (without the rng/ prefix).
+          Which noise criterion group to run, via a name filter matched against the exact criterion_group! names in benches/noise.rs.
         required: true
         default: 'all'
         type: choice
         options:
           - all
-          - advance
-          - bool_p
-          - bulk_1m
-          - range
-          - throughput
+          - noise_scalar_2d
+          - noise_scalar_3d
+          - noise_scalar_4d
+          - fbm_2d
+          - fbm_3d
+          - domain_warp_2d
+          - domain_warp_3d
+          - worley_modes_2d
+          - noise_batch_100k
+          - noise_construction
 
 env:
   CARGO_TERM_COLOR: never
@@ -63,7 +68,7 @@ permissions:
 
 jobs:
   bench:
-    name: bench (${{ inputs.target_cpu }}, ${{ inputs.rng_group }})
+    name: bench (${{ inputs.target_cpu }}, ${{ inputs.noise_group }})
     runs-on: ${{ inputs.target_cpu == 'neon' && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}
 
     steps:
@@ -123,7 +128,7 @@ jobs:
             echo "|---|---|"
             echo "| Runner        | \`${{ inputs.target_cpu == 'neon' && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}\` |"
             echo "| target-cpu    | \`${{ inputs.target_cpu }}\` |"
-            echo "| rng_group | \`${{ inputs.rng_group }}\` |"
+            echo "| noise_group | \`${{ inputs.noise_group }}\` |"
             echo "| ACTIVE_CPU_FLAGS | \`$ACTIVE_CPU_FLAGS\` |"
             echo "| Rust          | \`$(rustc --version)\` |"
             echo "| Branch        | \`${{ github.ref_name }}\` |"
@@ -147,17 +152,17 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ runner.os }}-${{ runner.arch }}-bench-rng-${{ inputs.target_cpu }}-v1-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-${{ runner.arch }}-bench-noise-${{ inputs.target_cpu }}-v1-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-${{ runner.arch }}-bench-rng-${{ inputs.target_cpu }}-v1-
+            ${{ runner.os }}-${{ runner.arch }}-bench-noise-${{ inputs.target_cpu }}-v1-
 
-      - name: Run vs_rng criterion benchmarks
+      - name: Run noise criterion benchmarks
         if: steps.hwcheck.outputs.skip != 'true'
         run: |
           set -o pipefail
-          SEL="${{ inputs.rng_group }}"
+          SEL="${{ inputs.noise_group }}"
           if [ "$SEL" = "all" ]; then FILTER=""; else FILTER="${SEL}"; fi
-          cargo bench --bench vs_rng -p mid-math $BENCH_TARGET $BENCH_FEATURES -- "$FILTER" 2>&1 | tee bench-rng-raw.txt
+          cargo bench --bench noise -p mid-math $BENCH_TARGET $BENCH_FEATURES -- "$FILTER" 2>&1 | tee bench-noise-raw.txt
           echo "Bench exit code: $?" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Surface bench diagnostics
@@ -167,26 +172,22 @@ jobs:
             echo "### Diagnostics"
             echo '```'
             grep -E 'took zero time|Unable to complete|Warning:|panicked|Completed [0-9]+ iterations' \
-              bench-rng-raw.txt | head -60 || echo "(none found)"
+              bench-noise-raw.txt | head -60 || echo "(none found)"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Publish summary
         if: steps.hwcheck.outputs.skip != 'true'
         env:
-          BENCH_RAW_FILE: bench-rng-raw.txt
+          BENCH_RAW_FILE: bench-noise-raw.txt
         run: |
           {
-            echo "## mid-math RNG Benchmarks — Xorshift64 vs PCG32"
+            echo "## mid-math noise — Criterion Benchmarks"
             echo ""
-            echo "Build: #${{ github.run_number }} &nbsp;|&nbsp; Rust: \`$(rustc --version | cut -d' ' -f2)\` &nbsp;|&nbsp; target-cpu: \`${{ inputs.target_cpu }}\` &nbsp;|&nbsp; rng_group: \`${{ inputs.rng_group }}\`"
+            echo "Build: #${{ github.run_number }} &nbsp;|&nbsp; Rust: \`$(rustc --version | cut -d' ' -f2)\` &nbsp;|&nbsp; target-cpu: \`${{ inputs.target_cpu }}\` &nbsp;|&nbsp; noise_group: \`${{ inputs.noise_group }}\`"
             echo ""
-            echo "> Xorshift64: 3 XOR+shift ops ~1 ns. Best for hot simulation loops."
-            echo "> PCG32: 1 multiply + XSH-RR permutation ~1–2 ns. Better stats; independent streams."
-            echo "> PCG32 advance() is O(log n) — enables parallel skip-ahead."
-            echo "> Both are deterministic: same seed -> same sequence on x86, ARM, WASM."
-            echo "> bulk_1m sample_size=20."
-            echo "> No external-crate comparison yet (rand/rand_pcg would be the natural target — not added this pass)."
+            echo "> noise/ is scalar-only today (no SIMD backend) — these numbers are the pre-SIMD baseline the bench file's own header says it exists to establish."
+            echo "> No external-crate comparison here yet."
             echo ""
             python3 scripts/bench_vs_all.py
           } >> "$GITHUB_STEP_SUMMARY"
@@ -195,8 +196,8 @@ jobs:
         if: steps.hwcheck.outputs.skip != 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: bench-rng-${{ github.run_number }}-${{ inputs.target_cpu }}-${{ inputs.rng_group }}
+          name: bench-noise-${{ github.run_number }}-${{ inputs.target_cpu }}-${{ inputs.noise_group }}
           path: |
-            bench-rng-raw.txt
+            bench-noise-raw.txt
             target/criterion/
           retention-days: 30

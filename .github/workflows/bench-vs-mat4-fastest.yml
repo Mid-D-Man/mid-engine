@@ -1,18 +1,58 @@
 # .github/workflows/bench-vs-mat4-fastest.yml
-# Who has the fastest 4×4 matrix multiply?
-# mid-math vs glam vs nalgebra vs ultraviolet vs vek vs matrixmultiply vs faer
-# Run: Actions → "mid-math: bench vs mat4 fastest" → Run workflow
-# DO NOT add push/pull_request triggers — benchmarks take 15+ minutes.
+# Who has the fastest 4x4 matrix multiply? mid-math vs glam vs nalgebra vs ultraviolet vs vek vs matrixmultiply vs faer. Upgraded from a single free-text-note input to the standard target_cpu dropdown; summary keeps calling the bespoke scripts/bench_vs_mat4_fastest.py (ranking/leaderboard logic beyond the generic group/impl table) unchanged.
+# Run: Actions → "mid-math — bench vs mat4 fastest" → Run workflow
+# DO NOT add push/pull_request triggers.
 
 name: mid-math — bench vs mat4 fastest
 
 on:
   workflow_dispatch:
     inputs:
-      baseline_note:
-        description: 'Context for this run (e.g. "pre storage layout fix")'
-        required: false
-        default: 'manual mat4 benchmark'
+      target_cpu:
+        description: >
+          Compiler target-cpu or architecture configuration.
+          native     = all hardware features the runner has.
+          x86-64-v4  = AVX-512 requested — this crate has no hand-written
+                       AVX-512 backend anywhere, so this activates the same
+                       AVX2 path as x86-64-v3. Kept for platform-matrix
+                       consistency and because requesting this target-cpu
+                       carries a real SIGILL risk on non-AVX-512 hardware
+                       regardless of hand-written code (rustc's
+                       autovectorizer can emit it anywhere) — same hardware
+                       soft-gate as every other bench workflow in this repo.
+          x86-64-v3  = AVX2+FMA+BMI2 guaranteed (Haswell+).
+          x86-64-v2  = SSE4.2 baseline — no AVX.
+          x86-64     = SSE2 only.
+          neon       = ARM NEON via -C target-cpu=native on a native
+                       aarch64 runner.
+          wasm       = WebAssembly wasm32-wasip1 + simd128 via wasmtime.
+          scalar     = pure scalar fallback via --features force-scalar.
+        required: true
+        default: 'native'
+        type: choice
+        options:
+          - native
+          - x86-64-v4
+          - x86-64-v3
+          - x86-64-v2
+          - x86-64
+          - neon
+          - wasm
+          - scalar
+      mat4fastest_group:
+        description: >
+          Which mat4-fastest criterion group to run, via a name filter matched against the exact criterion_group! names in benches/vs_mat4_fastest.rs.
+        required: true
+        default: 'all'
+        type: choice
+        options:
+          - all
+          - mat4_4x4_latency
+          - mat4_4x4_throughput_100k
+
+env:
+  CARGO_TERM_COLOR: never
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 permissions:
   contents: read
@@ -20,55 +60,137 @@ permissions:
 
 jobs:
   bench:
-    runs-on: ubuntu-latest
+    name: bench (${{ inputs.target_cpu }}, ${{ inputs.mat4fastest_group }})
+    runs-on: ${{ inputs.target_cpu == 'neon' && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+      - name: Configure target environment
+        run: python3 scripts/bench_target_env.py "${{ inputs.target_cpu }}" >> "$GITHUB_ENV"
 
-      - name: Get Rust version
-        id: rustver
-        run: echo "ver=$(rustc --version)" >> $GITHUB_OUTPUT
-
-      - name: Cache cargo registry
-        uses: actions/cache@v3
-        with:
-          path: |
-            ~/.cargo/bin/
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git/db/
-          key: cargo-registry-bench-mat4fastest-${{ hashFiles('crates/mid-math/Cargo.toml') }}
-          restore-keys: cargo-registry-
-
-      - name: Run vs_mat4_fastest benchmarks
+      - name: Check AVX-512 hardware availability
+        id: hwcheck
+        if: inputs.target_cpu == 'x86-64-v4'
         run: |
-          echo "Running: cargo bench --bench vs_mat4_fastest -p mid-math"
-          echo "Note: ${{ inputs.baseline_note }}"
-          cargo bench --bench vs_mat4_fastest -p mid-math 2>&1 | tee bench-mat4-fastest-raw.txt
+          if grep -qw 'avx512f' /proc/cpuinfo; then
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            {
+              echo "## bench (x86-64-v4) — skipped"
+              echo ""
+              echo "> GitHub-hosted \`ubuntu-latest\` runners use AMD EPYC CPUs without AVX-512."
+              echo "> rustc will happily emit AVX-512 instructions for \`-C target-cpu=x86-64-v4\`"
+              echo "> regardless of the host's real capabilities — running the resulting binary"
+              echo "> here would SIGILL. This run is marked successful (skipped, not failed)."
+              echo "> x86-64-v3 gets you the same AVX2 path this crate actually has."
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
 
-      - name: Publish summary
+      - name: Set up Rust stable
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+          override: true
+          target: ${{ inputs.target_cpu == 'wasm' && 'wasm32-wasip1' || '' }}
+          rustflags: ""
+
+      - name: Install wasmtime
+        if: inputs.target_cpu == 'wasm'
+        uses: bytecodealliance/actions/wasmtime/setup@v1
+        with:
+          version: v25.0.2
+
+      - name: Configure WASM test runner
+        if: inputs.target_cpu == 'wasm'
+        run: |
+          mkdir -p .cargo
+          cat >> .cargo/config.toml << 'EOF'
+          [target.wasm32-wasip1]
+          runner = ["wasmtime", "run", "--dir", ".", "--env", "CRITERION_DEBUG=1", "--"]
+          EOF
+
+      - name: Confirm CPU and compiler features
         run: |
           {
-            echo "## mid-math — 4×4 Matrix Multiply: Who's Fastest?"
+            echo "## CPU & Compiler — Build #${{ github.run_number }}"
             echo ""
-            echo "**Build:** #${{ github.run_number }} &nbsp; **Rust:** \`${{ steps.rustver.outputs.ver }}\`"
+            echo "| | |"
+            echo "|---|---|"
+            echo "| Runner        | \`${{ inputs.target_cpu == 'neon' && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}\` |"
+            echo "| target-cpu    | \`${{ inputs.target_cpu }}\` |"
+            echo "| mat4fastest_group | \`${{ inputs.mat4fastest_group }}\` |"
+            echo "| ACTIVE_CPU_FLAGS | \`$ACTIVE_CPU_FLAGS\` |"
+            echo "| Rust          | \`$(rustc --version)\` |"
+            echo "| Branch        | \`${{ github.ref_name }}\` |"
+            echo "| Commit        | \`${GITHUB_SHA:0:8}\` |"
             echo ""
-            echo "**Note:** ${{ inputs.baseline_note }}"
+            echo "### Rustc target_feature cfg"
+            echo '```'
+            if [ "${{ inputs.target_cpu }}" = "wasm" ]; then
+              rustc --print cfg --target wasm32-wasip1 $RUSTFLAGS 2>&1 | grep '^target_feature' | sort
+            else
+              rustc --print cfg $ACTIVE_CPU_FLAGS 2>&1 | grep -E '^target_(arch|feature)' | sort
+            fi
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Cache cargo registry + build artifacts
+        if: steps.hwcheck.outputs.skip != 'true'
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-${{ runner.arch }}-bench-mat4fastest-${{ inputs.target_cpu }}-v1-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ runner.arch }}-bench-mat4fastest-${{ inputs.target_cpu }}-v1-
+
+      - name: Run vs_mat4_fastest criterion benchmarks
+        if: steps.hwcheck.outputs.skip != 'true'
+        run: |
+          set -o pipefail
+          SEL="${{ inputs.mat4fastest_group }}"
+          if [ "$SEL" = "all" ]; then FILTER=""; else FILTER="${SEL}"; fi
+          cargo bench --bench vs_mat4_fastest -p mid-math $BENCH_TARGET $BENCH_FEATURES -- "$FILTER" 2>&1 | tee bench-mat4-fastest-raw.txt
+          echo "Bench exit code: $?" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Surface bench diagnostics
+        if: steps.hwcheck.outputs.skip != 'true'
+        run: |
+          {
+            echo "### Diagnostics"
+            echo '```'
+            grep -E 'took zero time|Unable to complete|Warning:|panicked|Completed [0-9]+ iterations' \
+              bench-mat4-fastest-raw.txt | head -60 || echo "(none found)"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Publish summary
+        if: steps.hwcheck.outputs.skip != 'true'
+        env:
+          BENCH_RAW_FILE: bench-mat4-fastest-raw.txt
+        run: |
+          {
+            echo "## mid-math — 4x4 Matrix Multiply: Who's Fastest?"
+            echo ""
+            echo "Build: #${{ github.run_number }} &nbsp;|&nbsp; Rust: \`$(rustc --version | cut -d' ' -f2)\` &nbsp;|&nbsp; target-cpu: \`${{ inputs.target_cpu }}\` &nbsp;|&nbsp; mat4fastest_group: \`${{ inputs.mat4fastest_group }}\`"
             echo ""
             echo "> Lower is faster. glam (~7 ns) is the x86-64 gold standard."
-            echo "> mid-math target after storage fix: ≤7 ns (parity). After AVX2 (OPT-7): ~3.5 ns."
+            echo "> mid-math target after storage fix: <=7 ns (parity). After AVX2 (OPT-7): ~3.5 ns."
             echo "> faer 0.22: linalg::matmul::Accum is pub(crate); benches use allocating path."
             echo ""
             python3 scripts/bench_vs_mat4_fastest.py
-          } >> $GITHUB_STEP_SUMMARY
+          } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Upload raw results
+      - name: Upload artifacts
+        if: steps.hwcheck.outputs.skip != 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: bench-mat4-fastest-${{ github.run_number }}
-          path: bench-mat4-fastest-raw.txt
+          name: bench-mat4-fastest-${{ github.run_number }}-${{ inputs.target_cpu }}-${{ inputs.mat4fastest_group }}
+          path: |
+            bench-mat4-fastest-raw.txt
+            target/criterion/
           retention-days: 30

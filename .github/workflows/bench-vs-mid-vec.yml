@@ -1,16 +1,62 @@
 # .github/workflows/bench-vs-mid-vec.yml
-# Run: Actions → "mid-math: bench MidVec vs Vec/VecDeque/SmallVec/TinyVec" → Run workflow
-# DO NOT add push/pull_request triggers — benchmarks take 5-10 minutes.
+# Upgraded from a single free-text-note input to the standard target_cpu dropdown. Already used the shared scripts/bench_vs_all.py and had a diagnostics step — those are unchanged, this pass only adds the dropdown.
+# Run: Actions → "mid-math — bench MidVec vs Vec/VecDeque/SmallVec/TinyVec" → Run workflow
+# DO NOT add push/pull_request triggers.
 
 name: mid-math — bench MidVec vs Vec/VecDeque/SmallVec/TinyVec
 
 on:
   workflow_dispatch:
     inputs:
-      baseline_note:
-        description: 'Why are you running this? (e.g. "post push_unchecked fast-path change")'
-        required: false
-        default: 'manual benchmark run'
+      target_cpu:
+        description: >
+          Compiler target-cpu or architecture configuration.
+          native     = all hardware features the runner has.
+          x86-64-v4  = AVX-512 requested — this crate has no hand-written
+                       AVX-512 backend anywhere, so this activates the same
+                       AVX2 path as x86-64-v3. Kept for platform-matrix
+                       consistency and because requesting this target-cpu
+                       carries a real SIGILL risk on non-AVX-512 hardware
+                       regardless of hand-written code (rustc's
+                       autovectorizer can emit it anywhere) — same hardware
+                       soft-gate as every other bench workflow in this repo.
+          x86-64-v3  = AVX2+FMA+BMI2 guaranteed (Haswell+).
+          x86-64-v2  = SSE4.2 baseline — no AVX.
+          x86-64     = SSE2 only.
+          neon       = ARM NEON via -C target-cpu=native on a native
+                       aarch64 runner.
+          wasm       = WebAssembly wasm32-wasip1 + simd128 via wasmtime.
+          scalar     = pure scalar fallback via --features force-scalar.
+        required: true
+        default: 'native'
+        type: choice
+        options:
+          - native
+          - x86-64-v4
+          - x86-64-v3
+          - x86-64-v2
+          - x86-64
+          - neon
+          - wasm
+          - scalar
+      mid_vec_group:
+        description: >
+          Which mid_vec criterion group to run, via a name filter matched against the exact criterion_group! names in benches/vs_mid_vec.rs.
+        required: true
+        default: 'all'
+        type: choice
+        options:
+          - all
+          - array_of_curves_iterate_sum
+          - bulk_collect
+          - construct_and_drop
+          - construct_push
+          - csm_like_small
+          - hermite_keys
+
+env:
+  CARGO_TERM_COLOR: never
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 permissions:
   contents: read
@@ -18,43 +64,105 @@ permissions:
 
 jobs:
   bench:
-    runs-on: ubuntu-latest
+    name: bench (${{ inputs.target_cpu }}, ${{ inputs.mid_vec_group }})
+    runs-on: ${{ inputs.target_cpu == 'neon' && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+      - name: Configure target environment
+        run: python3 scripts/bench_target_env.py "${{ inputs.target_cpu }}" >> "$GITHUB_ENV"
 
-      - name: Get Rust version
-        id: rustver
-        run: echo "ver=$(rustc --version)" >> $GITHUB_OUTPUT
+      - name: Check AVX-512 hardware availability
+        id: hwcheck
+        if: inputs.target_cpu == 'x86-64-v4'
+        run: |
+          if grep -qw 'avx512f' /proc/cpuinfo; then
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            {
+              echo "## bench (x86-64-v4) — skipped"
+              echo ""
+              echo "> GitHub-hosted \`ubuntu-latest\` runners use AMD EPYC CPUs without AVX-512."
+              echo "> rustc will happily emit AVX-512 instructions for \`-C target-cpu=x86-64-v4\`"
+              echo "> regardless of the host's real capabilities — running the resulting binary"
+              echo "> here would SIGILL. This run is marked successful (skipped, not failed)."
+              echo "> x86-64-v3 gets you the same AVX2 path this crate actually has."
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
 
-      - name: Cache cargo registry
-        uses: actions/cache@v3
+      - name: Set up Rust stable
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+          override: true
+          target: ${{ inputs.target_cpu == 'wasm' && 'wasm32-wasip1' || '' }}
+          rustflags: ""
+
+      - name: Install wasmtime
+        if: inputs.target_cpu == 'wasm'
+        uses: bytecodealliance/actions/wasmtime/setup@v1
+        with:
+          version: v25.0.2
+
+      - name: Configure WASM test runner
+        if: inputs.target_cpu == 'wasm'
+        run: |
+          mkdir -p .cargo
+          cat >> .cargo/config.toml << 'EOF'
+          [target.wasm32-wasip1]
+          runner = ["wasmtime", "run", "--dir", ".", "--env", "CRITERION_DEBUG=1", "--"]
+          EOF
+
+      - name: Confirm CPU and compiler features
+        run: |
+          {
+            echo "## CPU & Compiler — Build #${{ github.run_number }}"
+            echo ""
+            echo "| | |"
+            echo "|---|---|"
+            echo "| Runner        | \`${{ inputs.target_cpu == 'neon' && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}\` |"
+            echo "| target-cpu    | \`${{ inputs.target_cpu }}\` |"
+            echo "| mid_vec_group | \`${{ inputs.mid_vec_group }}\` |"
+            echo "| ACTIVE_CPU_FLAGS | \`$ACTIVE_CPU_FLAGS\` |"
+            echo "| Rust          | \`$(rustc --version)\` |"
+            echo "| Branch        | \`${{ github.ref_name }}\` |"
+            echo "| Commit        | \`${GITHUB_SHA:0:8}\` |"
+            echo ""
+            echo "### Rustc target_feature cfg"
+            echo '```'
+            if [ "${{ inputs.target_cpu }}" = "wasm" ]; then
+              rustc --print cfg --target wasm32-wasip1 $RUSTFLAGS 2>&1 | grep '^target_feature' | sort
+            else
+              rustc --print cfg $ACTIVE_CPU_FLAGS 2>&1 | grep -E '^target_(arch|feature)' | sort
+            fi
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Cache cargo registry + build artifacts
+        if: steps.hwcheck.outputs.skip != 'true'
+        uses: actions/cache@v4
         with:
           path: |
-            ~/.cargo/bin/
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git/db/
-          key: cargo-registry-bench-${{ hashFiles('crates/mid-math/Cargo.toml') }}
-          restore-keys: cargo-registry-
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-${{ runner.arch }}-bench-mid-vec-${{ inputs.target_cpu }}-v1-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ runner.arch }}-bench-mid-vec-${{ inputs.target_cpu }}-v1-
 
-      # ── Bench: vs_mid_vec (MidVec<T,N> vs Vec/VecDeque/SmallVec/TinyVec) ────
       - name: Run vs_mid_vec criterion benchmarks
+        if: steps.hwcheck.outputs.skip != 'true'
         run: |
-          echo "Running: cargo bench --bench vs_mid_vec -p mid-math"
-          echo "Note: ${{ inputs.baseline_note }}"
-          cargo bench --bench vs_mid_vec -p mid-math 2>&1 | tee bench-vs-mid-vec-raw.txt
+          set -o pipefail
+          SEL="${{ inputs.mid_vec_group }}"
+          if [ "$SEL" = "all" ]; then FILTER=""; else FILTER="${SEL}"; fi
+          cargo bench --bench vs_mid_vec -p mid-math $BENCH_TARGET $BENCH_FEATURES -- "$FILTER" 2>&1 | tee bench-vs-mid-vec-raw.txt
           echo "Bench exit code: $?" >> "$GITHUB_STEP_SUMMARY"
 
-      # ── Surface criterion's own diagnostics directly in the summary ─────────
-      # Same idea as Abemch-vs-all.yml: a clean "Bench exit code: 0" does not
-      # by itself guarantee every benchmark printed a result row (criterion
-      # can silently skip printing one whose measured time hit exactly 0.0).
       - name: Surface bench diagnostics
+        if: steps.hwcheck.outputs.skip != 'true'
         run: |
           {
             echo "### Diagnostics"
@@ -64,54 +172,28 @@ jobs:
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
-      # ── Publish summary ──────────────────────────────────────────────────────
-      - name: Publish benchmark summary
+      - name: Publish summary
+        if: steps.hwcheck.outputs.skip != 'true'
         env:
           BENCH_RAW_FILE: bench-vs-mid-vec-raw.txt
         run: |
           {
             echo "## mid-math small-vec containers — Criterion Benchmarks"
             echo ""
-            echo "**Build:** #${{ github.run_number }} &nbsp; **Rust:** \`${{ steps.rustver.outputs.ver }}\`"
+            echo "Build: #${{ github.run_number }} &nbsp;|&nbsp; Rust: \`$(rustc --version | cut -d' ' -f2)\` &nbsp;|&nbsp; target-cpu: \`${{ inputs.target_cpu }}\` &nbsp;|&nbsp; mid_vec_group: \`${{ inputs.mid_vec_group }}\`"
             echo ""
-            echo "**Note:** ${{ inputs.baseline_note }}"
+            echo "> Containers: vec (std::vec::Vec, baseline), vecdeque (std::collections::VecDeque), mid_vec (this crate's own MidVec<T,N>), smallvec (union feature, same storage strategy as MidVec), tinyvec (auto-spilling Inline/Heap enum), tinyvec_arrayvec (fixed-capacity, only benched at sizes <= N)."
+            echo "> Covers: construct_push, construct_and_drop, bulk_collect, hermite_keys (HermiteKey<Vec3> element type), array_of_curves (per-bone/per-object animation shape), csm_like_small (camera::csm_split_depths shape)."
+            echo "> Lower is faster. MidVec expected to win construct_push/construct_and_drop; smallvec is its closest structural relative (same union storage) — a persistent gap there is the signal worth digging into."
             echo ""
-            echo "Containers: \`vec\` (\`std::vec::Vec\`, baseline), \`vecdeque\`"
-            echo "(\`std::collections::VecDeque\`, the ring-buffer comparison — no inline"
-            echo "storage, bucketed with \`vec\` where that matters), \`mid_vec\` (this crate's"
-            echo "own \`MidVec<T, N>\`), \`smallvec\` (\`smallvec::SmallVec<[T; N]>\`, \`union\`"
-            echo "feature — same union+MaybeUninit storage strategy as MidVec), \`tinyvec\`"
-            echo "(\`tinyvec::TinyVec<[T; N]>\`, the auto-spilling Inline/Heap enum), and"
-            echo "\`tinyvec_arrayvec\` (\`tinyvec::ArrayVec<[T; N]>\`, fixed-capacity, only"
-            echo "benched at sizes <= N since it panics past that)."
-            echo ""
-            echo "Covers: \`construct_push\` (organic push, no pre-reserve), \`construct_and_drop\`"
-            echo "(alloc/dealloc round trip at/under and over N), \`bulk_collect\` (FromIterator"
-            echo "from a known-size iterator), \`hermite_keys\` (same shapes with the real"
-            echo "\`HermiteKey<Vec3>\` element type), \`array_of_curves\` (many independent small"
-            echo "curves, summed — the per-bone/per-object animation-evaluation shape), and"
-            echo "\`csm_like_small\` (3-8 element f32 collections, shaped like"
-            echo "\`camera::csm_split_depths\`)."
-            echo ""
-            echo "> Lower is faster. Each group shows related operations side by side."
-            echo "> MidVec is expected to win construct_push/construct_and_drop (fewer or zero"
-            echo "> allocations) and be roughly at par or slightly behind on bulk_collect (Vec's"
-            echo "> collect specialisation also allocates only once there, so every tagged"
-            echo "> inline/heap container's per-element tag check is pure overhead in that"
-            echo "> specific group). \`smallvec\` is MidVec's closest structural relative (same"
-            echo "> union storage) — the two should track each other closely everywhere; a"
-            echo "> persistent gap there is the signal worth digging into."
-            echo ""
-
             python3 scripts/bench_vs_all.py
+          } >> "$GITHUB_STEP_SUMMARY"
 
-          } >> $GITHUB_STEP_SUMMARY
-
-      # ── Upload raw logs and criterion HTML ────────────────────────────────────
       - name: Upload artifacts
+        if: steps.hwcheck.outputs.skip != 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: bench-mid-vec-results-${{ github.run_number }}
+          name: bench-mid-vec-results-${{ github.run_number }}-${{ inputs.target_cpu }}-${{ inputs.mid_vec_group }}
           path: |
             bench-vs-mid-vec-raw.txt
             target/criterion/
