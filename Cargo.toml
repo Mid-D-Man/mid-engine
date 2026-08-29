@@ -71,7 +71,17 @@ members = [
     "tools/mdix-compiler",
     "examples/headless-server",
     "examples/custom-transport-demo",
+    "benches/ecs-vs-bevy-ecs",
 ]
+
+# NOTE on benches/ecs-vs-bevy-ecs (added this pass): its bevy_ecs dependency
+# declares `rust-version = "1.95.0"` (confirmed directly: tried building
+# bevy_ecs 0.19.1 from crates.io). Same class of wall as
+# mid-net-transport-quinn's edition2024 requirement above, same isolation
+# reasoning -- kept as its own workspace member specifically so a bare
+# `cargo test`/`cargo build`/`cargo bench` without `-p` doesn't pull the
+# newer-toolchain requirement into mid-ecs's own, otherwise-1.91-compatible
+# build. `-p ecs-vs-bevy-ecs` needs the newer toolchain; nothing else does.
 resolver = "2"
 
 [profile.release]
