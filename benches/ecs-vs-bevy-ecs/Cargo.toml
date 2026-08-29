@@ -1,0 +1,39 @@
+[package]
+name = "ecs-vs-bevy-ecs"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# Real, run-it-yourself answer to "which storage architecture is actually
+# faster for mid-ecs's own workloads" (docs/mid-ecs.md / docs/bevy-comparison.md).
+#
+# NOT a member of mid-ecs's own dependency graph -- mid-ecs itself has zero
+# path dependency on this crate or on bevy_ecs. Kept as a separate workspace
+# member specifically so mid-ecs's own `cargo test -p mid-ecs`/`cargo bench
+# -p mid-ecs` stay buildable on whatever toolchain the rest of the workspace
+# uses. This crate alone carries the heavier requirement below.
+#
+# TOOLCHAIN WALL, confirmed directly (tried building bevy_ecs 0.19.1 from
+# crates.io): bevy_ecs declares `rust-version = "1.95.0"`. This sandbox's
+# best available apt toolchain at time of writing (rustc-1.91) is below
+# that -- `cargo build -p ecs-vs-bevy-ecs`/`cargo bench -p ecs-vs-bevy-ecs`
+# cannot be verified locally here. Real CI's `dtolnay/rust-toolchain@stable`
+# tracks true latest stable, confirmed already well past 1.94 as of March
+# 2026, so it clears 1.95 -- this crate's own numbers can only come from a
+# real CI run, not this sandbox. Same isolate-the-wall pattern already used
+# for mid-net-transport-quinn's own heavier MSRV, for the same reason.
+[dependencies]
+mid-ecs = { path = "../../crates/mid-ecs" }
+# Reference comparison target. Pinned to a real, published, buildable
+# release (crates.io latest at time of add: 0.19.1) -- NOT the
+# `Mid-D-Man/bevy` fork checked out separately for source-reading/porting,
+# which tracks an unreleased `0.20.0-dev` and isn't a fixed target to bench
+# against run over run.
+bevy_ecs = { version = "0.19" }
+
+[dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[[bench]]
+name    = "vs_bevy_ecs"
+harness = false

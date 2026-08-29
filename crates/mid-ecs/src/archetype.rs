@@ -477,24 +477,47 @@ impl Archetypes {
     /// see `Archetypes::despawn`). Empty (not a panic or a special
     /// case) if `T` was never inserted as an archetype-tracked
     /// component for anything.
+    ///
+    /// A real, non-obvious case this handles: `component_ids` listing
+    /// a component doesn't guarantee a column for it has actually been
+    /// created yet. [`Self::insert_bundle`]'s chained
+    /// [`Self::edge_for_insert`] calls (one per bundle element, see its
+    /// own doc comment) can create — and correctly register in
+    /// `component_ids` — an *intermediate* archetype on the way to a
+    /// bundle's final target, without ever moving an entity into it
+    /// (this was a real panic, `archetypes_with guarantees
+    /// component_id is in this archetype's own signature`, hit during
+    /// bench-harness setup: bulk `insert_bundle` calls create exactly
+    /// these intermediate archetypes). Such an archetype always has
+    /// zero rows too, so "no column" and "a column that exists but is
+    /// empty" are observationally identical from here — both
+    /// contribute zero items. Handled below without a panic, not
+    /// treated as a broken invariant.
     pub(crate) fn iter<T: 'static>(&self) -> impl Iterator<Item = (Entity, &T)> + '_ {
         let component_id = self.existing_component_id::<T>();
         component_id.into_iter().flat_map(move |component_id| {
-            self.archetypes_with(component_id).flat_map(move |archetype_id| {
-                let archetype = self
-                    .archetypes
-                    .get(archetype_id)
-                    .expect("archetypes_with only ever yields real, currently-existing archetype ids");
-                let column = archetype
-                    .table
-                    .columns
-                    .get(component_id)
-                    .expect("archetypes_with guarantees component_id is in this archetype's own signature")
-                    .as_any()
-                    .downcast_ref::<Vec<T>>()
-                    .expect("column type must match component_id's T");
-                archetype.table.entities.iter().copied().zip(column.iter())
-            })
+            self.archetypes_with(component_id)
+                .flat_map(move |archetype_id| {
+                    let archetype = self.archetypes.get(archetype_id).expect(
+                        "archetypes_with only ever yields real, currently-existing archetype ids",
+                    );
+                    let entities: &[Entity] = &archetype.table.entities;
+                    let column: &[T] = match archetype.table.columns.get(component_id) {
+                        Some(column) => column
+                            .as_any()
+                            .downcast_ref::<Vec<T>>()
+                            .expect("column type must match component_id's T")
+                            .as_slice(),
+                        // See this method's own doc comment: a real,
+                        // reachable state, not a broken invariant. `zip`
+                        // below caps the pair count at this slice's length
+                        // (zero), so this is safe even if some other future
+                        // code path ever manages to violate the "no column
+                        // implies no rows" assumption too.
+                        None => &[],
+                    };
+                    entities.iter().copied().zip(column.iter())
+                })
         })
     }
 

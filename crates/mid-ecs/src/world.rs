@@ -1072,6 +1072,48 @@ mod tests {
     }
 
     #[test]
+    fn query_static_after_bulk_insert_bundle_does_not_panic() {
+        // Regression test for a real panic hit setting up the ECS bench
+        // harness: "archetypes_with guarantees component_id is in this
+        // archetype's own signature", inside Archetypes::iter.
+        //
+        // Root cause: World::insert_bundle chains edge_for_insert once
+        // per bundle element (see its own doc comment) to compute the
+        // final target archetype. Each intermediate step really does
+        // call Archetypes::get_or_create, which really does register a
+        // correct `component_ids` signature for that intermediate
+        // archetype -- but insert_bundle only ever moves data into the
+        // *final* archetype in the chain, never the intermediate ones.
+        // So an intermediate archetype can exist with a signature that
+        // claims a component, while never having had a column created
+        // for it (no entity was ever actually placed there). None of
+        // the other insert_bundle tests above call query_static, so a
+        // single insert_bundle call alone was never enough to surface
+        // this -- it takes a real iteration over Archetypes::iter to
+        // reach the archetype and its absent column.
+        let mut w = World::new();
+        let entities: Vec<Entity> = (0..64)
+            .map(|i| {
+                let e = w.spawn();
+                assert!(w.insert_bundle(e, (Mass(i as f32), Charge(i as f32 * 2.0))));
+                e
+            })
+            .collect();
+
+        let found: Vec<Entity> = w.query_static::<Mass>().map(|(e, _)| e).collect();
+        assert_eq!(found.len(), entities.len());
+        for e in &entities {
+            assert!(found.contains(e));
+        }
+
+        let found2: Vec<Entity> = w
+            .query2_static::<Mass, Charge>()
+            .map(|(e, _, _)| e)
+            .collect();
+        assert_eq!(found2.len(), entities.len());
+    }
+
+    #[test]
     #[should_panic(expected = "was already used with Sparse Shell")]
     fn using_a_sparse_type_with_insert_static_panics() {
         let mut w = World::new();
