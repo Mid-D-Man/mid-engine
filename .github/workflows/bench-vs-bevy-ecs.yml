@@ -57,11 +57,30 @@ jobs:
 
       - name: Run vs_bevy_ecs benchmarks
         run: |
+          # set -o pipefail (established pattern -- see mid-ecs-test.yml's
+          # own "Run mid-ecs tests" step comment and the real incident it
+          # traces back to): without this, `cargo bench | tee file` reports
+          # tee's exit code (always 0), not cargo bench's, so a real
+          # failure would show green here. This step was missing it before
+          # this pass -- fixed now, not left as a silent gap.
+          set -o pipefail
           echo "Running: cargo bench -p ecs-vs-bevy-ecs --bench vs_bevy_ecs"
           echo "Note: ${{ inputs.baseline_note }}"
           cargo bench -p ecs-vs-bevy-ecs --bench vs_bevy_ecs 2>&1 | tee bench-vs-bevy-ecs-raw.txt
 
+      - name: Surface bench diagnostics
+        if: always()
+        run: |
+          {
+            echo "### Diagnostics"
+            echo '```'
+            grep -E 'took zero time|Unable to complete|Warning:|panicked|Completed [0-9]+ iterations' \
+              bench-vs-bevy-ecs-raw.txt | head -60 || echo "(none found)"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
       - name: Publish summary
+        if: always()
         run: |
           {
             echo "## mid-ecs vs bevy_ecs"
@@ -71,18 +90,18 @@ jobs:
             echo "**Note:** ${{ inputs.baseline_note }}"
             echo ""
             echo "Three groups, each mid-ecs vs bevy_ecs on an equivalent workload"
-            echo "(N=10,000 entities): `spawn_n_entities_two_components`,"
-            echo "`dense_query_iteration`, `structural_churn_insert_remove`. See"
+            echo "(N=10,000 entities). See"
             echo "\`benches/ecs-vs-bevy-ecs/benches/vs_bevy_ecs.rs\` for exactly what"
             echo "each one does and why, including the one workload"
             echo "(\`spawn\`) that isn't perfectly apples-to-apples between the two"
             echo "engines' APIs — read that file's own top doc comment before"
             echo "drawing conclusions from it specifically."
             echo ""
-            echo "Full criterion output is in the raw log artifact below."
+            python3 scripts/bench_vs_bevy_ecs.py
           } >> $GITHUB_STEP_SUMMARY
 
       - name: Upload raw results
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: bench-vs-bevy-ecs-${{ github.run_number }}
