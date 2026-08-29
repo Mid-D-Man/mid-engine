@@ -1,0 +1,90 @@
+# .github/workflows/bench-vs-bevy-ecs.yml
+# mid-ecs vs bevy_ecs: spawn throughput, dense query iteration, and
+# structural-churn (insert/remove) migration cost.
+# Run: Actions → "ecs-vs-bevy-ecs: bench vs bevy_ecs" → Run workflow
+# DO NOT add push/pull_request triggers — benchmarks take real time, and
+# bevy_ecs's own rust-version = "1.95.0" (see benches/ecs-vs-bevy-ecs/
+# Cargo.toml) means this can only build here, on @stable, not in the
+# sandbox this was authored in (apt's best available toolchain there:
+# 1.91) — first real CI run for this workflow is also the first real
+# compile check for the bevy_ecs half of vs_bevy_ecs.rs. Confirm it
+# actually builds before trusting the numbers.
+
+name: ecs-vs-bevy-ecs — bench vs bevy_ecs
+
+on:
+  workflow_dispatch:
+    inputs:
+      baseline_note:
+        description: 'Context for this run (e.g. "pre insert_bundle optimization")'
+        required: false
+        default: 'manual mid-ecs vs bevy_ecs benchmark'
+
+permissions:
+  contents: read
+  actions:  read
+
+jobs:
+  bench:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Get Rust version
+        id: rustver
+        run: echo "ver=$(rustc --version)" >> $GITHUB_OUTPUT
+
+      - name: Confirm rustc clears bevy_ecs's MSRV
+        run: |
+          echo "bevy_ecs 0.19.1 requires rustc 1.95.0 -- confirming this runner's toolchain clears it:"
+          rustc --version
+
+      - name: Cache cargo registry
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+          key: cargo-registry-bench-vs-bevy-ecs-${{ hashFiles('benches/ecs-vs-bevy-ecs/Cargo.toml') }}
+          restore-keys: cargo-registry-
+
+      - name: Run vs_bevy_ecs benchmarks
+        run: |
+          echo "Running: cargo bench -p ecs-vs-bevy-ecs --bench vs_bevy_ecs"
+          echo "Note: ${{ inputs.baseline_note }}"
+          cargo bench -p ecs-vs-bevy-ecs --bench vs_bevy_ecs 2>&1 | tee bench-vs-bevy-ecs-raw.txt
+
+      - name: Publish summary
+        run: |
+          {
+            echo "## mid-ecs vs bevy_ecs"
+            echo ""
+            echo "**Build:** #${{ github.run_number }} &nbsp; **Rust:** \`${{ steps.rustver.outputs.ver }}\`"
+            echo ""
+            echo "**Note:** ${{ inputs.baseline_note }}"
+            echo ""
+            echo "Three groups, each mid-ecs vs bevy_ecs on an equivalent workload"
+            echo "(N=10,000 entities): `spawn_n_entities_two_components`,"
+            echo "`dense_query_iteration`, `structural_churn_insert_remove`. See"
+            echo "\`benches/ecs-vs-bevy-ecs/benches/vs_bevy_ecs.rs\` for exactly what"
+            echo "each one does and why, including the one workload"
+            echo "(\`spawn\`) that isn't perfectly apples-to-apples between the two"
+            echo "engines' APIs — read that file's own top doc comment before"
+            echo "drawing conclusions from it specifically."
+            echo ""
+            echo "Full criterion output is in the raw log artifact below."
+          } >> $GITHUB_STEP_SUMMARY
+
+      - name: Upload raw results
+        uses: actions/upload-artifact@v4
+        with:
+          name: bench-vs-bevy-ecs-${{ github.run_number }}
+          path: bench-vs-bevy-ecs-raw.txt
+          retention-days: 30
