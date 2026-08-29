@@ -70,7 +70,17 @@ members = [
     "crates/mid-trace",
     "tools/mdix-compiler",
     "examples/headless-server",
+      # New this pass (docs/roadmap.md, "What can be built in parallel"):
+    # v0 stubs, not yet compiled/verified in this sandbox (no rustc
+    # available here at all -- see that section's own honesty note).
+    "crates/mid-time",
+    "crates/mid-physics",
+    "crates/mid-anim",
+    "crates/mid-app",
+    "tools/mdix-compiler",
+    "examples/headless-server",
     "examples/custom-transport-demo",
+
     "benches/ecs-vs-bevy-ecs",
 ]
 
