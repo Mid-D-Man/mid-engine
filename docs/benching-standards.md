@@ -113,3 +113,74 @@ reference implementation, adapted from `bench_vs_mat4_fastest.py`):
   benches exist at all (comparing against a reference implementation).
 - `docs/mid-ecs.md`, `docs/mid-math.md` — the design context a given
   bench's numbers should get read against.
+
+## Benchmarking across runners and platforms
+
+This is a real, separate axis from the summary-formatting stuff above,
+and `bench-vs-bevy-ecs.yml` didn't have it either on first write —
+checked directly against what's actually in this repo (`Abench-vs-all-
+f64.yml`, `mid-math-test-neon.yml`, `test-geom.yml`) rather than
+assumed. Two genuinely different concerns, easy to conflate:
+
+### 1. ISA-tier SIMD dispatch matrix — only for vectorized, dispatched-backend code
+
+`Abench-vs-all-f64.yml` (and its f32 counterpart) sweep a real
+`target_cpu` `workflow_dispatch` choice input — `native`, `x86-64-v4`
+(AVX-512), `x86-64-v3` (AVX2+FMA), `x86-64-v2` (SSE4.2), `x86-64`
+(SSE2-only), `neon`, `wasm`, `scalar` — because mid-math genuinely
+*has* a different dispatched SIMD backend per ISA tier
+(`f32/{sse2,avx,neon,wasm}/`), and the whole point of the matrix is
+proving the right backend gets picked and actually performs on each
+real tier. Real mechanics worth reusing wherever this pattern actually
+applies:
+
+- **`CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS`, not plain
+  `RUSTFLAGS`**, for the target-cpu flag — plain `RUSTFLAGS` also
+  applies to build-script (host) compilation, which `SIGILL`s if the
+  runner's *real* CPU doesn't have the requested ISA (GitHub-hosted
+  `ubuntu-latest` runners are AMD EPYC, no AVX-512).
+- **Soft-gate hardware you can't guarantee**: `x86-64-v4` checks
+  `/proc/cpuinfo` for `avx512f` first and marks the run
+  skipped-not-failed with an explanatory step summary if it's absent,
+  rather than actually attempting a `SIGILL`ing run.
+- **Real ARM coverage exists and is cheap**: `mid-math-test-neon.yml`
+  runs on `macos-14` (Apple Silicon M1) — GitHub's free-tier hosted
+  ARM runner, not a self-hosted rig. `neon` in the f64/f32 bench
+  matrices runs on `ubuntu-24.04-arm` instead (also free-tier hosted),
+  with `-C target-cpu=native` as plain `RUSTFLAGS` — safe there
+  specifically because host and target are the same architecture, so
+  no cross-compile SIGILL risk the x86 tiers have.
+- **wasm needs `wasmtime` + a `.cargo/config.toml` runner shim** to
+  actually execute — see the `wasm` branch for the exact
+  `[target.wasm32-wasip1]` config.
+
+**When a bench does NOT need this matrix — real, already-established
+precedent, not new**: `bench-mid-collections-sparse-set.yml`'s own
+header comment explains it directly — `SparseSet`'s performance is
+governed by cache locality and pointer-chasing, not vectorizable
+arithmetic, so there's no ISA tier to sweep. **The same reasoning
+applies to `vs_bevy_ecs.rs`** — `spawn`/`dense_query_iteration`/
+`structural_churn` are all archetype-migration, hashmap-lookup, and
+`Box<dyn Any>`-boxing bound, not SIMD arithmetic bound. Neither
+`bench-mid-collections-sparse-set.yml` nor `bench-vs-bevy-ecs.yml` carry
+the `target_cpu` matrix, and that's a deliberate omission, not a gap —
+don't add one without a real, dispatched-SIMD-backend reason to.
+
+### 2. Cross-OS/cross-arch portability — a different, still-real concern
+
+Independent of SIMD: does the thing actually build and behave the same
+on Linux, macOS, and Windows? `test-geom.yml`'s pattern is the
+reference — a plain `strategy.matrix.os: [ubuntu-latest, macos-latest,
+windows-latest]` with `fail-fast: false`, no ISA-tier logic at all,
+just "does this work everywhere Mid Engine cares about."
+
+This is the piece `bench-vs-bevy-ecs.yml` was missing and now has: an
+opt-in `platforms` `workflow_dispatch` choice (`ubuntu-only` fast
+default, `all` for the full `ubuntu-latest` + `macos-latest` +
+`ubuntu-24.04-arm` sweep) — opt-in rather than every-run, because
+`bevy_ecs`'s ~400-crate dependency tree makes each platform's build
+alone take real minutes, and this bench doesn't need to pay that on
+every invocation the way a plain correctness test-matrix (`test-
+geom.yml`) does on every dispatch. Reach for `all` before trusting a
+cross-platform performance claim from this bench specifically, not by
+default.
