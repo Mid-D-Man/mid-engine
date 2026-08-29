@@ -9,6 +9,17 @@
 # 1.91) — first real CI run for this workflow is also the first real
 # compile check for the bevy_ecs half of vs_bevy_ecs.rs. Confirm it
 # actually builds before trusting the numbers.
+#
+# NO target_cpu/ISA-tier matrix here, unlike Abench-vs-all-f64.yml —
+# deliberate, not a gap. See docs/benching-standards.md's "Benchmarking
+# across runners and platforms" section: spawn/query/churn are archetype-
+# migration and hashmap-lookup bound, not vectorized-arithmetic bound, so
+# there's no dispatched SIMD backend here to sweep tiers against (same
+# reasoning bench-mid-collections-sparse-set.yml already documents for
+# itself). What this DOES carry is an opt-in cross-OS/cross-arch matrix
+# (`platforms: all`) — a genuinely different concern from ISA tiers,
+# mirrored from test-geom.yml's real ubuntu/macos/windows pattern and
+# mid-math-test-neon.yml's real macos-14 (Apple Silicon) ARM coverage.
 
 name: ecs-vs-bevy-ecs — bench vs bevy_ecs
 
@@ -19,14 +30,48 @@ on:
         description: 'Context for this run (e.g. "pre insert_bundle optimization")'
         required: false
         default: 'manual mid-ecs vs bevy_ecs benchmark'
+      platforms:
+        description: >
+          ubuntu-only = fast default, ubuntu-latest (x86-64) alone.
+          all = ubuntu-latest + macos-latest (Apple Silicon, real ARM via
+          GitHub's free-tier hosted runner) + ubuntu-24.04-arm (real ARM,
+          Linux). ~400-crate bevy_ecs dependency tree makes each leg take
+          real minutes to build -- opt into `all` deliberately, don't
+          default to it, and reach for it before trusting a cross-platform
+          performance claim from this bench specifically.
+        required: true
+        default: 'ubuntu-only'
+        type: choice
+        options:
+          - ubuntu-only
+          - all
 
 permissions:
   contents: read
   actions:  read
 
 jobs:
-  bench:
+  setup:
     runs-on: ubuntu-latest
+    outputs:
+      os_list: ${{ steps.set.outputs.os_list }}
+    steps:
+      - id: set
+        run: |
+          if [ "${{ inputs.platforms }}" = "all" ]; then
+            echo 'os_list=["ubuntu-latest","macos-latest","ubuntu-24.04-arm"]' >> "$GITHUB_OUTPUT"
+          else
+            echo 'os_list=["ubuntu-latest"]' >> "$GITHUB_OUTPUT"
+          fi
+
+  bench:
+    needs: setup
+    strategy:
+      fail-fast: false
+      matrix:
+        os: ${{ fromJSON(needs.setup.outputs.os_list) }}
+    name: bench (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
 
     steps:
       - name: Checkout
@@ -52,8 +97,8 @@ jobs:
             ~/.cargo/registry/index/
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
-          key: cargo-registry-bench-vs-bevy-ecs-${{ hashFiles('benches/ecs-vs-bevy-ecs/Cargo.toml') }}
-          restore-keys: cargo-registry-
+          key: cargo-registry-bench-vs-bevy-ecs-${{ matrix.os }}-${{ hashFiles('benches/ecs-vs-bevy-ecs/Cargo.toml') }}
+          restore-keys: cargo-registry-bench-vs-bevy-ecs-${{ matrix.os }}-
 
       - name: Run vs_bevy_ecs benchmarks
         run: |
@@ -72,7 +117,7 @@ jobs:
         if: always()
         run: |
           {
-            echo "### Diagnostics"
+            echo "### Diagnostics (${{ matrix.os }})"
             echo '```'
             grep -E 'took zero time|Unable to complete|Warning:|panicked|Completed [0-9]+ iterations' \
               bench-vs-bevy-ecs-raw.txt | head -60 || echo "(none found)"
@@ -83,9 +128,9 @@ jobs:
         if: always()
         run: |
           {
-            echo "## mid-ecs vs bevy_ecs"
+            echo "## mid-ecs vs bevy_ecs — ${{ matrix.os }}"
             echo ""
-            echo "**Build:** #${{ github.run_number }} &nbsp; **Rust:** \`${{ steps.rustver.outputs.ver }}\`"
+            echo "**Build:** #${{ github.run_number }} &nbsp; **Rust:** \`${{ steps.rustver.outputs.ver }}\` &nbsp; **Runner:** \`${{ matrix.os }}\`"
             echo ""
             echo "**Note:** ${{ inputs.baseline_note }}"
             echo ""
@@ -95,7 +140,8 @@ jobs:
             echo "each one does and why, including the one workload"
             echo "(\`spawn\`) that isn't perfectly apples-to-apples between the two"
             echo "engines' APIs — read that file's own top doc comment before"
-            echo "drawing conclusions from it specifically."
+            echo "drawing conclusions from it specifically. No ISA-tier matrix here"
+            echo "on purpose -- see this workflow's own header comment."
             echo ""
             python3 scripts/bench_vs_bevy_ecs.py
           } >> $GITHUB_STEP_SUMMARY
@@ -104,6 +150,6 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: bench-vs-bevy-ecs-${{ github.run_number }}
+          name: bench-vs-bevy-ecs-${{ matrix.os }}-${{ github.run_number }}
           path: bench-vs-bevy-ecs-raw.txt
           retention-days: 30
