@@ -1,0 +1,13 @@
+[package]
+name        = "mid-physics"
+version     = "0.1.0"
+edition     = "2021"
+description = "Rigid body dynamics for Mid Engine — built directly on mid-math/mid-geom, ECS wiring deferred (see docs/roadmap.md)"
+
+[lib]
+name = "mid_physics"
+crate-type = ["lib"]
+
+[dependencies]
+mid-math = { path = "../mid-math", version = "0.2" }
+mid-geom = { path = "../mid-geom", version = "0.1" }

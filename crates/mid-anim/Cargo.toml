@@ -1,0 +1,12 @@
+[package]
+name        = "mid-anim"
+version     = "0.1.0"
+edition     = "2021"
+description = "Animation clip sampling for Mid Engine — built directly on mid-math's curve types, hierarchy application deferred (see docs/roadmap.md)"
+
+[lib]
+name = "mid_anim"
+crate-type = ["lib"]
+
+[dependencies]
+mid-math = { path = "../mid-math", version = "0.2" }

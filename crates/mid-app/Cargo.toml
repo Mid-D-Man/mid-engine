@@ -1,0 +1,12 @@
+[package]
+name        = "mid-app"
+version     = "0.1.0"
+edition     = "2021"
+description = "App / Plugin / schedule-runner for Mid Engine — turns a mid-ecs World into a runnable program (see docs/roadmap.md, Decision 1)"
+
+[lib]
+name = "mid_app"
+crate-type = ["lib"]
+
+[dependencies]
+mid-ecs = { path = "../mid-ecs", version = "0.1" }

@@ -1,0 +1,11 @@
+[package]
+name        = "mid-time"
+version     = "0.1.0"
+edition     = "2021"
+description = "Portable clock and fixed-timestep accumulator for Mid Engine — zero dependencies, native + wasm32-unknown-unknown"
+
+[lib]
+name = "mid_time"
+crate-type = ["lib"]
+
+[dependencies]
