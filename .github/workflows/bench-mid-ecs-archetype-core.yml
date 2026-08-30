@@ -1,0 +1,184 @@
+# .github/workflows/bench-mid-ecs-archetype-core.yml
+#
+# mid-ecs's own Archetype Core operations (spawn+insert_bundle,
+# query_static, query2_static, structural churn) -- mid-ecs only, no
+# bevy_ecs dependency, so unlike benches/ecs-vs-bevy-ecs this doesn't
+# need rustc 1.95+ and runs on any toolchain this workspace already
+# supports. See crates/mid-ecs/benches/archetype_core.rs's own doc
+# comment for the full rationale and group-by-group breakdown.
+#
+# Modeled directly on bench-mid-collections-sparse-set.yml's structure
+# (bash-grep summary pattern, not the Python-parser one -- this suite
+# has no natural "vs X" baseline the way sparse_set has HashMap or
+# vs_bevy_ecs has bevy_ecs, it's a regression guard against mid-ecs's
+# own history, so the two-column ratio between query_static and
+# query2_static below is the thing worth watching over time, not a
+# per-run computed badge). `set -o pipefail` included from the start --
+# not a retrofit, see docs/benching-standards.md's own "correctness
+# detail that actually matters more than formatting" section for why.
+#
+# No ISA-tier target_cpu matrix -- same reasoning docs/benching-
+# standards.md already gives for bench-mid-collections-sparse-set.yml
+# and bench-vs-bevy-ecs.yml: this suite's operations are archetype-
+# migration, SparseSet-lookup, and Box<dyn Any>-downcast bound, not
+# vectorizable arithmetic. No cross-OS matrix either for now -- mid-ecs
+# has no platform-specific code path to diverge on (unlike mid-math's
+# per-ISA SIMD backends); worth adding the same opt-in `platforms`
+# pattern bench-vs-bevy-ecs.yml has if that ever changes.
+#
+# HONEST VERIFICATION NOTE: unlike bench-mid-collections-sparse-set.yml
+# (whose own header notes its summary step was never run against real
+# output at the time, blocked by the same MSRV wall as everything else
+# in this sandbox), this workflow's `cargo bench` command, its exact
+# criterion output shape, and the grep pattern below were all verified
+# directly against real captured output in this same session -- mid-ecs
+# itself only needs rustc 1.80+ (rayon), which this sandbox's apt
+# rustc-1.91 already clears. First real numbers (rustc 1.91.1, this
+# sandbox, --sample-size 20 for turnaround, not this workflow's default
+# --sample-size 100 -- expect tighter confidence intervals on a real CI
+# run): query2_static_two_components/mid-ecs/10000 improved ~21-23%
+# after Archetypes::iter2 stopped re-resolving its second column's
+# location on every single entity (see archetype.rs's iter2 doc comment
+# for the full writeup) -- 152.34us vs the prior per-entity-lookup
+# version's 194.61us, landing within ~3% of query_static_single_
+# component's own 148.10us at the same N. That said: this doesn't close
+# the full gap against bevy_ecs (dense_query_iteration was ~21x slower
+# in benches/ecs-vs-bevy-ecs's own real CI run) -- it fixes one real,
+# isolated inefficiency, not the whole thing. Real first CI trigger of
+# *this* workflow is still the next actual proof this all holds up
+# outside this sandbox.
+#
+# Run: Actions -> "mid-ecs — bench Archetype Core" -> Run workflow
+# DO NOT add push/pull_request triggers.
+
+name: mid-ecs — bench Archetype Core
+
+on:
+  workflow_dispatch:
+    inputs:
+      baseline_note:
+        description: 'Context for this run (e.g. "after iter2 column-resolution fix")'
+        required: false
+        default: 'manual Archetype Core benchmark run'
+
+permissions:
+  contents: read
+  actions:  read
+
+jobs:
+  bench:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Get Rust version
+        id: rustver
+        run: echo "ver=$(rustc --version)" >> $GITHUB_OUTPUT
+
+      # Caches target/ too, not just the registry -- same reasoning as
+      # bench-mid-collections-sparse-set.yml: lets criterion's own
+      # target/criterion baseline persist between runs, so after the
+      # first run each subsequent one shows a real comparison-to-
+      # previous delta, not just an absolute number in isolation. This
+      # is the actual mechanism that will show whether a future change
+      # regresses query2_static_two_components back toward its old
+      # per-entity-lookup cost.
+      - name: Cache cargo registry + build artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-bench-mid-ecs-archetype-core-${{ hashFiles('crates/mid-ecs/**/Cargo.toml', 'crates/mid-collections/**/Cargo.toml', 'crates/mid-math/**/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-bench-mid-ecs-archetype-core-
+
+      - name: Confirm environment
+        env:
+          RUST_VERSION: ${{ steps.rustver.outputs.ver }}
+        run: |
+          {
+            echo "## mid-ecs Archetype Core Bench — Build #${{ github.run_number }}"
+            echo ""
+            echo "| | |"
+            echo "|---|---|"
+            echo "| Rust   | \`${RUST_VERSION}\` |"
+            echo "| Branch | \`${{ github.ref_name }}\` |"
+            echo "| Commit | \`${GITHUB_SHA:0:8}\` |"
+            echo "| Note   | ${{ inputs.baseline_note }} |"
+            echo ""
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Run Archetype Core criterion benchmarks
+        run: |
+          # set -o pipefail: without it, `cargo bench | tee file`
+          # reports tee's exit code (always 0), not cargo bench's, and
+          # a real failure would show as green. See docs/benching-
+          # standards.md's own "correctness detail" section -- this
+          # workflow has it from the start, not as a later fix.
+          set -o pipefail
+          echo "Note: ${{ inputs.baseline_note }}"
+          cargo bench -p mid-ecs --bench archetype_core -- --color never \
+            2>&1 | tee bench-mid-ecs-archetype-core-raw.txt
+          echo "Bench exit code: $?" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Surface bench diagnostics
+        if: always()
+        run: |
+          {
+            echo "### Diagnostics"
+            echo '```'
+            grep -E 'took zero time|Unable to complete|Warning:|panicked|Completed [0-9]+ iterations' \
+              bench-mid-ecs-archetype-core-raw.txt | head -60 || echo "(none found)"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Publish summary
+        if: always()
+        run: |
+          {
+            echo "### Results"
+            echo ""
+            echo "Lower is faster. Groups: spawn_insert_bundle, query_static_single_component,"
+            echo "query2_static_two_components, structural_churn_insert_remove -- each swept"
+            echo "over N = 100 / 1,000 / 10,000 / 100,000. The ratio between"
+            echo "query2_static_two_components and query_static_single_component at the same N"
+            echo "is the real regression guard here: it should stay close to 1.0x (both touch"
+            echo "the same archetype's columns, resolved once, not per entity) -- if it drifts"
+            echo "back up toward the old ~1.2-1.3x-and climbing per-entity-lookup cost, that's"
+            echo "this exact class of bug returning. See the raw log below for full confidence"
+            echo "intervals and (after the first run) any comparison-to-previous delta."
+            echo ""
+            echo '```'
+            # Grounded in criterion 0.5.1's real report.rs source, same
+            # pattern as bench-mid-collections-sparse-set.yml -- each
+            # headline result prints as the benchmark id on its own
+            # line immediately followed by an indented "time: [...]"
+            # line. -B1 pulls that id line back in alongside each match.
+            grep -B 1 "time:" bench-mid-ecs-archetype-core-raw.txt | grep -v "^--$" || echo "(no results parsed -- see raw log)"
+            echo '```'
+            echo ""
+            echo "<details><summary>Full raw output</summary>"
+            echo ""
+            echo '```'
+            cat bench-mid-ecs-archetype-core-raw.txt
+            echo '```'
+            echo ""
+            echo "</details>"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bench-mid-ecs-archetype-core-${{ github.run_number }}
+          path: |
+            bench-mid-ecs-archetype-core-raw.txt
+            target/criterion
+          retention-days: 30
