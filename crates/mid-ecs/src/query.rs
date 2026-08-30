@@ -61,9 +61,11 @@ impl World {
     /// Iterates every `(Entity, &A, &B)` for entities alive with *both*
     /// an archetype-tracked `A` and `B` attached — the Archetype Core
     /// counterpart to [`Self::query2`]. Thin wrapper over
-    /// `Archetypes::iter2`; same "drive off one side, look up the
-    /// other per entity" v1 shape as `query2`, for the same reason —
-    /// see that method's own doc comment.
+    /// `Archetypes::iter2`, which — unlike this method's Sparse Shell
+    /// counterpart — does *not* look up `B` per entity; see
+    /// `Archetypes::iter2`'s own doc comment for why the Archetype
+    /// Core side needed a hand-written iterator to get there, not just
+    /// a per-entity-lookup fix.
     pub fn query2_static<A: 'static, B: 'static>(
         &self,
     ) -> impl Iterator<Item = (Entity, &A, &B)> + '_ {
