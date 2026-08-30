@@ -1,21 +1,28 @@
 # .github/workflows/bench-mid-ecs-archetype-core.yml
 #
 # mid-ecs's own Archetype Core operations (spawn+insert_bundle,
-# query_static, query2_static, structural churn) -- mid-ecs only, no
-# bevy_ecs dependency, so unlike benches/ecs-vs-bevy-ecs this doesn't
-# need rustc 1.95+ and runs on any toolchain this workspace already
-# supports. See crates/mid-ecs/benches/archetype_core.rs's own doc
-# comment for the full rationale and group-by-group breakdown.
+# query_static, query2_static, structural churn, a zero-abstraction
+# raw_slice_ceiling floor) -- mid-ecs only, no bevy_ecs dependency, so
+# unlike benches/ecs-vs-bevy-ecs this doesn't need rustc 1.95+ and runs
+# on any toolchain this workspace already supports. See
+# crates/mid-ecs/benches/archetype_core.rs's own header doc comment for
+# the full rationale and group-by-group breakdown -- that comment is
+# the authoritative, current writeup; treat anything below as a summary
+# of it, not a replacement.
 #
-# Modeled directly on bench-mid-collections-sparse-set.yml's structure
-# (bash-grep summary pattern, not the Python-parser one -- this suite
-# has no natural "vs X" baseline the way sparse_set has HashMap or
-# vs_bevy_ecs has bevy_ecs, it's a regression guard against mid-ecs's
-# own history, so the two-column ratio between query_static and
-# query2_static below is the thing worth watching over time, not a
-# per-run computed badge). `set -o pipefail` included from the start --
-# not a retrofit, see docs/benching-standards.md's own "correctness
-# detail that actually matters more than formatting" section for why.
+# Uses scripts/bench_mid_ecs_archetype_core.py for the summary --
+# earlier version of this workflow used a bash-grep dump instead (the
+# same pattern bench-mid-collections-sparse-set.yml still uses), on the
+# reasoning that this suite has no natural "vs X" baseline the way
+# sparse_set has HashMap or vs_bevy_ecs has bevy_ecs. That reasoning
+# didn't hold up: query_static_single_component vs
+# query2_static_two_components at the same N *is* a real, meaningful
+# ratio (see the .py script and the bench file's own doc comment for
+# what it should look like and why), so it gets the same structured
+# table+ratio+badge treatment as everything else. `set -o pipefail`
+# included from the start -- not a retrofit, see docs/benching-
+# standards.md's own "correctness detail that actually matters more
+# than formatting" section for why.
 #
 # No ISA-tier target_cpu matrix -- same reasoning docs/benching-
 # standards.md already gives for bench-mid-collections-sparse-set.yml
@@ -26,27 +33,20 @@
 # per-ISA SIMD backends); worth adding the same opt-in `platforms`
 # pattern bench-vs-bevy-ecs.yml has if that ever changes.
 #
-# HONEST VERIFICATION NOTE: unlike bench-mid-collections-sparse-set.yml
-# (whose own header notes its summary step was never run against real
-# output at the time, blocked by the same MSRV wall as everything else
-# in this sandbox), this workflow's `cargo bench` command, its exact
-# criterion output shape, and the grep pattern below were all verified
-# directly against real captured output in this same session -- mid-ecs
-# itself only needs rustc 1.80+ (rayon), which this sandbox's apt
-# rustc-1.91 already clears. First real numbers (rustc 1.91.1, this
-# sandbox, --sample-size 20 for turnaround, not this workflow's default
-# --sample-size 100 -- expect tighter confidence intervals on a real CI
-# run): query2_static_two_components/mid-ecs/10000 improved ~21-23%
-# after Archetypes::iter2 stopped re-resolving its second column's
-# location on every single entity (see archetype.rs's iter2 doc comment
-# for the full writeup) -- 152.34us vs the prior per-entity-lookup
-# version's 194.61us, landing within ~3% of query_static_single_
-# component's own 148.10us at the same N. That said: this doesn't close
-# the full gap against bevy_ecs (dense_query_iteration was ~21x slower
-# in benches/ecs-vs-bevy-ecs's own real CI run) -- it fixes one real,
-# isolated inefficiency, not the whole thing. Real first CI trigger of
-# *this* workflow is still the next actual proof this all holds up
-# outside this sandbox.
+# REAL STATE, as of the session that added raw_slice_ceiling and this
+# script (see crates/mid-ecs/benches/archetype_core.rs's own doc
+# comment for the full, current writeup -- this is a summary, not a
+# replacement): query_static_single_component and
+# query2_static_two_components both went through a real, two-part fix
+# each (a per-entity-redundant-lookup fix, then a combinator-chain
+# -> hand-written-iterator rewrite, `Iter1`/`Iter2` in
+# crates/mid-ecs/src/archetype.rs). Both are now within noise of
+# bevy_ecs's own real CI numbers for the same N=10,000 workload -- zero
+# `unsafe` added either time. spawn_insert_bundle and
+# structural_churn_insert_remove have NOT had an equivalent root-cause
+# pass -- real CI (benches/ecs-vs-bevy-ecs) shows mid-ecs ~2.9-5x
+# slower than bevy_ecs on both, same order of magnitude, no evidence
+# yet they share a cause with the now-fixed query-iteration gap.
 #
 # Run: Actions -> "mid-ecs — bench Archetype Core" -> Run workflow
 # DO NOT add push/pull_request triggers.
@@ -146,23 +146,13 @@ jobs:
             echo "### Results"
             echo ""
             echo "Lower is faster. Groups: spawn_insert_bundle, query_static_single_component,"
-            echo "query2_static_two_components, structural_churn_insert_remove -- each swept"
-            echo "over N = 100 / 1,000 / 10,000 / 100,000. The ratio between"
-            echo "query2_static_two_components and query_static_single_component at the same N"
-            echo "is the real regression guard here: it should stay close to 1.0x (both touch"
-            echo "the same archetype's columns, resolved once, not per entity) -- if it drifts"
-            echo "back up toward the old ~1.2-1.3x-and climbing per-entity-lookup cost, that's"
-            echo "this exact class of bug returning. See the raw log below for full confidence"
-            echo "intervals and (after the first run) any comparison-to-previous delta."
+            echo "query2_static_two_components, structural_churn_insert_remove, raw_slice_ceiling"
+            echo "-- each swept over N = 100 / 1,000 / 10,000 / 100,000. See"
+            echo "\`crates/mid-ecs/benches/archetype_core.rs\`'s own header doc comment for"
+            echo "what each group tests and why, including which gaps are fixed and which"
+            echo "are still real, open, and not yet investigated."
             echo ""
-            echo '```'
-            # Grounded in criterion 0.5.1's real report.rs source, same
-            # pattern as bench-mid-collections-sparse-set.yml -- each
-            # headline result prints as the benchmark id on its own
-            # line immediately followed by an indented "time: [...]"
-            # line. -B1 pulls that id line back in alongside each match.
-            grep -B 1 "time:" bench-mid-ecs-archetype-core-raw.txt | grep -v "^--$" || echo "(no results parsed -- see raw log)"
-            echo '```'
+            python3 scripts/bench_mid_ecs_archetype_core.py
             echo ""
             echo "<details><summary>Full raw output</summary>"
             echo ""
