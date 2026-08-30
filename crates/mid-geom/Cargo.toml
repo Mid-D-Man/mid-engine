@@ -9,7 +9,7 @@ name = "mid_geom"
 crate-type = ["rlib", "cdylib", "staticlib"]
 
 [dependencies]
-mid-math = { path = "../mid-math", version = "0.2" }
+mid-math = { path = "../mid-math" }
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }

@@ -9,4 +9,4 @@ name = "mid_anim"
 crate-type = ["lib"]
 
 [dependencies]
-mid-math = { path = "../mid-math", version = "0.2" }
+mid-math = { path = "../mid-math" }

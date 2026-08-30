@@ -43,5 +43,15 @@ zerocopy = { version = "0.8.56", default-features = false, features = ["derive"]
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 rayon = "1.8"
 
+[dev-dependencies]
+# Same version/feature choice as mid-collections's and mid-math's own
+# criterion dev-dependency — html_reports for the local
+# `target/criterion` report, default features kept.
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[[bench]]
+name    = "archetype_core"
+harness = false
+
 [features]
 default = []

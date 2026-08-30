@@ -522,25 +522,78 @@ impl Archetypes {
     }
 
     /// Iterates every `(Entity, &A, &B)` for entities alive with *both*
-    /// an archetype-tracked `A` and `B` attached. Same "drive off one
-    /// side, look up the other per entity" v1 shape `query.rs`'s own
-    /// `World::query2` deliberately picked, for the same reason (see
-    /// that method's doc comment) — not the smaller-side optimization,
-    /// there's no real workload yet to justify it over the simpler
-    /// correct version. Drives off `A` specifically (via
-    /// [`Self::iter`]) and looks up `B` with [`Self::get`] per entity —
-    /// which, unlike the Sparse Shell's own `query2`, means a `B` in
-    /// the *same* archetype as a matched `A` still costs one full
-    /// `get` (row + column downcast), because there's no cheaper path
-    /// here that doesn't already assume something about how `A` and
-    /// `B`'s archetypes relate. Empty if either `A` or `B` was never
-    /// inserted as an archetype-tracked component for anything.
+    /// an archetype-tracked `A` and `B` attached.
+    ///
+    /// Resolves *both* columns once per matching archetype, not once
+    /// per entity — real perf history, not a style choice: the
+    /// original v1 shape drove off `A` (via [`Self::iter`]) and looked
+    /// up `B` with [`Self::get`] *per entity*, paying a full
+    /// `locations` lookup + `archetypes` lookup + column-`SparseSet`
+    /// lookup + `dyn Column` downcast on every single item, even
+    /// though every entity in one archetype shares the exact same
+    /// answer for "does this archetype have a `B` column, and where".
+    /// Profiled directly against `bevy_ecs` on a real N=10,000,
+    /// single-archetype dense-iteration workload
+    /// (`benches/ecs-vs-bevy-ecs`): the two-component query was ~21x
+    /// slower than `bevy_ecs`'s equivalent, vs. ~4.3–4.4x for
+    /// spawn/structural-churn — a real, disproportionate gap isolated
+    /// (via a standalone timing probe, `mid-ecs` only, no `bevy_ecs`
+    /// dependency) to exactly this per-entity redundant lookup: the
+    /// same N=10,000 entities cost 6.5x more through the old `iter2`
+    /// than through the single-column [`Self::iter`] alone, on
+    /// identical data in the identical archetype.
+    ///
+    /// This version instead filters to archetypes whose signature
+    /// contains *both* `A` and `B` up front (archetype membership is
+    /// uniform across every entity in an archetype, so this is exactly
+    /// equivalent to the old per-entity filter, not an approximation),
+    /// then — like [`Self::iter`] — resolves each archetype's `A` and
+    /// `B` slices once and zips `entities`/`a_col`/`b_col` together
+    /// directly. Same "no column implies no rows" edge case as
+    /// [`Self::iter`] (see its own doc comment) applies independently
+    /// to both `a_col` and `b_col` here. Empty if either `A` or `B` was
+    /// never inserted as an archetype-tracked component for anything.
     pub(crate) fn iter2<A: 'static, B: 'static>(
         &self,
     ) -> impl Iterator<Item = (Entity, &A, &B)> + '_ {
-        let b_id = self.existing_component_id::<B>();
-        self.iter::<A>()
-            .filter_map(move |(entity, a)| self.get::<B>(entity, b_id?).map(|b| (entity, a, b)))
+        let ids = self
+            .existing_component_id::<A>()
+            .zip(self.existing_component_id::<B>());
+        ids.into_iter().flat_map(move |(a_id, b_id)| {
+            self.archetypes_with(a_id)
+                .filter(move |&archetype_id| {
+                    self.archetypes
+                        .get(archetype_id)
+                        .is_some_and(|archetype| archetype.component_ids.contains(&b_id))
+                })
+                .flat_map(move |archetype_id| {
+                    let archetype = self.archetypes.get(archetype_id).expect(
+                        "archetypes_with only ever yields real, currently-existing archetype ids",
+                    );
+                    let entities: &[Entity] = &archetype.table.entities;
+                    let a_col: &[A] = match archetype.table.columns.get(a_id) {
+                        Some(column) => column
+                            .as_any()
+                            .downcast_ref::<Vec<A>>()
+                            .expect("column type must match component_id's T")
+                            .as_slice(),
+                        None => &[],
+                    };
+                    let b_col: &[B] = match archetype.table.columns.get(b_id) {
+                        Some(column) => column
+                            .as_any()
+                            .downcast_ref::<Vec<B>>()
+                            .expect("column type must match component_id's T")
+                            .as_slice(),
+                        None => &[],
+                    };
+                    entities
+                        .iter()
+                        .copied()
+                        .zip(a_col.iter().zip(b_col.iter()))
+                        .map(|(entity, (a, b))| (entity, a, b))
+                })
+        })
     }
 
     /// Opts `T` into FFI span exposure under `name` — the Archetype

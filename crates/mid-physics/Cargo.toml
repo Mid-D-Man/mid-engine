@@ -9,5 +9,5 @@ name = "mid_physics"
 crate-type = ["lib"]
 
 [dependencies]
-mid-math = { path = "../mid-math", version = "0.2" }
+mid-math = { path = "../mid-math" }
 mid-geom = { path = "../mid-geom", version = "0.1" }
