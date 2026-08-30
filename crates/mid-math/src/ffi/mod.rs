@@ -5,6 +5,8 @@ pub mod float32;
 pub mod float64;
 pub mod int32;
 pub mod int64;
+pub mod int8;
+pub mod int16;
 pub mod curves;
 pub mod color;
 pub mod helpers;
@@ -13,6 +15,10 @@ pub mod fixed;
 pub mod noise;
 pub mod camera;
 pub mod geom;
+pub mod wide_int;
+pub mod wide_float;
+pub mod storage;
+pub mod bvec;
 
 // ── Flat re-exports ───────────────────────────────────────────────────────────
 
@@ -20,6 +26,8 @@ pub use float32::{CAffine3, CMat3, CMat4, CQuat, CVec2, CVec3, CVec4};
 pub use float64::{CDAffine3, CDMat2, CDMat3, CDMat4, CDQuat, CDVec2, CDVec3, CDVec4};
 pub use int32::{CIVec2, CIVec3, CIVec4, CUVec2, CUVec3, CUVec4};
 pub use int64::{CI64Vec2, CI64Vec3, CI64Vec4, CU64Vec2, CU64Vec3, CU64Vec4};
+pub use int8::{CI8Vec2, CI8Vec3, CI8Vec4, CU8Vec2, CU8Vec3, CU8Vec4};
+pub use int16::{CI16Vec2, CI16Vec3, CI16Vec4, CU16Vec2, CU16Vec3, CU16Vec4};
 pub use color::{CColor32, CRgb, CRgba, CHsv, CHsl, CRgbe, CYCbCr};
 pub use helpers::{CDualQuat, CRotor3, CTangentFrame, CPackedTangent,
                   CSpatialVelocity, CSpatialForce, CSpatialInertia};
@@ -29,6 +37,12 @@ pub use fixed::{CFixed8, CFixed12, CFixed16,
                 CFixed8Vec3, CFixed12Vec3, CFixed16Vec3};
 pub use camera::{CFrustum, CVisibility, CPerspectiveParams};
 pub use geom::{CBarycentricCoords, CTriangle2, CTriangle3, CCircumcircle, CRayHit3};
+pub use wide_int::{CI32x4, CU32x4, CI16x8, CU16x8, CI8x16, CU8x16};
+pub use wide_float::{Cf32x4, CVec3x4, CQuatX4};
+// storage: no new C struct types -- exports use raw u8/u16/u32/u64/[u64;2]/[u64;4]
+// directly (see ffi/storage.rs's header for why). bvec: no new C struct types
+// either -- BVec2/3/4 are already crate::BVec2/3/4, re-exported from the crate
+// root already, not redefined here.
 
 // Legacy path — anything that did `use crate::ffi::types::X` still compiles.
 pub mod types {
