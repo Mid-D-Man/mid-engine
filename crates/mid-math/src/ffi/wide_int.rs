@@ -101,7 +101,13 @@ impl From<CU8x16> for u8x16  { #[inline(always)] fn from(c: CU8x16) -> Self { u8
 #[no_mangle] pub extern "C" fn mid_i16x8_abs(v:CI16x8)->CI16x8{i16x8::from(v).abs().into()}
 #[no_mangle] pub extern "C" fn mid_i16x8_min_element(v:CI16x8)->i16{i16x8::from(v).min_element()}
 #[no_mangle] pub extern "C" fn mid_i16x8_max_element(v:CI16x8)->i16{i16x8::from(v).max_element()}
-#[no_mangle] pub extern "C" fn mid_i16x8_element_sum(v:CI16x8)->i16{i16x8::from(v).element_sum()}
+// element_sum() returns i32, not i16 — a deliberate widened accumulator
+// (crates/mid-math/src/wide/int/sse2/i16x8.rs), since summing 8 i16
+// lanes can overflow i16's own range. Matching that here, not
+// truncating with .try_into().unwrap() (rustc's own suggested fix for
+// the mismatch this used to be) — that would reintroduce exactly the
+// overflow-panic risk the widened accumulator exists to avoid.
+#[no_mangle] pub extern "C" fn mid_i16x8_element_sum(v:CI16x8)->i32{i16x8::from(v).element_sum()}
 #[no_mangle] pub extern "C" fn mid_i16x8_wrapping_add(a:CI16x8,b:CI16x8)->CI16x8{i16x8::from(a).wrapping_add(i16x8::from(b)).into()}
 #[no_mangle] pub extern "C" fn mid_i16x8_wrapping_sub(a:CI16x8,b:CI16x8)->CI16x8{i16x8::from(a).wrapping_sub(i16x8::from(b)).into()}
 #[no_mangle] pub extern "C" fn mid_i16x8_saturating_add(a:CI16x8,b:CI16x8)->CI16x8{i16x8::from(a).saturating_add(i16x8::from(b)).into()}
@@ -118,7 +124,8 @@ impl From<CU8x16> for u8x16  { #[inline(always)] fn from(c: CU8x16) -> Self { u8
 #[no_mangle] pub extern "C" fn mid_u16x8_clamp(v:CU16x8,lo:CU16x8,hi:CU16x8)->CU16x8{u16x8::from(v).clamp(u16x8::from(lo),u16x8::from(hi)).into()}
 #[no_mangle] pub extern "C" fn mid_u16x8_min_element(v:CU16x8)->u16{u16x8::from(v).min_element()}
 #[no_mangle] pub extern "C" fn mid_u16x8_max_element(v:CU16x8)->u16{u16x8::from(v).max_element()}
-#[no_mangle] pub extern "C" fn mid_u16x8_element_sum(v:CU16x8)->u16{u16x8::from(v).element_sum()}
+// See mid_i16x8_element_sum's comment above — same reasoning, u32.
+#[no_mangle] pub extern "C" fn mid_u16x8_element_sum(v:CU16x8)->u32{u16x8::from(v).element_sum()}
 #[no_mangle] pub extern "C" fn mid_u16x8_wrapping_add(a:CU16x8,b:CU16x8)->CU16x8{u16x8::from(a).wrapping_add(u16x8::from(b)).into()}
 #[no_mangle] pub extern "C" fn mid_u16x8_wrapping_sub(a:CU16x8,b:CU16x8)->CU16x8{u16x8::from(a).wrapping_sub(u16x8::from(b)).into()}
 #[no_mangle] pub extern "C" fn mid_u16x8_saturating_add(a:CU16x8,b:CU16x8)->CU16x8{u16x8::from(a).saturating_add(u16x8::from(b)).into()}
@@ -129,14 +136,23 @@ impl From<CU8x16> for u8x16  { #[inline(always)] fn from(c: CU8x16) -> Self { u8
 #[no_mangle] pub extern "C" fn mid_i8x16_splat(v:i8)->CI8x16{i8x16::splat(v).into()}
 #[no_mangle] pub extern "C" fn mid_i8x16_add(a:CI8x16,b:CI8x16)->CI8x16{(i8x16::from(a)+i8x16::from(b)).into()}
 #[no_mangle] pub extern "C" fn mid_i8x16_sub(a:CI8x16,b:CI8x16)->CI8x16{(i8x16::from(a)-i8x16::from(b)).into()}
-#[no_mangle] pub extern "C" fn mid_i8x16_mul(a:CI8x16,b:CI8x16)->CI8x16{(i8x16::from(a)*i8x16::from(b)).into()}
-#[no_mangle] pub extern "C" fn mid_i8x16_min(a:CI8x16,b:CI8x16)->CI8x16{i8x16::from(a).min(i8x16::from(b)).into()}
+// mid_i8x16_mul intentionally not exported: SSE2's i8x16 has no `Mul`
+// impl (crates/mid-math/src/wide/int/sse2/i8x16.rs) -- unlike NEON's
+// i8x16, which gets there by widening to i16 (mul_widen_lo/
+// mul_widen_hi), multiplying, and narrowing back (pack_i16x8; see that
+// file's own doc comment, though it reads oddly against what the code
+// actually does). SSE2's i8x16 doesn't have those widen/pack helpers
+// yet, so replicating that isn't a quick fix -- confirmed no other
+// caller anywhere in mid-math depends on this operator existing.
+// Real follow-up if 8-bit SIMD multiply is actually needed on x86, not
+// invented here under time pressure.#[no_mangle] pub extern "C" fn mid_i8x16_min(a:CI8x16,b:CI8x16)->CI8x16{i8x16::from(a).min(i8x16::from(b)).into()}
 #[no_mangle] pub extern "C" fn mid_i8x16_max(a:CI8x16,b:CI8x16)->CI8x16{i8x16::from(a).max(i8x16::from(b)).into()}
 #[no_mangle] pub extern "C" fn mid_i8x16_clamp(v:CI8x16,lo:CI8x16,hi:CI8x16)->CI8x16{i8x16::from(v).clamp(i8x16::from(lo),i8x16::from(hi)).into()}
 #[no_mangle] pub extern "C" fn mid_i8x16_abs(v:CI8x16)->CI8x16{i8x16::from(v).abs().into()}
 #[no_mangle] pub extern "C" fn mid_i8x16_min_element(v:CI8x16)->i8{i8x16::from(v).min_element()}
 #[no_mangle] pub extern "C" fn mid_i8x16_max_element(v:CI8x16)->i8{i8x16::from(v).max_element()}
-#[no_mangle] pub extern "C" fn mid_i8x16_element_sum(v:CI8x16)->i8{i8x16::from(v).element_sum()}
+// See mid_i16x8_element_sum's comment above — same reasoning, i32.
+#[no_mangle] pub extern "C" fn mid_i8x16_element_sum(v:CI8x16)->i32{i8x16::from(v).element_sum()}
 #[no_mangle] pub extern "C" fn mid_i8x16_wrapping_add(a:CI8x16,b:CI8x16)->CI8x16{i8x16::from(a).wrapping_add(i8x16::from(b)).into()}
 #[no_mangle] pub extern "C" fn mid_i8x16_wrapping_sub(a:CI8x16,b:CI8x16)->CI8x16{i8x16::from(a).wrapping_sub(i8x16::from(b)).into()}
 #[no_mangle] pub extern "C" fn mid_i8x16_saturating_add(a:CI8x16,b:CI8x16)->CI8x16{i8x16::from(a).saturating_add(i8x16::from(b)).into()}
@@ -147,13 +163,15 @@ impl From<CU8x16> for u8x16  { #[inline(always)] fn from(c: CU8x16) -> Self { u8
 #[no_mangle] pub extern "C" fn mid_u8x16_splat(v:u8)->CU8x16{u8x16::splat(v).into()}
 #[no_mangle] pub extern "C" fn mid_u8x16_add(a:CU8x16,b:CU8x16)->CU8x16{(u8x16::from(a)+u8x16::from(b)).into()}
 #[no_mangle] pub extern "C" fn mid_u8x16_sub(a:CU8x16,b:CU8x16)->CU8x16{(u8x16::from(a)-u8x16::from(b)).into()}
-#[no_mangle] pub extern "C" fn mid_u8x16_mul(a:CU8x16,b:CU8x16)->CU8x16{(u8x16::from(a)*u8x16::from(b)).into()}
+// mid_u8x16_mul intentionally not exported — same reasoning as
+// mid_i8x16_mul above.
 #[no_mangle] pub extern "C" fn mid_u8x16_min(a:CU8x16,b:CU8x16)->CU8x16{u8x16::from(a).min(u8x16::from(b)).into()}
 #[no_mangle] pub extern "C" fn mid_u8x16_max(a:CU8x16,b:CU8x16)->CU8x16{u8x16::from(a).max(u8x16::from(b)).into()}
 #[no_mangle] pub extern "C" fn mid_u8x16_clamp(v:CU8x16,lo:CU8x16,hi:CU8x16)->CU8x16{u8x16::from(v).clamp(u8x16::from(lo),u8x16::from(hi)).into()}
 #[no_mangle] pub extern "C" fn mid_u8x16_min_element(v:CU8x16)->u8{u8x16::from(v).min_element()}
 #[no_mangle] pub extern "C" fn mid_u8x16_max_element(v:CU8x16)->u8{u8x16::from(v).max_element()}
-#[no_mangle] pub extern "C" fn mid_u8x16_element_sum(v:CU8x16)->u8{u8x16::from(v).element_sum()}
+// See mid_i16x8_element_sum's comment above — same reasoning, u32.
+#[no_mangle] pub extern "C" fn mid_u8x16_element_sum(v:CU8x16)->u32{u8x16::from(v).element_sum()}
 #[no_mangle] pub extern "C" fn mid_u8x16_wrapping_add(a:CU8x16,b:CU8x16)->CU8x16{u8x16::from(a).wrapping_add(u8x16::from(b)).into()}
 #[no_mangle] pub extern "C" fn mid_u8x16_wrapping_sub(a:CU8x16,b:CU8x16)->CU8x16{u8x16::from(a).wrapping_sub(u8x16::from(b)).into()}
 #[no_mangle] pub extern "C" fn mid_u8x16_saturating_add(a:CU8x16,b:CU8x16)->CU8x16{u8x16::from(a).saturating_add(u8x16::from(b)).into()}
