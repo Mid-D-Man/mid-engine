@@ -1202,6 +1202,62 @@ impl Archetypes {
         self.archetypes.insert(a, archetype_a);
         self.archetypes.insert(b, archetype_b);
     }
+
+    // ── TEMPORARY, for crate::diag_inline only — delete together ──
+    // `Archetype`/`Table` aren't visible outside this file, so the
+    // diagnostic module needs these to resolve entities/columns
+    // without naming those types itself. Same logic as `Iter2::next`'s
+    // own archetype-advance step, factored out so it's not duplicated
+    // a third time across the two diagnostic variants.
+    pub(crate) fn diag_entities_and_columns<A: 'static, B: 'static>(
+        &self,
+        archetype_id: ArchetypeId,
+        a_id: ComponentId,
+        b_id: ComponentId,
+    ) -> (&[Entity], &[A], &[B]) {
+        let archetype = self
+            .archetypes
+            .get(archetype_id)
+            .expect("diag: precomputed matched list only ever contains real archetype ids");
+        let entities: &[Entity] = &archetype.table.entities;
+        let a_col: &[A] = match archetype.table.columns.get(a_id) {
+            Some(column) => column
+                .as_any()
+                .downcast_ref::<Vec<A>>()
+                .expect("column type must match component_id's T")
+                .as_slice(),
+            None => &[],
+        };
+        let b_col: &[B] = match archetype.table.columns.get(b_id) {
+            Some(column) => column
+                .as_any()
+                .downcast_ref::<Vec<B>>()
+                .expect("column type must match component_id's T")
+                .as_slice(),
+            None => &[],
+        };
+        (entities, a_col, b_col)
+    }
+
+    pub(crate) fn diag_matched_and_ids<A: 'static, B: 'static>(
+        &self,
+    ) -> (Option<(ComponentId, ComponentId)>, Vec<ArchetypeId>) {
+        let ids = self
+            .existing_component_id::<A>()
+            .zip(self.existing_component_id::<B>());
+        let matched = match ids {
+            Some((a_id, b_id)) => self
+                .archetypes_with(a_id)
+                .filter(|&archetype_id| {
+                    self.archetypes
+                        .get(archetype_id)
+                        .is_some_and(|archetype| archetype.component_ids.contains(&b_id))
+                })
+                .collect(),
+            None => Vec::new(),
+        };
+        (ids, matched)
+    }
 }
 
 /// The real `Iterator` behind [`Archetypes::iter`] — see that method's
@@ -1222,6 +1278,16 @@ pub(crate) struct Iter1<'a, T> {
 impl<'a, T: 'static> Iterator for Iter1<'a, T> {
     type Item = (Entity, &'a T);
 
+    // Deliberately NOT #[inline(always)] — tried it (reasoning: bevy's
+    // own `QueryIterationCursor::next` has it explicitly, and this
+    // method's sibling `Iter2::next` regressed ~4x on real CI's rustc
+    // 1.98.0 specifically), and it made this method measurably WORSE
+    // on this sandbox's rustc 1.91.1 — a real, reproducible ~4x
+    // regression (28.6µs vs 6.6-7.2µs at N=10,000, confirmed across
+    // repeated runs, not noise), the opposite of the intended fix.
+    // Reverted rather than shipped on an unproven, one-toolchain-tested
+    // hypothesis. The real Iter2 regression on rustc 1.98.0 is still
+    // real and still unexplained — this specific fix for it was wrong.
     fn next(&mut self) -> Option<Self::Item> {
         loop {
             if self.row < self.len {
@@ -1313,6 +1379,15 @@ pub(crate) struct Iter2<'a, A, B> {
 impl<'a, A: 'static, B: 'static> Iterator for Iter2<'a, A, B> {
     type Item = (Entity, &'a A, &'a B);
 
+    // Deliberately NOT #[inline(always)] — see Iter1::next's doc
+    // comment above for the full story: tried it here specifically
+    // (this method has the real, confirmed CI regression it was meant
+    // to fix — 26.605µs/9.1913µs on this sandbox's rustc 1.91.1 vs a
+    // genuine ~4x against bevy_ecs on real CI's rustc 1.98.0), and it
+    // made this method measurably WORSE on this sandbox too (~29µs,
+    // matching Iter1's own regression exactly). Reverted. The real
+    // rustc-1.98.0-specific regression this was meant to explain is
+    // still real and still unexplained — this fix for it was wrong.
     fn next(&mut self) -> Option<Self::Item> {
         loop {
             if self.row < self.len {

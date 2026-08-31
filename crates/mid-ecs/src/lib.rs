@@ -14,6 +14,11 @@ pub mod sync;
 pub mod transform;
 pub mod world;
 
+// TEMPORARY — real-CI inlining-regression diagnostic, see this
+// module's own doc comment. Delete this line together with
+// src/diag_inline.rs once the investigation concludes.
+mod diag_inline;
+
 // Restored: world.rs now actually defines World (and Entity), as of the
 // generational-arena/entity-allocation pass -- see world.rs's own doc
 // comment. The comment that used to be here explained why this line was

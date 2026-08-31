@@ -71,6 +71,27 @@ impl World {
     ) -> impl Iterator<Item = (Entity, &A, &B)> + '_ {
         self.archetypes.iter2::<A, B>()
     }
+
+    // ── TEMPORARY, real-CI inlining-regression diagnostic ──
+    // See src/diag_inline.rs's own doc comment for the full story.
+    // Delete these two methods together with that module once the
+    // investigation concludes. `pub`, not `pub(crate)`, only because
+    // `benches/archetype_core.rs` is compiled as an external binary
+    // and needs real public API to reach them — not meant for any
+    // other use.
+    #[doc(hidden)]
+    pub fn query2_static_diag_never<A: 'static, B: 'static>(
+        &self,
+    ) -> impl Iterator<Item = (Entity, &A, &B)> + '_ {
+        self.archetypes.iter2_diag_never::<A, B>()
+    }
+
+    #[doc(hidden)]
+    pub fn query2_static_diag_always<A: 'static, B: 'static>(
+        &self,
+    ) -> impl Iterator<Item = (Entity, &A, &B)> + '_ {
+        self.archetypes.iter2_diag_always::<A, B>()
+    }
 }
 
 #[cfg(test)]

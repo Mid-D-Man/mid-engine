@@ -53,5 +53,9 @@ criterion = { version = "0.5", features = ["html_reports"] }
 name    = "archetype_core"
 harness = false
 
+[[bench]]
+name    = "sparse_shell"
+harness = false
+
 [features]
 default = []

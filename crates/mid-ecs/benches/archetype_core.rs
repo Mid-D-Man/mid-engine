@@ -185,6 +185,45 @@ fn bench_query2_static_two_components(c: &mut Criterion) {
     group.finish();
 }
 
+// ── TEMPORARY, real-CI inlining-regression diagnostic ──────────────
+// See crates/mid-ecs/src/diag_inline.rs's own doc comment for the full
+// story: `query2_static_two_components` above runs ~4x slower than
+// bevy_ecs on real CI (rustc 1.98.0) but within noise of it on this
+// sandbox's rustc 1.91.1. `#[inline(always)]` on Iter2::next made
+// things *worse* here, not better, so this compares three identical
+// copies of the same logic — no attribute (matches the group above),
+// #[inline(never)], #[inline(always)] — to see, on whichever toolchain
+// actually shows the regression, which extreme (if either) the
+// no-attribute default already resembles. Delete this function and
+// its criterion_group! entries together with diag_inline.rs once the
+// investigation concludes.
+fn bench_query2_static_two_components_diag_inlining(c: &mut Criterion) {
+    let mut group = c.benchmark_group("query2_static_two_components_diag_inlining");
+    for &n in &SIZES {
+        group.throughput(Throughput::Elements(n as u64));
+        let world = populated_world(n);
+        group.bench_with_input(BenchmarkId::new("inline_never", n), &n, |b, _| {
+            b.iter(|| {
+                let mut sum = 0.0f32;
+                for (_, pos, vel) in world.query2_static_diag_never::<Position, Velocity>() {
+                    sum += pos.x + vel.dx;
+                }
+                black_box(sum);
+            });
+        });
+        group.bench_with_input(BenchmarkId::new("inline_always", n), &n, |b, _| {
+            b.iter(|| {
+                let mut sum = 0.0f32;
+                for (_, pos, vel) in world.query2_static_diag_always::<Position, Velocity>() {
+                    sum += pos.x + vel.dx;
+                }
+                black_box(sum);
+            });
+        });
+    }
+    group.finish();
+}
+
 fn bench_structural_churn(c: &mut Criterion) {
     let mut group = c.benchmark_group("structural_churn_insert_remove");
     for &n in &SIZES {
@@ -279,6 +318,7 @@ criterion_group!(
     bench_spawn_insert_bundle,
     bench_query_static_single_component,
     bench_query2_static_two_components,
+    bench_query2_static_two_components_diag_inlining,
     bench_structural_churn,
     bench_raw_slice_ceiling
 );
