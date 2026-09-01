@@ -1,0 +1,163 @@
+# .github/workflows/bench-vs-c-arena-libs.yml
+# Build and run tsoding/arena.h / APR pools / talloc(_pool) C benchmarks
+# alongside mid-arena's Rust vs_arena_crates suite, then produce a unified
+# comparison in the step summary. Mirrors bench-vs-c-libs.yml (mid-math's
+# own C-vs-Rust workflow) structure exactly -- same job shape, same
+# apt-install/curl-fetch/compile/run/summarize steps, adapted from
+# math-library sources to arena-allocator sources.
+#
+# C libs are compiled with -O3 -march=native (same as Rust release +
+# target-cpu=native). All three timed with clock_gettime, single-pass
+# (not 4-way interleaved like cglm_bench.c -- these are allocator calls
+# with real side effects, not pure arithmetic a compiler could hoist).
+# Rust timing: criterion median.
+#
+# DO NOT add push/pull_request triggers.
+
+name: mid-arena — bench vs C arena libraries
+
+on:
+  workflow_dispatch:
+    inputs:
+      baseline_note:
+        description: 'Context for this run'
+        required: false
+        default: 'C arena library comparison'
+
+permissions:
+  contents: read
+  actions:  read
+
+jobs:
+  bench:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Get Rust version
+        id: rustver
+        run: echo "ver=$(rustc --version)" >> $GITHUB_OUTPUT
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            libapr1-dev \
+            libtalloc-dev \
+            gcc \
+            curl \
+            git
+
+      - name: Fetch tsoding/arena.h
+        run: |
+          curl -fsSL \
+            "https://raw.githubusercontent.com/tsoding/arena/master/arena.h" \
+            -o crates/mid-arena/benches/arena.h
+          echo "arena.h downloaded ($(wc -l < crates/mid-arena/benches/arena.h) lines)"
+
+      - name: Compile C benchmarks
+        working-directory: crates/mid-arena/benches
+        run: |
+          echo "=== tsoding/arena.h ==="
+          gcc -O3 -march=native \
+            -o /tmp/tsoding_bench \
+            tsoding_arena_bench.c \
+            -lm
+          echo "✓ tsoding_bench"
+
+          echo "=== APR pools ==="
+          gcc -O3 -march=native $(pkg-config --cflags apr-1) \
+            -o /tmp/apr_bench \
+            apr_pool_bench.c \
+            $(pkg-config --libs apr-1)
+          echo "✓ apr_bench"
+
+          echo "=== talloc ==="
+          gcc -O3 -march=native \
+            -o /tmp/talloc_bench \
+            talloc_bench.c \
+            -ltalloc
+          echo "✓ talloc_bench"
+
+      - name: Run C benchmarks
+        run: |
+          echo "--- tsoding/arena.h ---"
+          /tmp/tsoding_bench 2>&1 | tee /tmp/tsoding.txt
+
+          echo "--- APR pools ---"
+          /tmp/apr_bench 2>&1 | tee /tmp/apr.txt
+
+          echo "--- talloc ---"
+          /tmp/talloc_bench 2>&1 | tee /tmp/talloc.txt
+
+      - name: Cache cargo registry
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+          key: cargo-arena-libs-bench-${{ hashFiles('crates/mid-arena/Cargo.toml') }}
+          restore-keys: cargo-registry-
+
+      - name: Run Rust vs_arena_crates benchmark
+        run: |
+          cargo bench --bench vs_arena_crates -p mid-arena 2>&1 | tee /tmp/rust.txt
+
+      - name: Publish summary
+        run: |
+          {
+            echo "## mid-arena vs C Arena Libraries"
+            echo ""
+            echo "**Build:** #${{ github.run_number }} &nbsp; **Rust:** \`${{ steps.rustver.outputs.ver }}\`"
+            echo "**Note:** ${{ inputs.baseline_note }}"
+            echo ""
+            echo "> Rust: criterion medians. C: single-pass, clock_gettime, real side effects (no interleaving trick needed)."
+            echo "> All binaries compiled \`-O3 -march=native\` on the same \`ubuntu-latest\` runner."
+            echo ""
+            python3 scripts/bench_vs_c_arena_libs.py
+            echo ""
+            echo "---"
+            echo "### Raw C Benchmark Output"
+            echo ""
+            echo "<details><summary>tsoding/arena.h (click to expand)</summary>"
+            echo ""
+            echo '```'
+            cat /tmp/tsoding.txt 2>/dev/null || echo "(compilation or run failed)"
+            echo '```'
+            echo ""
+            echo "</details>"
+            echo ""
+            echo "<details><summary>APR pools (click to expand)</summary>"
+            echo ""
+            echo '```'
+            cat /tmp/apr.txt 2>/dev/null || echo "(compilation or run failed)"
+            echo '```'
+            echo ""
+            echo "</details>"
+            echo ""
+            echo "<details><summary>talloc (click to expand)</summary>"
+            echo ""
+            echo '```'
+            cat /tmp/talloc.txt 2>/dev/null || echo "(compilation or run failed)"
+            echo '```'
+            echo ""
+            echo "</details>"
+          } >> $GITHUB_STEP_SUMMARY
+
+      - name: Upload all benchmark artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: bench-vs-c-arena-libs-${{ github.run_number }}
+          path: |
+            /tmp/tsoding.txt
+            /tmp/apr.txt
+            /tmp/talloc.txt
+            /tmp/rust.txt
+          retention-days: 30
