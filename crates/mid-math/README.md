@@ -21,11 +21,15 @@ Scalar only. 32-byte alignment reserved for future AVX2 fast path.
 ### Swizzle
 `.xy()` `.xzy()` `.wzyx()` ...-style component-permutation getters, plus
 `.with_xy(rhs)` `.with_xyz(rhs)` ...-style same-or-narrower-width replacement
-setters — `src/swizzle.rs`, `Vec2Swizzles` / `Vec3Swizzles` / `Vec4Swizzles`.
+setters — `src/swizzle/`, `Vec2Swizzles` / `Vec3Swizzles` / `Vec4Swizzles`.
+`engine.rs` holds the shared trait/macro definitions (numeric-family-agnostic);
+one file per numeric family (`f32.rs`, `f64.rs`, ...) just invokes those macros
+once per concrete type in that family.
 
-So far: **f32** (`Vec2`, `Vec3` × every backend, `Vec4` × every backend).
-Queued next: f64, the narrow int families (i8/u8/i16/u16/i32/u32/i64/u64),
-then wide/int + wide/float axis-shuffles.
+So far: **f32** (`Vec2`, `Vec3` × every backend, `Vec4` × every backend) and
+**f64** (`DVec3`, `DVec2` × every backend, `DVec4` × every backend). Queued
+next: the narrow int families (i8/u8/i16/u16/i32/u32/i64/u64), then wide/int
++ wide/float axis-shuffles.
 
 ### Boolean masks
 `BVec2` `BVec3` `BVec4`

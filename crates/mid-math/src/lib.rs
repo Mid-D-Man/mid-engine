@@ -94,8 +94,8 @@ pub use bvec::{BVec2, BVec3, BVec4};
 
 // ── Swizzle ───────────────────────────────────────────────────────────────────
 // Import one of these to get `.xy()`/`.xzy()`/`.wzyx()`-style component-permutation
-// getters and `.with_xy(rhs)`/`.with_xyz(rhs)`-style setters. See `swizzle.rs` for
-// the full convention and what's covered so far.
+// getters and `.with_xy(rhs)`/`.with_xyz(rhs)`-style setters. See `swizzle/mod.rs`
+// for the full convention and what's covered so far.
 pub use swizzle::{Vec2Swizzles, Vec3Swizzles, Vec4Swizzles};
 
 // ── Integer vectors (i8 / u8) ─────────────────────────────────────────────────
