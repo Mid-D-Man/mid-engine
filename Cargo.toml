@@ -1,66 +1,119 @@
-[package]
-name        = "mid-arena"
-version     = "0.1.0"
-edition     = "2021"
-description = "Arena/slot allocators for Mid Engine, built and feature-gated piece by piece against a real survey of the Rust arena-crate ecosystem. See docs/mid-arena.md for what's built, what's planned, and why."
+[workspace]
+# NOTE on mid-net-transport-quinn (added this pass): its `web-transport-quinn`
+# dependency needs a Cargo that understands `edition2024` (~1.85+) to even
+# resolve, transitively (confirmed directly: `cargo check -p mid-net-transport-quinn`
+# fails on rustc 1.75 at the `cpufeatures` manifest with exactly that error).
+# `cargo check -p <anything-else>` and `cargo test -p <anything-else>` are
+# UNAFFECTED — verified directly, resolver 2 scopes lockfile resolution to
+# each `-p` target's own dependency closure, not the whole members list.
+# Only a bare `cargo check`/`cargo build`/`cargo test` with NO `-p` (i.e.
+# "build everything") pulls this crate in and needs the newer toolchain.
+# If you're on an older Rust and something inexplicably won't resolve,
+# this is almost certainly why — build with explicit `-p` flags instead.
+# UPDATE (later pass): `examples/headless-server` now depends on
+# `mid-net-transport-quinn` directly too (it's the actual thing exercising
+# it over a real bind/dial, not just compiling it in isolation), so
+# `-p headless-server` needs the same newer toolchain now as well.
+# UPDATE (later pass): `mid-net-transport-wasm` added, and it behaves
+# DIFFERENTLY from the two above — confirmed empirically, not assumed.
+# `cargo check -p mid-net-transport-wasm` with NO `--target` flag
+# resolves cleanly even on rustc 1.75 (its `web-transport-wasm` dependency
+# lives under `[target.'cfg(target_arch = "wasm32")'.dependencies]`,
+# and resolver 2 doesn't fetch platform-specific deps for a platform
+# that isn't actually being built). The wall only shows up with an
+# explicit `--target wasm32-unknown-unknown` — same edition2024 problem,
+# this time via `idna_adapter` rather than `cpufeatures`, pulled in
+# through `web-transport-wasm`'s own tree. So: `-p mid-net-transport-wasm`
+# alone is fine anywhere; add `--target wasm32-unknown-unknown` and it
+# needs the same ~1.85+ toolchain as the other two.
+# UPDATE (later pass): `mid-net-transport-wasm/wasm-test-server` added --
+# a native-only fixture server for the real browser test (see
+# .github/workflows/mid-net-transport-wasm-test.yml). Depends on
+# mid-net-transport-quinn directly, so `-p mid-net-transport-wasm-test-server`
+# needs the ~1.85+ toolchain unconditionally, same as `-p mid-net-transport-quinn`
+# itself -- not the conditional wasm32-only situation `mid-net-transport-wasm`
+# is in.
+# NOTE on mid-ecs (rayon dependency): needs rustc 1.80+, confirmed directly
+# (`cargo check -p mid-ecs` fails on rustc 1.75 at `rayon-core`'s manifest).
+# Independent of the edition2024 walls above -- ordinary MSRV drift, not the
+# same root cause. `-p mid-collections` alone is unaffected (zero deps).
+# NOTE on mid-collections' bench (criterion dev-dependency, added when the
+# SparseSet bench suite was written): pulls in criterion -> clap_builder,
+# which needs edition2024 same as the walls above -- confirmed directly,
+# fails at `clap_builder`'s manifest on rustc 1.75. A FIFTH independent
+# instance of this exact class of ordinary upstream MSRV drift, not a new
+# root cause. REAL REGRESSION worth flagging explicitly: this affects
+# `cargo test -p mid-collections` too, not just `--bench` -- verified
+# directly (first assumed dev-dependencies were resolved per-target, that
+# assumption was WRONG and corrected after actually testing it). Cargo
+# resolves a package's full manifest, dev-dependencies included, before
+# building ANY target from it, so mid-collections lost the "zero-MSRV-wall,
+# fully testable in this sandbox" property this same comment block used to
+# get to claim uniquely for it, the moment criterion was added as a dev-dep.
+# Real tests were still run and verified before this dependency was added
+# (18/18, see docs/mid-collections.md) -- this note is about local
+# re-verification going forward, not about doubting that earlier result.
+members = [
+    "crates/mid-log",
+    "crates/mid-net",
+    "crates/mid-net/wire",
+    "crates/mid-net/transport",
+    "crates/mid-net/reliable",
+    "crates/mid-net/transport-quinn",
+    "crates/mid-net/transport-wasm",
+    "crates/mid-net/transport-wasm/wasm-test-server",
+    "crates/mid-ecs",
+    "crates/mid-collections",
+    "crates/mid-math",
+    "crates/mid-geom",
+    "crates/mid-common",
+    "crates/mid-trace",
+    "crates/mid-arena",
+    "tools/mdix-compiler",
+    "examples/headless-server",
+      # New this pass (docs/roadmap.md, "What can be built in parallel"):
+    # v0 stubs, not yet compiled/verified in this sandbox (no rustc
+    # available here at all -- see that section's own honesty note).
+    "crates/mid-time",
+    "crates/mid-physics",
+    "crates/mid-anim",
+    "crates/mid-app",
+    "tools/mdix-compiler",
+    "examples/headless-server",
+    "examples/custom-transport-demo",
 
-[lib]
-name       = "mid_arena"
-crate-type = ["lib"]
+    "benches/ecs-vs-bevy-ecs",
+]
 
-[dependencies]
-# Intentionally empty for the default build. See docs/mid-arena.md
-# "Feature gates" -- `compact`, `ffi` will each add exactly one
-# optional dependency the same way mid-collections' own `ffi` feature
-# does (zerocopy, optional, gated, zero-cost when the feature is off),
-# not a new pattern.
+# NOTE on benches/ecs-vs-bevy-ecs (added this pass): its bevy_ecs dependency
+# declares `rust-version = "1.95.0"` (confirmed directly: tried building
+# bevy_ecs 0.19.1 from crates.io). Same class of wall as
+# mid-net-transport-quinn's edition2024 requirement above, same isolation
+# reasoning -- kept as its own workspace member specifically so a bare
+# `cargo test`/`cargo build`/`cargo bench` without `-p` doesn't pull the
+# newer-toolchain requirement into mid-ecs's own, otherwise-1.91-compatible
+# build. `-p ecs-vs-bevy-ecs` needs the newer toolchain; nothing else does.
+resolver = "2"
 
-[dev-dependencies]
-# Same choice mid-collections made (crates/mid-collections/Cargo.toml):
-# criterion pulls in clap_builder, which needs edition2024 (root
-# Cargo.toml's comment block, "A FIFTH independent instance"; this is
-# the SIXTH). `cargo test -p mid-arena` now needs the newer toolchain
-# too, not just `--bench` -- same real regression, same reason, not
-# re-litigated here. `slot_arena`'s 16 tests were run and passed for
-# real on this project's rustc-1.75 floor BEFORE this dependency was
-# added -- see docs/mid-arena.md's "What's built" section for that
-# result. `--lib` does NOT route around this (re-confirmed directly,
-# same as mid-collections' own note already found: Cargo resolves a
-# package's full manifest, dev-dependencies included, before building
-# ANY target from it) -- there is no local rustc-1.75 workaround for
-# `cargo test`/`cargo bench` once this dependency is in the manifest.
-# Plain `cargo build -p mid-arena` (no --tests/--benches) DOES still
-# work on 1.75, verified directly, immediately after this dependency
-# was added -- it doesn't need dev-dependencies compiled or even fully
-# resolved, only regular ones (there are none here). So: consuming this
-# crate from elsewhere in the workspace stays on the 1.75 floor;
-# testing/benching mid-arena itself locally doesn't, same as
-# mid-collections.
-criterion = { version = "0.5", features = ["html_reports"] }
-# Comparison targets for `benches/vs_arena_crates.rs` -- versions pinned
-# to what actually resolved and was actually benched for docs/mid-arena.md
-# (checked directly via Cargo.lock, not left to range resolution drift
-# out from under the recorded numbers). One `Arena`/`Slab` per crate,
-# each exercising that crate's own real API, not a shared trait facade.
-slab               = "0.4.12"
-bumpalo            = "3.20.3"
-typed-arena        = "2.0.2"
-slotmap            = "1.1.1"
-generational-arena = "0.2.9"
-id-arena           = "2.3.0"
-thunderdome        = "0.6.1"
-sharded-slab       = "0.1.7"
-internment         = { version = "0.8.6", features = ["arena"] }
-gc                 = { version = "0.5.1", features = ["derive"] }
+[profile.release]
+opt-level     = 3
+lto           = true
+codegen-units = 1
+strip         = true
+debug         = false
 
-[[bench]]
-name    = "vs_arena_crates"
-harness = false
-
-[features]
-default = []
-# Planned, not yet built -- see docs/mid-arena.md "Feature gates".
-# compact = []
-# bump    = []
-# intern  = []
-# ffi     = ["dep:zerocopy"]
+# cargo bench does NOT use [profile.release] — it has its own default
+# profile (opt-level=3, but WITHOUT lto/codegen-units=1). That gap
+# matters for cross-crate calls into external comparison crates in our
+# benches (e.g. `wide`): our own mid-math methods are all
+# #[inline(always)], which survives regardless, but a crate we only
+# call via #[inline] (not #[inline(always)]) through a multi-hop call
+# chain depends on aggressive cross-crate inlining to collapse down to
+# the same single instruction our own code gets — added 2026-08-23
+# after wide::i32x4::add benched ~14x slower than our i32x4::add,
+# tracked to exactly this profile gap (see docs/platform-optimization.md §9).
+[profile.bench]
+opt-level     = 3
+lto           = true
+codegen-units = 1
+debug         = true
