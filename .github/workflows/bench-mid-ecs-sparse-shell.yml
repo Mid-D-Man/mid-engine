@@ -1,0 +1,140 @@
+# .github/workflows/bench-mid-ecs-sparse-shell.yml
+#
+# mid-ecs's own Sparse Shell operations (insert, query, query2,
+# remove+insert churn) -- component.rs's SparseShell, as distinct from
+# archetype_core.rs's Archetype Core. First real bench coverage this
+# storage system has ever had: SparseShell::iter's own doc comment and
+# World::query2's own doc comment both say, verbatim, "revisit if this
+# ever shows up in a real profile -- it hasn't been built for one."
+# This is that profile. See crates/mid-ecs/benches/sparse_shell.rs's
+# own header doc comment for the full rationale and group-by-group
+# breakdown -- that comment is authoritative; this is a summary.
+#
+# Mirrors bench-mid-ecs-archetype-core.yml's structure exactly:
+# scripts/bench_mid_ecs_sparse_shell.py for the summary (same
+# table+ratio treatment, tested against real captured output before
+# being trusted -- both the per-group tables and the cross-suite
+# comparison section, which needs a real bench-mid-ecs-archetype-core-
+# raw.txt in the same job to say anything; absent that, it prints
+# nothing there, not an error), `set -o pipefail` from the start, no
+# ISA-tier or cross-OS matrix for the same reasons given there.
+#
+# No baseline yet -- this is the suite's first real run. The one
+# existing signal worth going in with: query_single_component alone
+# (Box<dyn Iterator>, one vtable hop per item) measured ~4x slower than
+# Archetype Core's own fixed Iter1 at the same N in the sandbox that
+# built this suite -- a real, substantial, not-yet-explained cost on
+# its own, independent of query2's per-entity-lookup question. Worth
+# reading both numbers together, not just the two-component ratio.
+#
+# Run: Actions -> "mid-ecs — bench Sparse Shell" -> Run workflow
+# DO NOT add push/pull_request triggers.
+
+name: mid-ecs — bench Sparse Shell
+
+on:
+  workflow_dispatch:
+    inputs:
+      baseline_note:
+        description: 'Context for this run (e.g. "first real Sparse Shell numbers")'
+        required: false
+        default: 'manual Sparse Shell benchmark run'
+
+permissions:
+  contents: read
+  actions:  read
+
+jobs:
+  bench:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Get Rust version
+        id: rustver
+        run: echo "ver=$(rustc --version)" >> $GITHUB_OUTPUT
+
+      - name: Cache cargo registry + build artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-bench-mid-ecs-sparse-shell-${{ hashFiles('crates/mid-ecs/**/Cargo.toml', 'crates/mid-collections/**/Cargo.toml', 'crates/mid-math/**/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-bench-mid-ecs-sparse-shell-
+
+      - name: Confirm environment
+        env:
+          RUST_VERSION: ${{ steps.rustver.outputs.ver }}
+        run: |
+          {
+            echo "## mid-ecs Sparse Shell Bench — Build #${{ github.run_number }}"
+            echo ""
+            echo "| | |"
+            echo "|---|---|"
+            echo "| Rust   | \`${RUST_VERSION}\` |"
+            echo "| Branch | \`${{ github.ref_name }}\` |"
+            echo "| Commit | \`${GITHUB_SHA:0:8}\` |"
+            echo "| Note   | ${{ inputs.baseline_note }} |"
+            echo ""
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Run Sparse Shell criterion benchmarks
+        run: |
+          set -o pipefail
+          echo "Note: ${{ inputs.baseline_note }}"
+          cargo bench -p mid-ecs --bench sparse_shell -- --color never \
+            2>&1 | tee bench-mid-ecs-sparse-shell-raw.txt
+          echo "Bench exit code: $?" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Surface bench diagnostics
+        if: always()
+        run: |
+          {
+            echo "### Diagnostics"
+            echo '```'
+            grep -E 'took zero time|Unable to complete|Warning:|panicked|Completed [0-9]+ iterations' \
+              bench-mid-ecs-sparse-shell-raw.txt | head -60 || echo "(none found)"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Publish summary
+        if: always()
+        run: |
+          {
+            echo "### Results"
+            echo ""
+            echo "Lower is faster. Groups: insert_two_components, query_single_component,"
+            echo "query2_two_components, remove_insert_churn -- each swept over"
+            echo "N = 100 / 1,000 / 10,000 / 100,000. See"
+            echo "\`crates/mid-ecs/benches/sparse_shell.rs\`'s own header doc comment for"
+            echo "what each group tests and why. First real run for this suite -- no"
+            echo "fixed baseline yet, that starts here."
+            echo ""
+            python3 scripts/bench_mid_ecs_sparse_shell.py
+            echo ""
+            echo "<details><summary>Full raw output</summary>"
+            echo ""
+            echo '```'
+            cat bench-mid-ecs-sparse-shell-raw.txt
+            echo '```'
+            echo ""
+            echo "</details>"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bench-mid-ecs-sparse-shell-${{ github.run_number }}
+          path: |
+            bench-mid-ecs-sparse-shell-raw.txt
+            target/criterion
+          retention-days: 30
