@@ -6,7 +6,12 @@
 )
 
 
+@QUICKFUNCS(
+  ~target<object>(name, path) { return { name = name, path = path } }
+)
+
 
 @DATA(
     target_root = "."
+    overrides:: target("Cargo.toml", "./Cargo.toml") 
 )
