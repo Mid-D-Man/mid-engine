@@ -26,10 +26,11 @@ setters — `src/swizzle/`, `Vec2Swizzles` / `Vec3Swizzles` / `Vec4Swizzles`.
 one file per numeric family (`f32.rs`, `f64.rs`, ...) just invokes those macros
 once per concrete type in that family.
 
-So far: **f32** (`Vec2`, `Vec3` × every backend, `Vec4` × every backend) and
-**f64** (`DVec3`, `DVec2` × every backend, `DVec4` × every backend). Queued
-next: the narrow int families (i8/u8/i16/u16/i32/u32/i64/u64), then wide/int
-+ wide/float axis-shuffles.
+So far: **f32** (`Vec2`, `Vec3` × every backend, `Vec4` × every backend),
+**f64** (`DVec3`, `DVec2` × every backend, `DVec4` × every backend), and all
+8 narrow int families (**i8/u8/i16/u16/i32/u32/i64/u64**, all always-scalar
+and canonical, no backend split). Queued next: wide/int + wide/float
+axis-shuffles, then mint.
 
 ### Boolean masks
 `BVec2` `BVec3` `BVec4`
