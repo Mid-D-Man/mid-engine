@@ -1,0 +1,66 @@
+[package]
+name        = "mid-arena"
+version     = "0.1.0"
+edition     = "2021"
+description = "Arena/slot allocators for Mid Engine, built and feature-gated piece by piece against a real survey of the Rust arena-crate ecosystem. See docs/mid-arena.md for what's built, what's planned, and why."
+
+[lib]
+name       = "mid_arena"
+crate-type = ["lib"]
+
+[dependencies]
+# Intentionally empty for the default build. See docs/mid-arena.md
+# "Feature gates" -- `compact`, `ffi` will each add exactly one
+# optional dependency the same way mid-collections' own `ffi` feature
+# does (zerocopy, optional, gated, zero-cost when the feature is off),
+# not a new pattern.
+
+[dev-dependencies]
+# Same choice mid-collections made (crates/mid-collections/Cargo.toml):
+# criterion pulls in clap_builder, which needs edition2024 (root
+# Cargo.toml's comment block, "A FIFTH independent instance"; this is
+# the SIXTH). `cargo test -p mid-arena` now needs the newer toolchain
+# too, not just `--bench` -- same real regression, same reason, not
+# re-litigated here. `slot_arena`'s 16 tests were run and passed for
+# real on this project's rustc-1.75 floor BEFORE this dependency was
+# added -- see docs/mid-arena.md's "What's built" section for that
+# result. `--lib` does NOT route around this (re-confirmed directly,
+# same as mid-collections' own note already found: Cargo resolves a
+# package's full manifest, dev-dependencies included, before building
+# ANY target from it) -- there is no local rustc-1.75 workaround for
+# `cargo test`/`cargo bench` once this dependency is in the manifest.
+# Plain `cargo build -p mid-arena` (no --tests/--benches) DOES still
+# work on 1.75, verified directly, immediately after this dependency
+# was added -- it doesn't need dev-dependencies compiled or even fully
+# resolved, only regular ones (there are none here). So: consuming this
+# crate from elsewhere in the workspace stays on the 1.75 floor;
+# testing/benching mid-arena itself locally doesn't, same as
+# mid-collections.
+criterion = { version = "0.5", features = ["html_reports"] }
+# Comparison targets for `benches/vs_arena_crates.rs` -- versions pinned
+# to what actually resolved and was actually benched for docs/mid-arena.md
+# (checked directly via Cargo.lock, not left to range resolution drift
+# out from under the recorded numbers). One `Arena`/`Slab` per crate,
+# each exercising that crate's own real API, not a shared trait facade.
+slab               = "0.4.12"
+bumpalo            = "3.20.3"
+typed-arena        = "2.0.2"
+slotmap            = "1.1.1"
+generational-arena = "0.2.9"
+id-arena           = "2.3.0"
+thunderdome        = "0.6.1"
+sharded-slab       = "0.1.7"
+internment         = { version = "0.8.6", features = ["arena"] }
+gc                 = { version = "0.5.1", features = ["derive"] }
+
+[[bench]]
+name    = "vs_arena_crates"
+harness = false
+
+[features]
+default = []
+# Planned, not yet built -- see docs/mid-arena.md "Feature gates".
+# compact = []
+# bump    = []
+# intern  = []
+# ffi     = ["dep:zerocopy"]
