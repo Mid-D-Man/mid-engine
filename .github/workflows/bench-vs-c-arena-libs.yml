@@ -1,16 +1,39 @@
 # .github/workflows/bench-vs-c-arena-libs.yml
 # Build and run tsoding/arena.h / APR pools / talloc(_pool) C benchmarks
 # alongside mid-arena's Rust vs_arena_crates suite, then produce a unified
-# comparison in the step summary. Mirrors bench-vs-c-libs.yml (mid-math's
-# own C-vs-Rust workflow) structure exactly -- same job shape, same
-# apt-install/curl-fetch/compile/run/summarize steps, adapted from
-# math-library sources to arena-allocator sources.
+# comparison in the step summary.
 #
-# C libs are compiled with -O3 -march=native (same as Rust release +
-# target-cpu=native). All three timed with clock_gettime, single-pass
-# (not 4-way interleaved like cglm_bench.c -- these are allocator calls
-# with real side effects, not pure arithmetic a compiler could hoist).
-# Rust timing: criterion median.
+# Structure follows bench-vs-bevy-ecs.yml -- docs/benching-standards.md's
+# actual "canonical reference" -- not bench-vs-c-libs.yml, which that same
+# doc names directly as one of 12 workflows missing `set -o pipefail`.
+# First version of this file copied the latter's shape by surface
+# similarity (C-library comparison) without checking that; wrong call,
+# fixed here rather than left in place.
+#
+# Real incident this fixes, not a hypothetical one: run #1 failed with
+# "cargo: command not found" inside "Run Rust vs_arena_crates benchmark",
+# reported as a green/succeeded step. Root cause, confirmed directly
+# against this repo's other workflows, not assumed:
+#   1. `restore-keys: cargo-registry-` (this file's first version) is a
+#      prefix search across the WHOLE repo's cache entries, not scoped to
+#      this workflow. `mid-ecs-test.yml`, `mid-log-test.yml`,
+#      `mid-math-test.yml`, and `mid-net-test.yml` all use keys starting
+#      with that exact same `cargo-registry-` string. On this workflow's
+#      first run (guaranteed miss on its own unique key), the restore
+#      step fell through to the most recent of those four and overwrote
+#      the just-installed `~/.cargo/bin/` with theirs.
+#   2. `cargo bench ... | tee /tmp/rust.txt` with no `set -o pipefail`
+#      reports `tee`'s exit code (always 0), not cargo's -- so the
+#      resulting empty/error-only /tmp/rust.txt showed a green step
+#      instead of a failure. Same real incident class
+#      docs/benching-standards.md already documents for
+#      Abench-vs-all-f64.yml and mid-ecs-test.yml.
+# Fix: workflow-scoped cache key/restore-keys (can't collide with any
+# other workflow in this repo, present or future), `set -o pipefail` on
+# every step piping through `tee` (C steps included -- same masking risk,
+# not just the Rust one), and `if: always()` on diagnostics/summary/
+# upload so a real failure stays visible in the step summary instead of
+# just going missing.
 #
 # DO NOT add push/pull_request triggers.
 
@@ -38,6 +61,21 @@ jobs:
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
+
+      - name: Verify cargo is on PATH
+        run: |
+          # Added after run #2 still failed with "cargo: command not
+          # found" despite a workflow-scoped cache key that should have
+          # been a clean miss (nothing to restore) -- root cause not
+          # fully confirmed, so this step exists to actually show the
+          # real PATH/toolchain state going forward instead of leaving
+          # a bare "command not found" to guess from a third time.
+          echo "PATH=$PATH"
+          which cargo || echo "cargo NOT on PATH here"
+          which rustc || echo "rustc NOT on PATH here"
+          ls -la ~/.cargo/bin/ 2>&1 || echo "~/.cargo/bin/ doesn't exist"
+          cargo --version
+          rustc --version
 
       - name: Get Rust version
         id: rustver
@@ -86,6 +124,7 @@ jobs:
 
       - name: Run C benchmarks
         run: |
+          set -o pipefail
           echo "--- tsoding/arena.h ---"
           /tmp/tsoding_bench 2>&1 | tee /tmp/tsoding.txt
 
@@ -99,18 +138,46 @@ jobs:
         uses: actions/cache@v3
         with:
           path: |
-            ~/.cargo/bin/
             ~/.cargo/registry/index/
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
-          key: cargo-arena-libs-bench-${{ hashFiles('crates/mid-arena/Cargo.toml') }}
-          restore-keys: cargo-registry-
+          # ~/.cargo/bin/ deliberately NOT cached -- that's where the
+          # toolchain binary itself (cargo, rustc) lives, freshly placed
+          # there by "Install Rust toolchain" one step above. Caching
+          # registry/git sources is safe and standard; caching the
+          # toolchain's own bin dir is the actual suspect for run #2's
+          # "cargo: command not found" (exact mechanism not fully
+          # confirmed -- see "Verify cargo is on PATH" above -- but
+          # there's no upside to caching this directory and a real,
+          # repeated failure right where it would matter if there is one).
+          key: cargo-registry-bench-vs-c-arena-libs-${{ hashFiles('crates/mid-arena/Cargo.toml') }}
+          restore-keys: cargo-registry-bench-vs-c-arena-libs-
 
       - name: Run Rust vs_arena_crates benchmark
         run: |
+          # set -o pipefail: without it, `cargo bench | tee` reports tee's
+          # exit code (always 0), not cargo bench's -- see header comment,
+          # this is the real incident that made run #1 look green while
+          # actually failing at "cargo: command not found".
+          set -o pipefail
+          echo "PATH=$PATH"
+          which cargo
+          echo "Note: ${{ inputs.baseline_note }}"
           cargo bench --bench vs_arena_crates -p mid-arena 2>&1 | tee /tmp/rust.txt
 
+      - name: Surface bench diagnostics
+        if: always()
+        run: |
+          {
+            echo "### Diagnostics"
+            echo '```'
+            grep -E 'took zero time|Unable to complete|Warning:|panicked|command not found|error\[|Completed [0-9]+ iterations' \
+              /tmp/rust.txt | head -60 || echo "(none found)"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
       - name: Publish summary
+        if: always()
         run: |
           {
             echo "## mid-arena vs C Arena Libraries"
@@ -152,6 +219,7 @@ jobs:
           } >> $GITHUB_STEP_SUMMARY
 
       - name: Upload all benchmark artifacts
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: bench-vs-c-arena-libs-${{ github.run_number }}
