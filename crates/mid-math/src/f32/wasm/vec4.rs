@@ -16,6 +16,7 @@ use core::fmt;
 use core::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAssign};
 
 use crate::f32::wasm::vec3::Vec3;
+use crate::f32::vec2::Vec2;
 use crate::impl_vec4_deref;
 use crate::wasm::{dot4, dot4_in_x, dot4_into_v128};
 use crate::EPSILON;
@@ -230,3 +231,7 @@ impl From<(f32, f32, f32, f32)> for Vec4 {
 impl From<Vec4> for (f32, f32, f32, f32) {
     #[inline] fn from(v: Vec4) -> Self { (v.x, v.y, v.z, v.w) }
 }
+
+// ── Swizzle ────────────────────────────────────────────────────────────────
+
+crate::impl_vec4_swizzle!(Vec4, Vec2, Vec3);

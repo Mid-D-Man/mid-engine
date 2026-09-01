@@ -350,3 +350,7 @@ impl From<[f32; 2]>  for Vec2 { #[inline] fn from(a: [f32; 2]) -> Self  { Self::
 impl From<Vec2> for [f32; 2]  { #[inline] fn from(v: Vec2)     -> Self  { [v.x, v.y] } }
 impl From<(f32, f32)> for Vec2 { #[inline] fn from(t: (f32,f32)) -> Self { Self::new(t.0, t.1) } }
 impl From<Vec2> for (f32, f32) { #[inline] fn from(v: Vec2) -> Self      { (v.x, v.y) } }
+
+// ── Swizzle ────────────────────────────────────────────────────────────────
+
+crate::impl_vec2_swizzle!(Vec2, crate::Vec3, crate::Vec4);

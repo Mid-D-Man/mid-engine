@@ -19,6 +19,7 @@ pub mod storage;
 // ── Core math ─────────────────────────────────────────────────────────────────
 pub mod bvec;
 pub mod deref;
+pub mod swizzle;
 pub mod f32;
 pub mod f64;
 pub mod ffi;
@@ -90,6 +91,12 @@ pub use storage::{
 
 // ── Bool masks ────────────────────────────────────────────────────────────────
 pub use bvec::{BVec2, BVec3, BVec4};
+
+// ── Swizzle ───────────────────────────────────────────────────────────────────
+// Import one of these to get `.xy()`/`.xzy()`/`.wzyx()`-style component-permutation
+// getters and `.with_xy(rhs)`/`.with_xyz(rhs)`-style setters. See `swizzle.rs` for
+// the full convention and what's covered so far.
+pub use swizzle::{Vec2Swizzles, Vec3Swizzles, Vec4Swizzles};
 
 // ── Integer vectors (i8 / u8) ─────────────────────────────────────────────────
 pub use int8::{I8Vec2, I8Vec3, I8Vec4, U8Vec2, U8Vec3, U8Vec4};

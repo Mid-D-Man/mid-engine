@@ -7,6 +7,8 @@
 use core::fmt;
 use core::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAssign};
 use crate::{BVec4, EPSILON};
+use crate::f32::vec2::Vec2;
+use crate::f32::scalar::vec3::Vec3;
 
 /// 4D vector. 16 bytes, align(16). Scalar storage.
 #[derive(Debug, Clone, Copy)]
@@ -378,3 +380,7 @@ impl From<[f32;4]> for Vec4      { fn from(a:[f32;4])->Self{Self::new(a[0],a[1],
 impl From<Vec4> for [f32;4]      { fn from(v:Vec4)->[f32;4]{[v.x,v.y,v.z,v.w]} }
 impl From<(f32,f32,f32,f32)> for Vec4 { fn from(t:(f32,f32,f32,f32))->Self{Self::new(t.0,t.1,t.2,t.3)} }
 impl From<Vec4> for (f32,f32,f32,f32) { fn from(v:Vec4)->(f32,f32,f32,f32){(v.x,v.y,v.z,v.w)} }
+
+// ── Swizzle ────────────────────────────────────────────────────────────────
+
+crate::impl_vec4_swizzle!(Vec4, Vec2, Vec3);

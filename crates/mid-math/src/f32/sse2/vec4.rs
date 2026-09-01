@@ -10,6 +10,7 @@ use core::arch::x86_64::*;
 
 use crate::sse2::{dot4, dot4_in_x, dot4_into_m128, m128_abs, rsqrt_nr};
 use crate::f32::sse2::vec3::Vec3;
+use crate::f32::vec2::Vec2;
 use crate::EPSILON;
 use crate::impl_vec4_deref;
 
@@ -197,3 +198,7 @@ impl From<[f32; 4]> for Vec4 {
 impl From<Vec4> for [f32; 4] {
     #[inline] fn from(v: Vec4) -> Self { [v.x, v.y, v.z, v.w] }
             }
+
+// ── Swizzle ────────────────────────────────────────────────────────────────
+
+crate::impl_vec4_swizzle!(Vec4, Vec2, Vec3);

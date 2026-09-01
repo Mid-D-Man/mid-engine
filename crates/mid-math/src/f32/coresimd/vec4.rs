@@ -9,6 +9,7 @@ use std::simd::StdFloat;
 
 use super::{dot4, dot4_into_f32x4};
 use crate::f32::coresimd::vec3::Vec3;
+use crate::f32::vec2::Vec2;
 use crate::impl_vec4_deref;
 use crate::EPSILON;
 
@@ -159,3 +160,7 @@ impl From<[f32; 4]> for Vec4 { #[inline] fn from(a: [f32; 4]) -> Self { Self(f32
 impl From<Vec4> for [f32; 4] { #[inline] fn from(v: Vec4) -> Self { v.0.to_array() } }
 impl From<(f32,f32,f32,f32)> for Vec4 { #[inline] fn from(t:(f32,f32,f32,f32))->Self{Self::new(t.0,t.1,t.2,t.3)} }
 impl From<Vec4> for (f32,f32,f32,f32) { #[inline] fn from(v:Vec4)->(f32,f32,f32,f32){(v.x,v.y,v.z,v.w)} }
+
+// ── Swizzle ────────────────────────────────────────────────────────────────
+
+crate::impl_vec4_swizzle!(Vec4, Vec2, Vec3);

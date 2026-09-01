@@ -18,6 +18,15 @@ SSE2 on x86/x86_64. NEON stubs on aarch64 (optimisation pass pending). Scalar fa
 
 Scalar only. 32-byte alignment reserved for future AVX2 fast path.
 
+### Swizzle
+`.xy()` `.xzy()` `.wzyx()` ...-style component-permutation getters, plus
+`.with_xy(rhs)` `.with_xyz(rhs)` ...-style same-or-narrower-width replacement
+setters — `src/swizzle.rs`, `Vec2Swizzles` / `Vec3Swizzles` / `Vec4Swizzles`.
+
+So far: **f32** (`Vec2`, `Vec3` × every backend, `Vec4` × every backend).
+Queued next: f64, the narrow int families (i8/u8/i16/u16/i32/u32/i64/u64),
+then wide/int + wide/float axis-shuffles.
+
 ### Boolean masks
 `BVec2` `BVec3` `BVec4`
 
@@ -157,3 +166,7 @@ cargo bench --bench vs_all  -p mid-math
 3. SSE2 shuffle-based Mat4 general inverse (~6× gap vs glam)
 4. `f32x4` vectorised noise batch sampling
 5. `Vec3x4` frustum AABB batch culling (4 AABBs per SSE2 instruction)
+6. Swizzle getters currently always go through `<Output>::new(...)`; SSE2/NEON/WASM/coresimd
+   could do same-width swizzles in one shuffle instruction instead (glam's approach) — needs each
+   backend's shuffle-immediate encoding and `Vec3`'s padding-lane behaviour verified with a real
+   compiler before it's safe to generate across ~500+ call sites per backend
