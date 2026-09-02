@@ -9,6 +9,17 @@ name = "mid_math"
 crate-type = ["rlib", "cdylib", "staticlib"]
 
 [dependencies]
+# Added for the mint feature (math interoperability types — mint::Vector3<T>,
+# mint::Quaternion<T>, mint::ColumnMatrix4<T>, etc.). Depending on the REAL
+# `mint` crate matters here, not just its shape: the whole point is that
+# other crates already depending on mint (nalgebra, ultraviolet, glam, most
+# glTF/asset-loading crates) can hand mid-math a real mint value and vice
+# versa — a vendored lookalike struct would be a different Rust type and
+# satisfy nobody's `Into<mint::X>` bound. Confirmed directly against mint
+# 0.5.9's own source before adding this: genuinely tiny (318 lines across 4
+# files), `#![no_std]`, and its only dependency is `serde` (optional, off by
+# default) — negligible dependency-tree cost either way.
+mint = { version = "0.5", optional = true, default-features = false }
 
 [dev-dependencies]
 # Bumped 0.28 -> 0.33 (2026-07-16): 0.28 was ~5 minor releases stale, meaning
@@ -135,4 +146,5 @@ simd         = []
 avx2         = []
 coresimd     = []
 force-scalar = []
+mint         = ["dep:mint"]
  
