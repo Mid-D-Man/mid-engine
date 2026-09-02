@@ -9,11 +9,16 @@ remembered.
 
 The short version, if you read nothing else: `SlotArena<T>` is built and
 tested (16/16 real, rustc 1.75), it's the safe Vec-with-freelist approach
-every serious Rust arena crate in this space converges on, and it's
-currently measuring slower on insert than its closest peers by a real,
-checked, not-yet-explained margin — see "What's built" below. GC-based
-approaches are ruled out entirely, not benched further. Everything else
-is catalogued, not built.
+every serious Rust arena crate in this space converges on, and a real CI
+run (rustc 1.98.0, criterion — see "Real CI benchmark results") confirms
+it's squarely competitive with its true peers (`slotmap`,
+`generational-arena`, `id-arena`, `thunderdome` — all generation-checked,
+same as it is), ties `slotmap` exactly on insert. Plain `slab` is the
+real outlier, ~4x faster than that whole band, because it skips
+generation-checking entirely — a documented safety trade-off, not
+something `SlotArena` was competing to match. GC-based approaches are
+ruled out entirely, not benched further. Everything else is catalogued,
+not built.
 
 ## Survey methodology
 
@@ -129,20 +134,86 @@ plain `slab` unshared, matching that crate's own documented caveat about
 lock-free overhead not paying for itself single-threaded — real
 confirmation, not just trusting the caveat.
 
-**The honest surprise:** `SlotArena` measures 2–3x slower on insert than
-its closest algorithmic peers, despite using the same even/odd-
-generation LIFO-freelist scheme. Checked one real, concrete data point
-rather than leaving this as an unexplained gap: `size_of::<Slot<Payload>>()`
-is 24 bytes for a 16-byte payload — the discriminant tag fits inside
-`Occupied`'s existing alignment padding for free, so this isn't a bloated
-layout. The more likely cost is the branch shape of `insert()` itself
-(a bounds-checked `Option` match on every call, even though a
-fresh-arena bulk-insert workload always takes the "grow" arm) — plausible
-given the code, not confirmed by disassembly or profiling. Recorded
-here rather than smoothed over, because it's exactly the kind of gap the
-planned `compact` feature (see "Feature gates") exists to close, and a
-concrete number is a better reason to build that feature later than a
-vague "might be worth optimizing."
+**The "honest surprise" this pass got wrong, corrected below:** this
+sandbox pass originally reported `SlotArena` measuring 2–3x slower on
+insert than its closest algorithmic peers, with a `size_of`-grounded but
+ultimately unconfirmed guess about branch shape as the cause. Once
+`benches/vs_arena_crates.rs` actually ran on real CI (rustc 1.98.0,
+criterion, GitHub Actions run #3) that gap didn't hold up — see "Real CI
+benchmark results" below for the corrected numbers and a better-grounded
+explanation. Left visible here, struck through in spirit rather than
+deleted, because the point of recording a surprise honestly is that it
+can turn out to be sandbox noise, and this project's own convention is
+to say so plainly rather than quietly edit the earlier claim away.
+
+## Real CI benchmark results (rustc 1.98.0, actual GitHub Actions run — not the sandbox pass above)
+
+`benches/vs_arena_crates.rs` run for real on CI (`workflow_dispatch`,
+run #3, after two earlier runs failed on CI infrastructure issues —
+cache key collisions and `set -o pipefail` masking a missing `cargo`,
+unrelated to this crate's own code, fixed in the workflow itself, not
+here). Criterion's own methodology (many samples, statistical, real
+hardware) rather than a single `Instant` call on a shared sandbox VM —
+this table supersedes the previous section's numbers as the authoritative
+figures; the sandbox pass is kept above for the record, not as a second
+source of truth.
+
+| Crate | insert (ns/op) | get (ns/op) |
+|---|---|---|
+| typed-arena | 1.32 | 0.41 |
+| bumpalo | 1.37 | 0.40 |
+| slab | 1.65 | 0.66 |
+| generational-arena | 5.82 | 0.87 |
+| id-arena | 6.46 | 0.64 |
+| **mid-arena `SlotArena`** | **6.88** | **0.87** |
+| slotmap | 6.88 | 0.71 |
+| thunderdome | 6.99 | 0.76 |
+| sharded-slab | 29.98 | 10.17 |
+| gc (alloc) | 68.20 | — |
+| internment (unique) | 76.68 | — |
+
+(Converted from criterion's reported per-100,000-iteration batch times;
+raw figures are in the workflow's own step summary.)
+
+**The corrected finding:** `SlotArena` isn't an outlier. It ties
+`slotmap` on insert to five significant figures (687.89 µs both, on the
+same run) and sits inside the same 5.8–7.0 ns band as
+`generational-arena`/`id-arena`/`thunderdome` — its actual peer group,
+all of them generation-checked, ABA-safe handles. What's actually
+unusual is `slab`, at roughly 3.5–4.2x faster than that entire band —
+and there's a real, checkable reason for that rather than a guessed one:
+`slab`'s `usize` keys carry **no generation counter at all**. Reusing a
+freed slot's index hands out the exact same key value it had before;
+`slab`'s own documentation is explicit that this is a real, accepted
+ABA trade-off, not an oversight. Every other crate in that band —
+`SlotArena` included — pays a real, measured cost for the staleness
+check that buys ABA-safety. That's a fair trade to be making, and it's
+the correct comparison: `SlotArena` was never competing with `slab`'s
+weaker guarantee, and once compared against the crates that make the
+same safety promise it does, it's squarely competitive, not behind.
+This also means the `compact` feature's justification below needed a
+real edit, not just a numbers update — see "Feature gates".
+
+**Loose ends from this run, not yet followed up:**
+- `internment`'s checked-in criterion number (76.68 ns) doesn't have a
+  `get` figure — `bench_get` never included it (interning's return value
+  *is* the access handle; there's no separate lookup step to time), same
+  as the sandbox pass, not a new gap.
+- The checked-in `gc` bench only measures `force_collect` against a
+  fully-live 100k-object set (379.43 µs total, ≈3.79 ns/object scanned,
+  no garbage to reclaim). It does **not** reproduce the sandbox pass's
+  after-drop figure (footnote 3 above, 47.0–57.5 ns/object) — that
+  measurement only exists in the scratch sandbox script, not in
+  `vs_arena_crates.rs`. Worth closing that gap in a follow-up pass
+  rather than leaving the doc's most load-bearing GC number
+  CI-unverified indefinitely.
+- Criterion warned once: *"Unable to complete 100 samples in 5.0s."*
+  Non-fatal, didn't fail the run, but means at least one benchmark group
+  (`internment` and `gc` are the likely candidates given their multi-ms
+  per-iteration cost) is running fewer effective samples than criterion's
+  default target. A `.sample_size(50)`/longer `.measurement_time(...)`
+  on those specific groups would clear it; not done here since it doesn't
+  change the numbers' validity, only the noise floor around them.
 
 ## C arena libraries (real, compiled `-O3 -march=native`, actually run)
 
@@ -256,13 +327,18 @@ own, there's nothing left for the resolver to trip on. So consuming
 it's specifically testing or benching `mid-arena` itself, locally, that
 doesn't.
 
-`benches/vs_arena_crates.rs` itself is written against real, verified
-API calls (the exact same calls already proven correct and run for real
-in the numbers above) but has not been executed as criterion code in
-this sandbox — same status `bench-vs-c-libs.yml`-style CI-only benches
-elsewhere in this project start at. The Instant-based numbers in this
-doc are the real, actually-executed result it's expected to reproduce
-once it runs for real on CI.
+`benches/vs_arena_crates.rs` has since run for real on CI (rustc 1.98.0,
+`workflow_dispatch` run #3 — see "Real CI benchmark results" above). It
+took three attempts to get a clean run: the first two failed on workflow
+infrastructure (a cache-key collision with four unrelated workflows in
+this repo, then a caching-the-toolchain-binary issue), not on anything
+in this crate's own code — both fixed in
+`.github/workflows/bench-vs-c-arena-libs.yml` directly, nothing here
+needed to change. Worth naming plainly rather than glossing over: the
+Instant-based sandbox numbers earlier in this doc turned out to disagree
+with the real run on at least one real conclusion (the `SlotArena`
+insert-time "surprise"), which is exactly why they're kept, labeled, and
+superseded rather than quietly replaced.
 
 ## Relationship to `mid-collections`' `GenerationalIndex`
 
@@ -289,8 +365,17 @@ letting the two docs read as if they'd never noticed the tension.
 
 ## Feature gates (planned, not yet built)
 
-- **`compact`** — a `slotmap`-style unsafe union slot layout. Directly
-  motivated by the insert-time gap logged above, not speculative.
+- **`compact`** — a `slotmap`-style unsafe union slot layout. Originally
+  justified in this doc by an insert-time gap that the real CI run ("Real
+  CI benchmark results" above) showed wasn't actually there — `SlotArena`
+  ties `slotmap` and sits inside the same band as its other true peers,
+  so this isn't closing a speed gap. Still worth building, on a narrower
+  and more honest justification: memory footprint (`Slot<T>`'s enum
+  discriminant, even where it fits inside existing alignment padding for
+  free as measured above, doesn't always — a union layout removes that
+  dependence on `T`'s own alignment for `Vacant`/`Occupied` to share
+  space for free), not a performance claim this doc can no longer back
+  with a real number.
 - **`bump`** — Linked-Arena-Chunks bump allocator
   (`bumpalo`/`typed-arena`/`tsoding-arena`'s shared approach), for
   insert-heavy, rarely-freed workloads. Both the Rust and the C survey
