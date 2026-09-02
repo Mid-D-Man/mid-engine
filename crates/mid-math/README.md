@@ -27,10 +27,14 @@ one file per numeric family (`f32.rs`, `f64.rs`, ...) just invokes those macros
 once per concrete type in that family.
 
 So far: **f32** (`Vec2`, `Vec3` × every backend, `Vec4` × every backend),
-**f64** (`DVec3`, `DVec2` × every backend, `DVec4` × every backend), and all
-8 narrow int families (**i8/u8/i16/u16/i32/u32/i64/u64**, all always-scalar
-and canonical, no backend split). Queued next: wide/int + wide/float
-axis-shuffles, then mint.
+**f64** (`DVec3`, `DVec2` × every backend, `DVec4` × every backend), all 8
+narrow int families (**i8/u8/i16/u16/i32/u32/i64/u64**, all always-scalar and
+canonical, no backend split), and the wide SIMD types — **axis-swizzle**
+(`Vec3AxisSwizzle`, same-width-only) for `Vec3x4`/`Vec3x8`, and
+**lane-shuffle** (`LaneShuffle4`/`8`/`16`/`32`) for the opaque single-register
+wide types (`f32x4`, `i32x4`/`u32x4`/`i16x8`/`u16x8`/`i8x16`/`u8x16`, and
+AVX2's wider additions). No `QuatX4` — matches this crate's existing scope,
+`Quat`/`DQuat` never got swizzle either. Queued next: mint.
 
 ### Boolean masks
 `BVec2` `BVec3` `BVec4`
@@ -175,3 +179,8 @@ cargo bench --bench vs_all  -p mid-math
    could do same-width swizzles in one shuffle instruction instead (glam's approach) — needs each
    backend's shuffle-immediate encoding and `Vec3`'s padding-lane behaviour verified with a real
    compiler before it's safe to generate across ~500+ call sites per backend
+7. `LaneShuffle4/8/16/32::shuffle()` takes a runtime `[usize; N]` (checked via `to_array()` +
+   indexing, not a single shuffle instruction) for the same no-compiler reason as #6 — a
+   const-generic-per-lane version (mirroring how `_mm_shuffle_ps`/`i32x4_shuffle` themselves take
+   compile-time lane indices) would let the compiler fold `shuffle()` into one instruction for a
+   fixed permutation known at compile time, instead of an array build + indirect indexing

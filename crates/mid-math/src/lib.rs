@@ -94,9 +94,12 @@ pub use bvec::{BVec2, BVec3, BVec4};
 
 // ── Swizzle ───────────────────────────────────────────────────────────────────
 // Import one of these to get `.xy()`/`.xzy()`/`.wzyx()`-style component-permutation
-// getters and `.with_xy(rhs)`/`.with_xyz(rhs)`-style setters. See `swizzle/mod.rs`
-// for the full convention and what's covered so far.
+// getters and `.with_xy(rhs)`/`.with_xyz(rhs)`-style setters, or (for the wide SIMD
+// types) axis-swizzle / lane-shuffle. See `swizzle/mod.rs` for the full convention
+// and what's covered so far.
 pub use swizzle::{Vec2Swizzles, Vec3Swizzles, Vec4Swizzles};
+pub use swizzle::Vec3AxisSwizzle;
+pub use swizzle::{LaneShuffle4, LaneShuffle8, LaneShuffle16, LaneShuffle32};
 
 // ── Integer vectors (i8 / u8) ─────────────────────────────────────────────────
 pub use int8::{I8Vec2, I8Vec3, I8Vec4, U8Vec2, U8Vec3, U8Vec4};
