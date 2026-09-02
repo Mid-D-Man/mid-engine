@@ -13,24 +13,30 @@ on a decision that has not been made yet, and is written that way on purpose.
 
 ## 1. Workspace Structure
 
-mid-engine is meant to be one Cargo workspace: 14 crates under `crates/`,
-already wired together with `path = "../..."` dependencies (`mid-anim` on
+mid-engine is a real Cargo workspace: `[workspace]`, `resolver = "2"`, 20
+members under `crates/`, `benches/`, and `examples/`, already wired
+together with `path = "../.."`-style dependencies (`mid-anim` on
 `mid-math`, `mid-app` on `mid-ecs`, `mid-ecs` on `mid-collections` and
-`mid-math`, `mid-physics` on `mid-math` and `mid-geom`, and more). Right now
-there is no `[workspace]` manifest anywhere in the repo, and the file sitting
-at the repo root as `Cargo.toml` is a stale near-duplicate of
-`crates/mid-math/Cargo.toml` (same package name, same version, same bench
-list) that predates mid-math's move into `crates/`. Building at the repo
-root right now tries to rebuild mid-math a second time, from paths that do
-not exist there.
+`mid-math`, `mid-physics` on `mid-math` and `mid-geom`, and more). The
+root `Cargo.toml` also carries a growing block of real, dated comments
+documenting every per-crate MSRV/toolchain wall found so far (rayon on
+`mid-ecs`, `web-transport-quinn` on `mid-net-transport-quinn`, the
+`edition2024`-via-criterion wall on `mid-collections`/`mid-arena`, and
+others) — read those before assuming a bare `cargo build`/`cargo test`
+with no `-p` flag will resolve cleanly; several members deliberately
+need a newer toolchain than this project's rustc-1.75 floor, and the
+comments say exactly which ones and why.
 
-Once this is set up as a real workspace, the root `Cargo.toml` becomes:
+What the workspace does not have yet: a `[workspace.lints]` table or a
+`[workspace.dependencies]` table. Every crate currently repeats its own
+lint configuration (where it has one at all) and pins its own dependency
+versions independently — the exact kind of drift that already happened
+once with `mid-math`'s own `glam` dev-dependency going five minor
+releases stale before anyone noticed. Adding these two tables is still
+worth doing; nothing about them requires the workspace itself to be
+created first, since it already exists:
 
 ```toml
-[workspace]
-resolver = "2"
-members = ["crates/*"]
-
 [workspace.package]
 edition = "2021"
 license = "MIT OR Apache-2.0"
@@ -44,12 +50,10 @@ undocumented_unsafe_blocks = "warn"
 ```
 
 A crate opts into the shared lint table with `[lints] workspace = true`
-instead of repeating the list. `[workspace.dependencies]` holds one pinned
-version for anything more than one crate depends on (`glam` for
-benchmarking, `criterion`, and so on), so a version bump happens once at the
-workspace level instead of drifting crate by crate. That is the exact kind
-of drift that already happened once with mid-math's own `glam` dev-dependency going
-five minor releases stale before anyone noticed.
+instead of repeating the list. `[workspace.dependencies]` holds one
+pinned version for anything more than one crate depends on (`glam` for
+benchmarking, `criterion`, and so on), so a version bump happens once at
+the workspace level instead of drifting crate by crate.
 
 ## 2. Feature Gating
 
@@ -150,10 +154,10 @@ between.
 
 ## 6. Still Open
 
-- Whether to set up the real `[workspace]` now or later (section 1). This
-  changes what `[workspace.lints]`/`[workspace.dependencies]` actually look
-  like once it happens, so it's worth deciding before those get written
-  down as settled.
+- Whether to add `[workspace.lints]`/`[workspace.dependencies]` now or
+  keep deferring (section 1). The workspace itself already exists; this
+  is just about whether to centralize lints and shared dependency
+  versions yet.
 - Whether every crate that could reasonably split an `ffi` feature out
   (mid-collections and mid-math already do; anything else with a sizeable
   `ffi.rs`/`ffi/` is a candidate) should, or whether mid-ecs's
