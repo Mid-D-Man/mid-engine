@@ -2,7 +2,8 @@
 
 SIMD-optimised math library for Mid Engine. Feature-complete for engine v1.
 
-No external runtime dependencies. `no_std`-compatible core. C-ABI exports for every type.
+No required external runtime dependencies (one opt-in exception: `mint`, behind the
+`mint` feature — see below). `no_std`-compatible core. C-ABI exports for every type.
 
 ---
 
@@ -34,7 +35,7 @@ canonical, no backend split), and the wide SIMD types — **axis-swizzle**
 **lane-shuffle** (`LaneShuffle4`/`8`/`16`/`32`) for the opaque single-register
 wide types (`f32x4`, `i32x4`/`u32x4`/`i16x8`/`u16x8`/`i8x16`/`u8x16`, and
 AVX2's wider additions). No `QuatX4` — matches this crate's existing scope,
-`Quat`/`DQuat` never got swizzle either. Queued next: mint.
+`Quat`/`DQuat` never got swizzle either. See mint below for the interop layer.
 
 ### Boolean masks
 `BVec2` `BVec3` `BVec4`
@@ -110,6 +111,25 @@ Vectors: `Fixed8Vec2/3` `Fixed12Vec2/3` `Fixed16Vec2/3`
 `lerp` `smoothstep` `remap` `saturate` `approx_eq` — scalar helpers.
 
 ---
+
+## mint (optional — `mint` feature)
+`Into`/`From` conversions to and from the real [`mint`](https://crates.io/crates/mint)
+crate — not a vendored lookalike. mint's entire value is being a *shared* type other
+crates (nalgebra, ultraviolet, glam, most glTF/asset-loading crates) already depend
+on, so a caller holding a real `mint::Vector3<f32>` from any of those can hand it
+straight to mid-math and back — a local reimplementation would be a different Rust
+type and satisfy nobody's `Into<mint::X>` bound. Confirmed genuinely tiny before
+adding it (318 lines, `#![no_std]`, only optional dep is `serde`) — negligible cost
+either way.
+
+Covers `Point2`/`Point3` + `Vector2`/`Vector3`/`Vector4` for every numeric family
+(f32/f64 + all 8 narrow int families), plus `Quaternion` and both `Row`- and
+`Column`-major `Matrix2`/`3`/`4` for f32/f64 only — no integer quaternion or matrix
+conversions, matching what the real `mint` crate itself and glam's own mint support
+both actually cover. `src/features/mint_conversions/` — `vectors.rs` (one shared
+macro, all 10 families) + `f32.rs`/`f64.rs` (hand-written — `Mat2`/`Mat3`/`Mat4`
+don't share one internal shape closely enough for one macro to fit all three; see
+that file's own doc comment for the specifics).
 
 ## C FFI
 

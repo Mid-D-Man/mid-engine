@@ -1,2 +1,4 @@
 //! Programmatic feature flags and extensions
-// Auto-generated stub
+
+#[cfg(feature = "mint")]
+mod mint_conversions;

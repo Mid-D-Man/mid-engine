@@ -20,6 +20,7 @@ pub mod storage;
 pub mod bvec;
 pub mod deref;
 pub mod swizzle;
+mod features;
 pub mod f32;
 pub mod f64;
 pub mod ffi;
