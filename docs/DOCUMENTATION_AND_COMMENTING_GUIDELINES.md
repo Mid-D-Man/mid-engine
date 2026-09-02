@@ -10,11 +10,12 @@ These rules are written for your own projects. If a repo ever picks up outside c
 
 - Favor modular sub-files over one large file. If a file is doing more than one clear job, split it.
 - Group related sub-files under a module folder instead of piling unrelated logic into a single source file.
-- Every crate or package gets exactly one documentation file for itself: `docs/<CRATE_NAME>.md`, living inside that crate's own directory, not a shared repo-wide docs folder.
+- Every crate or package gets a documentation file for itself: `docs/<CRATE_NAME>.md`, living inside that crate's own directory, not a shared repo-wide docs folder.
+- If a crate has enough files that one doc file gets unwieldy, split the documentation by part instead of forcing everything into a single file. See section 4 for how that's structured.
 
 ## 2. Top-of-File Notice Header
 
-Every source file opens with a short header pointing to where its real documentation lives. Make it visible, not buried three lines down where it'll get skipped.
+Every source file opens with a short header pointing to where its real documentation lives. Point it at whichever file actually holds that file's section: the crate's single doc file for a normal crate, or the specific part file for a crate that's been split. Make it visible, not buried three lines down where it'll get skipped.
 
 Template (swap the comment token for the language: `//` for Rust, C#, JS, TS, C-family; `#` for Python, shell, TOML):
 
@@ -25,12 +26,21 @@ Template (swap the comment token for the language: `//` for Rust, C#, JS, TS, C-
 // ============================================================================
 ```
 
-Filled-in example, from mid-math:
+Filled-in example, single-doc crate (mid-math):
 
 ```rust
 // ============================================================================
 // NOTICE: Full documentation, design decisions, and fix history for this file
 // live in docs/mid-math.md, section "mid_vec.rs"
+// ============================================================================
+```
+
+Filled-in example, split-doc crate (dixscript, Go wrapper file):
+
+```rust
+// ============================================================================
+// NOTICE: Full documentation, design decisions, and fix history for this file
+// live in docs/dixscript/wrappers-go.md, section "go_wrapper.rs"
 // ============================================================================
 ```
 
@@ -64,7 +74,9 @@ if arr.len() >= SIMD_THRESHOLD {
 
 ## 4. The Crate Documentation File
 
-Path: `docs/<CRATE_NAME>.md`, one per crate.
+### Default: one file per crate
+
+Path: `docs/<CRATE_NAME>.md`.
 
 Structure, top to bottom:
 
@@ -76,7 +88,7 @@ Structure, top to bottom:
 - Benchmark results, if there's a corresponding bench file (link it, summarize the numbers)
 - Tests, if any (link the test file, note what it covers)
 
-**CI and Workflows** - list the `.yml` and relevant `.py` workflow files relevant to this crate and what each one checks: build, test, publish, bench runs, whatever applies.
+**CI and Workflows** - list the `.yml` workflow files relevant to this crate and what each one checks: build, test, publish, bench runs, whatever applies. If a workflow depends on a helper script, commonly a `.py` file under a root-level `scripts/` directory, reference that script too: path and what it does.
 
 **Fixes and Problems** - always the last section in the file. A log of bugs found, fixes made, and problems run into, organized by file so each one is easy to locate. New entries go under the file they belong to.
 
@@ -106,12 +118,62 @@ edge cases at N = 0 and N = 1.
 ## CI and Workflows
 
 - `.github/workflows/mid-math-ci.yml` - build and test on push
-- `.github/workflows/mid-math-bench.yml` - runs the benchmark suite, posts results
+- `.github/workflows/mid-math-bench.yml` - runs the benchmark suite, posts
+  results. Depends on `scripts/plot_bench.py` to turn raw numbers into a chart.
 
 ## Fixes and Problems
 
 ### `mid_vec.rs`
 - Fixed a double-free at N = 0 (uninitialized union member was being dropped).
+```
+
+### Large crates: splitting by part
+
+Once a crate has grown enough files that a single doc file becomes hard to navigate, split it by part instead. A "part" is whatever subsystem grouping already exists in the code, for example dixscript's wrappers versus its LSP versus its compiler.
+
+Layout:
+
+- `docs/<CRATE_NAME>.md` becomes the index. It keeps the crate-level Overview, a short list of parts with a one-line description and a link to each part file, and the full CI and Workflows section (crate-wide workflows and any root scripts they depend on).
+- `docs/<CRATE_NAME>/<PART_NAME>.md` holds one part's own Modules section (same per-file structure as above, scoped to files in that part) and its own Fixes and Problems section at the bottom, scoped to that part's files. If a workflow only touches that part, reference it here too, in addition to the index.
+
+Index skeleton:
+
+```markdown
+# dixscript
+
+## Overview
+Multi-language scripting and configuration runtime with LSP support.
+
+## Parts
+
+- [Language wrappers](dixscript/wrappers.md) - Go, Odin, and Lua bindings
+- [LSP](dixscript/lsp.md) - hover, completion, diagnostics, formatting
+- [Compiler](dixscript/compiler.md) - parser, type checker, codegen
+
+## CI and Workflows
+
+- `.github/workflows/dixscript-publish.yml` - publishes the crate to crates.io
+```
+
+Part file skeleton (`docs/dixscript/wrappers.md`):
+
+```markdown
+# dixscript: language wrappers
+
+## Modules
+
+### `go_wrapper.rs`
+**What it does:** Go language bindings for the dixscript runtime.
+
+**Decisions:**
+- ...
+
+**Tests:** `tests/go_wrapper_tests.rs`
+
+## Fixes and Problems
+
+### `go_wrapper.rs`
+- ...
 ```
 
 ## 5. Writing Style
@@ -124,7 +186,7 @@ edge cases at N = 0 and N = 1.
 
 When you touch a file:
 
-1. Check whether its crate has a `docs/<CRATE_NAME>.md` file. If not, create one.
+1. Check whether its crate has documentation covering it: a single `docs/<CRATE_NAME>.md`, or, for a split crate, the relevant `docs/<CRATE_NAME>/<PART_NAME>.md`. If neither exists yet, create the appropriate one.
 2. Check whether that file has its own section in the doc. If not, add one.
 3. Clean up comments in the file you touched, following the rules above. Don't sweep the rest of the crate unless that's explicitly asked for.
-4. If the file you're editing has fix history, decision notes, or problem logs sitting in its comments, move that content into the doc file's Fixes and Problems section (or the relevant module section) and strip it out of the source.
+4. If the file you're editing has fix history, decision notes, or problem logs sitting in its comments, move that content into the doc's Fixes and Problems section (or the relevant module section) and strip it out of the source.
