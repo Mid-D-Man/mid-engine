@@ -1,0 +1,29 @@
+[package]
+name        = "mid-alloc"
+version     = "0.1.0"
+edition     = "2021"
+description = "Composable allocator strategies for Mid Engine (stack/pool/fallback/segregator/tracking), built from a real survey of foonathan/memory (C++) and the Rust GlobalAlloc-adapter ecosystem (dhat, mod-alloc). See docs/mid-alloc.md."
+
+[lib]
+name       = "mid_alloc"
+crate-type = ["lib"]
+
+[dependencies]
+# Intentionally empty for the default build -- same zero-mandatory-dep
+# stance as mid-arena/mid-collections, same reason (low in the
+# dependency graph, wasm32-reachable).
+
+[dev-dependencies]
+# None yet. First real module (stack_allocator) ships with plain
+# #[test]s, same sequencing mid-arena/mid-collections both used: verify
+# on this project's rustc-1.75 floor for real before criterion (if a
+# bench is ever added here) closes that window the same way it did for
+# both of those.
+
+[features]
+default = []
+# Planned, not yet built -- see docs/mid-alloc.md "Module plan".
+# pool       = []
+# fallback   = []
+# segregator = []
+# tracking   = []
