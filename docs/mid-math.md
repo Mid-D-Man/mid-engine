@@ -153,3 +153,28 @@ API-documentation gaps, not stylistic), `should_implement_trait`
 (same family of lint this project's own `mid-collections` fix already
 dealt with once this cycle). A dedicated pass, not something to fix
 inline here.
+
+## Fixes and Problems
+
+### `f32/vec2.rs`, `f32/{scalar,sse2,neon,wasm,coresimd}/vec3.rs`, `f32/{scalar,sse2,neon,wasm,coresimd}/vec4.rs`
+
+The move to the `swizzle/` module directory (see that module's own top
+comment) left the old per-type macro invocations behind in these 11
+files. Both the old and new locations invoked
+`impl_vec2_swizzle!`/`impl_vec3_swizzle!`/`impl_vec4_swizzle!` for the
+same concrete types, a conflicting trait implementation (`E0119`) that
+blocked every build touching `mid-math`, including real CI runs with
+nothing to do with swizzle at all. Fixed by deleting the 11 old
+invocations, each a standalone `crate::impl_vecN_swizzle!(...)` call
+under a `// ── Swizzle ──` header and nothing else in the block, since
+`swizzle/f32.rs` already covers every one of those types across every
+backend. Verified with a direct test exercising `.xy()`/`.xyz()`/
+`.xyzw()` on real `Vec2`/`Vec3`/`Vec4` values after the fix, not just a
+clean build. Full `cargo test -p mid-math --lib` still passes 659/659
+afterward.
+
+Also noticed while running the full suite, unrelated to this fix: 5 of
+the crate's doctests fail to compile (`camera/frustum.rs`,
+`color/color32.rs`, `fixed/mod.rs`, `helpers/euler.rs`, `noise/fbm.rs`),
+each missing an import or referencing an undefined variable in the
+example code itself. Pre-existing, not touched here.
