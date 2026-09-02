@@ -197,6 +197,70 @@ impl<I: SparseSetIndex, T> SparseSet<I, T> {
         Some(&mut self.dense_values[pos])
     }
 
+    /// Fetches mutable references to the values for two *different* keys
+    /// at once, without removing either one.
+    ///
+    /// This exists specifically so a caller needing to mutate two
+    /// entries simultaneously (e.g. `mid-ecs`'s archetype migration,
+    /// which needs the "from" and "to" `Archetype` at the same time)
+    /// doesn't have to `remove` both and `insert` them back afterward
+    /// just to satisfy the borrow checker — that round trip is real,
+    /// measurable overhead (two swap-removes plus two dense-array
+    /// pushes, every single call) for something that, once you actually
+    /// have two known-distinct dense positions, is just a slice split.
+    ///
+    /// Grounded directly in `bevy_ecs`'s own real source
+    /// (`Mid-D-Man/bevy`, `crates/bevy_ecs/src/archetype.rs`'s
+    /// `Archetypes::get_maybe_disjoint_mut`, read directly): bevy stores
+    /// its archetypes in a plain `Vec` and reaches into it at two
+    /// indices via `get_disjoint_unchecked_mut`, `unsafe` specifically
+    /// to skip the bounds/order checks. This does the equivalent split
+    /// using `[T]::split_at_mut` instead — **zero new `unsafe`** —
+    /// matching this crate's own established zero-unsafe-by-default
+    /// precedent (see `mid-ecs/src/archetype.rs`'s top doc comment for
+    /// the same reasoning applied there). `split_at_mut` already proves
+    /// the two halves don't alias; once `key_a`'s and `key_b`'s dense
+    /// positions are known distinct (checked by value up front, not by
+    /// pointer), splitting at the larger position and indexing into
+    /// each half is enough — no need to reach for `unsafe` just to get
+    /// the same guarantee `split_at_mut` already gives for free.
+    ///
+    /// Returns `(None, None)` for either key not present. If `key_a` and
+    /// `key_b` compare equal (by `sparse_index()`), returns the single
+    /// reference as `(Some(_), None)` rather than attempting to hand out
+    /// two live mutable references to the same slot — matches
+    /// `bevy_ecs`'s own `get_maybe_disjoint_mut` convention for the
+    /// same-key case exactly.
+    pub fn get_disjoint_mut(&mut self, key_a: I, key_b: I) -> (Option<&mut T>, Option<&mut T>) {
+        if key_a.sparse_index() == key_b.sparse_index() {
+            return (self.get_mut(key_a), None);
+        }
+        match (self.dense_index_of(key_a), self.dense_index_of(key_b)) {
+            (Some(pos_a), Some(pos_b)) => {
+                let (lo, hi, a_is_lo) = if pos_a < pos_b {
+                    (pos_a, pos_b, true)
+                } else {
+                    (pos_b, pos_a, false)
+                };
+                // `hi` is strictly greater than `lo` (keys compared
+                // unequal above, and dense positions for distinct live
+                // keys are themselves always distinct), so `hi` is a
+                // valid split point strictly inside the slice and
+                // `right[0]` always exists.
+                let (left, right) = self.dense_values.split_at_mut(hi);
+                let (lo_ref, hi_ref) = (&mut left[lo], &mut right[0]);
+                if a_is_lo {
+                    (Some(lo_ref), Some(hi_ref))
+                } else {
+                    (Some(hi_ref), Some(lo_ref))
+                }
+            }
+            (Some(pos_a), None) => (Some(&mut self.dense_values[pos_a]), None),
+            (None, Some(pos_b)) => (None, Some(&mut self.dense_values[pos_b])),
+            (None, None) => (None, None),
+        }
+    }
+
     /// Inserts `value` under `key`. If `key` was already present, its
     /// value is replaced in place (no structural change, no effect on
     /// dense ordering) and the old value is returned — matching
@@ -627,5 +691,70 @@ mod tests {
         assert_eq!(s.remove(e1), Some("one"));
         assert_eq!(s.get(e2), Some(&"two"));
         assert!(!s.contains(e1));
+    }
+
+    #[test]
+    fn get_disjoint_mut_returns_both_in_either_dense_order() {
+        let mut s = SparseSet::new();
+        s.insert(1u32, 10);
+        s.insert(2u32, 20);
+        s.insert(3u32, 30);
+        // key 1's dense position (0) < key 3's (2) here -- also cover the
+        // reverse case below so both branches of the lo/hi split run.
+        let (a, b) = s.get_disjoint_mut(1, 3);
+        assert_eq!(a, Some(&mut 10));
+        assert_eq!(b, Some(&mut 30));
+
+        let (a, b) = s.get_disjoint_mut(3, 1);
+        assert_eq!(a, Some(&mut 30));
+        assert_eq!(b, Some(&mut 10));
+    }
+
+    #[test]
+    fn get_disjoint_mut_actually_gives_independently_mutable_references() {
+        let mut s = SparseSet::new();
+        s.insert(1u32, 10);
+        s.insert(2u32, 20);
+        {
+            let (a, b) = s.get_disjoint_mut(1, 2);
+            *a.unwrap() += 1;
+            *b.unwrap() += 2;
+        }
+        assert_eq!(s.get(1), Some(&11));
+        assert_eq!(s.get(2), Some(&22));
+    }
+
+    #[test]
+    fn get_disjoint_mut_same_key_twice_returns_single_reference_not_two() {
+        let mut s = SparseSet::new();
+        s.insert(1u32, 10);
+        let (a, b) = s.get_disjoint_mut(1, 1);
+        assert_eq!(a, Some(&mut 10));
+        assert_eq!(b, None);
+    }
+
+    #[test]
+    fn get_disjoint_mut_missing_key_or_keys_returns_none_for_each() {
+        let mut s = SparseSet::new();
+        s.insert(1u32, 10);
+        assert_eq!(s.get_disjoint_mut(1, 99), (Some(&mut 10), None));
+        assert_eq!(s.get_disjoint_mut(99, 1), (None, Some(&mut 10)));
+        assert_eq!(s.get_disjoint_mut(98, 99), (None, None));
+    }
+
+    #[test]
+    fn get_disjoint_mut_after_a_swap_remove_still_resolves_correctly() {
+        // Forces dense positions to actually move (swap-remove fixes up
+        // whichever key got swapped into the removed slot) before
+        // exercising get_disjoint_mut, so this isn't just testing the
+        // freshly-inserted, positions-match-insertion-order case.
+        let mut s = SparseSet::new();
+        s.insert(1u32, 10);
+        s.insert(2u32, 20);
+        s.insert(3u32, 30);
+        assert_eq!(s.remove(1), Some(10)); // swaps key 3 into slot 0
+        let (a, b) = s.get_disjoint_mut(3, 2);
+        assert_eq!(a, Some(&mut 30));
+        assert_eq!(b, Some(&mut 20));
     }
 }

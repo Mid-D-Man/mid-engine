@@ -160,11 +160,148 @@ fn bench_iterate_values(c: &mut Criterion) {
     group.finish();
 }
 
+/// Real motivation: `mid-ecs`'s `Archetypes::take_two`/`give_back_two`
+/// (crates/mid-ecs/src/archetype.rs) needs two `&mut Archetype`s at once
+/// for every structural change (insert/remove component), and currently
+/// gets them by `remove`-ing both out of the `SparseSet<ArchetypeId,
+/// Archetype>` and `insert`-ing them back afterward -- two swap-removes
+/// plus two dense-array pushes, every single call, purely to satisfy the
+/// borrow checker, not because the archetypes actually need to move.
+/// `bevy_ecs`'s own equivalent (`Archetypes::get_maybe_disjoint_mut`,
+/// read directly from `Mid-D-Man/bevy`) avoids this entirely -- a plain
+/// `Vec` plus a disjoint-index split, zero data movement. This group
+/// measures that exact difference: `remove`+`remove`+`insert`+`insert`
+/// vs the new `get_disjoint_mut` (`split_at_mut`-based, zero new
+/// `unsafe`), repeatedly fetching the SAME two keys (the real access
+/// pattern -- a game hammering the same two archetypes during
+/// structural churn, not a random pair each time) out of a set sized
+/// like a realistic archetype count, not this file's other groups'
+/// component-count scale.
+const ARCHETYPE_COUNTS: [u32; 3] = [16, 64, 256];
+
+/// Stand-in for the real `Archetype` struct's own size (216 bytes,
+/// measured directly via `std::mem::size_of::<Archetype>()` in
+/// mid-ecs -- `Archetype` itself isn't `pub`, so this bench can't name
+/// it directly; matching its byte size is what matters for a realistic
+/// swap-remove/push cost, not the exact field layout). A bare `u32`
+/// value (the other groups' choice) would understate the real
+/// move/copy cost of `remove`+`insert` shuffling something this size
+/// around, so this group repeats the same comparison at the size that
+/// actually matters for the `take_two`/`give_back_two` call site.
+#[derive(Clone, Copy)]
+struct ArchetypeSized {
+    _bytes: [u8; 216],
+}
+
+impl ArchetypeSized {
+    fn new(seed: u8) -> Self {
+        Self {
+            _bytes: [seed; 216],
+        }
+    }
+    // Touches one byte so the compiler can't fold the whole 216-byte
+    // value away as dead weight -- same reasoning as the `u32` group's
+    // `+= 1`.
+    fn touch(&mut self) {
+        self._bytes[0] = self._bytes[0].wrapping_add(1);
+    }
+}
+
+fn populated_archetype_sized_set(n: u32) -> SparseSet<u32, ArchetypeSized> {
+    let mut s = SparseSet::with_capacity(n as usize);
+    for i in 0..n {
+        s.insert(i, ArchetypeSized::new(i as u8));
+    }
+    s
+}
+
+fn bench_two_at_once_archetype_sized(c: &mut Criterion) {
+    let mut group = c.benchmark_group("two_at_once_archetype_sized");
+    for &n in &ARCHETYPE_COUNTS {
+        group.throughput(Throughput::Elements(1));
+        let key_a = n / 4;
+        let key_b = (n * 3) / 4;
+
+        let mut s_remove_reinsert = populated_archetype_sized_set(n);
+        group.bench_with_input(BenchmarkId::new("remove_then_reinsert", n), &n, |b, _| {
+            b.iter(|| {
+                let mut val_a = s_remove_reinsert.remove(key_a).unwrap();
+                let mut val_b = s_remove_reinsert.remove(key_b).unwrap();
+                val_a.touch();
+                val_b.touch();
+                s_remove_reinsert.insert(key_a, val_a);
+                s_remove_reinsert.insert(key_b, val_b);
+            });
+        });
+
+        let mut s_disjoint = populated_archetype_sized_set(n);
+        group.bench_with_input(BenchmarkId::new("get_disjoint_mut", n), &n, |b, _| {
+            b.iter(|| {
+                let (a, b) = s_disjoint.get_disjoint_mut(key_a, key_b);
+                a.unwrap().touch();
+                b.unwrap().touch();
+            });
+        });
+    }
+    group.finish();
+}
+
+fn bench_two_at_once(c: &mut Criterion) {
+    let mut group = c.benchmark_group("two_at_once");
+    for &n in &ARCHETYPE_COUNTS {
+        group.throughput(Throughput::Elements(1));
+        // Two keys roughly a quarter and three-quarters of the way
+        // through the set -- neither at an edge, matching how real
+        // archetype ids for a churning entity aren't reliably first or
+        // last.
+        let key_a = n / 4;
+        let key_b = (n * 3) / 4;
+
+        // Persistent set, mutated in place across every sample -- NOT
+        // `iter_batched` with fresh O(n) setup per iteration, which
+        // would let the setup cost dominate a measurement this small
+        // and defeat the point. `remove_then_reinsert` restores the
+        // same two keys every cycle (positions of OTHER elements drift
+        // as swap-remove reshuffles them, same as the real workload
+        // this models -- structural churn that keeps evolving, not a
+        // fixed snapshot replayed identically), so reusing one set
+        // across all samples is both cheaper and more representative,
+        // not just a shortcut.
+        let mut s_remove_reinsert = populated_sparse_set(n);
+        group.bench_with_input(BenchmarkId::new("remove_then_reinsert", n), &n, |b, _| {
+            b.iter(|| {
+                let val_a = s_remove_reinsert.remove(key_a).unwrap();
+                let val_b = s_remove_reinsert.remove(key_b).unwrap();
+                // Real call sites mutate the two values here
+                // (migrating columns) -- represented as a trivial
+                // touch so the compiler can't elide the whole
+                // thing, without adding unrelated cost.
+                let val_a = black_box(val_a) + 1;
+                let val_b = black_box(val_b) + 1;
+                s_remove_reinsert.insert(key_a, val_a);
+                s_remove_reinsert.insert(key_b, val_b);
+            });
+        });
+
+        let mut s_disjoint = populated_sparse_set(n);
+        group.bench_with_input(BenchmarkId::new("get_disjoint_mut", n), &n, |b, _| {
+            b.iter(|| {
+                let (a, b) = s_disjoint.get_disjoint_mut(key_a, key_b);
+                *a.unwrap() += 1;
+                *b.unwrap() += 1;
+            });
+        });
+    }
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_insert,
     bench_get_existing,
     bench_remove_all,
-    bench_iterate_values
+    bench_iterate_values,
+    bench_two_at_once,
+    bench_two_at_once_archetype_sized
 );
 criterion_main!(benches);
