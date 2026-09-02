@@ -53,6 +53,17 @@
 # Real tests were still run and verified before this dependency was added
 # (18/18, see docs/mid-collections.md) -- this note is about local
 # re-verification going forward, not about doubting that earlier result.
+# NOTE on mid-arena's bench (criterion dev-dependency, added when
+# vs_arena_crates was written): same edition2024 wall as every note
+# above -- confirmed directly, fails at clap_builder's manifest on
+# rustc 1.75. A SIXTH independent instance of this exact class of
+# ordinary upstream MSRV drift. Same real regression as mid-collections
+# took, same reason, not re-litigated -- `cargo test -p mid-arena` alone
+# now needs the newer toolchain too, not just `--bench`. Real tests were
+# run and verified BEFORE this dependency was added (16/16, see
+# docs/mid-arena.md) -- same sequencing mid-collections used, same
+# reason: verify everything the current toolchain still can, before
+# adding the thing that closes that window.
 members = [
     "crates/mid-log",
     "crates/mid-net",
@@ -64,11 +75,12 @@ members = [
     "crates/mid-net/transport-wasm/wasm-test-server",
     "crates/mid-ecs",
     "crates/mid-collections",
+    "crates/mid-arena",
+    "crates/mid-alloc",
     "crates/mid-math",
     "crates/mid-geom",
     "crates/mid-common",
     "crates/mid-trace",
-    "crates/mid-arena",
     "tools/mdix-compiler",
     "examples/headless-server",
       # New this pass (docs/roadmap.md, "What can be built in parallel"):
