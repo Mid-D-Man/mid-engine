@@ -1,18 +1,18 @@
 // crates/mid-arena/benches/vs_arena_crates.rs
-//! mid-arena's own `SlotArena<T>` against the 10 real Rust arena crates
-//! actually surveyed and benched for docs/mid-arena.md — same N, same
-//! payload shape, same operations, converted from the `std::time::Instant`
-//! version that produced that doc's recorded numbers (criterion itself
-//! can't run in this project's rustc-1.75 sandbox — clap_builder needs
-//! edition2024, this crate's own Cargo.toml comment — so this file is
-//! written against real, verified API calls but has not itself been run
-//! yet; the Instant-based numbers in docs/mid-arena.md are the real,
-//! actually-executed result this bench is expected to reproduce on a
-//! real CI run).
+//! mid-arena's own `SlotArena<T>` (and `BumpArena<T>`, behind the `bump`
+//! feature — run with `--features bump` to include it) against the 10
+//! real Rust arena crates actually surveyed and benched for
+//! docs/mid-arena.md — same N, same payload shape, same operations,
+//! converted from the `std::time::Instant` version that produced that
+//! doc's recorded SlotArena numbers. `BumpArena`'s entries here were
+//! never run through the Instant-based version first; they're written
+//! directly against the same real, unit-tested API (25/25 tests passing,
+//! docs/mid-arena.md's "What's built") rather than ported from a
+//! sandbox pass that doesn't exist for this one.
 //!
 //! Run
 //! ---
-//!   cargo bench --bench vs_arena_crates -p mid-arena
+//!   cargo bench --bench vs_arena_crates -p mid-arena --features bump
 
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 
@@ -123,6 +123,17 @@ fn bench_insert(c: &mut Criterion) {
             let arena: typed_arena::Arena<Payload> = typed_arena::Arena::with_capacity(N);
             for i in 0..N {
                 black_box(arena.alloc(payload(i)));
+            }
+            arena
+        })
+    });
+
+    #[cfg(feature = "bump")]
+    g.bench_function("mid-arena/BumpArena", |b| {
+        b.iter(|| {
+            let arena: mid_arena::BumpArena<Payload> = mid_arena::BumpArena::with_capacity(N);
+            for i in 0..N {
+                arena.alloc(payload(i));
             }
             arena
         })
@@ -266,6 +277,21 @@ fn bench_get(c: &mut Criterion) {
         let arena: typed_arena::Arena<Payload> = typed_arena::Arena::with_capacity(N);
         let refs: Vec<&mut Payload> = (0..N).map(|i| arena.alloc(payload(i))).collect();
         g.bench_function("typed-arena", |b| {
+            b.iter(|| {
+                let mut sum = 0u64;
+                for r in &refs {
+                    sum = sum.wrapping_add(r.a);
+                }
+                black_box(sum)
+            })
+        });
+    }
+
+    #[cfg(feature = "bump")]
+    {
+        let arena: mid_arena::BumpArena<Payload> = mid_arena::BumpArena::with_capacity(N);
+        let refs: Vec<&mut Payload> = (0..N).map(|i| arena.alloc(payload(i))).collect();
+        g.bench_function("mid-arena/BumpArena", |b| {
             b.iter(|| {
                 let mut sum = 0u64;
                 for r in &refs {

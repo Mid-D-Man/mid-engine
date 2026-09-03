@@ -16,9 +16,48 @@ it's squarely competitive with its true peers (`slotmap`,
 same as it is), ties `slotmap` exactly on insert. Plain `slab` is the
 real outlier, ~4x faster than that whole band, because it skips
 generation-checking entirely — a documented safety trade-off, not
-something `SlotArena` was competing to match. GC-based approaches are
+something `SlotArena` was competing to match. `BumpArena<T>` is also
+built now (9/9 tests, rustc 1.75, behind the `bump` feature) —
+single-typed, chunk-linked, the approach both the Rust and C surveys
+found fastest for insert-heavy workloads. GC-based approaches are
 ruled out entirely, not benched further. Everything else is catalogued,
 not built.
+
+## Modules
+
+### `lib.rs`
+**What it does:** crate root, module declarations, the feature gate
+roadmap and the garbage collection exclusion, all in the crate-level doc
+comment.
+
+**Decisions:** see "Feature gates" and "Explicitly out of scope: garbage
+collection" below.
+
+### `slot_arena.rs`
+**What it does:** `SlotArena<T>` and `ArenaKey`, the generational
+value-storing arena. See "What's built" below for the full design.
+
+**Decisions and benchmarks:** see "What's built", "Real CI benchmark
+results", and "Fixes and Problems" below.
+
+**Tests:** 16, in this file, `#[cfg(test)] mod tests`. Run for real on
+rustc 1.75 before `criterion` was added as a dev-dependency (see "Fixes
+and Problems").
+
+### `bump_arena.rs`
+**What it does:** `BumpArena<T>`, single-typed chunk-linked bump
+allocator, feature-gated behind `bump`. See "Feature gates" below for
+why this shape and not `bumpalo`'s mixed-type one.
+
+**Decisions:** `RefCell<Vec<Region<T>>>` over a raw intrusive linked
+list (what `bumpalo` actually uses internally) because this sandbox has
+no Miri to check raw-pointer unsafe code with. Geometric region growth,
+oversized single allocations get their own region, both ported directly
+from `tsoding/arena.h`'s real source.
+
+**Tests:** 9, in this file. Covers multi-region growth, geometric
+capacity doubling, `iter_mut` order and write-through, and running
+`Drop` for every value across every region on arena drop.
 
 ## Survey methodology
 
@@ -363,7 +402,7 @@ exactly as `mid-ecs` needs it" build order (`docs/mid-collections.md`),
 not a quiet abandonment of it — worth flagging honestly rather than
 letting the two docs read as if they'd never noticed the tension.
 
-## Feature gates (planned, not yet built)
+## Feature gates (`bump` built, rest still planned)
 
 - **`compact`** — a `slotmap`-style unsafe union slot layout. Originally
   justified in this doc by an insert-time gap that the real CI run ("Real
@@ -376,10 +415,12 @@ letting the two docs read as if they'd never noticed the tension.
   dependence on `T`'s own alignment for `Vacant`/`Occupied` to share
   space for free), not a performance claim this doc can no longer back
   with a real number.
-- **`bump`** — Linked-Arena-Chunks bump allocator
-  (`bumpalo`/`typed-arena`/`tsoding-arena`'s shared approach), for
-  insert-heavy, rarely-freed workloads. Both the Rust and the C survey
-  agree this approach wins that shape of workload by a wide margin.
+- **`bump`** — built. `BumpArena<T>`, single-typed chunk-linked bump
+  allocator (`bumpalo`/`typed-arena`/`tsoding-arena`'s shared approach),
+  for insert-heavy, rarely-freed workloads. Both the Rust and the C
+  survey agreed this approach wins that shape of workload by a wide
+  margin before this was built; the real numbers already in this doc
+  are what motivated building it first out of everything on this list.
 - **`intern`** — hashset-of-boxes dedup arena (`internment`'s
   `ArenaIntern` approach), for string/path/asset-key interning.
 - **`concurrent`** — sharded lock-free slab (`sharded-slab`'s
@@ -412,6 +453,66 @@ sandbox ever genuinely needs tracing-GC semantics, that belongs in its
 own crate with its own explicit, opted-into latency contract — not
 blended into an allocator every other system is assumed to be able to
 call without a pause budget.
+
+## CI and Workflows
+
+- `.github/workflows/bench-vs-c-arena-libs.yml` — builds and runs the
+  three C library benchmarks plus the Rust `vs_arena_crates` criterion
+  suite, publishes a unified comparison table to the step summary.
+  Depends on `scripts/bench_vs_c_arena_libs.py` to parse and merge both
+  sides' raw output into one table.
+
+## Fixes and Problems
+
+### `lib.rs`
+- `cargo doc` without the `bump` feature enabled produced two broken
+  intra-doc link warnings for `[bump_arena]`/`[BumpArena<T>]`, since
+  that module doesn't exist in scope when the feature is off. Fixed by
+  dropping the link brackets in favor of plain code-formatted text for
+  that one line, checked against both feature configurations after.
+
+### `.github/workflows/bench-vs-c-arena-libs.yml`
+- Run 1 failed with "cargo: command not found" inside the Rust bench
+  step, reported as a green step. Cause: a repo-wide cache restore-key
+  prefix matched four unrelated workflows' cache entries and restored
+  one of their `~/.cargo/bin/` snapshots over the freshly installed
+  toolchain, and missing `set -o pipefail` let `cargo bench | tee`
+  report `tee`'s exit code instead of cargo's, hiding the failure.
+- Run 2 scoped the cache key to this workflow and still failed the same
+  way, root cause not fully confirmed. Fixed by removing `~/.cargo/bin/`
+  from the cached paths entirely (only `registry/` and `git/db/` need
+  caching, the toolchain binary never should have been cached at all)
+  and adding a PATH diagnostic step.
+- Run 3 succeeded. Real numbers now live in "Real CI benchmark results"
+  above.
+- Open: criterion warned once, "Unable to complete 100 samples in
+  5.0s." Non-fatal, likely `internment` or `gc` given their
+  multi-millisecond iteration cost. Not tuned yet.
+- Open: the checked-in `gc` bench only measures `force_collect` against
+  a fully live set. The after-drop number in "Explicitly out of scope:
+  garbage collection" only exists in a scratch sandbox script, not in
+  this suite.
+
+### `bump_arena.rs`
+- While verifying the test suite locally, mixed up which of two similar
+  tests actually needed `mut` on its `BumpArena` binding: removed it
+  from `iter_mut_visits_every_value_in_allocation_order_and_writes_through`
+  (which calls `iter_mut(&mut self)` and genuinely needs it) instead of
+  from `later_regions_hold_at_least_double_the_previous_capacity` (which
+  only calls `alloc(&self)` and doesn't). Caught by re-running the full
+  suite after the first edit instead of assuming it was right, fixed
+  both, re-ran again to confirm.
+
+### `benches/vs_arena_crates.rs`
+- The original sandbox pass (`std::time::Instant`, not criterion)
+  reported `SlotArena` insert running 2 to 3 times slower than its
+  closest peers. Sandbox noise: the real CI run showed `SlotArena` ties
+  `slotmap` exactly and sits inside the same band as
+  `generational-arena`/`id-arena`/`thunderdome`. The real outlier is
+  `slab`, about 4 times faster than that band, because its keys carry
+  no generation counter (a documented trade-off in `slab`'s own source).
+  The `compact` feature's justification below was rewritten once this
+  became clear.
 
 ## Reproducing these numbers
 

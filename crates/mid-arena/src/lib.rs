@@ -1,3 +1,7 @@
+// ============================================================================
+// NOTICE: Full documentation, design decisions, and fix history for this file
+// live in docs/mid-arena.md, section "lib.rs"
+// ============================================================================
 //! mid-arena — arena/slot allocators for Mid Engine, built from a real
 //! survey of the Rust arena-crate ecosystem (28 crates) and three
 //! established C arena/pool libraries, rather than from a single
@@ -28,16 +32,14 @@
 //!   verified even/odd-generation LIFO-freelist algorithm to actually
 //!   own a `T` per slot. See that module's doc comment for the full
 //!   design.
+//! - `bump_arena` (behind the `bump` feature) — single-typed,
+//!   chunk-linked bump allocator, `BumpArena<T>`. See that module's doc
+//!   comment for the full design.
 //!
-//! # Feature gates (planned, not yet built — see `docs/mid-arena.md`
-//! "Feature gates" for the reasoning behind each)
+//! # Feature gates (`bump` built, rest still planned — see
+//! `docs/mid-arena.md` "Feature gates" for the reasoning behind each)
 //! - `compact` — `slotmap`-style unsafe union slot layout, trading the
 //!   enum tag's per-slot overhead away for types where that matters.
-//! - `bump` — Linked-Arena-Chunks bump allocator (`bumpalo`/
-//!   `typed-arena`'s approach), for insert-heavy, rarely-freed
-//!   workloads. The real benchmark numbers in `docs/mid-arena.md` show
-//!   this approach fastest by a wide margin for that shape of workload,
-//!   in both the Rust and the C survey.
 //! - `intern` — hashset-of-boxes dedup arena (`internment`'s
 //!   `ArenaIntern` approach), for string/path/asset-key interning.
 //! - `concurrent` — sharded lock-free slab (`sharded-slab`'s approach).
@@ -70,4 +72,10 @@ extern crate alloc;
 
 pub mod slot_arena;
 
+#[cfg(feature = "bump")]
+pub mod bump_arena;
+
 pub use slot_arena::{ArenaKey, SlotArena};
+
+#[cfg(feature = "bump")]
+pub use bump_arena::BumpArena;
