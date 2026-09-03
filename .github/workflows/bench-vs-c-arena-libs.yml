@@ -35,6 +35,9 @@
 # upload so a real failure stays visible in the step summary instead of
 # just going missing.
 #
+# UPDATE: now runs with --features bump to include BumpArena<T> in the
+# comparison, once that module was built (docs/mid-arena.md "Modules").
+#
 # DO NOT add push/pull_request triggers.
 
 name: mid-arena — bench vs C arena libraries
@@ -163,7 +166,7 @@ jobs:
           echo "PATH=$PATH"
           which cargo
           echo "Note: ${{ inputs.baseline_note }}"
-          cargo bench --bench vs_arena_crates -p mid-arena 2>&1 | tee /tmp/rust.txt
+          cargo bench --bench vs_arena_crates -p mid-arena --features bump 2>&1 | tee /tmp/rust.txt
 
       - name: Surface bench diagnostics
         if: always()
