@@ -1,3 +1,7 @@
+// ============================================================================
+// NOTICE: Full documentation, design decisions, and fix history for this file
+// live in docs/mid-arena.md, section "slot_arena.rs"
+// ============================================================================
 //! Generational, value-storing slot arena: [`SlotArena<T>`] issues
 //! [`ArenaKey`] handles that detect their own staleness, the same way
 //! `mid_collections::GenerationalIndex` does, extended to actually own
@@ -72,6 +76,20 @@ pub struct ArenaKey {
 }
 
 impl ArenaKey {
+    /// Builds a handle from raw parts. Not exposed outside this crate
+    /// -- only an arena's own `insert`/`iter` should ever mint a real
+    /// one. Exists so `compact_slot_arena.rs` (behind the `compact`
+    /// feature) can issue the exact same handle type `SlotArena` does,
+    /// instead of duplicating it, since the two share nothing else --
+    /// unused (and so `#[allow(dead_code)]`'d) when `compact` is off,
+    /// same as `compact_slot_arena.rs` itself not existing in that
+    /// build.
+    #[inline]
+    #[cfg_attr(not(feature = "compact"), allow(dead_code))]
+    pub(crate) fn new(index: u32, generation: u32) -> Self {
+        Self { index, generation }
+    }
+
     /// The raw slot index. Not meaningful alone without the matching
     /// generation -- use [`SlotArena::contains`] to check validity.
     #[inline]

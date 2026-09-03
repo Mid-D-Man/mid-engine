@@ -35,11 +35,16 @@
 //! - `bump_arena` (behind the `bump` feature) — single-typed,
 //!   chunk-linked bump allocator, `BumpArena<T>`. See that module's doc
 //!   comment for the full design.
+//! - `compact_slot_arena` (behind the `compact` feature) — union-based
+//!   generational slot arena, `CompactSlotArena<T>`, same handle type
+//!   and algorithm as `slot_arena`, ported from `slotmap`'s real
+//!   internal layout. See that module's doc comment for the full
+//!   design and why it's a separate type from `SlotArena`, not a
+//!   feature-swapped version of it.
 //!
-//! # Feature gates (`bump` built, rest still planned — see
-//! `docs/mid-arena.md` "Feature gates" for the reasoning behind each)
-//! - `compact` — `slotmap`-style unsafe union slot layout, trading the
-//!   enum tag's per-slot overhead away for types where that matters.
+//! # Feature gates (`bump` and `compact` built, rest still planned —
+//! see `docs/mid-arena.md` "Feature gates" for the reasoning behind
+//! each)
 //! - `intern` — hashset-of-boxes dedup arena (`internment`'s
 //!   `ArenaIntern` approach), for string/path/asset-key interning.
 //! - `concurrent` — sharded lock-free slab (`sharded-slab`'s approach).
@@ -75,7 +80,13 @@ pub mod slot_arena;
 #[cfg(feature = "bump")]
 pub mod bump_arena;
 
+#[cfg(feature = "compact")]
+pub mod compact_slot_arena;
+
 pub use slot_arena::{ArenaKey, SlotArena};
 
 #[cfg(feature = "bump")]
 pub use bump_arena::BumpArena;
+
+#[cfg(feature = "compact")]
+pub use compact_slot_arena::CompactSlotArena;

@@ -17,9 +17,17 @@ same as it is), ties `slotmap` exactly on insert. Plain `slab` is the
 real outlier, ~4x faster than that whole band, because it skips
 generation-checking entirely — a documented safety trade-off, not
 something `SlotArena` was competing to match. `BumpArena<T>` is also
-built now (9/9 tests, rustc 1.75, behind the `bump` feature) —
+built (11/11 tests, rustc 1.75, behind the `bump` feature) —
 single-typed, chunk-linked, the approach both the Rust and C surveys
-found fastest for insert-heavy workloads. GC-based approaches are
+found fastest for insert-heavy workloads. Its first version measured
+3.2x slower than `bumpalo`/`typed-arena` on real CI; reading `bumpalo`'s
+actual source and matching its real intrusive-linked-list structure
+substantially closed that gap (real, local comparison: roughly 1.5 to
+1.7x now, not full parity — see "Fixes and Problems"). `CompactSlotArena<T>`
+is built too (14/14 tests, behind the `compact` feature) — a
+`slotmap`-style union layout, ported from `slotmap`'s own real source,
+for when `Slot<T>`'s enum discriminant doesn't fit inside `T`'s
+alignment padding for free. GC-based approaches are
 ruled out entirely, not benched further. Everything else is catalogued,
 not built.
 
@@ -49,15 +57,43 @@ and Problems").
 allocator, feature-gated behind `bump`. See "Feature gates" below for
 why this shape and not `bumpalo`'s mixed-type one.
 
-**Decisions:** `RefCell<Vec<Region<T>>>` over a raw intrusive linked
-list (what `bumpalo` actually uses internally) because this sandbox has
-no Miri to check raw-pointer unsafe code with. Geometric region growth,
-oversized single allocations get their own region, both ported directly
-from `tsoding/arena.h`'s real source.
+**Decisions:** second version now. The first used
+`RefCell<Vec<Region<T>>>`, which real CI numbers showed running 3.2x
+slower on insert than `bumpalo`/`typed-arena`. Cloning and reading
+`bumpalo`'s and `slab`'s actual source found the real cause and this
+version fixes it -- see "Fixes and Problems" below for the full story.
+Now: `Cell<NonNull<RegionNode<T>>>` intrusive linked list, matching
+`bumpalo::Bump`'s real structure directly. Geometric region growth
+ported from `tsoding/arena.h`'s real source, unchanged from the first
+version.
 
-**Tests:** 9, in this file. Covers multi-region growth, geometric
-capacity doubling, `iter_mut` order and write-through, and running
+**Tests:** 11, in this file. Covers multi-region growth, geometric
+capacity doubling, `iter_mut` order (including specifically across a
+region boundary) and write-through, and running
 `Drop` for every value across every region on arena drop.
+
+### `compact_slot_arena.rs`
+**What it does:** `CompactSlotArena<T>`, union-based generational slot
+arena, feature-gated behind `compact`. Same `ArenaKey` handle type and
+algorithm as `SlotArena`, ported from `slotmap` 1.0.7's real
+`src/basic.rs`. Deliberately a separate type from `SlotArena`, not a
+feature-swapped internal representation of it -- see this file's own
+doc comment for why (Cargo feature unification would otherwise let an
+unrelated crate's `compact` flag silently change `SlotArena`'s behavior
+for everyone in the build).
+
+**Decisions:** real, checked finding while building this: writing an
+entire new value to a `ManuallyDrop<T>` union field needs no `unsafe` on
+this compiler, only reads do -- confirmed by the compiler itself
+(`unused_unsafe` warnings on the first draft), not assumed from
+`slotmap`'s own file-level `#![allow(unused_unsafe)]` comment, which
+turned out to describe some other rustc/edition combination, not this
+one.
+
+**Tests:** 14, in this file. Includes one specifically checking that a
+removed-then-reused slot's old value isn't double-dropped when the
+arena itself later drops -- the real risk this union layout carries
+that `SlotArena`'s plain enum doesn't.
 
 ## Survey methodology
 
@@ -402,25 +438,29 @@ exactly as `mid-ecs` needs it" build order (`docs/mid-collections.md`),
 not a quiet abandonment of it — worth flagging honestly rather than
 letting the two docs read as if they'd never noticed the tension.
 
-## Feature gates (`bump` built, rest still planned)
+## Feature gates (`bump` and `compact` built, rest still planned)
 
-- **`compact`** — a `slotmap`-style unsafe union slot layout. Originally
-  justified in this doc by an insert-time gap that the real CI run ("Real
-  CI benchmark results" above) showed wasn't actually there — `SlotArena`
-  ties `slotmap` and sits inside the same band as its other true peers,
-  so this isn't closing a speed gap. Still worth building, on a narrower
-  and more honest justification: memory footprint (`Slot<T>`'s enum
-  discriminant, even where it fits inside existing alignment padding for
-  free as measured above, doesn't always — a union layout removes that
-  dependence on `T`'s own alignment for `Vacant`/`Occupied` to share
-  space for free), not a performance claim this doc can no longer back
-  with a real number.
+- **`compact`** — built. `CompactSlotArena<T>`, a `slotmap`-style
+  unsafe union slot layout. Originally justified in this doc by an
+  insert-time gap that the real CI run ("Real CI benchmark results"
+  above) showed wasn't actually there — `SlotArena` ties `slotmap` and
+  sits inside the same band as its other true peers, so this was never
+  closing a speed gap. Built on the narrower, honest justification
+  instead: memory footprint (`Slot<T>`'s enum discriminant, even where
+  it fits inside existing alignment padding for free as measured above,
+  doesn't always — a union layout removes that dependence on `T`'s own
+  alignment for `Vacant`/`Occupied` to share space for free).
 - **`bump`** — built. `BumpArena<T>`, single-typed chunk-linked bump
   allocator (`bumpalo`/`typed-arena`/`tsoding-arena`'s shared approach),
   for insert-heavy, rarely-freed workloads. Both the Rust and the C
   survey agreed this approach wins that shape of workload by a wide
   margin before this was built; the real numbers already in this doc
   are what motivated building it first out of everything on this list.
+  Real CI numbers on the first version showed it running 3.2x slower on
+  insert than `bumpalo`/`typed-arena` despite the same approach — see
+  "Fixes and Problems" below for the real cause (found by reading
+  `bumpalo`'s actual source, not guessed) and the rewrite that
+  substantially closed that gap without fully eliminating it.
 - **`intern`** — hashset-of-boxes dedup arena (`internment`'s
   `ArenaIntern` approach), for string/path/asset-key interning.
 - **`concurrent`** — sharded lock-free slab (`sharded-slab`'s
@@ -485,15 +525,34 @@ call without a pause budget.
   and adding a PATH diagnostic step.
 - Run 3 succeeded. Real numbers now live in "Real CI benchmark results"
   above.
-- Open: criterion warned once, "Unable to complete 100 samples in
-  5.0s." Non-fatal, likely `internment` or `gc` given their
-  multi-millisecond iteration cost. Not tuned yet.
+- Open: criterion warned about incomplete samples on both run 3 and run
+  4 ("Unable to complete 100 samples in 5.0s"), non-fatal both times,
+  likely `internment` or `gc` given their multi-millisecond iteration
+  cost. Not tuned yet.
 - Open: the checked-in `gc` bench only measures `force_collect` against
   a fully live set. The after-drop number in "Explicitly out of scope:
   garbage collection" only exists in a scratch sandbox script, not in
   this suite.
 
 ### `bump_arena.rs`
+- First version measured 3.2x slower on insert than `bumpalo`/
+  `typed-arena` on real CI (run 4), despite using the same approach.
+  Root cause found by cloning and reading `bumpalo`'s and `slab`'s
+  actual current source rather than continuing to guess: `bumpalo::Bump`
+  holds a single `Cell<NonNull<ChunkFooter>>` pointing directly at the
+  current chunk (an intrusive linked list), where the first version of
+  this file used `RefCell<Vec<Region<T>>>` — paying for a `RefCell`
+  borrow check, a `Vec` index to find the current region, and doing
+  that lookup twice per call, none of which `bumpalo` pays for at all.
+  Rewritten to the same `Cell<NonNull<RegionNode<T>>>` intrusive
+  structure `bumpalo` actually uses. A follow-up fix (eliminating a
+  redundant second `current` read even when no growth happened)
+  narrowed the gap further. Real, local (not CI) sandbox comparison
+  after both fixes: roughly 1.5 to 1.7x slower than `bumpalo`/
+  `typed-arena`, down from the original 3.2x — a substantial, measured
+  improvement, not full parity. The remaining gap wasn't root-caused
+  further; this sandbox has no profiler to look past what source
+  reading alone can explain.
 - While verifying the test suite locally, mixed up which of two similar
   tests actually needed `mut` on its `BumpArena` binding: removed it
   from `iter_mut_visits_every_value_in_allocation_order_and_writes_through`
@@ -502,6 +561,17 @@ call without a pause budget.
   only calls `alloc(&self)` and doesn't). Caught by re-running the full
   suite after the first edit instead of assuming it was right, fixed
   both, re-ran again to confirm.
+
+### `compact_slot_arena.rs`
+- First draft wrapped every union field write in `unsafe`, following
+  `slotmap`'s own file-level `#![allow(unused_unsafe)]` comment
+  literally. The compiler disagreed: two real `unused_unsafe` warnings
+  on writes to `ManuallyDrop<T>` union fields, which need no `unsafe` on
+  this rustc since `ManuallyDrop<T>` has no drop glue to skip in the
+  first place. Fixed by removing the unnecessary wrapping and correcting
+  the safety comments to say what's actually true here rather than what
+  `slotmap`'s own comment (written for some other rustc/edition
+  combination) seemed to imply.
 
 ### `benches/vs_arena_crates.rs`
 - The original sandbox pass (`std::time::Instant`, not criterion)

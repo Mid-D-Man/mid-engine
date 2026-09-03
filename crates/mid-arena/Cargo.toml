@@ -59,9 +59,10 @@ harness = false
 
 [features]
 default = []
-# `bump` built -- see src/bump_arena.rs and docs/mid-arena.md "Modules".
+# `bump` and `compact` built -- see src/bump_arena.rs,
+# src/compact_slot_arena.rs, and docs/mid-arena.md "Modules".
 bump = []
+compact = []
 # Still planned, not yet built -- see docs/mid-arena.md "Feature gates".
-# compact = []
 # intern  = []
 # ffi     = ["dep:zerocopy"]
