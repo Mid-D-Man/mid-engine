@@ -9,25 +9,25 @@ remembered.
 
 The short version, if you read nothing else: `SlotArena<T>` is built and
 tested (16/16 real, rustc 1.75), it's the safe Vec-with-freelist approach
-every serious Rust arena crate in this space converges on, and a real CI
-run (rustc 1.98.0, criterion — see "Real CI benchmark results") confirms
-it's squarely competitive with its true peers (`slotmap`,
-`generational-arena`, `id-arena`, `thunderdome` — all generation-checked,
-same as it is), ties `slotmap` exactly on insert. Plain `slab` is the
-real outlier, ~4x faster than that whole band, because it skips
-generation-checking entirely — a documented safety trade-off, not
-something `SlotArena` was competing to match. `BumpArena<T>` is also
-built (11/11 tests, rustc 1.75, behind the `bump` feature) —
-single-typed, chunk-linked, the approach both the Rust and C surveys
+every serious Rust arena crate in this space converges on, and real CI
+(rustc 1.98, criterion — see "Real CI benchmark results") confirms it's
+squarely competitive with its true peers (`slotmap`, `generational-arena`,
+`typed-generational-arena`, `thunderdome` — all generation-checked, same
+as it is). Plain `slab` is the real outlier, ~4x faster than that whole
+band, because it skips generation-checking entirely — a documented
+safety trade-off, not something `SlotArena` was competing to match.
+`CompactSlotArena<T>` is built too (14/14 tests, behind `compact`) — a
+`slotmap`-style union layout, ported from `slotmap`'s own real source,
+landing a hair faster inside that same peer band on real CI, not in a
+different league. `BumpArena<T>` is built (11/11 tests, behind `bump`)
+— single-typed, chunk-linked, the approach both the Rust and C surveys
 found fastest for insert-heavy workloads. Its first version measured
 3.2x slower than `bumpalo`/`typed-arena` on real CI; reading `bumpalo`'s
 actual source and matching its real intrusive-linked-list structure
-substantially closed that gap (real, local comparison: roughly 1.5 to
-1.7x now, not full parity — see "Fixes and Problems"). `CompactSlotArena<T>`
-is built too (14/14 tests, behind the `compact` feature) — a
-`slotmap`-style union layout, ported from `slotmap`'s own real source,
-for when `Slot<T>`'s enum discriminant doesn't fit inside `T`'s
-alignment padding for free. GC-based approaches are
+fixed that, and real CI now shows it tying both within measurement
+noise (a second bug — a missing `black_box` — briefly made it look
+*faster* than both, caught and fixed before trusting that number; see
+"Fixes and Problems"). GC-based approaches are
 ruled out entirely, not benched further. Everything else is catalogued,
 not built.
 
@@ -225,74 +225,91 @@ deleted, because the point of recording a surprise honestly is that it
 can turn out to be sandbox noise, and this project's own convention is
 to say so plainly rather than quietly edit the earlier claim away.
 
-## Real CI benchmark results (rustc 1.98.0, actual GitHub Actions run — not the sandbox pass above)
+## Real CI benchmark results (rustc 1.98.1, actual GitHub Actions run #8 — not the sandbox pass above)
 
-`benches/vs_arena_crates.rs` run for real on CI (`workflow_dispatch`,
-run #3, after two earlier runs failed on CI infrastructure issues —
-cache key collisions and `set -o pipefail` masking a missing `cargo`,
-unrelated to this crate's own code, fixed in the workflow itself, not
-here). Criterion's own methodology (many samples, statistical, real
-hardware) rather than a single `Instant` call on a shared sandbox VM —
-this table supersedes the previous section's numbers as the authoritative
-figures; the sandbox pass is kept above for the record, not as a second
-source of truth.
+`benches/vs_arena_crates.rs` run for real on CI (`workflow_dispatch`).
+Took several real runs to get here, not one clean shot — runs 1 and 2
+failed on CI infrastructure (a cache-key collision, then a caching
+mistake around the toolchain binary itself), run 3 was the first clean
+result but only covered `SlotArena`, runs 4 to 6 chased down a real
+`BumpArena` benchmarking bug (missing `black_box`, made it look faster
+than `bumpalo` itself, which was the tell that something was wrong) and
+a real table-formatting bug (Rust's batch-total time printed next to
+C's already-per-op time, unconverted), and run 8 added
+`CompactSlotArena` and `typed-generational-arena` once those existed.
+Every one of those runs is logged in "Fixes and Problems" below, not
+smoothed over. This table is the current, complete state, all figures
+already per-operation (criterion's own methodology — many samples,
+statistical, real hardware — not a single `Instant` call on a shared
+sandbox VM).
 
-| Crate | insert (ns/op) | get (ns/op) |
+**Vec + freelist, ABA-safe (generation-checked)** — insert / get, ns/op
+
+| Crate | insert | get |
 |---|---|---|
-| typed-arena | 1.32 | 0.41 |
-| bumpalo | 1.37 | 0.40 |
-| slab | 1.65 | 0.66 |
-| generational-arena | 5.82 | 0.87 |
-| id-arena | 6.46 | 0.64 |
-| **mid-arena `SlotArena`** | **6.88** | **0.87** |
-| slotmap | 6.88 | 0.71 |
-| thunderdome | 6.99 | 0.76 |
-| sharded-slab | 29.98 | 10.17 |
-| gc (alloc) | 68.20 | — |
-| internment (unique) | 76.68 | — |
+| generational-arena | 5.66 | 0.87 |
+| typed-generational-arena | 5.67 | 0.77 |
+| **mid-arena `CompactSlotArena`** | **6.91** | **0.75** |
+| **mid-arena `SlotArena`** | **6.93** | **0.86** |
+| slotmap | 6.96 | 0.71 |
+| thunderdome | 7.01 | 0.76 |
 
-(Converted from criterion's reported per-100,000-iteration batch times;
-raw figures are in the workflow's own step summary.)
+**Linked arena chunks (bump, no per-item reuse)**
 
-**The corrected finding:** `SlotArena` isn't an outlier. It ties
-`slotmap` on insert to five significant figures (687.89 µs both, on the
-same run) and sits inside the same 5.8–7.0 ns band as
-`generational-arena`/`id-arena`/`thunderdome` — its actual peer group,
-all of them generation-checked, ABA-safe handles. What's actually
-unusual is `slab`, at roughly 3.5–4.2x faster than that entire band —
-and there's a real, checkable reason for that rather than a guessed one:
-`slab`'s `usize` keys carry **no generation counter at all**. Reusing a
-freed slot's index hands out the exact same key value it had before;
+| Crate | insert | get |
+|---|---|---|
+| **mid-arena `BumpArena`** | **1.30** | **0.34** |
+| typed-arena | 1.32 | 0.33 |
+| bumpalo | 1.37 | 0.34 |
+
+**Everything else** — `slab` (no ABA check) 1.66 / 0.66, `id-arena`
+(indexed, no reuse) 6.47 / 0.64, `sharded-slab` (sharded/lock-free)
+29.95 / 10.03, `internment` (hashset dedup) 71.60 / —. Full grouped
+table, C libraries included, in the workflow's own step summary.
+
+**The corrected finding, still holding across every run since:**
+`SlotArena` isn't an outlier. It sits inside the same ~5.7–7.0 ns band
+as `generational-arena`/`typed-generational-arena`/`slotmap`/
+`thunderdome` — its actual peer group, all of them generation-checked,
+ABA-safe handles — and `CompactSlotArena` lands a hair faster inside
+that same band, not in a different league. What's actually unusual is
+`slab`, at roughly 3.5–4.2x faster than that entire band — and there's
+a real, checkable reason for that rather than a guessed one: `slab`'s
+`usize` keys carry **no generation counter at all**. Reusing a freed
+slot's index hands out the exact same key value it had before;
 `slab`'s own documentation is explicit that this is a real, accepted
-ABA trade-off, not an oversight. Every other crate in that band —
-`SlotArena` included — pays a real, measured cost for the staleness
-check that buys ABA-safety. That's a fair trade to be making, and it's
-the correct comparison: `SlotArena` was never competing with `slab`'s
-weaker guarantee, and once compared against the crates that make the
-same safety promise it does, it's squarely competitive, not behind.
-This also means the `compact` feature's justification below needed a
-real edit, not just a numbers update — see "Feature gates".
+ABA trade-off, not an oversight. Every crate in the generation-checked
+band pays a real, measured cost for the staleness check that buys
+ABA-safety. That's a fair trade to be making, and it's the correct
+comparison: `SlotArena`/`CompactSlotArena` were never competing with
+`slab`'s weaker guarantee.
 
-**Loose ends from this run, not yet followed up:**
-- `internment`'s checked-in criterion number (76.68 ns) doesn't have a
-  `get` figure — `bench_get` never included it (interning's return value
-  *is* the access handle; there's no separate lookup step to time), same
-  as the sandbox pass, not a new gap.
+**`BumpArena` is now honestly competitive, not artificially ahead:**
+first measured 3.2x slower than `bumpalo` (a real design gap, fixed by
+matching `bumpalo`'s actual intrusive-linked-list structure — see
+"Fixes and Problems"), then measured *faster* than both `bumpalo` and
+`typed-arena` (a benchmarking bug, missing `black_box`, not a real
+result), now ties them within measurement noise. Three different
+numbers for the same code across this project's history, each one
+real for the reason recorded at the time — worth stating plainly rather
+than only keeping the final one.
+
+**Loose ends, not yet followed up:**
+- `internment` has no `get` figure — `bench_get` never included it
+  (interning's return value *is* the access handle; there's no
+  separate lookup step to time), not a gap.
 - The checked-in `gc` bench only measures `force_collect` against a
-  fully-live 100k-object set (379.43 µs total, ≈3.79 ns/object scanned,
-  no garbage to reclaim). It does **not** reproduce the sandbox pass's
-  after-drop figure (footnote 3 above, 47.0–57.5 ns/object) — that
-  measurement only exists in the scratch sandbox script, not in
-  `vs_arena_crates.rs`. Worth closing that gap in a follow-up pass
-  rather than leaving the doc's most load-bearing GC number
-  CI-unverified indefinitely.
-- Criterion warned once: *"Unable to complete 100 samples in 5.0s."*
-  Non-fatal, didn't fail the run, but means at least one benchmark group
-  (`internment` and `gc` are the likely candidates given their multi-ms
-  per-iteration cost) is running fewer effective samples than criterion's
-  default target. A `.sample_size(50)`/longer `.measurement_time(...)`
-  on those specific groups would clear it; not done here since it doesn't
-  change the numbers' validity, only the noise floor around them.
+  fully-live 100k-object set (a single sweep, no garbage to reclaim).
+  It does **not** reproduce the earlier sandbox pass's after-drop
+  figure (footnote 3 above, 47.0–57.5 ns/object) — that measurement
+  only ever existed in a scratch script, never in `vs_arena_crates.rs`.
+  Worth closing that gap.
+- Criterion has warned about incomplete samples on more than one run
+  now ("Unable to complete 100 samples in 5.0s"). Non-fatal every time,
+  likely `internment`/`gc` given their multi-ms iteration cost. A
+  `.sample_size(50)`/longer `.measurement_time(...)` on those specific
+  groups would clear it; not done yet since it doesn't change the
+  numbers' validity, only the noise floor around them.
 
 ## C arena libraries (real, compiled `-O3 -march=native`, actually run)
 
