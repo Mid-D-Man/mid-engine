@@ -16,6 +16,21 @@ from collections import OrderedDict
 
 RE_ANSI = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
 
+# The actual bug this fix is for: Rust's criterion output reports total
+# time for one iteration of the closure, which allocates N items in a
+# loop -- so "775.60 us" for SlotArena's insert group means 775.60 us
+# for all 100,000 inserts, not one. The C programs' report() function
+# already divides by N itself before printing, so a C line reads
+# "7.34 ns/op" -- already per-operation. Printing those two numbers in
+# the same table column without accounting for that difference is
+# exactly what made the C libraries look faster than they are: a
+# 4-digit microsecond figure next to a 1-digit nanosecond figure looks
+# like a huge gap by eye, when normalized they're close (and the Rust
+# side usually wins). Every number this script prints from here on is
+# per-operation, Rust included -- the raw batch-total is never shown
+# without being divided by the real number of operations it covers.
+N = 100_000
+
 
 def to_ns(val_str, unit):
     v = float(val_str)
@@ -124,18 +139,25 @@ talloc_data  = parse_c('/tmp/talloc.txt')
 rust_data    = parse_rust('/tmp/rust.txt')
 
 # ── insert / get: every source measured the exact same operation ──────────
+# Every figure below is per-operation. Rust's raw criterion number
+# (total time for a 100,000-op batch) is divided by N here before
+# display; the C programs already report per-operation and are shown
+# as-is. See the N= comment above for why this matters -- this is the
+# fix for a real, repeated confusion, not a style choice.
 
-print("### insert / get — every source, same N=100,000, same 16-byte payload")
+print("### insert / get — every source, same N=100,000, same 16-byte payload, all figures per-operation")
 print("")
-print("| Implementation | insert | get |")
+print("| Implementation | insert (per-op) | get (per-op) |")
 print("|---|---|---|")
 
 rust_insert = rust_data.get('insert', {})
 rust_get    = rust_data.get('get', {})
 rust_impls  = OrderedDict.fromkeys(list(rust_insert.keys()) + list(rust_get.keys()))
 for impl in rust_impls:
-    ins = rust_insert.get(impl, ('—',))[0]
-    get = rust_get.get(impl, ('—',))[0]
+    ins_ns = rust_insert.get(impl, (None, None))[1]
+    get_ns = rust_get.get(impl, (None, None))[1]
+    ins = fmt_ns(ins_ns / N) if ins_ns is not None else '—'
+    get = fmt_ns(get_ns / N) if get_ns is not None else '—'
     print(f"| {impl} | {ins} | {get} |")
 
 for label, data in (
@@ -143,10 +165,16 @@ for label, data in (
     ("APR pools (C)", apr_data),
     ("talloc_pool (C)", talloc_data),
 ):
-    ins = data.get('insert', ('—',))[0]
-    get = data.get('get', ('—',))[0]
+    ins_ns = data.get('insert', (None, None))[1]
+    get_ns = data.get('get', (None, None))[1]
+    # Already per-op from the C side's own report() -- not divided by N.
+    ins = fmt_ns(ins_ns) if ins_ns is not None else '—'
+    get = fmt_ns(get_ns) if get_ns is not None else '—'
     print(f"| {label} | {ins} | {get} |")
 
+print("")
+print("(Rust: raw criterion batch time / 100,000. C: already per-operation "
+      "from each program's own timing. Same unit, same meaning, both sides.)")
 print("")
 
 # ── reuse / reset: each source's own real semantics, not forced into one shape ──
@@ -163,12 +191,20 @@ print("")
 
 rust_churn = rust_data.get('remove_half_then_reinsert_half', {})
 if rust_churn:
-    print("**Rust: remove half, reinsert half (single-slot reuse)**")
+    print("**Rust: remove half, reinsert half (single-slot reuse), per-operation**")
     print("")
-    print("| Implementation | time |")
+    print("Most implementations here run 100,000 inserts + 50,000 removes + "
+          "50,000 reinserts (200,000 real operations total) in one measured "
+          "closure; `sharded-slab` only runs the insert + remove half (no "
+          "reinsert measured for it, 150,000 operations) -- dividing each by "
+          "its own real operation count, not one shared N, same reasoning "
+          "as the insert/get table above.")
+    print("")
+    print("| Implementation | per-op |")
     print("|---|---|")
-    for impl, (s, _ns) in rust_churn.items():
-        print(f"| {impl} | {s} |")
+    for impl, (_s, ns) in rust_churn.items():
+        ops = 150_000 if 'sharded-slab' in impl else 200_000
+        print(f"| {impl} | {fmt_ns(ns / ops)} |")
     print("")
 
 print("**tsoding/arena.h: whole-arena reset**")
@@ -198,10 +234,20 @@ rust_gc = rust_data.get('gc', {})
 if rust_gc:
     print("### gc crate — allocation and collector-pause cost")
     print("")
+    print("`alloc` is 100,000 real allocations, shown per-operation like "
+          "every other insert figure above. `force_collect` is a single "
+          "collection sweep over those same 100,000 live objects, not "
+          "100,000 separate operations -- shown as the real total cost of "
+          "that one sweep, not divided by N, since dividing it would "
+          "understate what a single collection pause actually costs.")
+    print("")
     print("| Operation | time |")
     print("|---|---|")
-    for impl, (s, _ns) in rust_gc.items():
-        print(f"| {impl} | {s} |")
+    for impl, (_s, ns) in rust_gc.items():
+        if 'alloc' in impl and 'force_collect' not in impl:
+            print(f"| {impl} (per-op) | {fmt_ns(ns / N)} |")
+        else:
+            print(f"| {impl} (total, one sweep over {N:,} live objects) | {fmt_ns(ns)} |")
     print("")
     print("The `force_collect` row is exactly the kind of cost "
           "`docs/mid-arena.md`'s \"Explicitly out of scope: garbage "

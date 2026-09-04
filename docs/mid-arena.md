@@ -511,6 +511,22 @@ call without a pause budget.
   dropping the link brackets in favor of plain code-formatted text for
   that one line, checked against both feature configurations after.
 
+### `scripts/bench_vs_c_arena_libs.py`
+- The insert/get table printed Rust's raw criterion figure (total time
+  for a 100,000-op batch) next to C's already-per-op figure, unconverted,
+  in the same column. Real, repeated confusion across at least two CI
+  runs: read by eye, C looked dramatically faster than every Rust crate
+  including `slab`, when normalized it's the other way around for
+  `tsoding/arena.h` against the bump allocators, and close for the rest.
+  Fixed by dividing every Rust figure by its real operation count (N for
+  insert/get, 200,000 or 150,000 depending on the crate for the churn
+  table, since `sharded-slab` measures a different op count than the
+  rest there) before printing anything, and labeling `gc`'s two rows
+  differently since one is genuinely per-operation and the other is a
+  single sweep that dividing would understate. Verified against a
+  synthetic criterion-format file built from run 5's real numbers, not
+  just read by inspection.
+
 ### `.github/workflows/bench-vs-c-arena-libs.yml`
 - Run 1 failed with "cargo: command not found" inside the Rust bench
   step, reported as a green step. Cause: a repo-wide cache restore-key
