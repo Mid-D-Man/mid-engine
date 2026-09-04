@@ -52,6 +52,7 @@ thunderdome        = "0.6.1"
 sharded-slab       = "0.1.7"
 internment         = { version = "0.8.6", features = ["arena"] }
 gc                 = { version = "0.5.1", features = ["derive"] }
+typed-generational-arena = "0.2.9"
 
 [[bench]]
 name    = "vs_arena_crates"

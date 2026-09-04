@@ -95,6 +95,10 @@ removed-then-reused slot's old value isn't double-dropped when the
 arena itself later drops -- the real risk this union layout carries
 that `SlotArena`'s plain enum doesn't.
 
+**Wired into the bench:** `benches/vs_arena_crates.rs` now includes
+`CompactSlotArena` in insert/get/churn, behind `#[cfg(feature =
+"compact")]` -- see "Fixes and Problems" below for when.
+
 ## Survey methodology
 
 Started from a comparison table (screenshot, `Overview` sheet) plus the
@@ -526,6 +530,17 @@ call without a pause budget.
   single sweep that dividing would understate. Verified against a
   synthetic criterion-format file built from run 5's real numbers, not
   just read by inspection.
+- Even after the unit fix (run 6/7), the insert/get table still listed
+  implementations in benchmark-registration order -- a flat list mixing
+  generation-checked arenas, `slab` (no ABA check), bump allocators (no
+  reuse at all), and everything else in one sequence, so comparing
+  `SlotArena` against its real peers meant scanning past several
+  unrelated rows first. Reorganized into one small table per real
+  approach category (`docs/mid-arena.md`'s own survey taxonomy),
+  fastest to slowest within each, `mid-arena`'s own types bolded.
+  Verified against the same synthetic-file approach, extended to cover
+  the two crates added in this same pass (`CompactSlotArena`,
+  `typed-generational-arena`) landing in the correct group.
 
 ### `.github/workflows/bench-vs-c-arena-libs.yml`
 - Run 1 failed with "cargo: command not found" inside the Rust bench
@@ -599,6 +614,27 @@ call without a pause budget.
   no generation counter (a documented trade-off in `slab`'s own source).
   The `compact` feature's justification below was rewritten once this
   became clear.
+- `BumpArena`'s insert bench was the one entry in this file missing
+  `black_box()` around each per-item allocation, unlike every other
+  crate's own bench. Real consequence, not cosmetic: without it, the
+  compiler had room to auto-vectorize a tight sequential write into a
+  flat, non-aliasing buffer in a way none of the fair comparisons got to
+  benefit from, and one real CI run showed `BumpArena` running faster
+  than `bumpalo` itself -- implausible for a newer, less-optimized
+  implementation doing the same thing. Fixed; the next real run showed
+  `BumpArena` landing within measurement noise of `bumpalo`, not
+  artificially ahead of it.
+- Added `CompactSlotArena` (behind `compact`) and `typed-generational-arena`
+  (real API verified in an isolated scratch project before use -- exact
+  same `insert`/`with_capacity`/indexing/`remove` shape as
+  `generational-arena`, confirmed by compiling and running it, not
+  assumed from the crate description) to insert/get/churn.
+  `atomic-arena` and `drop_arena` were also considered and passed over
+  for this round -- both have real API complexity beyond a simple
+  `insert`/`get`/`remove` shape (`atomic-arena`'s `Controller`-based
+  reservation workflow, `drop_arena`'s lifetime-tied `DropBox` wrapper),
+  and getting either wrong in a benchmark is worse than not benching it
+  yet.
 
 ## Reproducing these numbers
 

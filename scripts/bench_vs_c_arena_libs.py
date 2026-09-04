@@ -144,26 +144,103 @@ rust_data    = parse_rust('/tmp/rust.txt')
 # display; the C programs already report per-operation and are shown
 # as-is. See the N= comment above for why this matters -- this is the
 # fix for a real, repeated confusion, not a style choice.
+#
+# Grouped by real approach (docs/mid-arena.md's own survey taxonomy),
+# not registration order -- comparing SlotArena against slab used to
+# mean scanning past six unrelated rows to find slotmap/thunderdome,
+# its actual peer group. Fastest-to-slowest within each group; the
+# order across groups below is deliberate (safest-and-most-general
+# first, most specialized/narrowest-contract last), not alphabetical.
+
+APPROACH_ORDER = [
+    "Vec + freelist, ABA-safe (generation-checked)",
+    "Vec + freelist, no ABA check",
+    "Linked arena chunks (bump, no per-item reuse)",
+    "Indexed Vec (no reuse at all)",
+    "Sharded / lock-free",
+    "Hashset dedup (interning)",
+]
+
+APPROACH_OF = {
+    "mid-arena/SlotArena": "Vec + freelist, ABA-safe (generation-checked)",
+    "mid-arena/CompactSlotArena": "Vec + freelist, ABA-safe (generation-checked)",
+    "slotmap": "Vec + freelist, ABA-safe (generation-checked)",
+    "generational-arena": "Vec + freelist, ABA-safe (generation-checked)",
+    "typed-generational-arena": "Vec + freelist, ABA-safe (generation-checked)",
+    "thunderdome": "Vec + freelist, ABA-safe (generation-checked)",
+    "slab": "Vec + freelist, no ABA check",
+    "mid-arena/BumpArena": "Linked arena chunks (bump, no per-item reuse)",
+    "bumpalo": "Linked arena chunks (bump, no per-item reuse)",
+    "typed-arena": "Linked arena chunks (bump, no per-item reuse)",
+    "id-arena": "Indexed Vec (no reuse at all)",
+    "sharded-slab": "Sharded / lock-free",
+    "internment/ArenaIntern (unique)": "Hashset dedup (interning)",
+}
 
 print("### insert / get — every source, same N=100,000, same 16-byte payload, all figures per-operation")
 print("")
-print("| Implementation | insert (per-op) | get (per-op) |")
-print("|---|---|---|")
+print("Grouped by real approach, not benchmark registration order — see "
+      "docs/mid-arena.md's own survey taxonomy. `mid-arena`'s own types are "
+      "bolded. Fastest to slowest within each group.")
+print("")
 
 rust_insert = rust_data.get('insert', {})
 rust_get    = rust_data.get('get', {})
 rust_impls  = OrderedDict.fromkeys(list(rust_insert.keys()) + list(rust_get.keys()))
+
+rows_by_approach = {a: [] for a in APPROACH_ORDER}
+unclassified = []
 for impl in rust_impls:
     ins_ns = rust_insert.get(impl, (None, None))[1]
     get_ns = rust_get.get(impl, (None, None))[1]
-    ins = fmt_ns(ins_ns / N) if ins_ns is not None else '—'
-    get = fmt_ns(get_ns / N) if get_ns is not None else '—'
-    print(f"| {impl} | {ins} | {get} |")
+    approach = APPROACH_OF.get(impl)
+    row = (impl, ins_ns, get_ns)
+    if approach:
+        rows_by_approach[approach].append(row)
+    else:
+        unclassified.append(row)
 
+for approach in APPROACH_ORDER:
+    rows = rows_by_approach[approach]
+    if not rows:
+        continue
+    # Fastest insert first; entries with no insert figure (shouldn't
+    # happen for this table, but don't crash if a name mismatches) sort
+    # last rather than erroring.
+    rows.sort(key=lambda r: (r[1] is None, r[1] if r[1] is not None else 0))
+    print(f"**{approach}**")
+    print("")
+    print("| Implementation | insert (per-op) | get (per-op) |")
+    print("|---|---|---|")
+    for impl, ins_ns, get_ns in rows:
+        name = f"**{impl}**" if impl.startswith("mid-arena/") else impl
+        ins = fmt_ns(ins_ns / N) if ins_ns is not None else '—'
+        get = fmt_ns(get_ns / N) if get_ns is not None else '—'
+        print(f"| {name} | {ins} | {get} |")
+    print("")
+
+if unclassified:
+    print("**Other (not yet categorized in this script)**")
+    print("")
+    print("| Implementation | insert (per-op) | get (per-op) |")
+    print("|---|---|---|")
+    for impl, ins_ns, get_ns in unclassified:
+        ins = fmt_ns(ins_ns / N) if ins_ns is not None else '—'
+        get = fmt_ns(get_ns / N) if get_ns is not None else '—'
+        print(f"| {impl} | {ins} | {get} |")
+    print("")
+
+print("**C libraries** (own timing methodology — clock_gettime, not "
+      "criterion — see the file header of each `.c` source; shown "
+      "separately rather than folded into the groups above since they "
+      "aren't Rust approaches, but the same per-operation unit applies)")
+print("")
+print("| Implementation | insert (per-op) | get (per-op) |")
+print("|---|---|---|")
 for label, data in (
-    ("tsoding/arena.h (C)", tsoding_data),
-    ("APR pools (C)", apr_data),
-    ("talloc_pool (C)", talloc_data),
+    ("tsoding/arena.h", tsoding_data),
+    ("APR pools", apr_data),
+    ("talloc_pool", talloc_data),
 ):
     ins_ns = data.get('insert', (None, None))[1]
     get_ns = data.get('get', (None, None))[1]
@@ -174,7 +251,8 @@ for label, data in (
 
 print("")
 print("(Rust: raw criterion batch time / 100,000. C: already per-operation "
-      "from each program's own timing. Same unit, same meaning, both sides.)")
+      "from each program's own timing. Same unit, same meaning, every row "
+      "on this page.)")
 print("")
 
 # ── reuse / reset: each source's own real semantics, not forced into one shape ──

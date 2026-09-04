@@ -46,6 +46,17 @@ fn bench_insert(c: &mut Criterion) {
         })
     });
 
+    #[cfg(feature = "compact")]
+    g.bench_function("mid-arena/CompactSlotArena", |b| {
+        b.iter(|| {
+            let mut a = mid_arena::CompactSlotArena::with_capacity(N);
+            for i in 0..N {
+                black_box(a.insert(payload(i)));
+            }
+            a
+        })
+    });
+
     g.bench_function("slab", |b| {
         b.iter(|| {
             let mut s: slab::Slab<Payload> = slab::Slab::with_capacity(N);
@@ -71,6 +82,17 @@ fn bench_insert(c: &mut Criterion) {
         b.iter(|| {
             let mut a: generational_arena::Arena<Payload> =
                 generational_arena::Arena::with_capacity(N);
+            for i in 0..N {
+                black_box(a.insert(payload(i)));
+            }
+            a
+        })
+    });
+
+    g.bench_function("typed-generational-arena", |b| {
+        b.iter(|| {
+            let mut a: typed_generational_arena::StandardArena<Payload> =
+                typed_generational_arena::StandardArena::with_capacity(N);
             for i in 0..N {
                 black_box(a.insert(payload(i)));
             }
@@ -171,6 +193,21 @@ fn bench_get(c: &mut Criterion) {
         });
     }
 
+    #[cfg(feature = "compact")]
+    {
+        let mut a = mid_arena::CompactSlotArena::with_capacity(N);
+        let keys: Vec<_> = (0..N).map(|i| a.insert(payload(i))).collect();
+        g.bench_function("mid-arena/CompactSlotArena", |b| {
+            b.iter(|| {
+                let mut sum = 0u64;
+                for &k in &keys {
+                    sum = sum.wrapping_add(a.get(k).unwrap().a);
+                }
+                black_box(sum)
+            })
+        });
+    }
+
     {
         let mut s: slab::Slab<Payload> = slab::Slab::with_capacity(N);
         let keys: Vec<_> = (0..N).map(|i| s.insert(payload(i))).collect();
@@ -205,6 +242,21 @@ fn bench_get(c: &mut Criterion) {
             generational_arena::Arena::with_capacity(N);
         let idxs: Vec<_> = (0..N).map(|i| arena.insert(payload(i))).collect();
         g.bench_function("generational-arena", |b| {
+            b.iter(|| {
+                let mut sum = 0u64;
+                for &idx in &idxs {
+                    sum = sum.wrapping_add(arena[idx].a);
+                }
+                black_box(sum)
+            })
+        });
+    }
+
+    {
+        let mut arena: typed_generational_arena::StandardArena<Payload> =
+            typed_generational_arena::StandardArena::with_capacity(N);
+        let idxs: Vec<_> = (0..N).map(|i| arena.insert(payload(i))).collect();
+        g.bench_function("typed-generational-arena", |b| {
             b.iter(|| {
                 let mut sum = 0u64;
                 for &idx in &idxs {
@@ -324,6 +376,21 @@ fn bench_churn(c: &mut Criterion) {
         })
     });
 
+    #[cfg(feature = "compact")]
+    g.bench_function("mid-arena/CompactSlotArena", |b| {
+        b.iter(|| {
+            let mut a = mid_arena::CompactSlotArena::with_capacity(N);
+            let keys: Vec<_> = (0..N).map(|i| a.insert(payload(i))).collect();
+            for &k in keys.iter().step_by(2) {
+                a.remove(k);
+            }
+            for i in 0..N / 2 {
+                black_box(a.insert(payload(i)));
+            }
+            a
+        })
+    });
+
     g.bench_function("slab", |b| {
         b.iter(|| {
             let mut s: slab::Slab<Payload> = slab::Slab::with_capacity(N);
@@ -357,6 +424,21 @@ fn bench_churn(c: &mut Criterion) {
         b.iter(|| {
             let mut a: generational_arena::Arena<Payload> =
                 generational_arena::Arena::with_capacity(N);
+            let idxs: Vec<_> = (0..N).map(|i| a.insert(payload(i))).collect();
+            for &idx in idxs.iter().step_by(2) {
+                a.remove(idx);
+            }
+            for i in 0..N / 2 {
+                black_box(a.insert(payload(i)));
+            }
+            a
+        })
+    });
+
+    g.bench_function("typed-generational-arena", |b| {
+        b.iter(|| {
+            let mut a: typed_generational_arena::StandardArena<Payload> =
+                typed_generational_arena::StandardArena::with_capacity(N);
             let idxs: Vec<_> = (0..N).map(|i| a.insert(payload(i))).collect();
             for &idx in idxs.iter().step_by(2) {
                 a.remove(idx);
