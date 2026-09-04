@@ -133,7 +133,7 @@ fn bench_insert(c: &mut Criterion) {
         b.iter(|| {
             let arena: mid_arena::BumpArena<Payload> = mid_arena::BumpArena::with_capacity(N);
             for i in 0..N {
-                arena.alloc(payload(i));
+                black_box(arena.alloc(payload(i)));
             }
             arena
         })
