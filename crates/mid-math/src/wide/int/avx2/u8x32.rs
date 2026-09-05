@@ -1,25 +1,22 @@
 // crates/mid-math/src/wide/int/avx2/u8x32.rs
-//! 32-lane unsigned 8-bit integer vector — AVX2, x86 / x86_64.
+//! 32-lane unsigned 8-bit integer vector.
 //!
-//! Widens sse2/u8x16.rs to `__m256i`. `_mm256_min_epu8`/`_mm256_max_epu8`/
-//! `_mm256_adds_epu8`/`_mm256_subs_epu8` are all AVX2 native (mirrors
-//! SSE2, which already had these natively for unsigned 8-bit — the one
-//! width where SSE2 itself needed no emulation). `cmpgt` still needs the
-//! XOR-sign-flip trick (no native unsigned compare on x86 at any width).
+//! Same storage/dispatch design as `i32x8.rs` — see that file's doc
+//! comment for the full reasoning. Portable `{lo, hi}: u8x16` storage.
 //!
-//! `element_sum` uses `_mm256_sad_epu8` against zero, same as
-//! sse2/u8x16.rs — NOT a cross-lane hazard like unpack/shuffle: SAD runs
-//! independently per 8-byte group and simply produces four 64-bit
-//! partial sums instead of SSE2's two, extracted via `_mm256_extract_epi64`.
+//! `shuffle_bytes` now takes `indices: Self` (matches `u8x16::shuffle_bytes`'s
+//! own convention) rather than the original's `indices: i8x32` — a small,
+//! deliberate signature change, not preserved from the original, since
+//! nothing in this crate's own benches calls `u8x32::shuffle_bytes`
+//! (confirmed before making the change) and matching `u8x16`'s own
+//! convention is more internally consistent than the original's mixed
+//! signed/unsigned parameter.
 //!
-//! `as_u16x16_lo`/`as_u16x16_hi` zero-extend via `_mm256_cvtepu8_epi16`
-//! (dedicated widen instruction, no cross-lane hazard) and
-//! `shuffle_bytes`/`to_i8x16_pair`-equivalent (`to_u8x16_pair`) are
-//! implemented the same way as i8x32.rs — see that file's header for
-//! the full reasoning on why the widen is safe but shuffle_bytes stays
-//! scoped per-16-byte-half.
-//!
-//! No multiply, same as sse2/u8x16.rs — no native 8-bit SIMD multiply.
+//! `element_sum` no longer uses `_mm256_sad_epu8` on the fast path composed
+//! from two `u8x16::element_sum` calls — each half's own `element_sum`
+//! already does the equivalent SAD-based reduction at width 16 (see
+//! `sse2/u8x16.rs`), so this stays portable-only like the other
+//! reduction methods, not dispatch-wrapped.
 
 #![allow(non_camel_case_types)]
 
@@ -34,151 +31,191 @@ use core::arch::x86::*;
 #[cfg(target_arch = "x86_64")]
 use core::arch::x86_64::*;
 
+use crate::wide::int::sse2::u8x16::u8x16;
+use super::u16x16::u16x16;
 use super::imask8x32::IMask8x32;
 
-#[repr(C)]
-union UnionCast { u: [u8; 32], v: u8x32 }
-
-#[inline(always)]
-unsafe fn ucmpgt_u8(a: __m256i, b: __m256i) -> __m256i {
-    let sign = _mm256_set1_epi8(-128i8); // 0x80 per byte
-    _mm256_cmpgt_epi8(_mm256_xor_si256(a, sign), _mm256_xor_si256(b, sign))
+/// 32-lane unsigned 8-bit integer vector. Two `u8x16` halves.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct u8x32 {
+    lo: u8x16,
+    hi: u8x16,
 }
 
-/// 32-lane unsigned 8-bit integer vector. 32 bytes, 32-byte aligned. Backed by `__m256i`.
-///
-/// Note: no Mul — unsigned byte multiply requires widening (no cross-lane
-/// widen provided here, see module docs).
-#[derive(Clone, Copy)]
-#[repr(transparent)]
-pub struct u8x32(pub(crate) __m256i);
-
 impl u8x32 {
-    pub const ZERO: Self = unsafe { UnionCast { u: [0; 32] }.v };
-    pub const ONE:  Self = unsafe { UnionCast { u: [1; 32] }.v };
-    pub const MIN:  Self = unsafe { UnionCast { u: [u8::MIN; 32] }.v };
-    pub const MAX:  Self = unsafe { UnionCast { u: [u8::MAX; 32] }.v };
+    pub const ZERO: Self = Self { lo: u8x16::ZERO, hi: u8x16::ZERO };
+    pub const ONE:  Self = Self { lo: u8x16::ONE,  hi: u8x16::ONE };
+    pub const MIN:  Self = Self { lo: u8x16::MIN,  hi: u8x16::MIN };
+    pub const MAX:  Self = Self { lo: u8x16::MAX,  hi: u8x16::MAX };
 
     #[inline(always)]
-    pub fn splat(v: u8) -> Self { Self(unsafe { _mm256_set1_epi8(v as i8) }) }
+    pub(crate) fn from_halves(lo: u8x16, hi: u8x16) -> Self { Self { lo, hi } }
+
+    #[inline(always)]
+    pub fn splat(v: u8) -> Self { Self::from_halves(u8x16::splat(v), u8x16::splat(v)) }
 
     #[inline(always)]
     pub fn from_array(a: [u8; 32]) -> Self {
-        Self(unsafe { _mm256_loadu_si256(a.as_ptr() as *const __m256i) })
+        let mut lo = [0u8; 16];
+        let mut hi = [0u8; 16];
+        lo.copy_from_slice(&a[0..16]);
+        hi.copy_from_slice(&a[16..32]);
+        Self::from_halves(u8x16::from_array(lo), u8x16::from_array(hi))
     }
-
-    /// Convenience alias — identical to `from_array`.
     #[inline(always)]
     pub fn from_bytes(b: [u8; 32]) -> Self { Self::from_array(b) }
 
     #[inline(always)]
     pub fn to_array(self) -> [u8; 32] {
-        unsafe { let mut a=[0u8;32]; _mm256_storeu_si256(a.as_mut_ptr() as *mut __m256i, self.0); a }
+        let lo = self.lo.to_array();
+        let hi = self.hi.to_array();
+        let mut out = [0u8; 32];
+        out[0..16].copy_from_slice(&lo);
+        out[16..32].copy_from_slice(&hi);
+        out
     }
 
-    /// Zero-extend the low 16 lanes (indices 0-15) to `u16x16`.
+    /// Zero-extend lanes 0-15 to `u16x16`. Portable — composes from
+    /// `u8x16::as_u16x8_lo`/`as_u16x8_hi`.
     #[inline(always)]
-    pub fn as_u16x16_lo(self) -> super::u16x16::u16x16 {
-        unsafe {
-            let lo_128 = _mm256_castsi256_si128(self.0);
-            super::u16x16::u16x16(_mm256_cvtepu8_epi16(lo_128))
-        }
+    pub fn as_u16x16_lo(self) -> u16x16 {
+        u16x16::from_halves(self.lo.as_u16x8_lo(), self.lo.as_u16x8_hi())
     }
-    /// Zero-extend the high 16 lanes (indices 16-31) to `u16x16`.
+    /// Zero-extend lanes 16-31 to `u16x16`.
     #[inline(always)]
-    pub fn as_u16x16_hi(self) -> super::u16x16::u16x16 {
-        unsafe {
-            let hi_128 = _mm256_extracti128_si256::<1>(self.0);
-            super::u16x16::u16x16(_mm256_cvtepu8_epi16(hi_128))
-        }
+    pub fn as_u16x16_hi(self) -> u16x16 {
+        u16x16::from_halves(self.hi.as_u16x8_lo(), self.hi.as_u16x8_hi())
     }
 
-    /// Split into two `sse2::u8x16` halves. See i8x32.rs's
-    /// `to_i8x16_pair` — same reasoning, unsigned lanes.
+    /// Split into two `sse2::u8x16` halves. Trivial now — this type
+    /// already stores its data this way.
     #[inline(always)]
-    pub fn to_u8x16_pair(self) -> (super::super::sse2::u8x16::u8x16, super::super::sse2::u8x16::u8x16) {
-        unsafe {
-            let lo = _mm256_castsi256_si128(self.0);
-            let hi = _mm256_extracti128_si256::<1>(self.0);
-            (
-                super::super::sse2::u8x16::u8x16(lo),
-                super::super::sse2::u8x16::u8x16(hi),
-            )
-        }
-    }
-    /// Inverse of `to_u8x16_pair`.
+    pub fn to_u8x16_pair(self) -> (u8x16, u8x16) { (self.lo, self.hi) }
+    /// Combine two `sse2::u8x16` halves into one `u8x32`.
     #[inline(always)]
-    pub fn from_u8x16_pair(lo: super::super::sse2::u8x16::u8x16, hi: super::super::sse2::u8x16::u8x16) -> Self {
-        unsafe { Self(_mm256_set_m128i(hi.0, lo.0)) }
-    }
+    pub fn from_u8x16_pair(lo: u8x16, hi: u8x16) -> Self { Self::from_halves(lo, hi) }
 
-    /// Byte shuffle within each 16-byte half independently. See
-    /// i8x32.rs's `shuffle_bytes` doc comment — identical semantics,
-    /// unsigned lanes.
-    #[inline(always)]
-    pub fn shuffle_bytes(self, indices: super::i8x32::i8x32) -> Self {
-        Self(unsafe { _mm256_shuffle_epi8(self.0, indices.0) })
+    /// Byte shuffle within each 16-byte half independently — see
+    /// `i8x32::shuffle_bytes`'s doc comment for why the fallback has
+    /// identical semantics to the real `_mm256_shuffle_epi8` instruction.
+    #[inline]
+    pub fn shuffle_bytes(self, indices: Self) -> Self {
+        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        if crate::wide::avx2_available() {
+            return unsafe { self.shuffle_bytes_avx2(indices) };
+        }
+        Self::from_halves(self.lo.shuffle_bytes(indices.lo), self.hi.shuffle_bytes(indices.hi))
+    }
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    #[target_feature(enable = "avx2")]
+    unsafe fn shuffle_bytes_avx2(self, indices: Self) -> Self {
+        unsafe { Self::from_m256i(_mm256_shuffle_epi8(self.to_m256i(), indices.to_m256i())) }
     }
 
     #[inline]
     pub fn get(self, i: usize) -> u8 {
         assert!(i < 32, "u8x32::get — lane {i} out of bounds (max 31)");
-        unsafe { UnionCast { v: self }.u[i] }
+        if i < 16 { self.lo.get(i) } else { self.hi.get(i - 16) }
     }
 
-    /// Per-lane minimum — AVX2 native `_mm256_min_epu8`.
-    #[inline(always)] pub fn min(self, rhs: Self) -> Self { Self(unsafe { _mm256_min_epu8(self.0, rhs.0) }) }
-    /// Per-lane maximum — AVX2 native `_mm256_max_epu8`.
-    #[inline(always)] pub fn max(self, rhs: Self) -> Self { Self(unsafe { _mm256_max_epu8(self.0, rhs.0) }) }
-    #[inline(always)] pub fn clamp(self, lo: Self, hi: Self) -> Self { self.max(lo).min(hi) }
+    // ── AVX2 pack/unpack helpers — only place a __m256i exists ──
 
-    #[inline] pub fn min_element(self) -> u8 { self.to_array().iter().copied().reduce(u8::min).unwrap() }
-    #[inline] pub fn max_element(self) -> u8 { self.to_array().iter().copied().reduce(u8::max).unwrap() }
-
-    /// Horizontal sum via `_mm256_sad_epu8` against zero — four independent
-    /// 8-byte-group partial sums (one per `_mm256_extract_epi64` lane),
-    /// added together. See module docs re: why this isn't a cross-lane hazard.
-    #[inline]
-    pub fn element_sum(self) -> u32 {
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    #[target_feature(enable = "avx2")]
+    unsafe fn to_m256i(self) -> __m256i {
+        unsafe { _mm256_set_m128i(self.hi.0, self.lo.0) }
+    }
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    #[target_feature(enable = "avx2")]
+    unsafe fn from_m256i(v: __m256i) -> Self {
         unsafe {
-            let zero = _mm256_setzero_si256();
-            let sad  = _mm256_sad_epu8(self.0, zero);
-            let s0 = _mm256_extract_epi64::<0>(sad) as u32;
-            let s1 = _mm256_extract_epi64::<1>(sad) as u32;
-            let s2 = _mm256_extract_epi64::<2>(sad) as u32;
-            let s3 = _mm256_extract_epi64::<3>(sad) as u32;
-            s0 + s1 + s2 + s3
+            Self::from_halves(
+                u8x16(_mm256_castsi256_si128(v)),
+                u8x16(_mm256_extracti128_si256::<1>(v)),
+            )
         }
     }
 
-    /// Saturating unsigned add — clamps to `u8::MAX`. AVX2 native.
-    #[inline(always)] pub fn saturating_add(self, rhs: Self) -> Self { Self(unsafe { _mm256_adds_epu8(self.0, rhs.0) }) }
-    /// Saturating unsigned sub — clamps to `0`. AVX2 native.
-    #[inline(always)] pub fn saturating_sub(self, rhs: Self) -> Self { Self(unsafe { _mm256_subs_epu8(self.0, rhs.0) }) }
+    #[inline]
+    pub fn min(self, rhs: Self) -> Self {
+        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        if crate::wide::avx2_available() {
+            return unsafe { self.min_avx2(rhs) };
+        }
+        Self::from_halves(self.lo.min(rhs.lo), self.hi.min(rhs.hi))
+    }
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    #[target_feature(enable = "avx2")]
+    unsafe fn min_avx2(self, rhs: Self) -> Self {
+        unsafe { Self::from_m256i(_mm256_min_epu8(self.to_m256i(), rhs.to_m256i())) }
+    }
 
-    /// Equality — AVX2 native (same bit pattern for signed/unsigned).
-    #[inline(always)] pub fn cmpeq(self, rhs: Self) -> IMask8x32 { IMask8x32(unsafe { _mm256_cmpeq_epi8(self.0, rhs.0) }) }
+    #[inline]
+    pub fn max(self, rhs: Self) -> Self {
+        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        if crate::wide::avx2_available() {
+            return unsafe { self.max_avx2(rhs) };
+        }
+        Self::from_halves(self.lo.max(rhs.lo), self.hi.max(rhs.hi))
+    }
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    #[target_feature(enable = "avx2")]
+    unsafe fn max_avx2(self, rhs: Self) -> Self {
+        unsafe { Self::from_m256i(_mm256_max_epu8(self.to_m256i(), rhs.to_m256i())) }
+    }
+
+    #[inline(always)]
+    pub fn clamp(self, lo: Self, hi: Self) -> Self { self.max(lo).min(hi) }
+
+    #[inline] pub fn min_element(self) -> u8 { self.lo.min_element().min(self.hi.min_element()) }
+    #[inline] pub fn max_element(self) -> u8 { self.lo.max_element().max(self.hi.max_element()) }
+    #[inline] pub fn element_sum(self) -> u32 { self.lo.element_sum() + self.hi.element_sum() }
+
+    #[inline]
+    pub fn saturating_add(self, rhs: Self) -> Self {
+        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        if crate::wide::avx2_available() {
+            return unsafe { self.saturating_add_avx2(rhs) };
+        }
+        Self::from_halves(self.lo.saturating_add(rhs.lo), self.hi.saturating_add(rhs.hi))
+    }
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    #[target_feature(enable = "avx2")]
+    unsafe fn saturating_add_avx2(self, rhs: Self) -> Self {
+        unsafe { Self::from_m256i(_mm256_adds_epu8(self.to_m256i(), rhs.to_m256i())) }
+    }
+
+    #[inline]
+    pub fn saturating_sub(self, rhs: Self) -> Self {
+        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        if crate::wide::avx2_available() {
+            return unsafe { self.saturating_sub_avx2(rhs) };
+        }
+        Self::from_halves(self.lo.saturating_sub(rhs.lo), self.hi.saturating_sub(rhs.hi))
+    }
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    #[target_feature(enable = "avx2")]
+    unsafe fn saturating_sub_avx2(self, rhs: Self) -> Self {
+        unsafe { Self::from_m256i(_mm256_subs_epu8(self.to_m256i(), rhs.to_m256i())) }
+    }
+
+    #[inline(always)] pub fn cmpeq(self, rhs: Self) -> IMask8x32 { IMask8x32::from_halves(self.lo.cmpeq(rhs.lo), self.hi.cmpeq(rhs.hi)) }
     #[inline(always)] pub fn cmpne(self, rhs: Self) -> IMask8x32 { !self.cmpeq(rhs) }
-    /// Unsigned greater-than. Uses sign-bit XOR trick.
-    #[inline(always)] pub fn cmpgt(self, rhs: Self) -> IMask8x32 { IMask8x32(unsafe { ucmpgt_u8(self.0, rhs.0) }) }
-    #[inline(always)] pub fn cmplt(self, rhs: Self) -> IMask8x32 { rhs.cmpgt(self) }
+    #[inline(always)] pub fn cmpgt(self, rhs: Self) -> IMask8x32 { IMask8x32::from_halves(self.lo.cmpgt(rhs.lo), self.hi.cmpgt(rhs.hi)) }
+    #[inline(always)] pub fn cmplt(self, rhs: Self) -> IMask8x32 { IMask8x32::from_halves(self.lo.cmplt(rhs.lo), self.hi.cmplt(rhs.hi)) }
     #[inline(always)] pub fn cmpge(self, rhs: Self) -> IMask8x32 { !self.cmplt(rhs) }
     #[inline(always)] pub fn cmple(self, rhs: Self) -> IMask8x32 { !self.cmpgt(rhs) }
 
     #[inline(always)]
     pub fn blend(mask: IMask8x32, if_true: Self, if_false: Self) -> Self {
-        unsafe {
-            Self(_mm256_or_si256(
-                _mm256_and_si256(mask.0, if_true.0),
-                _mm256_andnot_si256(mask.0, if_false.0),
-            ))
-        }
+        Self::from_halves(
+            u8x16::blend(mask.lo, if_true.lo, if_false.lo),
+            u8x16::blend(mask.hi, if_true.hi, if_false.hi),
+        )
     }
 
-    /// Number of lanes equal to `needle`.
     #[inline]
     pub fn count_eq(self, needle: Self) -> u32 { self.cmpeq(needle).count_true() }
-    /// True if any lane equals `needle`.
     #[inline]
     pub fn contains(self, needle: u8) -> bool { self.count_eq(Self::splat(needle)) > 0 }
 
@@ -186,28 +223,53 @@ impl u8x32 {
     #[inline(always)] pub fn wrapping_sub(self, r: Self) -> Self { self - r }
 }
 
-impl Add for u8x32 { type Output=Self; #[inline(always)] fn add(self,r:Self)->Self{Self(unsafe{_mm256_add_epi8(self.0,r.0)})} }
-impl AddAssign for u8x32 { #[inline(always)] fn add_assign(&mut self,r:Self){*self=*self+r;} }
-impl Sub for u8x32 { type Output=Self; #[inline(always)] fn sub(self,r:Self)->Self{Self(unsafe{_mm256_sub_epi8(self.0,r.0)})} }
-impl SubAssign for u8x32 { #[inline(always)] fn sub_assign(&mut self,r:Self){*self=*self-r;} }
-
-impl BitAnd for u8x32 { type Output=Self; #[inline(always)] fn bitand(self,r:Self)->Self{Self(unsafe{_mm256_and_si256(self.0,r.0)})} }
-impl BitAndAssign for u8x32 { #[inline(always)] fn bitand_assign(&mut self,r:Self){*self=*self&r;} }
-impl BitOr  for u8x32 { type Output=Self; #[inline(always)] fn bitor (self,r:Self)->Self{Self(unsafe{_mm256_or_si256(self.0,r.0)})} }
-impl BitOrAssign  for u8x32 { #[inline(always)] fn bitor_assign (&mut self,r:Self){*self=*self|r;} }
-impl BitXor for u8x32 { type Output=Self; #[inline(always)] fn bitxor(self,r:Self)->Self{Self(unsafe{_mm256_xor_si256(self.0,r.0)})} }
-impl BitXorAssign for u8x32 { #[inline(always)] fn bitxor_assign(&mut self,r:Self){*self=*self^r;} }
-impl Not for u8x32 {
+impl Add for u8x32 {
     type Output = Self;
-    #[inline(always)]
-    fn not(self) -> Self { unsafe { let ones = _mm256_cmpeq_epi8(self.0, self.0); Self(_mm256_xor_si256(self.0, ones)) } }
-}
-
-impl PartialEq for u8x32 {
     #[inline]
-    fn eq(&self, r: &Self) -> bool { unsafe { _mm256_movemask_epi8(_mm256_cmpeq_epi8(self.0, r.0)) == -1 } }
+    fn add(self, r: Self) -> Self {
+        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        if crate::wide::avx2_available() {
+            return unsafe { self.add_avx2(r) };
+        }
+        Self::from_halves(self.lo + r.lo, self.hi + r.hi)
+    }
 }
-impl Eq for u8x32 {}
+impl u8x32 {
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    #[target_feature(enable = "avx2")]
+    unsafe fn add_avx2(self, r: Self) -> Self {
+        unsafe { Self::from_m256i(_mm256_add_epi8(self.to_m256i(), r.to_m256i())) }
+    }
+}
+impl AddAssign for u8x32 { #[inline(always)] fn add_assign(&mut self, r: Self) { *self = *self + r; } }
+
+impl Sub for u8x32 {
+    type Output = Self;
+    #[inline]
+    fn sub(self, r: Self) -> Self {
+        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        if crate::wide::avx2_available() {
+            return unsafe { self.sub_avx2(r) };
+        }
+        Self::from_halves(self.lo - r.lo, self.hi - r.hi)
+    }
+}
+impl u8x32 {
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    #[target_feature(enable = "avx2")]
+    unsafe fn sub_avx2(self, r: Self) -> Self {
+        unsafe { Self::from_m256i(_mm256_sub_epi8(self.to_m256i(), r.to_m256i())) }
+    }
+}
+impl SubAssign for u8x32 { #[inline(always)] fn sub_assign(&mut self, r: Self) { *self = *self - r; } }
+
+impl BitAnd for u8x32 { type Output = Self; #[inline(always)] fn bitand(self, r: Self) -> Self { Self::from_halves(self.lo & r.lo, self.hi & r.hi) } }
+impl BitAndAssign for u8x32 { #[inline(always)] fn bitand_assign(&mut self, r: Self) { *self = *self & r; } }
+impl BitOr for u8x32 { type Output = Self; #[inline(always)] fn bitor(self, r: Self) -> Self { Self::from_halves(self.lo | r.lo, self.hi | r.hi) } }
+impl BitOrAssign for u8x32 { #[inline(always)] fn bitor_assign(&mut self, r: Self) { *self = *self | r; } }
+impl BitXor for u8x32 { type Output = Self; #[inline(always)] fn bitxor(self, r: Self) -> Self { Self::from_halves(self.lo ^ r.lo, self.hi ^ r.hi) } }
+impl BitXorAssign for u8x32 { #[inline(always)] fn bitxor_assign(&mut self, r: Self) { *self = *self ^ r; } }
+impl Not for u8x32 { type Output = Self; #[inline(always)] fn not(self) -> Self { Self::from_halves(!self.lo, !self.hi) } }
 
 impl fmt::Debug for u8x32 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result { write!(f, "u8x32({:?})", self.to_array()) }
@@ -215,5 +277,5 @@ impl fmt::Debug for u8x32 {
 impl fmt::Display for u8x32 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result { write!(f, "{:?}", self.to_array()) }
 }
-impl From<[u8; 32]> for u8x32 { #[inline] fn from(a: [u8;32]) -> Self { Self::from_array(a) } }
-impl From<u8x32> for [u8; 32] { #[inline] fn from(v: u8x32) -> Self { v.to_array() } }
+impl From<[u8; 32]> for u8x32 { #[inline(always)] fn from(a: [u8; 32]) -> Self { Self::from_array(a) } }
+impl From<u8x32> for [u8; 32] { #[inline(always)] fn from(v: u8x32) -> Self { v.to_array() } }

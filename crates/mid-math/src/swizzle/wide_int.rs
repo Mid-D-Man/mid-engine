@@ -58,15 +58,15 @@ crate::impl_lane_shuffle16!(crate::wide::int::scalar::i8x16::i8x16);
 crate::impl_lane_shuffle16!(crate::wide::int::scalar::u8x16::u8x16);
 
 // ── AVX2 (additive) ──
-#[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), target_feature = "avx2"))]
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 crate::impl_lane_shuffle8!(crate::wide::int::avx2::i32x8::i32x8);
-#[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), target_feature = "avx2"))]
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 crate::impl_lane_shuffle8!(crate::wide::int::avx2::u32x8::u32x8);
-#[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), target_feature = "avx2"))]
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 crate::impl_lane_shuffle16!(crate::wide::int::avx2::i16x16::i16x16);
-#[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), target_feature = "avx2"))]
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 crate::impl_lane_shuffle16!(crate::wide::int::avx2::u16x16::u16x16);
-#[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), target_feature = "avx2"))]
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 crate::impl_lane_shuffle32!(crate::wide::int::avx2::i8x32::i8x32);
-#[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), target_feature = "avx2"))]
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 crate::impl_lane_shuffle32!(crate::wide::int::avx2::u8x32::u8x32);

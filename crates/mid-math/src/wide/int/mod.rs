@@ -7,11 +7,23 @@
 //! |---------|-------------------------------|-----------------------------------------------------------|
 //! | SSE2    | x86 / x86_64                  | i32x4, u32x4, i16x8, u16x8, i8x16, u8x16, IMask4/8/16     |
 //! | NEON    | aarch64                       | i32x4, u32x4, i16x8, u16x8, i8x16, u8x16, IMask4/8/16     |
-//! | AVX2    | x86 / x86_64 + avx2 feature   | i32x8, u32x8, i16x16, u16x16, i8x32, u8x32, IMask32x8/16x16/8x32 (additional) |
+//! | AVX2    | x86 / x86_64                  | i32x8, u32x8, i16x16, u16x16, i8x32, u8x32, IMask32x8/16x16/8x32 (additional) |
 //! | WASM    | wasm32/64 + simd128 feature   | i32x4, u32x4, i16x8, u16x8, i8x16, u8x16, IMask4/8/16     |
 //! | Scalar  | all others                    | i32x4, u32x4, i16x8, u16x8, i8x16, u8x16, IMask4/8/16     |
 //!
 //! Mirrors `wide/float/mod.rs`'s dispatch shape.
+//!
+//! AVX2's row changed from "x86/x86_64 + avx2 feature" to plain
+//! "x86/x86_64": these 6 types are always compiled now, storage is two
+//! portable halves of the matching always-available width (e.g. `i32x8`
+//! is two `i32x4`), and each arithmetic method checks
+//! `crate::wide::avx2_available()` at runtime, calling a
+//! `#[target_feature(enable = "avx2")]`-gated fast path when true and the
+//! portable halves' own methods otherwise — see `wide/int/avx2/i32x8.rs`'s
+//! doc comment for the full reasoning (this was previously a compile-time
+//! `target_feature = "avx2"` gate on the whole module, which meant a C
+//! caller linking a non-AVX2 build would get a link error referencing
+//! these types at all, not just a slower runtime path).
 //!
 //! ## Fixes / additions this pass
 //!
@@ -90,22 +102,13 @@ pub use neon::{
 // per-op AVX2-vs-SSE2 advantage table and this pass's known omissions
 // (shuffle_bytes / cross-lane widen, deferred pending a compile check).
 
-#[cfg(all(
-    any(target_arch = "x86", target_arch = "x86_64"),
-    target_feature = "avx2",
-))]
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 pub(crate) mod avx2;
 
-#[cfg(all(
-    any(target_arch = "x86", target_arch = "x86_64"),
-    target_feature = "avx2",
-))]
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 pub use avx2::{IMask32x8, IMask16x16, IMask8x32};
 
-#[cfg(all(
-    any(target_arch = "x86", target_arch = "x86_64"),
-    target_feature = "avx2",
-))]
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 #[allow(non_camel_case_types)]
 pub use avx2::{
     i32x8::i32x8, u32x8::u32x8,
