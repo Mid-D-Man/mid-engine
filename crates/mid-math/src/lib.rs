@@ -198,8 +198,13 @@ pub use wide::float::f32x4;
 pub use wide::float::Vec3x4;
 pub use wide::float::QuatX4;
 
-#[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), target_feature = "avx2"))]
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 pub use wide::float::Vec3x8;
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+pub use wide::float::Mask8;
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[allow(non_camel_case_types)]
+pub use wide::float::f32x8;
 
 // ── Curves ────────────────────────────────────────────────────────────────────
 pub use curves::{

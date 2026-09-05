@@ -6,19 +6,25 @@
 //! | Backend | Target                        | Types                      |
 //! |---------|-------------------------------|----------------------------|
 //! | SSE2    | x86 / x86_64                  | f32x4, Mask4, Vec3x4, QuatX4 |
-//! | AVX2    | x86 / x86_64 + avx2 feature   | Vec3x8 (additional)        |
+//! | AVX2    | x86 / x86_64                  | f32x8, Mask8, Vec3x8 (additional) |
 //! | NEON    | aarch64                       | f32x4, Mask4, Vec3x4, QuatX4 |
 //! | WASM    | wasm32/64 + simd128 feature   | f32x4, Mask4, Vec3x4, QuatX4 |
 //! | Scalar  | all others                    | f32x4, Mask4, Vec3x4, QuatX4 |
 //!
 //! ## Vec3x8 availability
 //!
-//! Vec3x8 uses `__m256` (AVX2, 8× f32 in one register) and is x86-only.
-//! There is no NEON or WASM equivalent worth adding:
-//!   - NEON 8-wide would require 2× float32x4_t — a custom type with no
-//!     single-instruction transpose win (vld4q_f32 only gives 4-wide).
-//!   - WASM SIMD128 has no 256-bit registers.
-//! Vec3x8 is therefore gated to `all(x86/x86_64, target_feature = "avx2")`.
+//! Vec3x8, f32x8, and Mask8 are x86-only — there is no NEON or WASM
+//! equivalent worth adding (NEON's vld4q_f32 only gives a 4-wide transpose;
+//! WASM SIMD128 has no 256-bit registers). All three are now always
+//! compiled on x86/x86_64 rather than gated behind the crate's own `avx2`
+//! target-feature baseline: storage is two portable width-4 halves, and
+//! each arithmetic method checks `crate::wide::avx2_available()` at
+//! runtime, calling a `#[target_feature(enable = "avx2")]`-gated fast path
+//! when true and the portable halves' own methods otherwise — see
+//! `wide/int/avx2/i32x8.rs`'s doc comment for the full reasoning (this was
+//! previously a compile-time gate on the whole module, which meant a C
+//! caller linking a non-AVX2 build got a link error referencing these
+//! types at all, not just a slower runtime path).
 //!
 //! ## WASM (next)
 //!
@@ -44,17 +50,15 @@ pub use sse2::f32x4::f32x4;
 
 // ── AVX2 — x86 / x86_64 + avx2 ───────────────────────────────────────────────
 
-#[cfg(all(
-    any(target_arch = "x86", target_arch = "x86_64"),
-    target_feature = "avx2",
-))]
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 pub(crate) mod avx2;
 
-#[cfg(all(
-    any(target_arch = "x86", target_arch = "x86_64"),
-    target_feature = "avx2",
-))]
-pub use avx2::Vec3x8;
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+pub use avx2::{Vec3x8, Mask8};
+
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[allow(non_camel_case_types)]
+pub use avx2::f32x8::f32x8;
 
 // ── NEON — aarch64 ────────────────────────────────────────────────────────────
 //

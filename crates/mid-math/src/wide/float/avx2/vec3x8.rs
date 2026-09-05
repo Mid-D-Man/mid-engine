@@ -1,12 +1,31 @@
 // crates/mid-math/src/wide/float/avx2/vec3x8.rs
-//! 8 × Vec3 packed in SoA layout — AVX2, x86 / x86_64.
+//! 8 x Vec3 packed in SoA layout.
 //!
-//! Requires: RUSTFLAGS="-C target-feature=+avx2"
-//! 2010 MacBook Pro (Sandy Bridge) does NOT have AVX2. This path only compiles
-//! and runs on Haswell (2013) or later, or on GitHub CI (Xeon/EPYC).
+//! Same storage/dispatch design as `wide/int/avx2/i32x8.rs` — see that
+//! file's doc comment for the full reasoning. Portable `{lo, hi}: Vec3x4`
+//! storage, never a raw `__m256` field outside a
+//! `#[target_feature(enable = "avx2")]` scope.
 //!
-//! Layout: x,y,z each a __m256 holding one component for all 8 vectors.
-//! Same SoA philosophy as Vec3x4 — doubles the throughput on AVX2 hardware.
+//! `dot`/`length_sq`/`length` return `f32x8` and `lerp` takes `t: f32x8`,
+//! `select` takes `mask: Mask8` — matching `Vec3x4`'s own convention
+//! (`f32x4`/`Mask4`, never a raw `__m128`/`__m128`-as-mask) exactly. The
+//! original AVX2-only version of this file returned/took raw `__m256`
+//! directly in these four methods, which cannot be preserved: a signature
+//! exposing the raw register type cannot be called safely from ordinary
+//! code either, for the same reason the register cannot live in a
+//! struct field outside a guarded scope. One real call site in this
+//! crate's own benches (`vs_wide_float.rs`'s `lerp/vec3x8` case) does
+//! pass a raw `__m256` today and needs updating to build `f32x8` instead
+//! — flagged, not fixed as part of this file, since the bench file's own
+//! AVX2 dispatch wrappers need the same "always compiled, runtime
+//! checked" update this file just got, which is its own separate pass.
+//!
+//! `normalize`/`normalize_precise`'s fast-rsqrt math is unchanged in
+//! substance — still rsqrt + one Newton-Raphson step — just expressed via
+//! `f32x8`'s own portable methods instead of raw intrinsics recomputed
+//! here a second time.
+
+#![allow(non_camel_case_types)]
 
 use core::fmt;
 use core::ops::{Add, AddAssign, Mul, MulAssign, Neg, Sub, SubAssign};
@@ -17,386 +36,235 @@ use core::arch::x86::*;
 use core::arch::x86_64::*;
 
 use crate::f32::sse2::vec3::Vec3;
-use crate::EPSILON;
-use super::super::sse2::f32x4::f32x4 as f32x4_sse;
+use crate::wide::float::sse2::vec3x4::Vec3x4;
+use super::f32x8::f32x8;
+use super::mask8::Mask8;
 
-// Predicate constant for _mm256_cmp_ps: greater-than, ordered, quiet
-const CMP_GT_OQ: i32 = 30;
-
-/// Fast reciprocal sqrt per lane via rsqrt + one Newton-Raphson step.
-/// Accuracy: ~23-bit mantissa (same as f32 precision after NR).
-#[inline(always)]
-unsafe fn rsqrt_nr_256(x: __m256) -> __m256 {
-    let r     = _mm256_rsqrt_ps(x);
-    let half  = _mm256_set1_ps(0.5);
-    let three = _mm256_set1_ps(3.0);
-    let xrr   = _mm256_mul_ps(x, _mm256_mul_ps(r, r));
-    _mm256_mul_ps(_mm256_mul_ps(half, r), _mm256_sub_ps(three, xrr))
-}
-
-/// 8 × Vec3 in SoA layout. 96 bytes, 32-byte aligned.
-///
-/// Fields are public for advanced intrinsic use.
-/// All operations process 8 vectors simultaneously — double throughput vs Vec3x4
-/// on AVX2-capable hardware.
+/// 8 x Vec3 in SoA layout. Two `Vec3x4` halves.
 #[derive(Clone, Copy)]
-#[repr(C, align(32))]
 pub struct Vec3x8 {
-    /// x-components of all 8 vectors: [x₀..x₇]
-    pub x: __m256,
-    /// y-components of all 8 vectors: [y₀..y₇]
-    pub y: __m256,
-    /// z-components of all 8 vectors: [z₀..z₇]
-    pub z: __m256,
+    lo: Vec3x4,
+    hi: Vec3x4,
 }
 
 impl Vec3x8 {
-    // ── Constants ─────────────────────────────────────────────────────────────
+    pub const ZERO: Self = Self { lo: Vec3x4::ZERO, hi: Vec3x4::ZERO };
 
-    pub const ZERO: Self = unsafe {
-        // transmute from [f32; 8] — __m256 and [f32;8] are both 32 bytes.
-        // SAFETY: all-zeros is valid for __m256.
-        core::mem::transmute::<[f32; 24], Self>([0.0f32; 24])
-    };
-
-    // ── Constructors ──────────────────────────────────────────────────────────
+    #[inline(always)]
+    pub(crate) fn from_halves(lo: Vec3x4, hi: Vec3x4) -> Self { Self { lo, hi } }
 
     /// Build from 8 individual Vec3s.
-    ///
-    /// `_mm256_set_ps` takes args highest-lane first, so ordering is reversed.
     #[inline]
-    pub fn from_vec3s(
-        a: Vec3, b: Vec3, c: Vec3, d: Vec3,
-        e: Vec3, f: Vec3, g: Vec3, h: Vec3,
-    ) -> Self {
-        unsafe {
-            Self {
-                x: _mm256_set_ps(h.x, g.x, f.x, e.x, d.x, c.x, b.x, a.x),
-                y: _mm256_set_ps(h.y, g.y, f.y, e.y, d.y, c.y, b.y, a.y),
-                z: _mm256_set_ps(h.z, g.z, f.z, e.z, d.z, c.z, b.z, a.z),
-            }
-        }
+    pub fn from_vec3s(a: Vec3, b: Vec3, c: Vec3, d: Vec3, e: Vec3, f: Vec3, g: Vec3, h: Vec3) -> Self {
+        Self::from_halves(Vec3x4::from_vec3s(a, b, c, d), Vec3x4::from_vec3s(e, f, g, h))
     }
 
-    /// Build from a slice of 8 Vec3s.
     #[inline(always)]
     pub fn from_slice(s: &[Vec3; 8]) -> Self {
         Self::from_vec3s(s[0], s[1], s[2], s[3], s[4], s[5], s[6], s[7])
     }
 
-    /// Broadcast a single Vec3 to all 8 lanes.
     #[inline(always)]
-    pub fn splat(v: Vec3) -> Self {
-        unsafe {
-            Self {
-                x: _mm256_set1_ps(v.x),
-                y: _mm256_set1_ps(v.y),
-                z: _mm256_set1_ps(v.z),
-            }
-        }
-    }
+    pub fn splat(v: Vec3) -> Self { Self::from_halves(Vec3x4::splat(v), Vec3x4::splat(v)) }
 
-    /// Extract all 8 vectors as an array (SoA → AoS).
     #[inline]
     pub fn to_array(self) -> [Vec3; 8] {
-        unsafe {
-            let mut xs = [0.0f32; 8];
-            let mut ys = [0.0f32; 8];
-            let mut zs = [0.0f32; 8];
-            _mm256_storeu_ps(xs.as_mut_ptr(), self.x);
-            _mm256_storeu_ps(ys.as_mut_ptr(), self.y);
-            _mm256_storeu_ps(zs.as_mut_ptr(), self.z);
-            core::array::from_fn(|i| Vec3::new(xs[i], ys[i], zs[i]))
-        }
+        let lo = self.lo.to_array();
+        let hi = self.hi.to_array();
+        [lo[0], lo[1], lo[2], lo[3], hi[0], hi[1], hi[2], hi[3]]
     }
 
-    /// Write to a mutable slice of 8 Vec3s.
     #[inline(always)]
     pub fn write_to_slice(self, s: &mut [Vec3; 8]) {
         let a = self.to_array();
         s.copy_from_slice(&a);
     }
 
-    /// Extract one lane. Panics if `lane >= 8`.
     #[inline]
     pub fn get(self, lane: usize) -> Vec3 {
         assert!(lane < 8, "Vec3x8::get — lane {lane} out of bounds (max 7)");
-        self.to_array()[lane]
+        if lane < 4 { self.lo.get(lane) } else { self.hi.get(lane - 4) }
     }
 
-    // ── Arithmetic ────────────────────────────────────────────────────────────
+    // ── AVX2 pack/unpack helpers — only place a __m256 exists ──
+    // (Vec3x8 has 3 __m256-shaped fields conceptually — x/y/z — so this
+    // packs/unpacks each of Vec3x4's own x/y/z __m128 fields separately.)
 
-    /// Element-wise multiply — NOT dot product.
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    #[target_feature(enable = "avx2")]
+    unsafe fn to_m256_xyz(self) -> (__m256, __m256, __m256) {
+        unsafe {
+            (
+                _mm256_set_m128(self.hi.x, self.lo.x),
+                _mm256_set_m128(self.hi.y, self.lo.y),
+                _mm256_set_m128(self.hi.z, self.lo.z),
+            )
+        }
+    }
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    #[target_feature(enable = "avx2")]
+    unsafe fn from_m256_xyz(x: __m256, y: __m256, z: __m256) -> Self {
+        unsafe {
+            Self::from_halves(
+                Vec3x4 { x: _mm256_castps256_ps128(x), y: _mm256_castps256_ps128(y), z: _mm256_castps256_ps128(z) },
+                Vec3x4 { x: _mm256_extractf128_ps::<1>(x), y: _mm256_extractf128_ps::<1>(y), z: _mm256_extractf128_ps::<1>(z) },
+            )
+        }
+    }
+
     #[inline(always)]
     pub fn mul_elem(self, rhs: Self) -> Self {
-        unsafe {
-            Self {
-                x: _mm256_mul_ps(self.x, rhs.x),
-                y: _mm256_mul_ps(self.y, rhs.y),
-                z: _mm256_mul_ps(self.z, rhs.z),
-            }
-        }
+        Self::from_halves(self.lo.mul_elem(rhs.lo), self.hi.mul_elem(rhs.hi))
     }
 
-    /// Scale each of the 8 vectors by a uniform scalar.
+    #[inline(always)]
+    pub fn scale(self, s: f32x8) -> Self {
+        let (slo, shi) = s.halves();
+        Self::from_halves(self.lo.scale(slo), self.hi.scale(shi))
+    }
+
     #[inline(always)]
     pub fn scale_uniform(self, s: f32) -> Self {
-        unsafe {
-            let ss = _mm256_set1_ps(s);
-            Self {
-                x: _mm256_mul_ps(self.x, ss),
-                y: _mm256_mul_ps(self.y, ss),
-                z: _mm256_mul_ps(self.z, ss),
-            }
-        }
+        Self::from_halves(self.lo.scale_uniform(s), self.hi.scale_uniform(s))
     }
 
-    /// Fused multiply-add: `self * b + c` per component, per lane.
-    /// LLVM auto-contracts to `vfmadd231ps` on FMA3 CPUs.
     #[inline(always)]
     pub fn madd(self, b: Self, c: Self) -> Self {
+        Self::from_halves(self.lo.madd(b.lo, c.lo), self.hi.madd(b.hi, c.hi))
+    }
+
+    /// 8 independent dot products. AVX2 native fast path (3 muls + 2 adds
+    /// on real 256-bit registers instead of two width-4 passes).
+    #[inline]
+    pub fn dot(self, rhs: Self) -> f32x8 {
+        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        if crate::wide::avx2_available() {
+            return unsafe { self.dot_avx2(rhs) };
+        }
+        f32x8::from_halves(self.lo.dot(rhs.lo), self.hi.dot(rhs.hi))
+    }
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    #[target_feature(enable = "avx2")]
+    unsafe fn dot_avx2(self, rhs: Self) -> f32x8 {
         unsafe {
-            Self {
-                x: _mm256_add_ps(_mm256_mul_ps(self.x, b.x), c.x),
-                y: _mm256_add_ps(_mm256_mul_ps(self.y, b.y), c.y),
-                z: _mm256_add_ps(_mm256_mul_ps(self.z, b.z), c.z),
-            }
+            let (ax, ay, az) = self.to_m256_xyz();
+            let (bx, by, bz) = rhs.to_m256_xyz();
+            let xx = _mm256_mul_ps(ax, bx);
+            let yy = _mm256_mul_ps(ay, by);
+            let zz = _mm256_mul_ps(az, bz);
+            let sum = _mm256_add_ps(_mm256_add_ps(xx, yy), zz);
+            f32x8::from_halves(
+                crate::wide::float::sse2::f32x4::f32x4(_mm256_castps256_ps128(sum)),
+                crate::wide::float::sse2::f32x4::f32x4(_mm256_extractf128_ps::<1>(sum)),
+            )
         }
     }
 
-    // ── Geometric ops ─────────────────────────────────────────────────────────
-
-    /// 8 independent dot products simultaneously.
-    ///
-    /// Returns a `__m256` where lane i = dot(self[i], rhs[i]).
-    /// 3 muls + 2 adds = same as 1 scalar dot but 8× throughput.
-    #[inline(always)]
-    pub fn dot(self, rhs: Self) -> __m256 {
-        unsafe {
-            let xx = _mm256_mul_ps(self.x, rhs.x);
-            let yy = _mm256_mul_ps(self.y, rhs.y);
-            let zz = _mm256_mul_ps(self.z, rhs.z);
-            _mm256_add_ps(_mm256_add_ps(xx, yy), zz)
-        }
-    }
-
-    /// 8 independent cross products simultaneously.
-    #[inline(always)]
+    #[inline]
     pub fn cross(self, rhs: Self) -> Self {
+        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        if crate::wide::avx2_available() {
+            return unsafe { self.cross_avx2(rhs) };
+        }
+        Self::from_halves(self.lo.cross(rhs.lo), self.hi.cross(rhs.hi))
+    }
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    #[target_feature(enable = "avx2")]
+    unsafe fn cross_avx2(self, rhs: Self) -> Self {
         unsafe {
-            Self {
-                x: _mm256_sub_ps(
-                    _mm256_mul_ps(self.y, rhs.z),
-                    _mm256_mul_ps(self.z, rhs.y),
-                ),
-                y: _mm256_sub_ps(
-                    _mm256_mul_ps(self.z, rhs.x),
-                    _mm256_mul_ps(self.x, rhs.z),
-                ),
-                z: _mm256_sub_ps(
-                    _mm256_mul_ps(self.x, rhs.y),
-                    _mm256_mul_ps(self.y, rhs.x),
-                ),
-            }
+            let (ax, ay, az) = self.to_m256_xyz();
+            let (bx, by, bz) = rhs.to_m256_xyz();
+            let x = _mm256_sub_ps(_mm256_mul_ps(ay, bz), _mm256_mul_ps(az, by));
+            let y = _mm256_sub_ps(_mm256_mul_ps(az, bx), _mm256_mul_ps(ax, bz));
+            let z = _mm256_sub_ps(_mm256_mul_ps(ax, by), _mm256_mul_ps(ay, bx));
+            Self::from_m256_xyz(x, y, z)
         }
     }
 
     #[inline(always)]
-    pub fn length_sq(self) -> __m256 { self.dot(self) }
-
-    /// Length of each vector (full sqrt).
+    pub fn length_sq(self) -> f32x8 { self.dot(self) }
     #[inline(always)]
-    pub fn length(self) -> __m256 {
-        unsafe { _mm256_sqrt_ps(self.length_sq()) }
-    }
+    pub fn length(self) -> f32x8 { self.length_sq().sqrt() }
 
-    /// Normalize all 8 vectors — fast path via rsqrtps + Newton-Raphson.
-    ///
-    /// Degenerate lanes (length ≈ 0) produce zero — guarded by EPSILON.
-    #[inline]
+    #[inline(always)]
     pub fn normalize(self) -> Self {
-        unsafe {
-            let len_sq  = self.length_sq();
-            let eps2    = _mm256_set1_ps(EPSILON * EPSILON);
-            let inv     = rsqrt_nr_256(len_sq);
-            let ok      = _mm256_cmp_ps(len_sq, eps2, CMP_GT_OQ);
-            let masked  = _mm256_and_ps(ok, inv);
-            Self {
-                x: _mm256_mul_ps(self.x, masked),
-                y: _mm256_mul_ps(self.y, masked),
-                z: _mm256_mul_ps(self.z, masked),
-            }
-        }
+        Self::from_halves(self.lo.normalize(), self.hi.normalize())
     }
-
-    /// Normalize — full sqrt + divide for IEEE754 accuracy.
-    #[inline]
+    #[inline(always)]
     pub fn normalize_precise(self) -> Self {
-        unsafe {
-            let len_sq = self.length_sq();
-            let len    = _mm256_sqrt_ps(len_sq);
-            let eps    = _mm256_set1_ps(EPSILON);
-            let ok     = _mm256_cmp_ps(len, eps, CMP_GT_OQ);
-            let safe   = _mm256_blendv_ps(_mm256_set1_ps(1.0), len, ok);
-            let inv    = _mm256_div_ps(_mm256_set1_ps(1.0), safe);
-            let masked = _mm256_and_ps(ok, inv);
-            Self {
-                x: _mm256_mul_ps(self.x, masked),
-                y: _mm256_mul_ps(self.y, masked),
-                z: _mm256_mul_ps(self.z, masked),
-            }
-        }
+        Self::from_halves(self.lo.normalize_precise(), self.hi.normalize_precise())
     }
 
-    // ── Interpolation ─────────────────────────────────────────────────────────
-
-    /// Per-lane lerp. `t` is a `__m256` of blend factors.
     #[inline(always)]
-    pub fn lerp(self, rhs: Self, t: __m256) -> Self {
-        unsafe {
-            Self {
-                x: _mm256_add_ps(self.x, _mm256_mul_ps(_mm256_sub_ps(rhs.x, self.x), t)),
-                y: _mm256_add_ps(self.y, _mm256_mul_ps(_mm256_sub_ps(rhs.y, self.y), t)),
-                z: _mm256_add_ps(self.z, _mm256_mul_ps(_mm256_sub_ps(rhs.z, self.z), t)),
-            }
-        }
+    pub fn lerp(self, rhs: Self, t: f32x8) -> Self {
+        let (tlo, thi) = t.halves();
+        Self::from_halves(self.lo.lerp(rhs.lo, tlo), self.hi.lerp(rhs.hi, thi))
     }
-
-    /// Per-lane lerp with uniform t.
     #[inline(always)]
-    pub fn lerp_uniform(self, rhs: Self, t: f32) -> Self {
-        unsafe { self.lerp(rhs, _mm256_set1_ps(t)) }
-    }
+    pub fn lerp_uniform(self, rhs: Self, t: f32) -> Self { self.lerp(rhs, f32x8::splat(t)) }
 
-    /// Component-wise minimum.
     #[inline(always)]
-    pub fn min(self, rhs: Self) -> Self {
-        unsafe {
-            Self {
-                x: _mm256_min_ps(self.x, rhs.x),
-                y: _mm256_min_ps(self.y, rhs.y),
-                z: _mm256_min_ps(self.z, rhs.z),
-            }
-        }
-    }
-
-    /// Component-wise maximum.
+    pub fn min(self, rhs: Self) -> Self { Self::from_halves(self.lo.min(rhs.lo), self.hi.min(rhs.hi)) }
     #[inline(always)]
-    pub fn max(self, rhs: Self) -> Self {
-        unsafe {
-            Self {
-                x: _mm256_max_ps(self.x, rhs.x),
-                y: _mm256_max_ps(self.y, rhs.y),
-                z: _mm256_max_ps(self.z, rhs.z),
-            }
-        }
-    }
+    pub fn max(self, rhs: Self) -> Self { Self::from_halves(self.lo.max(rhs.lo), self.hi.max(rhs.hi)) }
 
-    /// Branchless per-lane select. `mask` MSB set = choose `if_true`.
     #[inline(always)]
-    pub fn select(mask: __m256, if_true: Self, if_false: Self) -> Self {
-        unsafe {
-            Self {
-                x: _mm256_blendv_ps(if_false.x, if_true.x, mask),
-                y: _mm256_blendv_ps(if_false.y, if_true.y, mask),
-                z: _mm256_blendv_ps(if_false.z, if_true.z, mask),
-            }
-        }
+    pub fn select(mask: Mask8, if_true: Self, if_false: Self) -> Self {
+        Self::from_halves(
+            Vec3x4::select(mask.lo, if_true.lo, if_false.lo),
+            Vec3x4::select(mask.hi, if_true.hi, if_false.hi),
+        )
     }
 
-    // ── Predicates ────────────────────────────────────────────────────────────
+    #[inline(always)]
+    pub fn length_lt(self, rhs: Self) -> Mask8 {
+        Mask8::from_halves(self.lo.length_lt(rhs.lo), self.hi.length_lt(rhs.hi))
+    }
 
-    /// True if all components of all 8 vectors are finite.
     #[inline]
-    pub fn is_finite(self) -> bool {
-        self.to_array().iter().all(|v| v.is_finite())
-    }
+    pub fn is_finite(self) -> bool { self.lo.is_finite() && self.hi.is_finite() }
 }
-
-// ── Operators ─────────────────────────────────────────────────────────────────
 
 impl Add for Vec3x8 {
     type Output = Self;
     #[inline(always)]
-    fn add(self, r: Self) -> Self {
-        unsafe { Self {
-            x: _mm256_add_ps(self.x, r.x),
-            y: _mm256_add_ps(self.y, r.y),
-            z: _mm256_add_ps(self.z, r.z),
-        }}
-    }
+    fn add(self, r: Self) -> Self { Self::from_halves(self.lo + r.lo, self.hi + r.hi) }
 }
-impl AddAssign for Vec3x8 { fn add_assign(&mut self, r: Self) { *self = *self + r; } }
+impl AddAssign for Vec3x8 { #[inline(always)] fn add_assign(&mut self, r: Self) { *self = *self + r; } }
 
 impl Sub for Vec3x8 {
     type Output = Self;
     #[inline(always)]
-    fn sub(self, r: Self) -> Self {
-        unsafe { Self {
-            x: _mm256_sub_ps(self.x, r.x),
-            y: _mm256_sub_ps(self.y, r.y),
-            z: _mm256_sub_ps(self.z, r.z),
-        }}
-    }
+    fn sub(self, r: Self) -> Self { Self::from_halves(self.lo - r.lo, self.hi - r.hi) }
 }
-impl SubAssign for Vec3x8 { fn sub_assign(&mut self, r: Self) { *self = *self - r; } }
+impl SubAssign for Vec3x8 { #[inline(always)] fn sub_assign(&mut self, r: Self) { *self = *self - r; } }
 
 impl Neg for Vec3x8 {
     type Output = Self;
     #[inline(always)]
-    fn neg(self) -> Self {
-        unsafe {
-            let sign = _mm256_set1_ps(-0.0);
-            Self {
-                x: _mm256_xor_ps(self.x, sign),
-                y: _mm256_xor_ps(self.y, sign),
-                z: _mm256_xor_ps(self.z, sign),
-            }
-        }
-    }
+    fn neg(self) -> Self { Self::from_halves(-self.lo, -self.hi) }
 }
 
-impl Mul for Vec3x8 {
-    type Output = Self;
-    #[inline(always)]
-    fn mul(self, r: Self) -> Self { self.mul_elem(r) }
-}
-impl MulAssign for Vec3x8 { fn mul_assign(&mut self, r: Self) { *self = *self * r; } }
-
-impl Mul<f32> for Vec3x8 {
-    type Output = Self;
-    #[inline(always)]
-    fn mul(self, s: f32) -> Self { self.scale_uniform(s) }
-}
+impl Mul for Vec3x8 { type Output = Self; #[inline(always)] fn mul(self, r: Self) -> Self { self.mul_elem(r) } }
+impl MulAssign for Vec3x8 { #[inline(always)] fn mul_assign(&mut self, r: Self) { *self = *self * r; } }
+impl Mul<f32> for Vec3x8 { type Output = Self; #[inline(always)] fn mul(self, s: f32) -> Self { self.scale_uniform(s) } }
 
 impl PartialEq for Vec3x8 {
-    fn eq(&self, r: &Self) -> bool {
-        unsafe {
-            let mx = _mm256_movemask_ps(_mm256_cmp_ps(self.x, r.x, 0)); // _CMP_EQ_OQ = 0
-            let my = _mm256_movemask_ps(_mm256_cmp_ps(self.y, r.y, 0));
-            let mz = _mm256_movemask_ps(_mm256_cmp_ps(self.z, r.z, 0));
-            mx == 0xFF && my == 0xFF && mz == 0xFF
-        }
-    }
+    #[inline]
+    fn eq(&self, r: &Self) -> bool { self.lo == r.lo && self.hi == r.hi }
 }
 
-impl Default for Vec3x8 { fn default() -> Self { Self::ZERO } }
+impl Default for Vec3x8 { #[inline(always)] fn default() -> Self { Self::ZERO } }
 
 impl fmt::Debug for Vec3x8 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let a = self.to_array();
-        write!(f, "Vec3x8({:?})", a)
+        write!(f, "Vec3x8({:?})", self.to_array())
     }
 }
 impl fmt::Display for Vec3x8 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let a = self.to_array();
-        write!(f, "{:?}", a)
+        write!(f, "{:?}", self.to_array())
     }
 }
-impl From<[Vec3; 8]> for Vec3x8 {
-    fn from(a: [Vec3; 8]) -> Self { Self::from_slice(&a) }
-}
-impl From<Vec3x8> for [Vec3; 8] {
-    fn from(v: Vec3x8) -> Self { v.to_array() }
-      }
+impl From<[Vec3; 8]> for Vec3x8 { #[inline(always)] fn from(a: [Vec3; 8]) -> Self { Self::from_slice(&a) } }
+impl From<Vec3x8> for [Vec3; 8] { #[inline(always)] fn from(v: Vec3x8) -> Self { v.to_array() } }
