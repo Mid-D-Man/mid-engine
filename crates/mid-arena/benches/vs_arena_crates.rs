@@ -112,7 +112,7 @@ fn bench_insert(c: &mut Criterion) {
 
     g.bench_function("id-arena", |b| {
         b.iter(|| {
-            let mut a: id_arena::Arena<Payload> = id_arena::Arena::new();
+            let mut a: id_arena::Arena<Payload> = id_arena::Arena::with_capacity(N);
             for i in 0..N {
                 black_box(a.alloc(payload(i)));
             }
@@ -294,7 +294,7 @@ fn bench_get(c: &mut Criterion) {
     }
 
     {
-        let mut arena: id_arena::Arena<Payload> = id_arena::Arena::new();
+        let mut arena: id_arena::Arena<Payload> = id_arena::Arena::with_capacity(N);
         let ids: Vec<_> = (0..N).map(|i| arena.alloc(payload(i))).collect();
         g.bench_function("id-arena", |b| {
             b.iter(|| {

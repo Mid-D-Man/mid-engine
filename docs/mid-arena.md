@@ -250,7 +250,7 @@ deleted, because the point of recording a surprise honestly is that it
 can turn out to be sandbox noise, and this project's own convention is
 to say so plainly rather than quietly edit the earlier claim away.
 
-## Real CI benchmark results (rustc 1.98.1, actual GitHub Actions run #8 — not the sandbox pass above)
+## Real CI benchmark results (rustc 1.98.1, actual GitHub Actions runs #8 and #10 — not the sandbox pass above)
 
 `benches/vs_arena_crates.rs` run for real on CI (`workflow_dispatch`).
 Took several real runs to get here, not one clean shot — runs 1 and 2
@@ -269,19 +269,25 @@ statistical, real hardware — not a single `Instant` call on a shared
 sandbox VM).
 
 `atomic-arena` and `drop_arena` were added after run #8 — real API
-verified in isolated scratch projects (see "Fixes and Problems" below),
-but neither has a real CI number yet, so neither appears in this table.
-`drop_arena` never will, the same way C libraries don't: it's measured
-by `examples/drop_arena_standalone.rs`, `std::time::Instant`, not
+verified in isolated scratch projects (see "Fixes and Problems" below).
+`atomic-arena` got its first real CI number on run 10: 15.98 ns/op
+insert, 2.07 ns/op get, notably slower than every other crate in its own
+generation-checked group (that group otherwise sits at 5.5–7.0 ns/op
+insert) — a real, standalone finding, not folded into the "ties its
+peer band" story the rest of that group shares. Plausible cause not yet
+confirmed by reading the source further: `atomic-arena`'s `Controller`
+type exists to support cross-thread reservation even when unused, and
+that bookkeeping may carry a real cost regardless of whether a given
+call site ever touches the concurrent path. `drop_arena` never gets a
+CI number the same way the C libraries don't: it's measured by
+`examples/drop_arena_standalone.rs`, `std::time::Instant`, not
 criterion, for a real confirmed reason (that module's own doc comment).
-Sandbox numbers for it, gathered while building it (noisy, three runs):
-insert 8.9–14.8 ns/op, get 0.83–2.32 ns/op, remove-half-reinsert-half
-3.24–9.54 ns/op — meaningfully slower than plain `typed-arena` across
-every run, which tracks: it's `typed-arena` with free-list bookkeeping
-layered on top, and that bookkeeping has a real cost, the same way
-`slab`/`slotmap`'s ABA-safety bookkeeping does elsewhere in this
-survey. `atomic-arena` will get its first real number the next time the
-workflow runs, same table as everything else.
+Its run 10 numbers (11.18 / 1.19 / 2.90 ns/op) land inside the range
+already seen while building it (8.9–14.8 / 0.83–2.32 / 2.90–9.54
+ns/op) — meaningfully slower than plain `typed-arena` across every run,
+which tracks: it's `typed-arena` with free-list bookkeeping layered on
+top, and that bookkeeping has a real cost, the same way `slab`/
+`slotmap`'s ABA-safety bookkeeping does elsewhere in this survey.
 
 **Vec + freelist, ABA-safe (generation-checked)** — insert / get, ns/op
 
@@ -293,7 +299,7 @@ workflow runs, same table as everything else.
 | **mid-arena `SlotArena`** | **6.93** | **0.86** |
 | slotmap | 6.96 | 0.71 |
 | thunderdome | 7.01 | 0.76 |
-| atomic-arena | *(pending first real CI run)* | |
+| atomic-arena | 15.98 | 2.07 |
 
 **Linked arena chunks (bump, no per-item reuse)**
 
@@ -715,6 +721,29 @@ call without a pause budget.
   (matching the same reasoning the `.c` benchmarks in this directory
   already use, for a related reason). Real numbers gathered from it are
   in "Real CI benchmark results" above.
+- Run 10 reported `id-arena` insert at 1.51 ns/op -- wildly outside its
+  own consistent 5.5-7.5 ns/op range across every prior run, and faster
+  than `bumpalo` itself, the same shape of implausible result the
+  `BumpArena`/`black_box` incident had. Checked the code directly rather
+  than assume the same bug: `black_box` was already present and correct
+  in `id-arena`'s bench, ruling that out. Real, separate, genuine finding
+  instead: `id-arena`'s bench was the only one in this whole file using
+  `Arena::new()` instead of `Arena::with_capacity(N)` -- every other
+  crate here pre-allocates, so `id-arena` alone was paying variable
+  Vec-reallocation cost the others don't, making it structurally more
+  exposed to scheduling noise on a busy runner (criterion's own
+  diagnostics flagged this specific run as unusually unstable: 3 sampling
+  warnings with suggested target times up to 9.4s, versus the usual 1
+  warning around 5.1s). `id_arena::Arena::with_capacity` exists (checked
+  directly) and is now used in all three `id-arena` bench sites. Also
+  fixed while investigating: `CARGO_TERM_COLOR: never` added to the
+  `drop_arena` example's CI step, since raw ANSI color codes from the
+  compile log were leaking into that step's raw-output display (cosmetic
+  only -- `parse_c()` only matches lines ending in `ns/op`, so the parsed
+  numbers were never affected). Next CI run is the real test of whether
+  the `with_capacity` fix actually stabilizes `id-arena`'s number; not
+  folded into "Real CI benchmark results" above until confirmed, since
+  run 10's figure for it specifically should not be trusted.
 
 ## Reproducing these numbers
 
