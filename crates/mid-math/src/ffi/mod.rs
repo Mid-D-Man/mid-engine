@@ -20,6 +20,18 @@ pub mod wide_float;
 pub mod storage;
 pub mod bvec;
 
+// AVX2-only additive wide types (i32x8 and friends, f32x8, Vec3x8) get
+// their own FFI modules, gated to the architectures they exist on at
+// all -- the types themselves always compile on x86/x86_64 now and
+// dispatch to AVX2 or a portable fallback internally at runtime (see
+// each module's own header), but they simply don't exist elsewhere
+// (aarch64, wasm32/64), so the module declaration itself is gated the
+// same way the underlying types already are.
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+pub mod wide_int_avx2;
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+pub mod wide_float_avx2;
+
 // ── Flat re-exports ───────────────────────────────────────────────────────────
 
 pub use float32::{CAffine3, CMat3, CMat4, CQuat, CVec2, CVec3, CVec4};
@@ -43,6 +55,11 @@ pub use wide_float::{Cf32x4, CVec3x4, CQuatX4};
 // directly (see ffi/storage.rs's header for why). bvec: no new C struct types
 // either -- BVec2/3/4 are already crate::BVec2/3/4, re-exported from the crate
 // root already, not redefined here.
+
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+pub use wide_int_avx2::{CI32x8, CU32x8, CI16x16, CU16x16, CI8x32, CU8x32};
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+pub use wide_float_avx2::{Cf32x8, CVec3x8};
 
 // Legacy path — anything that did `use crate::ffi::types::X` still compiles.
 pub mod types {
