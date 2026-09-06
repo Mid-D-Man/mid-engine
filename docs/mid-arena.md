@@ -99,6 +99,31 @@ that `SlotArena`'s plain enum doesn't.
 `CompactSlotArena` in insert/get/churn, behind `#[cfg(feature =
 "compact")]` -- see "Fixes and Problems" below for when.
 
+### `examples/drop_arena_standalone.rs`
+**What it does:** standalone `std::time::Instant` micro-benchmark for
+`drop_arena`, run via `cargo run --release --example
+drop_arena_standalone -p mid-arena`, not a criterion bench inside
+`vs_arena_crates.rs`.
+
+**Decisions:** `drop_arena::DropBox`'s `Drop` implementation calls back
+into the arena through an invariant lifetime tied to the arena's own
+type parameter. Every criterion bench in `vs_arena_crates.rs` returns
+the populated arena from the timed closure so criterion has something
+to observe; that shape does not compile for `drop_arena` (confirmed
+directly, `E0505`/`E0515`, not assumed) since returning `(arena,
+boxes)` -- or even just `arena` alone after any `DropBox` exists --
+ties the arena's borrow to the same lifetime the type itself carries.
+Lives under `examples/`, not `benches/` or `src/bin/`, specifically
+because example targets get `[dev-dependencies]` access the way
+tests/benches do; plain `[[bin]]` targets do not, and `drop_arena` has
+no reason to be a real dependency of this crate.
+
+**Tests:** none (it is itself a measurement program, not a
+correctness-tested module) -- its own three operations were manually
+verified against expected values (checksums, lengths) in a separate
+scratch project before this file was written, the same verification
+standard every other real API addition in this survey got.
+
 ## Survey methodology
 
 Started from a comparison table (screenshot, `Overview` sheet) plus the
@@ -238,10 +263,25 @@ a real table-formatting bug (Rust's batch-total time printed next to
 C's already-per-op time, unconverted), and run 8 added
 `CompactSlotArena` and `typed-generational-arena` once those existed.
 Every one of those runs is logged in "Fixes and Problems" below, not
-smoothed over. This table is the current, complete state, all figures
+smoothed over. This table is the state as of run #8, all figures
 already per-operation (criterion's own methodology — many samples,
 statistical, real hardware — not a single `Instant` call on a shared
 sandbox VM).
+
+`atomic-arena` and `drop_arena` were added after run #8 — real API
+verified in isolated scratch projects (see "Fixes and Problems" below),
+but neither has a real CI number yet, so neither appears in this table.
+`drop_arena` never will, the same way C libraries don't: it's measured
+by `examples/drop_arena_standalone.rs`, `std::time::Instant`, not
+criterion, for a real confirmed reason (that module's own doc comment).
+Sandbox numbers for it, gathered while building it (noisy, three runs):
+insert 8.9–14.8 ns/op, get 0.83–2.32 ns/op, remove-half-reinsert-half
+3.24–9.54 ns/op — meaningfully slower than plain `typed-arena` across
+every run, which tracks: it's `typed-arena` with free-list bookkeeping
+layered on top, and that bookkeeping has a real cost, the same way
+`slab`/`slotmap`'s ABA-safety bookkeeping does elsewhere in this
+survey. `atomic-arena` will get its first real number the next time the
+workflow runs, same table as everything else.
 
 **Vec + freelist, ABA-safe (generation-checked)** — insert / get, ns/op
 
@@ -253,6 +293,7 @@ sandbox VM).
 | **mid-arena `SlotArena`** | **6.93** | **0.86** |
 | slotmap | 6.96 | 0.71 |
 | thunderdome | 7.01 | 0.76 |
+| atomic-arena | *(pending first real CI run)* | |
 
 **Linked arena chunks (bump, no per-item reuse)**
 
@@ -265,7 +306,8 @@ sandbox VM).
 **Everything else** — `slab` (no ABA check) 1.66 / 0.66, `id-arena`
 (indexed, no reuse) 6.47 / 0.64, `sharded-slab` (sharded/lock-free)
 29.95 / 10.03, `internment` (hashset dedup) 71.60 / —. Full grouped
-table, C libraries included, in the workflow's own step summary.
+table, C libraries and `drop_arena` included, in the workflow's own
+step summary.
 
 **The corrected finding, still holding across every run since:**
 `SlotArena` isn't an outlier. It sits inside the same ~5.7–7.0 ns band
@@ -652,6 +694,27 @@ call without a pause budget.
   reservation workflow, `drop_arena`'s lifetime-tied `DropBox` wrapper),
   and getting either wrong in a benchmark is worse than not benching it
   yet.
+- Followed up on both, real source checked this time rather than
+  reasoning from the API's surface shape. `atomic-arena`'s real source
+  (`atomic-arena-0.1.2/src/lib.rs`) has a plain `insert(&mut self, data:
+  T) -> Result<Key, ArenaFull>` alongside the `Controller` workflow --
+  the reservation machinery is for cross-thread use, not required for
+  ordinary single-threaded insert/get/remove. Verified end to end in an
+  isolated scratch project, added normally, no caveats needed.
+  `drop_arena` was a real, confirmed dead end for this file specifically:
+  tried returning `(arena, boxes)` from a closure, then just `arena`
+  alone after allocating from it, both failed to compile
+  (`cannot move out of arena because it is borrowed`) -- `DropBox`'s
+  `Drop` impl calls back into the arena via an invariant lifetime tied
+  to the arena's own type parameter, which is fundamentally incompatible
+  with the "return the populated arena from the timed closure" shape
+  every criterion bench in this file uses. Not a workaround-able API
+  quirk, an actual structural property, confirmed by trying it twice.
+  Solved by moving it to `examples/drop_arena_standalone.rs`, a plain
+  `std::time::Instant` program with no return-value constraint at all
+  (matching the same reasoning the `.c` benchmarks in this directory
+  already use, for a related reason). Real numbers gathered from it are
+  in "Real CI benchmark results" above.
 
 ## Reproducing these numbers
 

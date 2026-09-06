@@ -2,6 +2,7 @@
 # Parses C and Rust arena-allocator benchmark output and prints a unified
 # markdown comparison. Called from .github/workflows/bench-vs-c-arena-libs.yml.
 # Reads: /tmp/tsoding.txt  /tmp/apr.txt  /tmp/talloc.txt  /tmp/rust.txt
+#        /tmp/drop_arena.txt
 #
 # parse_c()/parse_rust()/to_ns()/fmt_ns() below are copied unchanged from
 # scripts/bench_vs_c_libs.py (mid-math's own C-vs-Rust comparison script) --
@@ -137,6 +138,7 @@ tsoding_data = parse_c('/tmp/tsoding.txt')
 apr_data     = parse_c('/tmp/apr.txt')
 talloc_data  = parse_c('/tmp/talloc.txt')
 rust_data    = parse_rust('/tmp/rust.txt')
+drop_arena_data = parse_c('/tmp/drop_arena.txt')
 
 # ── insert / get: every source measured the exact same operation ──────────
 # Every figure below is per-operation. Rust's raw criterion number
@@ -167,6 +169,7 @@ APPROACH_OF = {
     "slotmap": "Vec + freelist, ABA-safe (generation-checked)",
     "generational-arena": "Vec + freelist, ABA-safe (generation-checked)",
     "typed-generational-arena": "Vec + freelist, ABA-safe (generation-checked)",
+    "atomic-arena": "Vec + freelist, ABA-safe (generation-checked)",
     "thunderdome": "Vec + freelist, ABA-safe (generation-checked)",
     "slab": "Vec + freelist, no ABA check",
     "mid-arena/BumpArena": "Linked arena chunks (bump, no per-item reuse)",
@@ -218,6 +221,35 @@ for approach in APPROACH_ORDER:
         get = fmt_ns(get_ns / N) if get_ns is not None else '—'
         print(f"| {name} | {ins} | {get} |")
     print("")
+
+    # drop_arena isn't a criterion result (see drop_arena_standalone.rs's
+    # own doc comment for why -- an invariant-lifetime issue, not a
+    # style choice), so it isn't in rust_data/rows_by_approach at all.
+    # Printed as its own row right after the bump-allocator group it's
+    # actually built on top of (typed-arena + a free list on top), using
+    # the same N and payload, already per-operation from its own
+    # report() output -- not divided by N again.
+    if approach == "Linked arena chunks (bump, no per-item reuse)":
+        da_ins = drop_arena_data.get('insert', (None, None))[1]
+        da_get = drop_arena_data.get('get', (None, None))[1]
+        if da_ins is not None or da_get is not None:
+            print("**Bump + free list (typed-arena-based, with reuse)**")
+            print("")
+            print("`drop_arena` wraps `typed-arena` with a free list so individual "
+                  "items can be reclaimed (`docs/mid-arena.md`'s survey) -- a real "
+                  "middle ground between the no-reuse bump allocators above and the "
+                  "full generation-checked arenas below. Measured with `std::time::Instant`, "
+                  "not criterion, for a real, confirmed reason (see "
+                  "`drop_arena_standalone.rs`'s own doc comment), so single-run rather "
+                  "than statistical -- treat this row as a real but noisier data point "
+                  "than the criterion-measured ones above and below it.")
+            print("")
+            print("| Implementation | insert (per-op) | get (per-op) |")
+            print("|---|---|---|")
+            ins = fmt_ns(da_ins) if da_ins is not None else '—'
+            get = fmt_ns(da_get) if da_get is not None else '—'
+            print(f"| drop_arena | {ins} | {get} |")
+            print("")
 
 if unclassified:
     print("**Other (not yet categorized in this script)**")
@@ -283,6 +315,9 @@ if rust_churn:
     for impl, (_s, ns) in rust_churn.items():
         ops = 150_000 if 'sharded-slab' in impl else 200_000
         print(f"| {impl} | {fmt_ns(ns / ops)} |")
+    da_churn = drop_arena_data.get('remove_half_reinsert_half', (None, None))[1]
+    if da_churn is not None:
+        print(f"| drop_arena (std::time::Instant, single run — see note above) | {fmt_ns(da_churn)} |")
     print("")
 
 print("**tsoding/arena.h: whole-arena reset**")

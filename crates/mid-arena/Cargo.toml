@@ -53,6 +53,8 @@ sharded-slab       = "0.1.7"
 internment         = { version = "0.8.6", features = ["arena"] }
 gc                 = { version = "0.5.1", features = ["derive"] }
 typed-generational-arena = "0.2.9"
+atomic-arena       = "0.1.2"
+drop_arena         = "0.3.0"
 
 [[bench]]
 name    = "vs_arena_crates"

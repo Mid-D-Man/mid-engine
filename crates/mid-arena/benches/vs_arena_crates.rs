@@ -100,6 +100,16 @@ fn bench_insert(c: &mut Criterion) {
         })
     });
 
+    g.bench_function("atomic-arena", |b| {
+        b.iter(|| {
+            let mut a: atomic_arena::Arena<Payload> = atomic_arena::Arena::new(N);
+            for i in 0..N {
+                black_box(a.insert(payload(i)).expect("arena sized exactly for N inserts"));
+            }
+            a
+        })
+    });
+
     g.bench_function("id-arena", |b| {
         b.iter(|| {
             let mut a: id_arena::Arena<Payload> = id_arena::Arena::new();
@@ -261,6 +271,22 @@ fn bench_get(c: &mut Criterion) {
                 let mut sum = 0u64;
                 for &idx in &idxs {
                     sum = sum.wrapping_add(arena[idx].a);
+                }
+                black_box(sum)
+            })
+        });
+    }
+
+    {
+        let mut arena: atomic_arena::Arena<Payload> = atomic_arena::Arena::new(N);
+        let keys: Vec<_> = (0..N)
+            .map(|i| arena.insert(payload(i)).expect("arena sized exactly for N inserts"))
+            .collect();
+        g.bench_function("atomic-arena", |b| {
+            b.iter(|| {
+                let mut sum = 0u64;
+                for &k in &keys {
+                    sum = sum.wrapping_add(arena.get(k).unwrap().a);
                 }
                 black_box(sum)
             })
@@ -445,6 +471,22 @@ fn bench_churn(c: &mut Criterion) {
             }
             for i in 0..N / 2 {
                 black_box(a.insert(payload(i)));
+            }
+            a
+        })
+    });
+
+    g.bench_function("atomic-arena", |b| {
+        b.iter(|| {
+            let mut a: atomic_arena::Arena<Payload> = atomic_arena::Arena::new(N);
+            let keys: Vec<_> = (0..N)
+                .map(|i| a.insert(payload(i)).expect("arena sized exactly for N inserts"))
+                .collect();
+            for &k in keys.iter().step_by(2) {
+                a.remove(k);
+            }
+            for i in 0..N / 2 {
+                black_box(a.insert(payload(i)).expect("removed half leaves room for N/2 more"));
             }
             a
         })
