@@ -1213,6 +1213,41 @@ impl Archetypes {
         )
     }
 
+    // ── TEMPORARY, for crate::diag_query2_unchecked only — delete
+    // together. Single-component analog of `diag_entities_and_columns`
+    // below, for `Iter1Unchecked`.
+    pub(crate) fn diag_entities_and_column<T: 'static>(
+        &self,
+        archetype_id: ArchetypeId,
+        id: ComponentId,
+    ) -> (&[Entity], &[T]) {
+        let archetype = self
+            .archetypes
+            .get(archetype_id)
+            .expect("diag: precomputed matched list only ever contains real archetype ids");
+        let entities: &[Entity] = &archetype.table.entities;
+        let column: &[T] = match archetype.table.columns.get(id) {
+            Some(column) => column
+                .as_any()
+                .downcast_ref::<Vec<T>>()
+                .expect("column type must match component_id's T")
+                .as_slice(),
+            None => &[],
+        };
+        (entities, column)
+    }
+
+    pub(crate) fn diag_matched_and_id<T: 'static>(
+        &self,
+    ) -> (Option<ComponentId>, Vec<ArchetypeId>) {
+        let id = self.existing_component_id::<T>();
+        let matched = match id {
+            Some(id) => self.archetypes_with(id).collect(),
+            None => Vec::new(),
+        };
+        (id, matched)
+    }
+
     // ── TEMPORARY, for crate::diag_inline only — delete together ──
     // `Archetype`/`Table` aren't visible outside this file, so the
     // diagnostic module needs these to resolve entities/columns

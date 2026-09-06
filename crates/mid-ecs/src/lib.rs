@@ -18,6 +18,7 @@ pub mod world;
 // module's own doc comment. Delete this line together with
 // src/diag_inline.rs once the investigation concludes.
 mod diag_inline;
+mod diag_query2_unchecked;
 
 // Restored: world.rs now actually defines World (and Entity), as of the
 // generational-arena/entity-allocation pass -- see world.rs's own doc

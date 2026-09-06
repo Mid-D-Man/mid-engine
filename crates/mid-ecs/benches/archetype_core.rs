@@ -313,12 +313,84 @@ fn bench_raw_slice_ceiling(c: &mut Criterion) {
     group.finish();
 }
 
+// ── TEMPORARY, real-CI query2 unsafe/shape diagnostic ──────────────
+// See crates/mid-ecs/src/diag_query2_unchecked.rs's own NOTICE header
+// and docs/mid-ecs.md's "diag_query2_unchecked.rs" section for the
+// full story and the bevy_ecs source comparison behind these four
+// variants. Delete this function and its criterion_group! entry
+// together with diag_query2_unchecked.rs once the investigation
+// concludes.
+fn bench_query2_static_diag_unchecked(c: &mut Criterion) {
+    let mut group = c.benchmark_group("query2_static_diag_unchecked");
+    fn combine(p: &Position, v: &Velocity) -> Position {
+        Position {
+            x: p.x + v.dx,
+            y: p.y + v.dy,
+            z: p.z + v.dz,
+        }
+    }
+    for &n in &SIZES {
+        group.throughput(Throughput::Elements(n as u64));
+        let world = populated_world(n);
+
+        group.bench_with_input(
+            BenchmarkId::new("query_static_unchecked_1col", n),
+            &n,
+            |b, _| {
+                b.iter(|| {
+                    let mut sum = 0.0f32;
+                    for (_, pos) in world.query_static_diag_unchecked::<Position>() {
+                        sum += pos.x;
+                    }
+                    black_box(sum);
+                });
+            },
+        );
+        group.bench_with_input(
+            BenchmarkId::new("query2_static_unchecked_2col", n),
+            &n,
+            |b, _| {
+                b.iter(|| {
+                    let mut sum = 0.0f32;
+                    for (_, pos, vel) in world.query2_static_diag_unchecked::<Position, Velocity>()
+                    {
+                        sum += pos.x + vel.dx;
+                    }
+                    black_box(sum);
+                });
+            },
+        );
+        group.bench_with_input(BenchmarkId::new("two_tuple_item", n), &n, |b, _| {
+            b.iter(|| {
+                let mut sum = 0.0f32;
+                for (_, combined) in
+                    world.query2_static_diag_two_tuple_item::<Position, Velocity>(combine)
+                {
+                    sum += combined.x;
+                }
+                black_box(sum);
+            });
+        });
+        group.bench_with_input(BenchmarkId::new("unused_b_col", n), &n, |b, _| {
+            b.iter(|| {
+                let mut sum = 0.0f32;
+                for (_, pos) in world.query2_static_diag_unused_b_col::<Position, Velocity>() {
+                    sum += pos.x;
+                }
+                black_box(sum);
+            });
+        });
+    }
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_spawn_insert_bundle,
     bench_query_static_single_component,
     bench_query2_static_two_components,
     bench_query2_static_two_components_diag_inlining,
+    bench_query2_static_diag_unchecked,
     bench_structural_churn,
     bench_raw_slice_ceiling
 );

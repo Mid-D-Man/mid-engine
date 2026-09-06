@@ -92,6 +92,41 @@ impl World {
     ) -> impl Iterator<Item = (Entity, &A, &B)> + '_ {
         self.archetypes.iter2_diag_always::<A, B>()
     }
+
+    // ── TEMPORARY, real-CI query2 unsafe/shape diagnostic ──
+    // See src/diag_query2_unchecked.rs's own NOTICE header and
+    // docs/mid-ecs.md's "diag_query2_unchecked.rs" section for the
+    // full story. Delete these four methods together with that module
+    // once the investigation concludes. `pub`, not `pub(crate)`, for
+    // the same reason as the methods above.
+    #[doc(hidden)]
+    pub fn query_static_diag_unchecked<T: 'static>(
+        &self,
+    ) -> impl Iterator<Item = (Entity, &T)> + '_ {
+        self.archetypes.iter_diag_unchecked::<T>()
+    }
+
+    #[doc(hidden)]
+    pub fn query2_static_diag_unchecked<A: 'static, B: 'static>(
+        &self,
+    ) -> impl Iterator<Item = (Entity, &A, &B)> + '_ {
+        self.archetypes.iter2_diag_unchecked::<A, B>()
+    }
+
+    #[doc(hidden)]
+    pub fn query2_static_diag_two_tuple_item<A: 'static + Clone, B: 'static>(
+        &self,
+        combine: fn(&A, &B) -> A,
+    ) -> impl Iterator<Item = (Entity, A)> + '_ {
+        self.archetypes.iter2_diag_two_tuple_item::<A, B>(combine)
+    }
+
+    #[doc(hidden)]
+    pub fn query2_static_diag_unused_b_col<A: 'static, B: 'static>(
+        &self,
+    ) -> impl Iterator<Item = (Entity, &A)> + '_ {
+        self.archetypes.iter2_diag_unused_b_col::<A, B>()
+    }
 }
 
 #[cfg(test)]
@@ -345,5 +380,126 @@ mod tests {
         let static_found: Vec<Entity> = w.query_static::<Velocity>().map(|(e, _)| e).collect();
         assert_eq!(sparse_found, vec![sparse_entity]);
         assert_eq!(static_found, vec![static_entity]);
+    }
+
+    // ── TEMPORARY, for src/diag_query2_unchecked.rs — delete together.
+    // Each `unsafe`-using diagnostic variant needs its own correctness
+    // proof against the real, safe `query_static`/`query2_static`
+    // output before it's trustworthy enough to bench on real CI at
+    // all — a variant that's merely fast and wrong isn't useful data.
+
+    fn two_archetype_world() -> (World, Entity, Entity) {
+        // Same fragmentation shape as
+        // query_static_finds_the_component_across_multiple_distinct_archetypes
+        // above, reused here so every diagnostic variant is checked
+        // against a real multi-archetype case, not just the trivial
+        // single-archetype one.
+        let mut w = World::new();
+        let both = w.spawn();
+        let position_only = w.spawn();
+        assert!(w.insert_static(both, Position { x: 1.0, y: 1.0 }));
+        assert!(w.insert_static(both, Velocity { dx: 9.0, dy: 9.0 }));
+        assert!(w.insert_static(position_only, Position { x: 2.0, y: 2.0 }));
+        (w, both, position_only)
+    }
+
+    #[test]
+    fn diag_query_static_unchecked_matches_the_real_query_static() {
+        let (w, both, position_only) = two_archetype_world();
+
+        let mut expected: Vec<(Entity, Position)> =
+            w.query_static::<Position>().map(|(e, p)| (e, *p)).collect();
+        let mut actual: Vec<(Entity, Position)> = w
+            .query_static_diag_unchecked::<Position>()
+            .map(|(e, p)| (e, *p))
+            .collect();
+        expected.sort_by_key(|(e, _)| e.index());
+        actual.sort_by_key(|(e, _)| e.index());
+
+        assert_eq!(actual, expected);
+        assert_eq!(actual.len(), 2);
+        assert!(actual.iter().any(|(e, _)| *e == both));
+        assert!(actual.iter().any(|(e, _)| *e == position_only));
+    }
+
+    #[test]
+    fn diag_query_static_unchecked_on_never_inserted_type_is_empty() {
+        let w = World::new();
+        assert_eq!(w.query_static_diag_unchecked::<Position>().count(), 0);
+    }
+
+    #[test]
+    fn diag_query2_static_unchecked_matches_the_real_query2_static() {
+        let (w, both, _position_only) = two_archetype_world();
+
+        let expected: Vec<(Entity, Position, Velocity)> = w
+            .query2_static::<Position, Velocity>()
+            .map(|(e, p, v)| (e, *p, *v))
+            .collect();
+        let actual: Vec<(Entity, Position, Velocity)> = w
+            .query2_static_diag_unchecked::<Position, Velocity>()
+            .map(|(e, p, v)| (e, *p, *v))
+            .collect();
+
+        assert_eq!(actual, expected);
+        assert_eq!(
+            actual,
+            vec![(
+                both,
+                Position { x: 1.0, y: 1.0 },
+                Velocity { dx: 9.0, dy: 9.0 }
+            )]
+        );
+    }
+
+    #[test]
+    fn diag_query2_static_unchecked_empty_when_one_side_was_never_registered() {
+        let mut w = World::new();
+        let e = w.spawn();
+        assert!(w.insert_static(e, Position { x: 0.0, y: 0.0 }));
+        assert_eq!(
+            w.query2_static_diag_unchecked::<Position, Velocity>()
+                .count(),
+            0
+        );
+    }
+
+    #[test]
+    fn diag_query2_static_two_tuple_item_matches_a_manual_combine_over_the_real_query2_static() {
+        let (w, both, _position_only) = two_archetype_world();
+        fn combine(p: &Position, v: &Velocity) -> Position {
+            Position {
+                x: p.x + v.dx,
+                y: p.y + v.dy,
+            }
+        }
+
+        let expected: Vec<(Entity, Position)> = w
+            .query2_static::<Position, Velocity>()
+            .map(|(e, p, v)| (e, combine(p, v)))
+            .collect();
+        let actual: Vec<(Entity, Position)> = w
+            .query2_static_diag_two_tuple_item::<Position, Velocity>(combine)
+            .collect();
+
+        assert_eq!(actual, expected);
+        assert_eq!(actual, vec![(both, Position { x: 10.0, y: 10.0 })]);
+    }
+
+    #[test]
+    fn diag_query2_static_unused_b_col_matches_query2_static_first_component_only() {
+        let (w, both, _position_only) = two_archetype_world();
+
+        let expected: Vec<(Entity, Position)> = w
+            .query2_static::<Position, Velocity>()
+            .map(|(e, p, _v)| (e, *p))
+            .collect();
+        let actual: Vec<(Entity, Position)> = w
+            .query2_static_diag_unused_b_col::<Position, Velocity>()
+            .map(|(e, p)| (e, *p))
+            .collect();
+
+        assert_eq!(actual, expected);
+        assert_eq!(actual, vec![(both, Position { x: 1.0, y: 1.0 })]);
     }
 }
