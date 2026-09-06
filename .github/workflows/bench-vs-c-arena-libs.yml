@@ -171,6 +171,18 @@ jobs:
           cargo bench --bench vs_arena_crates -p mid-arena --features bump,compact 2>&1 | tee /tmp/rust.txt
 
       - name: Run drop_arena standalone example
+        env:
+          # Real incident this fixes, not a style choice: run #10's step
+          # summary showed raw ANSI color escape codes
+          # (\x1b[1m\x1b[92m...) leaking into the compile log captured
+          # in this file, since cargo colorizes "Compiling ..." lines by
+          # default and this workflow doesn't otherwise set
+          # CARGO_TERM_COLOR. The actual timing lines still parsed fine
+          # either way (scripts/bench_vs_c_arena_libs.py's parse_c()
+          # only matches lines ending in "ns/op", so the noise was
+          # display-only, not a data problem) -- fixed anyway since the
+          # step summary's raw-output section is meant to be readable.
+          CARGO_TERM_COLOR: never
         run: |
           # Not a criterion bench -- see drop_arena_standalone.rs's own
           # doc comment for the real, confirmed reason (DropBox's Drop
