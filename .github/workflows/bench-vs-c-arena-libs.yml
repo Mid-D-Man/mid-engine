@@ -170,6 +170,16 @@ jobs:
           echo "Note: ${{ inputs.baseline_note }}"
           cargo bench --bench vs_arena_crates -p mid-arena --features bump,compact 2>&1 | tee /tmp/rust.txt
 
+      - name: Run drop_arena standalone example
+        run: |
+          # Not a criterion bench -- see drop_arena_standalone.rs's own
+          # doc comment for the real, confirmed reason (DropBox's Drop
+          # impl needs an invariant lifetime back into the arena, which
+          # is structurally incompatible with returning the arena from a
+          # timed closure the way every crate in vs_arena_crates.rs does).
+          set -o pipefail
+          cargo run --release --example drop_arena_standalone -p mid-arena 2>&1 | tee /tmp/drop_arena.txt
+
       - name: Surface bench diagnostics
         if: always()
         run: |
@@ -221,6 +231,14 @@ jobs:
             echo '```'
             echo ""
             echo "</details>"
+            echo ""
+            echo "<details><summary>drop_arena standalone (click to expand -- not a criterion result, see drop_arena_standalone.rs's own doc comment for why)</summary>"
+            echo ""
+            echo '```'
+            cat /tmp/drop_arena.txt 2>/dev/null || echo "(build or run failed)"
+            echo '```'
+            echo ""
+            echo "</details>"
           } >> $GITHUB_STEP_SUMMARY
 
       - name: Upload all benchmark artifacts
@@ -233,4 +251,5 @@ jobs:
             /tmp/apr.txt
             /tmp/talloc.txt
             /tmp/rust.txt
+            /tmp/drop_arena.txt
           retention-days: 30
