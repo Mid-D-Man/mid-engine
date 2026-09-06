@@ -32,6 +32,13 @@ pub mod wide_int_avx2;
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 pub mod wide_float_avx2;
 
+// "FFI option 3" -- width-hiding batch functions. NOT architecture-gated
+// like the two modules above: that's the whole point (a C caller gets
+// one function name that works everywhere, with the AVX2 fast path
+// used opportunistically inside it on x86/x86_64 only). See its own
+// header for the full design.
+pub mod wide_batch;
+
 // ── Flat re-exports ───────────────────────────────────────────────────────────
 
 pub use float32::{CAffine3, CMat3, CMat4, CQuat, CVec2, CVec3, CVec4};
@@ -60,6 +67,9 @@ pub use wide_float::{Cf32x4, CVec3x4, CQuatX4};
 pub use wide_int_avx2::{CI32x8, CU32x8, CI16x16, CU16x16, CI8x32, CU8x32};
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 pub use wide_float_avx2::{Cf32x8, CVec3x8};
+// wide_batch: no new C struct types either -- exports operate on raw
+// scalar pointers (i32/u32/i16/u16/i8/u8/f32) directly, same reasoning
+// as storage/bvec above.
 
 // Legacy path — anything that did `use crate::ffi::types::X` still compiles.
 pub mod types {
