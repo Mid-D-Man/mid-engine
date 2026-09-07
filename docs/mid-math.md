@@ -178,3 +178,78 @@ the crate's doctests fail to compile (`camera/frustum.rs`,
 `color/color32.rs`, `fixed/mod.rs`, `helpers/euler.rs`, `noise/fbm.rs`),
 each missing an import or referencing an undefined variable in the
 example code itself. Pre-existing, not touched here.
+
+Note on this doc's own writing: the sections above this one predate
+`DOCUMENTATION_AND_COMMENTING_GUIDELINES.md` and use em dashes
+throughout. The guideline says not to. New entries below follow the
+real rule; the older sections were left as they were rather than
+rewritten, since that would be an unrelated sweep.
+
+### `wide/float/avx2/vec3x8.rs`, `swizzle/wide_float.rs`
+
+`wide_float.rs` invoked `impl_vec3_axis_swizzle!` on `Vec3x8`, the same
+macro used for `Vec3x4`. That macro builds a struct literal assuming
+public `x`/`y`/`z` fields, which is true for `Vec3x4` (its own doc
+comment says the fields are public for exactly this kind of use) but
+not for `Vec3x8`. `Vec3x8` stores two `Vec3x4` halves instead (`lo`,
+`hi`), on purpose, to avoid holding a raw `__m256` outside a
+`target_feature`-gated scope. The macro invocation produced `E0560`/
+`E0609` on every field access, blocking any build that compiled
+`mid-math` at all, including `ecs-vs-bevy-ecs`'s real CI bench run
+(build #9).
+
+This invocation could not have caused a failure before now. `Vec3x8`,
+`f32x8`, and `Mask8` used to be compiled only behind the crate's `avx2`
+target feature; `wide/float/mod.rs`'s own doc comment explains the
+recent change to always compile them on x86/x86_64 instead, so a
+non-AVX2 build wouldn't link-error on types it never touches. That
+change is what exposed this: the broken invocation was sitting in the
+tree the whole time, just never previously type-checked on a normal
+x86/x86_64 build.
+
+Fixed by writing `Vec3AxisSwizzle` for `Vec3x8` directly in
+`vec3x8.rs`, one method per axis permutation, each delegating to
+`self.lo`/`self.hi` (both already implement the trait via the same
+macro, since `Vec3x4`'s fields are public) and recombining with
+`from_halves`. This is the same shape every other method on `Vec3x8`
+already uses (`mul_elem`, `scale`, `min`, `max`, and so on), so it's
+not a new pattern for this file. The broken macro invocation in
+`wide_float.rs` was removed and replaced with a comment pointing to
+where the real impl lives and why.
+
+`Vec3x8` and `f32x8` had no test coverage at all before this fix.
+Added 5 tests to `tests/wide_tests.rs`: two checking `Vec3x4`'s own
+axis swizzle against scalar math (also previously untested), and three
+for `Vec3x8` checking a swizzle result against scalar math, checking
+`xyz()` is the identity, and cross-checking `Vec3x8`'s composed result
+against applying the same swizzle to its two `Vec3x4` halves
+independently. `cargo test -p mid-math --lib` passes 664/664
+afterward.
+
+Also fixed while in this crate: 5 unused imports left over from the
+earlier swizzle duplicate-invocation fix (`f32/scalar/vec3.rs`,
+`f32/scalar/vec4.rs`, `f32/sse2/vec4.rs`) were still present on the
+real repo. The tarball that landed was an earlier version of that fix,
+before the import cleanup. Removed here; `cargo check -p mid-math`
+reports zero unused-import warnings now.
+
+Verified `mid-anim`, `mid-collections`, and `mid-ecs` (the three other
+workspace crates depending on `mid-math`) all still build clean against
+this fix. `mid-ecs`'s own test suite still passes 176/176.
+
+Not run: `ecs-vs-bevy-ecs` itself. Its `bevy_ecs` pin needs rustc
+1.95+; the sandbox's best available apt package is rustc-1.91, so this
+crate has never been buildable here (documented in its own `Cargo.toml`
+already). The real numbers from the query2_static diagnostic bench
+still need an actual CI run once this fix lands.
+
+### `f32/mat4.rs` (found, not fixed this pass)
+
+With `mid-math` compiling again, `mid-geom` and `mid-physics` (both
+depend on it) fail to build: 21 real errors, all `Mat4` missing
+`x_axis`/`y_axis`/`z_axis`/`w_axis` fields at various call sites in
+`mid-geom`. This was hidden entirely behind `mid-math`'s own compile
+failure until now. Unrelated to the swizzle fix above and doesn't
+block `ecs-vs-bevy-ecs` (which only needs `mid-ecs`, not `mid-geom`),
+so it wasn't touched here. Flagging plainly rather than fixing it
+without being asked, since it's a real, separate break.

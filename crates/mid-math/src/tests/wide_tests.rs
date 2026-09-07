@@ -21,6 +21,9 @@ mod tests {
         Vec3, Quat, Mat4,
         to_radians, approx_eq, EPSILON,
     };
+    use crate::Vec3AxisSwizzle;
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    use crate::Vec3x8;
 
     // ─────────────────────────────────────────────────────────────────────────
     // Helpers
@@ -977,4 +980,76 @@ mod tests {
                 "Lane {} mismatch: wide={:?} scalar={:?}", i, w, s);
         }
     }
-               }
+
+    // ── Axis swizzle (Vec3AxisSwizzle) ──────────────────────────────────────────
+    // Previously untested for both Vec3x4 and Vec3x8 — added alongside the fix
+    // for Vec3x8's impl (see wide/float/avx2/vec3x8.rs), which never compiled
+    // before Vec3x8 became always-compiled on x86/x86_64 (docs/mid-math.md).
+
+    #[test]
+    fn vec3x4_axis_swizzle_matches_scalar() {
+        let v = Vec3::new(1.0, 2.0, 3.0);
+        let wide = Vec3x4::splat(v);
+        let expected = Vec3::new(v.z, v.y, v.x); // zyx
+        for lane in wide.zyx().to_array() {
+            assert!(vec3_approx(lane, expected));
+        }
+    }
+
+    #[test]
+    fn vec3x4_axis_swizzle_xyz_is_identity() {
+        let v = Vec3::new(1.0, 2.0, 3.0);
+        let wide = Vec3x4::splat(v);
+        for lane in wide.xyz().to_array() {
+            assert!(vec3_approx(lane, v));
+        }
+    }
+
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    #[test]
+    fn vec3x8_axis_swizzle_matches_scalar() {
+        let vs: [Vec3; 8] = core::array::from_fn(|i| {
+            let f = i as f32;
+            Vec3::new(f + 1.0, f + 10.0, f + 100.0)
+        });
+        let wide = Vec3x8::from_slice(&vs);
+        let expected: [Vec3; 8] = core::array::from_fn(|i| Vec3::new(vs[i].z, vs[i].y, vs[i].x));
+
+        for (lane, exp) in wide.zyx().to_array().iter().zip(expected.iter()) {
+            assert!(vec3_approx(*lane, *exp), "lane={:?} expected={:?}", lane, exp);
+        }
+    }
+
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    #[test]
+    fn vec3x8_axis_swizzle_xyz_is_identity() {
+        let vs: [Vec3; 8] = core::array::from_fn(|i| {
+            let f = i as f32;
+            Vec3::new(f, f * 2.0, f * 3.0)
+        });
+        let wide = Vec3x8::from_slice(&vs);
+        for (lane, orig) in wide.xyz().to_array().iter().zip(vs.iter()) {
+            assert!(vec3_approx(*lane, *orig));
+        }
+    }
+
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    #[test]
+    fn vec3x8_axis_swizzle_matches_vec3x4_halves() {
+        // Cross-check: Vec3x8's composed result should match applying the same
+        // permutation to its two Vec3x4 halves independently and rejoining.
+        let vs: [Vec3; 8] = core::array::from_fn(|i| Vec3::new(i as f32, (i * 2) as f32, (i * 3) as f32));
+        let wide = Vec3x8::from_slice(&vs);
+        let lo = Vec3x4::from_vec3s(vs[0], vs[1], vs[2], vs[3]);
+        let hi = Vec3x4::from_vec3s(vs[4], vs[5], vs[6], vs[7]);
+
+        let combined = wide.xzy().to_array();
+        let expected_lo = lo.xzy().to_array();
+        let expected_hi = hi.xzy().to_array();
+
+        for i in 0..4 {
+            assert!(vec3_approx(combined[i], expected_lo[i]));
+            assert!(vec3_approx(combined[i + 4], expected_hi[i]));
+        }
+    }
+}

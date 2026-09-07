@@ -7,8 +7,6 @@
 use core::fmt;
 use core::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAssign};
 use crate::{BVec4, EPSILON};
-use crate::f32::vec2::Vec2;
-use crate::f32::scalar::vec3::Vec3;
 
 /// 4D vector. 16 bytes, align(16). Scalar storage.
 #[derive(Debug, Clone, Copy)]
