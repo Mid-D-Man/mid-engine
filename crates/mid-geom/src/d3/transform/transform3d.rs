@@ -142,10 +142,10 @@ impl From<Mat4> for Transform {
     /// Extract approximate TRS from a Mat4.
     /// Assumes the matrix was built from TRS — shear is not handled.
     fn from(m: Mat4) -> Self {
-        let position = Vec3::new(m.cols[3][0], m.cols[3][1], m.cols[3][2]);
-        let sx = Vec3::new(m.cols[0][0], m.cols[0][1], m.cols[0][2]).length();
-        let sy = Vec3::new(m.cols[1][0], m.cols[1][1], m.cols[1][2]).length();
-        let sz = Vec3::new(m.cols[2][0], m.cols[2][1], m.cols[2][2]).length();
+        let position = Vec3::new(m.w_axis.x, m.w_axis.y, m.w_axis.z);
+        let sx = Vec3::new(m.x_axis.x, m.x_axis.y, m.x_axis.z).length();
+        let sy = Vec3::new(m.y_axis.x, m.y_axis.y, m.y_axis.z).length();
+        let sz = Vec3::new(m.z_axis.x, m.z_axis.y, m.z_axis.z).length();
         // Placeholder rotation — full extraction via Affine3 is the correct path
         // for accurate results when starting from a Mat4.
         let rotation = Quat::from_axis_angle(Vec3::Y, 0.0);

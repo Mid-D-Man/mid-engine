@@ -380,6 +380,15 @@ fn bench_query2_static_diag_unchecked(c: &mut Criterion) {
                 black_box(sum);
             });
         });
+        group.bench_with_input(BenchmarkId::new("composed", n), &n, |b, _| {
+            b.iter(|| {
+                let mut sum = 0.0f32;
+                for (_, pos, vel) in world.query2_static_diag_composed::<Position, Velocity>() {
+                    sum += pos.x + vel.dx;
+                }
+                black_box(sum);
+            });
+        });
     }
     group.finish();
 }

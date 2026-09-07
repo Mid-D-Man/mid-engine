@@ -127,6 +127,13 @@ impl World {
     ) -> impl Iterator<Item = (Entity, &A)> + '_ {
         self.archetypes.iter2_diag_unused_b_col::<A, B>()
     }
+
+    #[doc(hidden)]
+    pub fn query2_static_diag_composed<A: 'static, B: 'static>(
+        &self,
+    ) -> impl Iterator<Item = (Entity, &A, &B)> + '_ {
+        self.archetypes.iter2_diag_composed::<A, B>()
+    }
 }
 
 #[cfg(test)]
@@ -501,5 +508,40 @@ mod tests {
 
         assert_eq!(actual, expected);
         assert_eq!(actual, vec![(both, Position { x: 1.0, y: 1.0 })]);
+    }
+
+    #[test]
+    fn diag_query2_static_composed_matches_the_real_query2_static() {
+        let (w, both, _position_only) = two_archetype_world();
+
+        let expected: Vec<(Entity, Position, Velocity)> = w
+            .query2_static::<Position, Velocity>()
+            .map(|(e, p, v)| (e, *p, *v))
+            .collect();
+        let actual: Vec<(Entity, Position, Velocity)> = w
+            .query2_static_diag_composed::<Position, Velocity>()
+            .map(|(e, p, v)| (e, *p, *v))
+            .collect();
+
+        assert_eq!(actual, expected);
+        assert_eq!(
+            actual,
+            vec![(
+                both,
+                Position { x: 1.0, y: 1.0 },
+                Velocity { dx: 9.0, dy: 9.0 }
+            )]
+        );
+    }
+
+    #[test]
+    fn diag_query2_static_composed_empty_when_one_side_was_never_registered() {
+        let mut w = World::new();
+        let e = w.spawn();
+        assert!(w.insert_static(e, Position { x: 0.0, y: 0.0 }));
+        assert_eq!(
+            w.query2_static_diag_composed::<Position, Velocity>().count(),
+            0
+        );
     }
 }

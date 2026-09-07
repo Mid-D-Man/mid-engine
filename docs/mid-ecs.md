@@ -566,3 +566,81 @@ Correctness is independent of this and already solid: all four
 variants pass their dedicated tests in `query.rs`, cross-checked
 against the real, safe `query_static`/`query2_static` output, 176/176
 `mid-ecs` tests total.
+
+### Real CI results (Archetype Core build #7, rustc 1.98.1)
+
+These four variants ran on real CI for the first time. The result
+overturns the sandbox reading above, which is exactly why the sandbox
+numbers were never trusted on their own.
+
+At N=10,000: safe `query2_static` 37.446µs against safe `query_static`
+9.4228µs, ratio 3.97x, matching every prior real CI run of this
+comparison. `Iter2Unchecked` (`query2_static_unchecked_2col`) measured
+37.758µs and `Iter2UnusedBCol` (`unused_b_col`) measured 37.734µs,
+both indistinguishable from the safe baseline. `get_unchecked` alone
+does nothing on real CI either, same conclusion the sandbox reached,
+for once matching it.
+
+`Iter2TwoTupleItem` (`two_tuple_item`) measured 9.4864µs, matching
+`query_static`'s single-column number almost exactly, at every N from
+100 to 100,000. This is the opposite of what the sandbox showed
+(28.700µs there, indistinguishable from the other two variants). One
+variant returning a single owned value instead of two references
+closes nearly the entire gap on the toolchain where the gap is real,
+despite doing more work per item: its `combine` function reads all six
+fields across both components (`Position`'s three plus `Velocity`'s
+three) and constructs a new `Position` by value, against the baseline
+loop's two field reads (`pos.x`, `vel.dx`). More arithmetic, less time.
+
+This rules a specific thing in, not just several things out. Returning
+`(Entity, &A, &B)` is not inherently slow. `Mid-D-Man/bevy`'s own
+`D::Item` for a two-component query is exactly this shape (`(A::Item,
+B::Item)` off the tuple macro, `(&Position, &Velocity)` for a plain
+read query), and bevy pays no penalty for it (`ecs-vs-bevy-ecs` build
+#10, same day: `query_static_single_component` 1.0x, `raw_slice_ceiling`
+1.0x). Also checked and ruled out this pass: `mid-ecs`'s real `Iter2`
+(`archetype.rs`) downcasts its `Box<dyn Any>` columns to `&[A]`/`&[B]`
+once per archetype advance, same as every diagnostic variant, never
+per item, so the downcast itself isn't a per-item cost candidate.
+
+What's actually different, still untested until this pass: bevy's
+tuple `QueryData::fetch` composes as `Some((A::fetch(...)?,
+B::fetch(...)?))`, two independent single-component fetch calls glued
+by `?`. `Iter2`, `Iter2Unchecked`, `Iter2TwoTupleItem`, and
+`Iter2UnusedBCol` all instead read both columns inline in one
+hand-written tuple literal. Whether returning two references together
+is the cost, or whether it only becomes the cost when they're
+constructed by one block instead of composed from two calls, hasn't
+been separated yet.
+
+### `Iter2Composed` (built this pass, not yet run on real CI)
+
+Isolates exactly that. Same struct fields, same archetype-advance and
+per-archetype downcast logic as `Iter2Unchecked`, same `Item =
+(Entity, &A, &B)`. The only real change: two small functions,
+`fetch_one::<A>`/`fetch_one::<B>`, each doing one
+`get_unchecked`-and-wrap-in-`Some`, called from `next()` as `Some((...,
+fetch_one(a_col, row)?, fetch_one(b_col, row)?))` instead of building
+the tuple directly from `&self.a_col[row]`/`&self.b_col[row]` inline.
+Mirrors bevy's own composition shape as closely as a hand-written
+non-generic version reasonably can.
+
+Two dedicated tests in `query.rs`
+(`diag_query2_static_composed_matches_the_real_query2_static`,
+`diag_query2_static_composed_empty_when_one_side_was_never_registered`),
+cross-checked against real `query2_static` the same way every other
+variant's tests are. 178/178 `mid-ecs` tests total now. Exposed via
+`World::query2_static_diag_composed`, same `#[doc(hidden)] pub`
+pattern as the other four. Bench arm `composed` added to the
+`query2_static_diag_unchecked` group in `archetype_core.rs`.
+
+Not run on real CI yet. Given `Iter2TwoTupleItem`'s result, the most
+useful outcome to watch for is whether `Iter2Composed` also closes
+most of the gap despite still returning two references, which would
+point at the inline-tuple-literal construction itself as the real
+cost rather than the reference-pair return value; or whether it stays
+near the current 4x, which would point back at something specific to
+carrying two live references out of `next()` together, and make
+`Iter2TwoTupleItem`'s result closer to a lucky side effect of also
+narrowing the return type rather than a real fix for a query API that
+actually needs to hand back both components separately.

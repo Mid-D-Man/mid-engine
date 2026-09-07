@@ -117,13 +117,21 @@ impl AABB {
 
     #[inline]
     pub fn transform(self, m: &mid_math::Mat4) -> Self {
-        let t = Vec3::new(m.cols[3][0], m.cols[3][1], m.cols[3][2]);
+        let t = Vec3::new(m.w_axis.x, m.w_axis.y, m.w_axis.z);
+        // Local (col, row) element accessor — mid_math::Mat4 stores named
+        // x_axis/y_axis/z_axis/w_axis columns on every backend, not a `cols`
+        // array or a universal col()/row() method (those only exist on the
+        // scalar backend). Mirrors Frustum::from_mat4's own approach.
+        let elem = |col: usize, row: usize| {
+            let v = match col { 0 => m.x_axis, 1 => m.y_axis, _ => m.z_axis };
+            match row { 0 => v.x, 1 => v.y, _ => v.z }
+        };
         let mut out_min = t;
         let mut out_max = t;
         for col in 0..3 {
             for row in 0..3 {
-                let a = m.cols[col][row] * match col { 0 => self.min.x, 1 => self.min.y, _ => self.min.z };
-                let b = m.cols[col][row] * match col { 0 => self.max.x, 1 => self.max.y, _ => self.max.z };
+                let a = elem(col, row) * match col { 0 => self.min.x, 1 => self.min.y, _ => self.min.z };
+                let b = elem(col, row) * match col { 0 => self.max.x, 1 => self.max.y, _ => self.max.z };
                 let (lo, hi) = if a < b { (a, b) } else { (b, a) };
                 match row {
                     0 => { out_min = Vec3::new(out_min.x + lo, out_min.y, out_min.z); out_max = Vec3::new(out_max.x + hi, out_max.y, out_max.z); }
@@ -137,3 +145,46 @@ impl AABB {
 }
 
 impl Default for AABB { fn default() -> Self { Self::ZERO } }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use mid_math::Mat4;
+
+    fn approx(a: Vec3, b: Vec3) -> bool {
+        (a.x - b.x).abs() < 1e-4 && (a.y - b.y).abs() < 1e-4 && (a.z - b.z).abs() < 1e-4
+    }
+
+    #[test]
+    fn transform_identity_is_noop() {
+        let b = AABB::new(Vec3::new(-1.0, -2.0, -3.0), Vec3::new(1.0, 2.0, 3.0));
+        let out = b.transform(&Mat4::IDENTITY);
+        assert!(approx(out.min, b.min));
+        assert!(approx(out.max, b.max));
+    }
+
+    #[test]
+    fn transform_translation_shifts_both_corners() {
+        let b = AABB::new(Vec3::new(-1.0, -2.0, -3.0), Vec3::new(1.0, 2.0, 3.0));
+        let t = Vec3::new(10.0, 20.0, 30.0);
+        let out = b.transform(&Mat4::from_translation(t));
+        assert!(approx(out.min, b.min + t));
+        assert!(approx(out.max, b.max + t));
+    }
+
+    #[test]
+    fn transform_scale_matches_expected_axis_mapping() {
+        // Non-uniform scale on each axis catches a wrong col/row mapping
+        // immediately (e.g. scaling y instead of x would fail this).
+        let b = AABB::new(Vec3::new(-1.0, -1.0, -1.0), Vec3::new(1.0, 1.0, 1.0));
+        let m = Mat4::from_cols(
+            [2.0, 0.0, 0.0, 0.0],
+            [0.0, 3.0, 0.0, 0.0],
+            [0.0, 0.0, 4.0, 0.0],
+            [0.0, 0.0, 0.0, 1.0],
+        );
+        let out = b.transform(&m);
+        assert!(approx(out.min, Vec3::new(-2.0, -3.0, -4.0)));
+        assert!(approx(out.max, Vec3::new(2.0, 3.0, 4.0)));
+    }
+}

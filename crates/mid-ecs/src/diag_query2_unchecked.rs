@@ -175,6 +175,72 @@ impl<'a, A: 'static, B: 'static> Iterator for Iter2UnusedBCol<'a, A, B> {
     }
 }
 
+/// Structural test, not a safety/inlining test like the three above.
+/// bevy_ecs's own tuple `QueryData::fetch` (`fetch.rs`'s
+/// `impl_tuple_query_data!` macro, read directly from `Mid-D-Man/bevy`)
+/// composes a 2-component fetch as
+/// `Some((A::fetch(...)?, B::fetch(...)?))` — two independent,
+/// single-component fetch calls glued together with `?`, not one
+/// hand-written block that reads both columns inline. `Iter2`,
+/// `Iter2Unchecked`, `Iter2TwoTupleItem`, and `Iter2UnusedBCol` above all
+/// still do the latter. This is the one variant built to mirror the
+/// former, with everything else (archetype advance, per-archetype
+/// downcast, row/len bookkeeping, unsafe unchecked access) identical to
+/// `Iter2Unchecked`.
+pub(crate) struct Iter2Composed<'a, A, B> {
+    archetypes: &'a Archetypes,
+    ids: Option<(ComponentId, ComponentId)>,
+    matched: std::vec::IntoIter<ArchetypeId>,
+    entities: &'a [Entity],
+    a_col: &'a [A],
+    b_col: &'a [B],
+    row: usize,
+    len: usize,
+}
+
+/// One small function per component, mirroring bevy's per-component
+/// `WorldQuery::fetch` — each does exactly one unchecked slice read and
+/// wraps it in `Some`, same shape bevy's own `&T` read-only fetch has.
+#[inline(always)]
+unsafe fn fetch_one<T>(col: &[T], row: usize) -> Option<&T> {
+    // SAFETY: caller (Iter2Composed::next) only calls this with
+    // row < self.len, and len is set to the min of entities/a_col/b_col
+    // lengths on every archetype advance below.
+    Some(unsafe { col.get_unchecked(row) })
+}
+
+impl<'a, A: 'static, B: 'static> Iterator for Iter2Composed<'a, A, B> {
+    type Item = (Entity, &'a A, &'a B);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            if self.row < self.len {
+                let row = self.row;
+                self.row += 1;
+                // SAFETY: row < self.len, same invariant as the two
+                // fetch_one calls below.
+                let entity = unsafe { *self.entities.get_unchecked(row) };
+                // Composed like bevy's tuple fetch: Some((A::fetch(...)?, B::fetch(...)?)).
+                return Some((
+                    entity,
+                    unsafe { fetch_one(self.a_col, row) }?,
+                    unsafe { fetch_one(self.b_col, row) }?,
+                ));
+            }
+            let (a_id, b_id) = self.ids?;
+            let archetype_id = self.matched.next()?;
+            let (entities, a_col, b_col) =
+                self.archetypes
+                    .diag_entities_and_columns::<A, B>(archetype_id, a_id, b_id);
+            self.len = entities.len().min(a_col.len()).min(b_col.len());
+            self.entities = entities;
+            self.a_col = a_col;
+            self.b_col = b_col;
+            self.row = 0;
+        }
+    }
+}
+
 impl Archetypes {
     pub(crate) fn iter_diag_unchecked<T: 'static>(&self) -> Iter1Unchecked<'_, T> {
         let (id, matched) = self.diag_matched_and_id::<T>();
@@ -226,6 +292,20 @@ impl Archetypes {
     ) -> Iter2UnusedBCol<'_, A, B> {
         let (ids, matched) = self.diag_matched_and_ids::<A, B>();
         Iter2UnusedBCol {
+            archetypes: self,
+            ids,
+            matched: matched.into_iter(),
+            entities: &[],
+            a_col: &[],
+            b_col: &[],
+            row: 0,
+            len: 0,
+        }
+    }
+
+    pub(crate) fn iter2_diag_composed<A: 'static, B: 'static>(&self) -> Iter2Composed<'_, A, B> {
+        let (ids, matched) = self.diag_matched_and_ids::<A, B>();
+        Iter2Composed {
             archetypes: self,
             ids,
             matched: matched.into_iter(),

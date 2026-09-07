@@ -23,12 +23,18 @@ impl Frustum {
     /// Uses the Gribb/Hartmann method — works for any hand / depth convention.
     /// Pass `view_proj = projection * view`.
     ///
-    /// Column-major `cols[c][r]` maps to row r as:
-    /// `[cols[0][r], cols[1][r], cols[2][r], cols[3][r]]`
+    /// Row r assembled from the four column vectors (`x_axis`, `y_axis`,
+    /// `z_axis`, `w_axis`). A small local helper, not `Mat4::row()` — that
+    /// method only exists on the scalar backend, not sse2/neon/wasm/coresimd.
+    fn vec4_elem(v: mid_math::Vec4, i: usize) -> f32 {
+        match i { 0 => v.x, 1 => v.y, 2 => v.z, _ => v.w }
+    }
+
     pub fn from_mat4(m: &Mat4) -> Self {
-        let row = |r: usize| {
-            [m.cols[0][r], m.cols[1][r], m.cols[2][r], m.cols[3][r]]
-        };
+        let row = |r: usize| [
+            Self::vec4_elem(m.x_axis, r), Self::vec4_elem(m.y_axis, r),
+            Self::vec4_elem(m.z_axis, r), Self::vec4_elem(m.w_axis, r),
+        ];
         let r0 = row(0); let r1 = row(1);
         let r2 = row(2); let r3 = row(3);
 
