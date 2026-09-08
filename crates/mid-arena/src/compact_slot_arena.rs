@@ -204,6 +204,7 @@ impl<T> CompactSlotArena<T> {
         self.get(key).is_some()
     }
 
+    #[inline]
     pub fn get(&self, key: ArenaKey) -> Option<&T> {
         let slot = self.slots.get(key.index() as usize)?;
         if slot.generation == key.generation() {
@@ -216,6 +217,7 @@ impl<T> CompactSlotArena<T> {
         }
     }
 
+    #[inline]
     pub fn get_mut(&mut self, key: ArenaKey) -> Option<&mut T> {
         let slot = self.slots.get_mut(key.index() as usize)?;
         if slot.generation == key.generation() {

@@ -250,7 +250,7 @@ deleted, because the point of recording a surprise honestly is that it
 can turn out to be sandbox noise, and this project's own convention is
 to say so plainly rather than quietly edit the earlier claim away.
 
-## Real CI benchmark results (rustc 1.98.1, actual GitHub Actions runs #8 and #10 — not the sandbox pass above)
+## Real CI benchmark results (rustc 1.98.1, actual GitHub Actions runs #8, #10, and #13 — not the sandbox pass above)
 
 `benches/vs_arena_crates.rs` run for real on CI (`workflow_dispatch`).
 Took several real runs to get here, not one clean shot — runs 1 and 2
@@ -263,33 +263,62 @@ a real table-formatting bug (Rust's batch-total time printed next to
 C's already-per-op time, unconverted), and run 8 added
 `CompactSlotArena` and `typed-generational-arena` once those existed.
 Every one of those runs is logged in "Fixes and Problems" below, not
-smoothed over. This table is the state as of run #8, all figures
-already per-operation (criterion's own methodology — many samples,
-statistical, real hardware — not a single `Instant` call on a shared
-sandbox VM).
+smoothed over. The table below is run #13's numbers, the most recent —
+run #8's table is kept right after it rather than overwritten, because
+the gap between the two runs is itself a real finding, not just
+history (see "Run #13 vs run #8: same ordering, noisier numbers"
+below).
 
 `atomic-arena` and `drop_arena` were added after run #8 — real API
 verified in isolated scratch projects (see "Fixes and Problems" below).
 `atomic-arena` got its first real CI number on run 10: 15.98 ns/op
-insert, 2.07 ns/op get, notably slower than every other crate in its own
-generation-checked group (that group otherwise sits at 5.5–7.0 ns/op
-insert) — a real, standalone finding, not folded into the "ties its
-peer band" story the rest of that group shares. Plausible cause not yet
-confirmed by reading the source further: `atomic-arena`'s `Controller`
-type exists to support cross-thread reservation even when unused, and
-that bookkeeping may carry a real cost regardless of whether a given
-call site ever touches the concurrent path. `drop_arena` never gets a
-CI number the same way the C libraries don't: it's measured by
+insert, notably slower than every other crate in its own
+generation-checked group (that group otherwise sat at 5.5–7.0 ns/op
+insert on that run). Plausible cause hypothesized then, not confirmed
+by reading the source further: `atomic-arena`'s `Controller` type
+exists to support cross-thread reservation even when unused, and that
+bookkeeping may carry a real cost regardless of whether a given call
+site ever touches the concurrent path. Run #13 complicates that
+hypothesis rather than confirming it: `atomic-arena` now measures at
+9.11 ns/op, much closer to its peer band (6.4–8.2 ns/op that run) than
+run 10's number suggested — a real, standalone finding that fits the
+"run #13 vs run #8/#10: noisier numbers" section below better than it
+fits a stable, architectural per-call cost. Still not confirmed by
+reading `Controller`'s source directly either way. `drop_arena` never
+gets a CI number the same way the C libraries don't: it's measured by
 `examples/drop_arena_standalone.rs`, `std::time::Instant`, not
-criterion, for a real confirmed reason (that module's own doc comment).
-Its run 10 numbers (11.18 / 1.19 / 2.90 ns/op) land inside the range
-already seen while building it (8.9–14.8 / 0.83–2.32 / 2.90–9.54
-ns/op) — meaningfully slower than plain `typed-arena` across every run,
-which tracks: it's `typed-arena` with free-list bookkeeping layered on
-top, and that bookkeeping has a real cost, the same way `slab`/
-`slotmap`'s ABA-safety bookkeeping does elsewhere in this survey.
+criterion, for a real confirmed reason (that module's own doc
+comment). Its run 10 numbers (11.18 / 1.19 / 2.90 ns/op) land inside
+the range already seen while building it (8.9–14.8 / 0.83–2.32 /
+2.90–9.54 ns/op) — meaningfully slower than plain `typed-arena` across
+every run, which tracks: it's `typed-arena` with free-list bookkeeping
+layered on top, and that bookkeeping has a real cost, the same way
+`slab`/`slotmap`'s ABA-safety bookkeeping does elsewhere in this
+survey. Not re-run for #13 (still Instant-measured, not part of the
+criterion suite that run refreshed).
 
-**Vec + freelist, ABA-safe (generation-checked)** — insert / get, ns/op
+**Vec + freelist, ABA-safe (generation-checked)** — insert / get, ns/op, run #13
+
+| Crate | insert | get |
+|---|---|---|
+| typed-generational-arena | 6.41 | 0.89 |
+| generational-arena | 6.54 | 1.08 |
+| **mid-arena `SlotArena`** | **7.76** | **0.99** |
+| thunderdome | 7.77 | 0.85 |
+| **mid-arena `CompactSlotArena`** | **8.14** | **0.86** |
+| slotmap | 8.15 | 0.82 |
+| atomic-arena | 9.11 | 1.21 |
+
+**Linked arena chunks (bump, no per-item reuse)** — run #13
+
+| Crate | insert | get |
+|---|---|---|
+| bumpalo | 1.43 | 0.42 |
+| **mid-arena `BumpArena`** | **1.44** | **0.41** |
+| typed-arena | 1.45 | 0.41 |
+
+**Run #8's table, for comparison** (rustc 1.98.1, same benchmark, same
+runner class):
 
 | Crate | insert | get |
 |---|---|---|
@@ -299,21 +328,13 @@ top, and that bookkeeping has a real cost, the same way `slab`/
 | **mid-arena `SlotArena`** | **6.93** | **0.86** |
 | slotmap | 6.96 | 0.71 |
 | thunderdome | 7.01 | 0.76 |
-| atomic-arena | 15.98 | 2.07 |
+| atomic-arena (run 10) | 15.98 | 2.07 |
 
-**Linked arena chunks (bump, no per-item reuse)**
-
-| Crate | insert | get |
-|---|---|---|
-| **mid-arena `BumpArena`** | **1.30** | **0.34** |
-| typed-arena | 1.32 | 0.33 |
-| bumpalo | 1.37 | 0.34 |
-
-**Everything else** — `slab` (no ABA check) 1.66 / 0.66, `id-arena`
-(indexed, no reuse) 6.47 / 0.64, `sharded-slab` (sharded/lock-free)
-29.95 / 10.03, `internment` (hashset dedup) 71.60 / —. Full grouped
-table, C libraries and `drop_arena` included, in the workflow's own
-step summary.
+**Everything else, run #13** — `slab` (no ABA check) 1.64 / 0.74,
+`id-arena` (indexed, no reuse) 7.41 / 0.71, `sharded-slab`
+(sharded/lock-free) 32.59 / 10.59, `internment` (hashset dedup) 74.35 /
+—. Full grouped table, C libraries and `drop_arena` included, in the
+workflow's own step summary.
 
 **The corrected finding, still holding across every run since:**
 `SlotArena` isn't an outlier. It sits inside the same ~5.7–7.0 ns band
@@ -353,11 +374,73 @@ than only keeping the final one.
   only ever existed in a scratch script, never in `vs_arena_crates.rs`.
   Worth closing that gap.
 - Criterion has warned about incomplete samples on more than one run
-  now ("Unable to complete 100 samples in 5.0s"). Non-fatal every time,
-  likely `internment`/`gc` given their multi-ms iteration cost. A
-  `.sample_size(50)`/longer `.measurement_time(...)` on those specific
-  groups would clear it; not done yet since it doesn't change the
-  numbers' validity, only the noise floor around them.
+  now ("Unable to complete 100 samples in 5.0s") — one to two warnings
+  on earlier runs, **three separate warnings on run #13**, its own
+  signal that this needs doing rather than staying deferred (see "Run
+  #13 vs run #8" right below: this is very likely why run #13's
+  absolute numbers moved as much as they did against run #8's, even
+  though relative ordering barely changed). Likely `internment`/`gc`
+  given their multi-ms iteration cost, but not confirmed which groups
+  specifically. A `.sample_size(50)`/longer `.measurement_time(...)`
+  on those groups would clear it — still not done.
+
+### Run #13 vs run #8: same ordering, noisier numbers — and why that matters more than any single gap
+
+Every crate's absolute number moved between run #8 and run #13 —
+`typed-generational-arena`'s insert went from 5.67 to 6.41 ns/op,
+`SlotArena`'s from 6.93 to 7.76, even `atomic-arena` moved (15.98 down
+to 9.11, the other direction). The **relative ordering inside each
+group barely changed** — `typed-generational-arena`/
+`generational-arena` ahead of `SlotArena`/`thunderdome`/
+`CompactSlotArena`/`slotmap` in both runs — but the absolute gaps
+themselves aren't stable run to run, and the criterion sampling
+warnings above are the most likely real cause. **Practical upshot: the
+sampling-tuning pass above should happen before chasing any more of
+these sub-nanosecond gaps further** — right now it's not possible to
+tell how much of a ~0.1–0.2 ns/op difference is a real, fixable gap
+versus this run-to-run noise floor.
+
+## `#[inline(never)]` hot/cold path split: investigated, measured, reverted
+
+Real investigation prompted directly by run #13's numbers above, not a
+hypothetical. Full writeup in "Fixes and Problems" → `slot_arena.rs`
+and `compact_slot_arena.rs` below — summary here since it changes how
+the insert gap above should be read: `generational-arena`/
+`typed-generational-arena`'s real source (cloned this pass, exact
+pinned versions 0.2.9/0.2.9 from `Cargo.toml`) marks their fast
+"reuse a free slot" path `#[inline]` and pulls the "grow the Vec"
+branch into a separate `#[inline(never)] fn insert_slow_path` — a real,
+consistently-applied technique in both crates, not a guess. Applying
+the identical split to `SlotArena`/`CompactSlotArena::insert` was
+measured locally (sandbox `rustc`/`cargo` 1.75, standalone
+`std::time::Instant` A/B harness, git-diffed old-vs-new source, not
+criterion — see the file-level entries below for the exact numbers)
+against **this project's own benchmark shape specifically**: a fresh
+arena, `with_capacity(N)`, then N sequential inserts with nothing ever
+removed first. That shape means every single call takes the "grow"
+branch — the free list is never non-empty — so the split's whole
+premise (keep the *common* case small; only the *rare* growth case
+pays a real function-call boundary) doesn't hold for this specific
+`insert` benchmark: the "rare" case is the *only* case being measured,
+and forcing it out of line cost ~20–50% per op across repeated runs, a
+real and reproducible regression, not noise. Reverted in full.
+Splitting into two functions *without* `#[inline(never)]` measured at
+parity with the original single function (±5%, inside this harness's
+own noise band) — no benefit either, so that half of the change wasn't
+kept separately.
+
+**What this does and doesn't mean:** it doesn't mean
+`generational-arena`/`typed-generational-arena` are wrong to use this
+technique, or that their real CI numbers are somehow suspect — their
+*own* insert benchmark has the identical always-grow shape, so if
+anything this raises a real open question (not resolved here) about
+*why* the same technique helps their code and hurts this one on the
+same rustc version's inlining heuristics — plausibly something in the
+surrounding function's size or register pressure tips LLVM's own
+inlining cost model differently for the two implementations, not
+something visible from reading either source alone. Worth a
+disassembly-level look before trying this again, not source-level
+pattern-matching.
 
 ## C arena libraries (real, compiled `-O3 -march=native`, actually run)
 
@@ -371,7 +454,7 @@ minimal header-only reference (`tsoding/arena.h`, MIT, the same role
 | Library | Paradigm | insert (ns) | get (ns) |
 |---|---|---|---|
 | tsoding/arena.h | Bump allocator, whole-arena reset | 6.3–8.6 | 1.1 |
-| APR pools (`apr_palloc`) | Bump allocator, whole-pool clear | 12.5–13.8 | 1.0–1.1 |
+| APR pools (`apr_palloc`) | Bump allocator, whole-pool clear | 12.5–19.2 | 1.0–1.1 |
 | talloc (`talloc_pool`) | Hierarchical, reference-style | 61.4–76.1 | 4.2–6.8 |
 
 Reuse/free doesn't unify across the three — each API's own real shape,
@@ -630,6 +713,30 @@ call without a pause budget.
   garbage collection" only exists in a scratch sandbox script, not in
   this suite.
 
+### `slot_arena.rs`
+- Run #13's real CI numbers (see "Real CI benchmark results" above)
+  prompted trying `generational-arena`/`typed-generational-arena`'s
+  real `#[inline]`/`#[inline(never)]` hot-cold path split on `insert`
+  (both crates' actual source cloned and read this pass, exact pinned
+  versions). Measured locally against this project's own benchmark
+  shape (sandbox rustc/cargo 1.75, standalone `std::time::Instant` A/B
+  harness comparing git-diffed old vs new source, `criterion` itself
+  unusable here — see the root note on this crate's `Cargo.toml`):
+  `#[inline(never)]` on the growth branch cost 20–50% per insert
+  across repeated runs, real and reproducible, not noise. Root cause:
+  `vs_arena_crates.rs`'s `insert` benchmark starts every arena empty
+  via `with_capacity(N)` and never removes anything before the timed
+  loop, so the free list is always empty and *every* call takes the
+  branch that was just marked never-inline — the split's whole premise
+  (small, always-inlined common case; rare, out-of-line growth case)
+  doesn't hold when the "rare" case is the only one being measured.
+  Splitting into two functions without `#[inline(never)]` measured at
+  parity with the original single function, no benefit either.
+  Reverted in full, back to the original single-function `insert`. Full
+  writeup, including why the same technique still looks real and
+  intentional in the source it was read from, in "Real CI benchmark
+  results" → "`#[inline(never)]` hot/cold path split" above.
+
 ### `bump_arena.rs`
 - First version measured 3.2x slower on insert than `bumpalo`/
   `typed-arena` on real CI (run 4), despite using the same approach.
@@ -668,6 +775,15 @@ call without a pause budget.
   the safety comments to say what's actually true here rather than what
   `slotmap`'s own comment (written for some other rustc/edition
   combination) seemed to imply.
+- Same `#[inline(never)]` hot/cold `insert` split tried and reverted as
+  `slot_arena.rs` above, same real cause, same measured 20–50%
+  regression — not written up twice, see that entry. What stuck from
+  this pass: `get`/`get_mut` were missing the `#[inline]` `SlotArena`'s
+  own equivalents already carry. Added for consistency with that
+  existing convention; measured neutral in the same local A/B harness
+  (±3%, inside noise) rather than a fix — `slotmap`'s real `get` isn't
+  explicitly `#[inline]`'d either, so this was never expected to move
+  the needle on its own, just bring this file in line with its sibling.
 
 ### `benches/vs_arena_crates.rs`
 - The original sandbox pass (`std::time::Instant`, not criterion)
