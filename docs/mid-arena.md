@@ -99,6 +99,53 @@ that `SlotArena`'s plain enum doesn't.
 `CompactSlotArena` in insert/get/churn, behind `#[cfg(feature =
 "compact")]` -- see "Fixes and Problems" below for when.
 
+### `unchecked_slot_arena.rs`
+**What it does:** `UncheckedSlotArena<T>`, feature-gated behind
+`unchecked`. Same LIFO-freelist algorithm as `SlotArena`, minus the
+generation field and check entirely -- a bare `u32` index in, a bare
+`u32` index back. Mid-arena's own native implementation of the "Vec +
+freelist, no ABA check" survey row, previously only occupied by `slab`
+itself. Prompted directly by run #13/#14's real CI numbers and a
+direct question about making `SlotArena`'s ABA-safety optional -- see
+this file's own doc comment for the real, source-grounded case for why
+that's a separate type (matching this crate's `SlotArena`/
+`CompactSlotArena`/`BumpArena` precedent) rather than a runtime flag,
+and for what "unchecked" actually risks before reaching for it.
+
+**Decisions:** `slab` 0.4.12's real source (cloned this pass) confirmed
+its `Entry<T>` carries no generation field in either variant, and its
+`insert`/`get` are otherwise the same bounds-checked-`Vec`-with-freelist
+shape `SlotArena` already uses, no special inlining tricks -- so the
+real ~4-5x gap between `slab` and the generation-checked cluster on CI
+is the generation field itself, not a technique this file needed to
+independently discover.
+
+**Tests:** 14, in this file, adapted from `SlotArena`'s own suite minus
+the generation-specific ones, plus one new one specific to this type:
+`stale_index_silently_aliases_the_reused_slot`, which demonstrates the
+actual real risk directly (a stale index reads back the new value, not
+`None`) rather than only describing it in the doc comment.
+
+**Local sandbox check, honestly caveated:** the standalone
+`std::time::Instant` A/B harness (see the `#[inline(never)]` writeup
+above for why this sandbox can't run real `criterion` benches at all)
+measured this type at only ~8-10% faster than `SlotArena` here --
+nowhere near the ~4-5x the real CI numbers for `slab` vs the
+generation-checked cluster would suggest. Consistent with this
+sandbox's numbers already being established as unreliable for
+*magnitude* (different hardware, non-statistical single-run timing),
+not a sign the real gap is actually small -- this is exactly what real
+CI is for, not this sandbox's own percentage.
+
+**Wired into the bench:** `benches/vs_arena_crates.rs` now includes
+`UncheckedSlotArena` in insert/get/churn, behind `#[cfg(feature =
+"unchecked")]`, alongside `slab` in the same taxonomy group.
+`scripts/bench_vs_c_arena_libs.py`'s own grouping dict and churn-model
+description updated to place it there too.
+`.github/workflows/bench-vs-c-arena-libs.yml`'s `cargo bench` line now
+passes `--features bump,compact,unchecked` -- won't show up in a real
+CI run until that lands.
+
 ### `examples/drop_arena_standalone.rs`
 **What it does:** standalone `std::time::Instant` micro-benchmark for
 `drop_arena`, run via `cargo run --release --example
@@ -351,7 +398,9 @@ ABA trade-off, not an oversight. Every crate in the generation-checked
 band pays a real, measured cost for the staleness check that buys
 ABA-safety. That's a fair trade to be making, and it's the correct
 comparison: `SlotArena`/`CompactSlotArena` were never competing with
-`slab`'s weaker guarantee.
+`slab`'s weaker guarantee. As of this pass, that weaker guarantee is
+also available natively in this crate on purpose, not just observed in
+`slab` from the outside — see `unchecked_slot_arena.rs` below.
 
 **`BumpArena` is now honestly competitive, not artificially ahead:**
 first measured 3.2x slower than `bumpalo` (a real design gap, fixed by
@@ -784,6 +833,21 @@ call without a pause budget.
   (±3%, inside noise) rather than a fix — `slotmap`'s real `get` isn't
   explicitly `#[inline]`'d either, so this was never expected to move
   the needle on its own, just bring this file in line with its sibling.
+
+### `unchecked_slot_arena.rs`
+- Built clean first pass -- no compile errors, no `unused_unsafe` or
+  `dead_code` warnings, unlike `compact_slot_arena.rs`'s union work.
+  Makes sense in hindsight: no union, no `unsafe` anywhere in this
+  file at all, same plain-enum choice `SlotArena` already made, just
+  with one fewer field. 14/14 tests passed on first real run.
+- The one real surprise: the local sandbox A/B check (same harness as
+  the `#[inline(never)]` investigation) measured only ~8-10% faster
+  than `SlotArena`, not the ~4-5x the real CI numbers for `slab`
+  implied. Not investigated further, and not a sign anything here is
+  wrong -- logged instead as one more data point that this sandbox's
+  numbers are for catching qualitative regressions (direction), not
+  predicting real-CI magnitude, on top of the `#[inline(never)]`
+  finding above. The real number is whatever the next CI run says.
 
 ### `benches/vs_arena_crates.rs`
 - The original sandbox pass (`std::time::Instant`, not criterion)

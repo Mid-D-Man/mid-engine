@@ -41,6 +41,13 @@
 //!   internal layout. See that module's doc comment for the full
 //!   design and why it's a separate type from `SlotArena`, not a
 //!   feature-swapped version of it.
+//! - `unchecked_slot_arena` (behind the `unchecked` feature) —
+//!   non-generational `UncheckedSlotArena<T>`: bare `u32` index in, bare
+//!   `u32` index back, no staleness check at all. Mid-arena's own native
+//!   implementation of `slab`'s real, benchmarked approach (real source
+//!   read — see that module's doc comment for the ~4-5x real cost this
+//!   trades away and, more importantly, what it actually risks before
+//!   reaching for this over `SlotArena`.
 //!
 //! # Feature gates (`bump` and `compact` built, rest still planned —
 //! see `docs/mid-arena.md` "Feature gates" for the reasoning behind
@@ -83,6 +90,9 @@ pub mod bump_arena;
 #[cfg(feature = "compact")]
 pub mod compact_slot_arena;
 
+#[cfg(feature = "unchecked")]
+pub mod unchecked_slot_arena;
+
 pub use slot_arena::{ArenaKey, SlotArena};
 
 #[cfg(feature = "bump")]
@@ -90,3 +100,6 @@ pub use bump_arena::BumpArena;
 
 #[cfg(feature = "compact")]
 pub use compact_slot_arena::CompactSlotArena;
+
+#[cfg(feature = "unchecked")]
+pub use unchecked_slot_arena::UncheckedSlotArena;

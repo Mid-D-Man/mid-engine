@@ -62,10 +62,15 @@ harness = false
 
 [features]
 default = []
-# `bump` and `compact` built -- see src/bump_arena.rs,
-# src/compact_slot_arena.rs, and docs/mid-arena.md "Modules".
+# `bump`, `compact`, and `unchecked` built -- see src/bump_arena.rs,
+# src/compact_slot_arena.rs, src/unchecked_slot_arena.rs, and
+# docs/mid-arena.md "Modules".
 bump = []
 compact = []
+# Non-generational SlotArena: bare u32 index, no staleness check, real
+# technique read from slab 0.4.12 -- see src/unchecked_slot_arena.rs's
+# own doc comment before reaching for this over the default SlotArena.
+unchecked = []
 # Still planned, not yet built -- see docs/mid-arena.md "Feature gates".
 # intern  = []
 # ffi     = ["dep:zerocopy"]

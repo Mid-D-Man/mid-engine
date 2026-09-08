@@ -57,6 +57,17 @@ fn bench_insert(c: &mut Criterion) {
         })
     });
 
+    #[cfg(feature = "unchecked")]
+    g.bench_function("mid-arena/UncheckedSlotArena", |b| {
+        b.iter(|| {
+            let mut a = mid_arena::UncheckedSlotArena::with_capacity(N);
+            for i in 0..N {
+                black_box(a.insert(payload(i)));
+            }
+            a
+        })
+    });
+
     g.bench_function("slab", |b| {
         b.iter(|| {
             let mut s: slab::Slab<Payload> = slab::Slab::with_capacity(N);
@@ -208,6 +219,21 @@ fn bench_get(c: &mut Criterion) {
         let mut a = mid_arena::CompactSlotArena::with_capacity(N);
         let keys: Vec<_> = (0..N).map(|i| a.insert(payload(i))).collect();
         g.bench_function("mid-arena/CompactSlotArena", |b| {
+            b.iter(|| {
+                let mut sum = 0u64;
+                for &k in &keys {
+                    sum = sum.wrapping_add(a.get(k).unwrap().a);
+                }
+                black_box(sum)
+            })
+        });
+    }
+
+    #[cfg(feature = "unchecked")]
+    {
+        let mut a = mid_arena::UncheckedSlotArena::with_capacity(N);
+        let keys: Vec<_> = (0..N).map(|i| a.insert(payload(i))).collect();
+        g.bench_function("mid-arena/UncheckedSlotArena", |b| {
             b.iter(|| {
                 let mut sum = 0u64;
                 for &k in &keys {
@@ -406,6 +432,21 @@ fn bench_churn(c: &mut Criterion) {
     g.bench_function("mid-arena/CompactSlotArena", |b| {
         b.iter(|| {
             let mut a = mid_arena::CompactSlotArena::with_capacity(N);
+            let keys: Vec<_> = (0..N).map(|i| a.insert(payload(i))).collect();
+            for &k in keys.iter().step_by(2) {
+                a.remove(k);
+            }
+            for i in 0..N / 2 {
+                black_box(a.insert(payload(i)));
+            }
+            a
+        })
+    });
+
+    #[cfg(feature = "unchecked")]
+    g.bench_function("mid-arena/UncheckedSlotArena", |b| {
+        b.iter(|| {
+            let mut a = mid_arena::UncheckedSlotArena::with_capacity(N);
             let keys: Vec<_> = (0..N).map(|i| a.insert(payload(i))).collect();
             for &k in keys.iter().step_by(2) {
                 a.remove(k);

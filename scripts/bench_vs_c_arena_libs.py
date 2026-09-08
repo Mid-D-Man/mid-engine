@@ -172,6 +172,7 @@ APPROACH_OF = {
     "atomic-arena": "Vec + freelist, ABA-safe (generation-checked)",
     "thunderdome": "Vec + freelist, ABA-safe (generation-checked)",
     "slab": "Vec + freelist, no ABA check",
+    "mid-arena/UncheckedSlotArena": "Vec + freelist, no ABA check",
     "mid-arena/BumpArena": "Linked arena chunks (bump, no per-item reuse)",
     "bumpalo": "Linked arena chunks (bump, no per-item reuse)",
     "typed-arena": "Linked arena chunks (bump, no per-item reuse)",
@@ -291,7 +292,8 @@ print("")
 
 print("### Bulk reuse / free — not a shared operation, each API's own real shape")
 print("")
-print("mid-arena's `SlotArena`/`slab`/`slotmap`/`generational-arena`/`thunderdome` "
+print("mid-arena's `SlotArena`/`UncheckedSlotArena`/`slab`/`slotmap`/"
+      "`generational-arena`/`thunderdome` "
       "remove *and reuse a single slot*; `tsoding/arena.h`/APR pools reset the "
       "*whole arena* at once; talloc frees per-item (but a pooled child's bytes "
       "aren't reclaimed until the whole pool is freed — see talloc_bench.c's own "
