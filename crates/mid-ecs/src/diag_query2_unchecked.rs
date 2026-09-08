@@ -241,6 +241,69 @@ impl<'a, A: 'static, B: 'static> Iterator for Iter2Composed<'a, A, B> {
     }
 }
 
+/// Tests a different candidate than the four variants above:
+/// `Iter2UnusedBCol`'s own real-CI result (see docs/mid-ecs.md) showed
+/// that merely *holding* a second, unused, differently-typed slice
+/// field (`b_col: &'a [B]`) reproduces the full regression even though
+/// its own `Item` is a single reference, identical in shape to the
+/// fast `Iter1Unchecked`. `Iter2Composed` showed the fetch-composition
+/// shape doesn't matter either. What's left: holding two independently
+/// typed `&'a [_]` slice references live in the same struct, at all,
+/// might be the actual cost, not what gets returned. Real unsafe-heavy
+/// ECS implementations don't store columns as typed slice references
+/// internally for exactly this class of reason — bevy's own table
+/// storage holds raw/`NonNull` pointers, materializing a `&T` only at
+/// the point of return. This is the same idea: `a_col`/`b_col` here
+/// are `*const A`/`*const B`, not `&'a [A]`/`&'a [B]`, converted to a
+/// reference only when the returned item is constructed.
+pub(crate) struct Iter2RawPtr<'a, A, B> {
+    archetypes: &'a Archetypes,
+    ids: Option<(ComponentId, ComponentId)>,
+    matched: std::vec::IntoIter<ArchetypeId>,
+    entities: &'a [Entity],
+    a_col: *const A,
+    b_col: *const B,
+    row: usize,
+    len: usize,
+    _marker: std::marker::PhantomData<(&'a [A], &'a [B])>,
+}
+
+impl<'a, A: 'static, B: 'static> Iterator for Iter2RawPtr<'a, A, B> {
+    type Item = (Entity, &'a A, &'a B);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            if self.row < self.len {
+                let row = self.row;
+                self.row += 1;
+                // SAFETY: row < self.len, and len is the min of
+                // entities/a_col/b_col lengths as of the most recent
+                // archetype advance below, so both offsets are in
+                // bounds of their respective (still-borrowed, per the
+                // 'a in PhantomData) allocations.
+                let item = unsafe {
+                    (
+                        *self.entities.get_unchecked(row),
+                        &*self.a_col.add(row),
+                        &*self.b_col.add(row),
+                    )
+                };
+                return Some(item);
+            }
+            let (a_id, b_id) = self.ids?;
+            let archetype_id = self.matched.next()?;
+            let (entities, a_col, b_col) =
+                self.archetypes
+                    .diag_entities_and_columns::<A, B>(archetype_id, a_id, b_id);
+            self.len = entities.len().min(a_col.len()).min(b_col.len());
+            self.entities = entities;
+            self.a_col = a_col.as_ptr();
+            self.b_col = b_col.as_ptr();
+            self.row = 0;
+        }
+    }
+}
+
 impl Archetypes {
     pub(crate) fn iter_diag_unchecked<T: 'static>(&self) -> Iter1Unchecked<'_, T> {
         let (id, matched) = self.diag_matched_and_id::<T>();
@@ -314,6 +377,21 @@ impl Archetypes {
             b_col: &[],
             row: 0,
             len: 0,
+        }
+    }
+
+    pub(crate) fn iter2_diag_raw_ptr<A: 'static, B: 'static>(&self) -> Iter2RawPtr<'_, A, B> {
+        let (ids, matched) = self.diag_matched_and_ids::<A, B>();
+        Iter2RawPtr {
+            archetypes: self,
+            ids,
+            matched: matched.into_iter(),
+            entities: &[],
+            a_col: std::ptr::null(),
+            b_col: std::ptr::null(),
+            row: 0,
+            len: 0,
+            _marker: std::marker::PhantomData,
         }
     }
 }

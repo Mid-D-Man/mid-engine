@@ -644,3 +644,91 @@ carrying two live references out of `next()` together, and make
 `Iter2TwoTupleItem`'s result closer to a lucky side effect of also
 narrowing the return type rather than a real fix for a query API that
 actually needs to hand back both components separately.
+
+### Real CI result for `Iter2Composed` (Archetype Core build #8, rustc 1.98.1)
+
+Second answer, not the first. `Iter2Composed`'s own bench arm measured
+42.350µs at N=10,000, indistinguishable from the safe baseline
+(42.505µs), `Iter2Unchecked` (42.271µs), and `Iter2UnusedBCol`
+(42.335µs). Composing the fetch as two separate calls glued by `?`,
+matching bevy's own macro shape exactly, changed nothing. That rules
+out "how the fetch is composed" as the cost.
+
+What actually separates the fast variant from the three slow ones,
+looking at all four together:
+
+| Variant | Struct holds both a_col and b_col? | Item | Real CI (N=10,000) |
+|---|---|---|---|
+| `Iter1Unchecked` | No, one column only | `&T` | 10.6µs, fast |
+| `Iter2UnusedBCol` | Yes, b_col never read | `&A` | 42.3µs, slow |
+| `Iter2TwoTupleItem` | Yes, b_col read via `combine` | `A` (owned) | 10.7µs, fast |
+| `Iter2` / `Unchecked` / `Composed` | Yes | `(&A, &B)` | 42.3-42.5µs, slow |
+
+`Iter2UnusedBCol` is the tell. Its `Item` is `(Entity, &A)`, the exact
+same shape as the fast `Iter1Unchecked`, and it never reads `b_col` in
+the hot loop. The only thing it does differently from `Iter1Unchecked`
+is carry a second, unread, differently-typed slice field
+(`b_col: &'a [B]`) that gets updated on every archetype advance. That
+alone reproduces the full regression. Meanwhile `Iter2TwoTupleItem`
+reads both columns every item and stays fast, because what crosses
+back out of `next()` is owned, not a reference.
+
+So it isn't "returning two references" (bevy does that and pays
+nothing) and it isn't "how many columns get read" (`TwoTupleItem`
+reads more than `UnusedBCol` and is faster). It's specifically: once
+the iterator's own state holds two independently-typed live slice
+references, returning any reference from `next()` pays a real cost
+that returning an owned value does not, regardless of how much work
+built that owned value or how the fetch that produced it was
+structured.
+
+### `bevy_ptr` and `ThinSlicePtr` (found this pass, points at the real fix)
+
+Checked `Mid-D-Man/bevy`'s actual `crates/bevy_ptr/src/lib.rs` directly
+on the lead the user gave: bevy_ecs doesn't just happen to avoid this,
+it has a dedicated crate (`bevy_ptr`, `#![no_std]`, one dependency,
+`bevy_utils`) built specifically so its storage layer never holds
+plain `&[T]` slice references across a fetch boundary. The relevant
+type is `ThinSlicePtr<'a, T>`: a `NonNull<T>` plus a debug-only `len`
+plus `PhantomData<&'a [T]>` for the borrow checker, with
+`get_unchecked(&self, index) -> &'a T` doing the same
+pointer-add-and-deref `Iter2RawPtr` does below. Confirmed this is not
+a coincidence: `query/fetch.rs` imports it directly
+(`use bevy_ptr::{ThinSlicePtr, UnsafeCellDeref};`), and `ReadFetch<'w,
+T>`, the real `WorldQuery::Fetch` type for a plain `&T` query (its own
+doc comment says so), stores its table column as exactly
+`Option<ThinSlicePtr<'w, UnsafeCell<T>>>`, never a `&'w [T]`. A
+2-component query composes two of these side by side, same shape
+`Iter2UnusedBCol`/`Iter2Composed` tested, except bevy's two fields are
+`ThinSlicePtr` and mid-ecs's are `&'a [_]`.
+
+### `Iter2RawPtr` (built this pass, not yet run on real CI)
+
+Direct test of this. Same struct and archetype-advance logic as
+`Iter2Unchecked`, but `a_col`/`b_col` are `*const A`/`*const B`
+instead of `&'a [A]`/`&'a [B]`, with a `PhantomData<(&'a [A], &'a
+[B])>` marker carrying the same lifetime obligation the slice fields
+used to enforce directly. `next()` builds the returned item with
+`&*self.a_col.add(row)`/`&*self.b_col.add(row)` instead of indexing a
+stored slice. This is a hand-rolled version of the same idea as
+`ThinSlicePtr`, not a dependency on it; `Mid-D-Man/bevy` is source-read
+and porting reference only, never a direct dependency, so nothing here
+imports `bevy_ptr`.
+
+Two dedicated tests
+(`diag_query2_static_raw_ptr_matches_the_real_query2_static`,
+`diag_query2_static_raw_ptr_empty_when_one_side_was_never_registered`),
+same cross-check pattern as every other variant. 180/180 `mid-ecs`
+tests total now. Exposed via `World::query2_static_diag_raw_ptr`.
+Bench arm `raw_ptr` added to the same group.
+
+If this closes the gap on real CI, the natural next step is exactly
+what was asked for: a small, focused, no-std-style crate mirroring
+`ThinSlicePtr`'s actual shape (`NonNull<T>` plus debug-only length plus
+a `PhantomData<&'a [T]>` marker, `get_unchecked` returning `&'a T`),
+built as mid-engine's own, not a dependency on `bevy_ptr` itself, the
+same relationship `Mid-D-Man/bevy` already has to everything else in
+this project. Worth building once real CI says raw-pointer storage is
+actually the fix and not one more thing that looks right for reasons
+that don't hold up outside this sandbox, the same caution every other
+diagnostic in this file has been given.
