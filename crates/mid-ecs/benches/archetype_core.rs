@@ -335,6 +335,46 @@ fn bench_query2_static_diag_unchecked(c: &mut Criterion) {
             z: p.z + v.dz,
         }
     }
+
+    // Bevy's own iteration benches (benches/benches/bevy_ecs/iteration/
+    // in Mid-D-Man/bevy, read directly -- iter_simple.rs, iter_frag.rs,
+    // iter_simple_foreach.rs, iter_simple_contiguous.rs all do this,
+    // no exceptions found) never put the loop directly inside
+    // `b.iter(...)`. Every one wraps it in a `#[inline(never)] fn
+    // run(&mut self)` on a small struct, called once per sample as
+    // `b.iter(move || bench.run())`. None of the variants above do
+    // this -- their loops sit directly in the closure, fully visible
+    // to the optimizer alongside criterion's own harness code. This
+    // tests whether that alone matters, using the real, current,
+    // completely unmodified `query2_static`/`query_static` -- no
+    // diagnostic Iter2 variant, no code change to archetype.rs at all.
+    struct RealQuery2<'w> {
+        world: &'w World,
+    }
+    impl<'w> RealQuery2<'w> {
+        #[inline(never)]
+        fn run(&mut self) -> f32 {
+            let mut sum = 0.0f32;
+            for (_, pos, vel) in self.world.query2_static::<Position, Velocity>() {
+                sum += pos.x + vel.dx;
+            }
+            sum
+        }
+    }
+    struct RealQuery1<'w> {
+        world: &'w World,
+    }
+    impl<'w> RealQuery1<'w> {
+        #[inline(never)]
+        fn run(&mut self) -> f32 {
+            let mut sum = 0.0f32;
+            for (_, pos) in self.world.query_static::<Position>() {
+                sum += pos.x;
+            }
+            sum
+        }
+    }
+
     for &n in &SIZES {
         group.throughput(Throughput::Elements(n as u64));
         let world = populated_world(n);
@@ -412,6 +452,14 @@ fn bench_query2_static_diag_unchecked(c: &mut Criterion) {
                 }
                 black_box(sum);
             });
+        });
+        group.bench_with_input(BenchmarkId::new("real_query1_inline_never_wrapper", n), &n, |b, _| {
+            let mut bench = RealQuery1 { world: &world };
+            b.iter(|| black_box(bench.run()));
+        });
+        group.bench_with_input(BenchmarkId::new("real_query2_inline_never_wrapper", n), &n, |b, _| {
+            let mut bench = RealQuery2 { world: &world };
+            b.iter(|| black_box(bench.run()));
         });
     }
     group.finish();

@@ -798,3 +798,76 @@ toolchain's handling of that particular loop shape, not about owned
 values at all — and would mean the `ThinSlice`/raw-pointer design
 sketch proposed above is very unlikely to be the fix, whatever else it
 might still be worth for other reasons.
+
+### Real CI result for `Iter2OwnedDirect` (Archetype Core builds #10 and #11, rustc 1.98.1)
+
+Second outcome. Build #10's absolute numbers were a false alarm (a
+uniform ~31% drop across every group in that run, including
+benchmarks nothing in this investigation touches — CI noise, caught
+and re-run by the user rather than trusted). Build #11, same commit,
+is back in the normal range and settles it: `owned_direct` measured
+42.267µs at N=10,000, indistinguishable from every reference-returning
+variant (safe baseline 42.793µs, `Unchecked` 42.276µs, `UnusedBCol`
+42.250µs, `Composed` 42.260µs, `RawPtr` 42.279µs). `TwoTupleItem`
+stayed fast at 10.712µs, matching the 1-column baseline (10.593µs).
+Build #10's noisy absolute values still preserved this same relative
+split (owned_direct 26.046µs next to a 26.0-26.1µs cluster, two_tuple_item
+alone at 11.614µs), so it's two real CI runs agreeing on the ordering,
+not one.
+
+This rules out "owned return" outright. `Iter2OwnedDirect` returns
+owned, same as `TwoTupleItem`, and it's exactly as slow as every
+reference-returning variant. The one thing left standing, out of seven
+variants tested, is that `TwoTupleItem` is the only one whose combine
+step goes through a genuine indirect call (a stored `fn` pointer) that
+the compiler can't inline through. Every other variant, whatever else
+differs between them, fully inlines.
+
+### Bevy's own benchmark convention (found this pass, checked directly against Mid-D-Man/bevy)
+
+Went back to `Mid-D-Man/bevy` with a narrower question than before:
+not what the fetch code does, but how bevy structures the benchmark
+loop itself. Checked `benches/benches/bevy_ecs/iteration/` directly —
+`iter_simple.rs`, `iter_frag.rs`, `iter_simple_foreach.rs`,
+`iter_simple_contiguous.rs`, no exceptions found across the ones
+checked. Every one wraps its loop in a `#[inline(never)] fn
+run(&mut self)` on a small `Benchmark` struct, and `mod.rs` calls it as
+`b.iter(move || bench.run())` — the criterion closure is a single call
+to an opaque, never-inlined function that does the real work inside
+itself. None of this project's benches do that anywhere; every loop,
+in every variant above and in `benches/ecs-vs-bevy-ecs/benches/vs_bevy_ecs.rs`,
+sits directly inside `b.iter(...)`, fully visible to the optimizer
+alongside criterion's own harness code.
+
+Checked whether this alone explains bevy's own speed before assuming
+it explains mid-ecs's slowness: `vs_bevy_ecs.rs`'s `dense_query_iteration`
+benches both engines the same way, loop inline in `b.iter()`, no
+wrapper, for both sides. `bevy_ecs` still lands at parity there (its
+own iteration doesn't need the wrapper to be fast). So this can't be
+the whole explanation. But that doesn't rule out `mid-ecs`'s specific
+`Iter2` needing it, independent of whatever bevy's implementation is
+doing.
+
+### Real, unmodified `query2_static`/`query_static`, wrapped to match bevy's convention (built this pass, not yet run on real CI)
+
+Two new bench arms in the same group, `real_query1_inline_never_wrapper`
+and `real_query2_inline_never_wrapper`. Neither touches archetype.rs
+or adds a new Iter2 variant — both call the real, current, completely
+unmodified `World::query_static`/`World::query2_static`, from inside a
+`#[inline(never)] fn run(&mut self)` on a small wrapper struct, called
+as `b.iter(|| black_box(bench.run()))`, matching bevy's own structure
+exactly. Compiles clean, smoke-tested locally (`cargo bench -- --test`,
+all arms report `Success` — sandbox numbers themselves stay
+non-authoritative as always, this only confirms nothing panics).
+
+This is the most direct test yet of what's actually been driving every
+result in this file so far, and it uses zero diagnostic code: if
+wrapping the real `query2_static` in a never-inlined function alone
+closes most of the gap, a meaningful part of this entire investigation
+has been chasing a benchmark-harness artifact rather than a real
+runtime difference in `Iter2` itself — the fix would be to the bench,
+not the iterator. If it stays near 37-43µs even wrapped, that rules
+out harness structure too, and leaves indirect-call-specifically (not
+owned return, not harness shape) as the one remaining explanation with
+any real evidence behind it, which would need a real disassembly
+comparison on rustc 1.98.1 to actually resolve.
