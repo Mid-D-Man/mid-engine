@@ -22,8 +22,11 @@ crate-type = ["lib"]
 
 [features]
 default = []
+# Fixed-node-size, free-list PoolAllocator<T> (typed create/destroy,
+# reuses freed slots before growing). See docs/mid-alloc.md
+# "pool_allocator.rs".
+pool = []
 # Planned, not yet built -- see docs/mid-alloc.md "Module plan".
-# pool       = []
 # fallback   = []
 # segregator = []
 # tracking   = []

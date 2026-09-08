@@ -9,6 +9,16 @@ strategies, and wrapper types that compose them) that turned out to be
 the real reusable idea in `foonathan/memory`, not just "a few more
 allocator structs to clone."
 
+## `lib.rs`
+
+`#![no_std]` + `alloc`, zero mandatory dependencies. Wires up each
+module behind its own Cargo feature once built (`stack_allocator` is
+unconditional; `pool_allocator` behind `pool`) and re-exports each
+module's public type at the crate root. The crate-level doc comment
+there is the short version of "what's built vs. planned" — this file
+is the long version, with the actual survey and real source behind
+every claim.
+
 ## Survey
 
 Pointed at `github.com/foonathan/memory` directly (cloned, real source
@@ -80,6 +90,18 @@ replacement" — worth reading before building `mid-alloc`'s own
 `tracking` module, since it's solving the exact problem in the exact
 language and toolchain floor this workspace already has.
 
+**`segregator.hpp`** (real source read, upgraded from a name-only
+listing): not a single N-way size table, a chain of *binary* decisions.
+`threshold_segregatable<RawAllocator>` pairs a `size <= max_size`
+predicate with an allocator; `binary_segregator<Segregatable,
+RawAllocator>` tries the `Segregatable` first and falls to the second
+allocator otherwise; `make_segregator(a, b, c, ...)` nests these
+recursively so the last argument is the final fallback and everything
+before it is tried in order. `null_allocator` (always fails) is the
+default terminal fallback when none is given. Real shape to build
+`mid-alloc`'s own `segregator` module against once it's started, not
+assumed from the name.
+
 ## What's built: `StackAllocator`
 
 `crates/mid-alloc/src/stack_allocator.rs`. Fixed-capacity, directly
@@ -125,17 +147,86 @@ on a toolchain that has it before this ships anywhere that isn't itself
 still under active development. Said plainly rather than left implied,
 matching this project's own standard for what "verified" gets to mean.
 
+## What's built: `PoolAllocator`
+
+`crates/mid-alloc/src/pool_allocator.rs`, behind the `pool` feature.
+Fixed-node-size, free-list allocator: typed `create()`/`destroy()`,
+reuses a freed slot before growing. Two real sources pulled in
+different directions here, and this module takes a real position on
+both:
+
+- **API shape** follows Zig's `std.heap.MemoryPool` (real source
+  read), not `foonathan::memory_pool`'s `void* allocate_node()` +
+  `allocator_traits` specialization. Zig's own maintainers' reasoning
+  (a fixed-single-type pool already knows its size/alignment at
+  compile time, so a byte-oriented generic interface buys nothing) is
+  the reason given, not just "Zig did it this way."
+- **Growth mechanic** follows `foonathan::memory_pool::allocate_node()`
+  exactly (real source read this pass: pop the free list, or grow by
+  one whole block sized for the next region and retry) and
+  `std.heap.MemoryPool`'s real choice to grow from an *owned* arena
+  rather than a raw block list — but the region chain itself is
+  `mid-arena`'s own `BumpArena` pattern (`Cell<NonNull<RegionNode<T>>>`,
+  geometric growth), reimplemented locally rather than taken as a
+  dependency, keeping `mid-alloc` at zero mandatory dependencies
+  including on its own sibling crate.
+- **Free-slot storage** reuses `mid-arena`'s `CompactSlotArena` union
+  trick (`union Slot<T> { value: ManuallyDrop<T>, next: ... }`) rather
+  than inventing a new one.
+
+Deliberately does **not** run `T`'s destructor for an item that's still
+live when the pool itself drops — only an explicit `destroy()` call
+does. Matches `std.heap.MemoryPool.deinit()`'s real behavior (Zig has
+no destructors to run in the first place) and this crate's own
+`StackAllocator` tradeoff for the same underlying reason: tracking
+which of a pool's non-contiguous slots are still live would mean a
+live/dead flag per slot, real cost a fixed-size pool exists to avoid.
+Said directly in the module's own doc comment, with a test
+(`drop_of_still_live_items_does_not_run_their_destructor`) that exists
+specifically to keep that tradeoff honest going forward, not just
+documented once and left to drift.
+
+`with_capacity_bounded()` gives a non-growing pool (`create()` returns
+`Err(value)` once full and the free list is empty), matching Zig's
+real `Options{ .growable = false }` and `StackAllocator`'s own
+fixed-budget precedent; `new()`/`with_capacity()` grow forever, Zig's
+default.
+
+**Tests:** 13, real, actually run on this sandbox's rustc 1.75 this
+pass (`cargo test -p mid-alloc --features pool`) — a step up from
+`StackAllocator`'s hand-review-only verification, since a working
+`rustc`/`cargo` (matching the project's own MSRV floor via
+`apt install rustc cargo`) happened to be available in this session's
+sandbox. Covers: create/read-back, multiple simultaneous live
+allocations, destroy running `Drop` exactly once and freeing the slot,
+freed-slot reuse ahead of growth, LIFO reuse order across three
+outstanding frees, growing past the first region, a bounded pool
+refusing a third live slot then still reusing one it frees, 200 real
+create/destroy cycles staying internally consistent, `Default`, the
+no-drop-on-pool-drop tradeoff above, and zero-sized `T`. Existing
+`StackAllocator` tests (9) re-run clean alongside these with no
+regressions, both with and without the `pool` feature enabled.
+
+**Verification honestly scoped:** same as `StackAllocator` — no Miri
+or AddressSanitizer available (this sandbox's rustc has no
+rustup/nightly component even though it now has a real `rustc`/`cargo`
+via `apt`). Checked by hand against `CompactSlotArena`'s and
+`BumpArena`'s already-shipped unsafe shapes, which this module
+recombines rather than inventing new ones, plus the real, actually-run
+tests above.
+
 ## Module plan (catalogued, not built)
 
-- **`pool`** — fixed-node-size free-list allocator, `memory_pool`'s
-  shape: pop-or-grow-by-one-block against a swappable underlying
-  allocator.
 - **`fallback`** — `FallbackAllocator<Primary, Secondary>`: try
   `Primary`, fall back to `Secondary`. `fallback_allocator.hpp`'s real
   dispatch is about ten lines; the Rust version should be comparably
   small.
 - **`segregator`** — route by allocation size to different allocators
-  (small → pool, large → heap), `segregator.hpp`'s shape.
+  (small → pool, large → heap). Real shape now confirmed
+  (`segregator.hpp`, source read — see the survey section above): a
+  chain of binary try-this-then-fall-through decisions, not a single
+  size table, terminated by a `null_allocator` unless a real fallback
+  is given.
 - **`tracking`** — wrap any `mid-alloc` allocator with alloc/dealloc
   hooks for profiling. Read `mod-alloc`'s real source before building
   this one, given it's already solving the same problem on this
@@ -167,3 +258,19 @@ the nightly `Allocator` trait, which would be the natural way to make
 directly, given `foonathan::memory`'s own `std_allocator.hpp` does the
 same interop job for `std::allocator`) — not acted on since it's a
 guess, not a confirmed one.
+
+## Fixes and Problems
+
+### `pool_allocator.rs`
+
+- First pass. Two real compile errors caught by actually running
+  `cargo test -p mid-alloc --features pool` on this sandbox's rustc
+  1.75 rather than relying on hand-review alone: an unused
+  `PoolRegion::remaining()` method (`dead_code` warning — removed,
+  `bump()` already self-checks capacity) and three `DropCounter` test
+  structs missing `#[derive(Debug)]` (`create()` returns
+  `Result<&mut T, T>`, and `.unwrap()` on a `Result` needs `E: Debug`
+  — `StackAllocator`'s own tests never hit this because its test
+  payloads are all `Copy`/`Debug` primitives). Both fixed same pass;
+  all 22 tests in the crate (13 new, 9 existing `StackAllocator`)
+  pass clean, with and without the `pool` feature enabled.

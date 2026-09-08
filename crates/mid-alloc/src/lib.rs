@@ -1,3 +1,7 @@
+// ============================================================================
+// NOTICE: Full documentation, design decisions, and fix history for this file
+// live in docs/mid-alloc.md, section "lib.rs"
+// ============================================================================
 //! mid-alloc — composable allocator strategies for Mid Engine, built
 //! from a real source read of foonathan/memory (C++, the library this
 //! survey was pointed at directly) and the Rust `GlobalAlloc`-adapter
@@ -27,12 +31,17 @@
 //!   pattern applied so multiple allocations can be held live
 //!   simultaneously. See that module's doc comment for the full design
 //!   and its real, checked tradeoffs.
+//! - `pool_allocator` (behind the `pool` feature) — fixed-node-size,
+//!   free-list [`PoolAllocator<T>`](pool_allocator::PoolAllocator):
+//!   typed `create`/`destroy` (Zig's `std.heap.MemoryPool` shape, real
+//!   source read), backed by an owned, chunk-linked region chain
+//!   (`mid-arena`'s `BumpArena` pattern, reimplemented locally) with
+//!   `mid-arena`'s own `CompactSlotArena` union trick threading the
+//!   free list through unused slots. See that module's doc comment for
+//!   the full design and why it departs from foonathan's `memory_pool`
+//!   shape on purpose.
 //!
 //! # Module plan (catalogued in docs/mid-alloc.md, not yet built)
-//! - **`pool`** — fixed-node-size free-list allocator, modeled on
-//!   foonathan's `memory_pool`: pop a node off a free list, grow by one
-//!   block (from a swappable underlying allocator) only when the list
-//!   is empty.
 //! - **`fallback`** — a generic `FallbackAllocator<Primary, Secondary>`
 //!   combinator: try `Primary`, fall back to `Secondary` on failure.
 //!   Directly modeled on foonathan's `fallback_allocator` — a real
@@ -55,4 +64,10 @@ extern crate alloc;
 
 pub mod stack_allocator;
 
+#[cfg(feature = "pool")]
+pub mod pool_allocator;
+
 pub use stack_allocator::{StackAllocator, StackMarker};
+
+#[cfg(feature = "pool")]
+pub use pool_allocator::PoolAllocator;
