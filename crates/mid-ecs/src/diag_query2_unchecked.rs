@@ -304,6 +304,75 @@ impl<'a, A: 'static, B: 'static> Iterator for Iter2RawPtr<'a, A, B> {
     }
 }
 
+/// Required by `Iter2OwnedDirect` below. A monomorphized trait method,
+/// not a stored `fn` pointer like `Iter2TwoTupleItem`'s `combine`
+/// field. `Iter2TwoTupleItem` was built to isolate item-shape (2-tuple
+/// vs 3-tuple) from the two-slice-fields question, and its real-CI
+/// result (see docs/mid-ecs.md) was the only fast variant among six —
+/// but its own `combine: fn(&A, &B) -> A` field is a genuine indirect
+/// call, which is its own kind of optimization barrier LLVM usually
+/// can't inline through. Every other variant tested (`Unchecked`,
+/// `UnusedBCol`, `Composed`, `RawPtr`) called nothing indirectly and
+/// stayed slow. `TwoTupleItem` called something indirectly and was
+/// fast. Before concluding "owned return" is what matters, "opaque
+/// call in the loop" needs to be ruled out as the actual reason,
+/// since they've been confounded together in every test so far. This
+/// trait call is fully known at compile time and monomorphized, so
+/// the compiler is free to inline it, unlike a stored `fn` pointer.
+/// `pub`, not `pub(crate)`: `benches/archetype_core.rs` is a separate
+/// crate linking against `mid-ecs` as a library, and needs to
+/// implement this for its own `Position`/`Velocity` types to call
+/// `World::query2_static_diag_owned_direct`. Hidden from docs, same as
+/// every other `#[doc(hidden)]` diagnostic method in this file.
+#[doc(hidden)]
+pub trait DiagCombine<B> {
+    #[doc(hidden)]
+    fn diag_combine(a: &Self, b: &B) -> Self;
+}
+
+pub(crate) struct Iter2OwnedDirect<'a, A, B> {
+    archetypes: &'a Archetypes,
+    ids: Option<(ComponentId, ComponentId)>,
+    matched: std::vec::IntoIter<ArchetypeId>,
+    entities: &'a [Entity],
+    a_col: &'a [A],
+    b_col: &'a [B],
+    row: usize,
+    len: usize,
+}
+
+impl<'a, A: 'static + Copy + DiagCombine<B>, B: 'static> Iterator for Iter2OwnedDirect<'a, A, B> {
+    type Item = (Entity, A);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            if self.row < self.len {
+                let row = self.row;
+                self.row += 1;
+                // SAFETY: row < self.len, same invariant as every other
+                // variant's archetype-advance logic below.
+                let item = unsafe {
+                    (
+                        *self.entities.get_unchecked(row),
+                        A::diag_combine(self.a_col.get_unchecked(row), self.b_col.get_unchecked(row)),
+                    )
+                };
+                return Some(item);
+            }
+            let (a_id, b_id) = self.ids?;
+            let archetype_id = self.matched.next()?;
+            let (entities, a_col, b_col) =
+                self.archetypes
+                    .diag_entities_and_columns::<A, B>(archetype_id, a_id, b_id);
+            self.len = entities.len().min(a_col.len()).min(b_col.len());
+            self.entities = entities;
+            self.a_col = a_col;
+            self.b_col = b_col;
+            self.row = 0;
+        }
+    }
+}
+
 impl Archetypes {
     pub(crate) fn iter_diag_unchecked<T: 'static>(&self) -> Iter1Unchecked<'_, T> {
         let (id, matched) = self.diag_matched_and_id::<T>();
@@ -392,6 +461,22 @@ impl Archetypes {
             row: 0,
             len: 0,
             _marker: std::marker::PhantomData,
+        }
+    }
+
+    pub(crate) fn iter2_diag_owned_direct<A: 'static + Copy + DiagCombine<B>, B: 'static>(
+        &self,
+    ) -> Iter2OwnedDirect<'_, A, B> {
+        let (ids, matched) = self.diag_matched_and_ids::<A, B>();
+        Iter2OwnedDirect {
+            archetypes: self,
+            ids,
+            matched: matched.into_iter(),
+            entities: &[],
+            a_col: &[],
+            b_col: &[],
+            row: 0,
+            len: 0,
         }
     }
 }

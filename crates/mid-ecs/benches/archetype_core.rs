@@ -110,6 +110,12 @@ struct Velocity {
     dz: f32,
 }
 
+impl mid_ecs::DiagCombine<Velocity> for Position {
+    fn diag_combine(a: &Self, b: &Velocity) -> Self {
+        Position { x: a.x + b.dx, y: a.y + b.dy, z: a.z + b.dz }
+    }
+}
+
 struct Marker;
 
 fn populated_world(n: usize) -> World {
@@ -394,6 +400,15 @@ fn bench_query2_static_diag_unchecked(c: &mut Criterion) {
                 let mut sum = 0.0f32;
                 for (_, pos, vel) in world.query2_static_diag_raw_ptr::<Position, Velocity>() {
                     sum += pos.x + vel.dx;
+                }
+                black_box(sum);
+            });
+        });
+        group.bench_with_input(BenchmarkId::new("owned_direct", n), &n, |b, _| {
+            b.iter(|| {
+                let mut sum = 0.0f32;
+                for (_, combined) in world.query2_static_diag_owned_direct::<Position, Velocity>() {
+                    sum += combined.x;
                 }
                 black_box(sum);
             });

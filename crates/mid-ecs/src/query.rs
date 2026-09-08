@@ -141,6 +141,16 @@ impl World {
     ) -> impl Iterator<Item = (Entity, &A, &B)> + '_ {
         self.archetypes.iter2_diag_raw_ptr::<A, B>()
     }
+
+    #[doc(hidden)]
+    pub fn query2_static_diag_owned_direct<
+        A: 'static + Copy + crate::DiagCombine<B>,
+        B: 'static,
+    >(
+        &self,
+    ) -> impl Iterator<Item = (Entity, A)> + '_ {
+        self.archetypes.iter2_diag_owned_direct::<A, B>()
+    }
 }
 
 #[cfg(test)]
@@ -157,6 +167,12 @@ mod tests {
     struct Velocity {
         dx: f32,
         dy: f32,
+    }
+
+    impl crate::DiagCombine<Velocity> for Position {
+        fn diag_combine(a: &Self, b: &Velocity) -> Self {
+            Position { x: a.x + b.dx, y: a.y + b.dy }
+        }
     }
 
     #[test]
@@ -583,6 +599,33 @@ mod tests {
         assert!(w.insert_static(e, Position { x: 0.0, y: 0.0 }));
         assert_eq!(
             w.query2_static_diag_raw_ptr::<Position, Velocity>().count(),
+            0
+        );
+    }
+
+    #[test]
+    fn diag_query2_static_owned_direct_matches_manual_combine() {
+        let (w, both, _position_only) = two_archetype_world();
+
+        // Position { x: 1.0, y: 1.0 }, Velocity { dx: 9.0, dy: 9.0 } per
+        // two_archetype_world's own setup — combine by hand here rather
+        // than calling query2_static, since this variant's Item is
+        // already the combined value, not the two original components.
+        let expected = vec![(both, Position { x: 10.0, y: 10.0 })];
+        let actual: Vec<(Entity, Position)> = w
+            .query2_static_diag_owned_direct::<Position, Velocity>()
+            .collect();
+
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn diag_query2_static_owned_direct_empty_when_one_side_was_never_registered() {
+        let mut w = World::new();
+        let e = w.spawn();
+        assert!(w.insert_static(e, Position { x: 0.0, y: 0.0 }));
+        assert_eq!(
+            w.query2_static_diag_owned_direct::<Position, Velocity>().count(),
             0
         );
     }

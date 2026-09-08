@@ -732,3 +732,69 @@ this project. Worth building once real CI says raw-pointer storage is
 actually the fix and not one more thing that looks right for reasons
 that don't hold up outside this sandbox, the same caution every other
 diagnostic in this file has been given.
+
+### Real CI result for `Iter2RawPtr` (Archetype Core build #9, rustc 1.98.1)
+
+It didn't. 37.452µs at N=10,000, indistinguishable from every other
+reference-returning variant (safe baseline 37.672µs, `Unchecked`
+37.458µs, `UnusedBCol` 37.402µs, `Composed` 37.445µs). Storage
+representation, slice vs raw pointer, changes nothing.
+
+This makes sense in hindsight rather than being a dead end. `RawPtr`
+and `Unchecked` both still return `Option<(Entity, &'a A, &'a B)>` from
+`next()` — identical signatures. Converting a raw pointer back to
+`&'a T` inside the function produces the exact same type crossing the
+exact same boundary; whatever LLVM does with that signature doesn't
+know or care whether the reference was built by indexing a slice or
+adding to a pointer. The lever that was actually being pulled every
+time (`Unchecked`'s safety, `Composed`'s call structure, `RawPtr`'s
+storage) was never the one that mattered. The one variable that has
+correlated with the result every single time is simpler: does `Item`
+contain a reference, or not.
+
+### `Iter2OwnedDirect` (built this pass, not yet run on real CI): isolating the one remaining confound
+
+Before settling on "owned return is what matters," one thing needed
+separating out. `Iter2TwoTupleItem`, the only fast variant found so
+far, gets its owned value through `(self.combine)(a, b)` — a stored
+`fn(&A, &B) -> A` pointer field, called indirectly. An indirect call
+through a function pointer is its own kind of optimization barrier;
+LLVM generally can't inline through one. Every slow variant
+(`Unchecked`, `UnusedBCol`, `Composed`, `RawPtr`) calls nothing
+indirectly. So "returns an owned value" and "goes through an opaque,
+uninlinable call" have been riding together in the one data point that
+worked, and it hadn't been checked which of the two actually explains
+the speed.
+
+`Iter2OwnedDirect` separates them: same owned-return shape as
+`TwoTupleItem` (`Item = (Entity, A)`), same struct fields as
+`Unchecked` (`a_col`/`b_col` as real `&'a [_]` slices, no pointer
+games), but the combine step goes through `DiagCombine`, a small
+trait with one method, called as `A::diag_combine(a, b)` rather than
+through a stored function pointer. A trait method call like this is
+fully known at compile time and monomorphized per concrete type, so
+the compiler is free to inline it — there's no runtime indirection at
+all, unlike a `fn` pointer field whose target isn't fixed until the
+value is constructed.
+
+`DiagCombine` is `pub`, not `pub(crate)` (re-exported hidden from
+`lib.rs` as `mid_ecs::DiagCombine`, module itself stays private): the
+bench is a separate crate linking against `mid-ecs` and needs to
+implement it for its own `Position`/`Velocity` to call
+`World::query2_static_diag_owned_direct` at all. Two dedicated tests
+(`diag_query2_static_owned_direct_matches_manual_combine`,
+`diag_query2_static_owned_direct_empty_when_one_side_was_never_registered`),
+same cross-check discipline as every other variant. 182/182 `mid-ecs`
+tests total now. Bench arm `owned_direct` added to the same group.
+
+Two possible outcomes once this runs on real CI. Lands near 9.4µs,
+matching `TwoTupleItem` and the 1-column baseline: confirms owned
+return is genuinely what matters, independent of the function-pointer
+question, and `TwoTupleItem`'s result wasn't a fluke of that
+confound. Stays near 37µs, matching every reference-returning variant:
+means the opaque call boundary itself was doing the real work in
+`TwoTupleItem`, a stranger and more specific finding about this
+toolchain's handling of that particular loop shape, not about owned
+values at all — and would mean the `ThinSlice`/raw-pointer design
+sketch proposed above is very unlikely to be the fix, whatever else it
+might still be worth for other reasons.

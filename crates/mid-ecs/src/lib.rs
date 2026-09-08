@@ -20,6 +20,13 @@ pub mod world;
 mod diag_inline;
 mod diag_query2_unchecked;
 
+// Hidden re-export, not the whole module: benches/archetype_core.rs is
+// external to this crate and needs to implement DiagCombine for its
+// own Position/Velocity to call World::query2_static_diag_owned_direct.
+// TEMPORARY, same lifecycle as the module above.
+#[doc(hidden)]
+pub use diag_query2_unchecked::DiagCombine;
+
 // Restored: world.rs now actually defines World (and Entity), as of the
 // generational-arena/entity-allocation pass -- see world.rs's own doc
 // comment. The comment that used to be here explained why this line was
