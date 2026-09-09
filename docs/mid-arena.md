@@ -297,7 +297,20 @@ deleted, because the point of recording a surprise honestly is that it
 can turn out to be sandbox noise, and this project's own convention is
 to say so plainly rather than quietly edit the earlier claim away.
 
-## Real CI benchmark results (rustc 1.98.1, actual GitHub Actions runs #8, #10, and #13 — not the sandbox pass above)
+## Real CI benchmark results (rustc 1.98.1, actual GitHub Actions runs #8, #10, #13, and #16 — not the sandbox pass above)
+
+**Run #16 update:** first real CI run with `UncheckedSlotArena` wired
+in. Clean, unambiguous win: 1.38 ns/op insert, 0.69 ns/op get, 1.56
+ns/op churn — beats `slab` on insert (1.65) and churn (1.63) outright,
+essentially ties it on get (0.69 vs 0.66, inside noise). The
+generation-checked group's own numbers stayed consistent with run #13's
+picture (`SlotArena`/`CompactSlotArena` roughly tying `slotmap`,
+`SlotArena`'s own get still ahead of `generational-arena`'s) — see the
+`#[inline(never)]` section below for the real, corrected investigation
+run #16's insert numbers prompted, including a second real technique
+that measured as a regression in this sandbox. Full run #16 table not
+transcribed here run-by-run the way #8/#13 are below; the numbers that
+matter from it are captured in this update and in that section.
 
 `benches/vs_arena_crates.rs` run for real on CI (`workflow_dispatch`).
 Took several real runs to get here, not one clean shot — runs 1 and 2
@@ -449,7 +462,7 @@ these sub-nanosecond gaps further** — right now it's not possible to
 tell how much of a ~0.1–0.2 ns/op difference is a real, fixable gap
 versus this run-to-run noise floor.
 
-## `#[inline(never)]` hot/cold path split: investigated, measured, reverted
+## `#[inline(never)]` hot/cold path split: investigated, measured, reverted — then corrected further
 
 Real investigation prompted directly by run #13's numbers above, not a
 hypothetical. Full writeup in "Fixes and Problems" → `slot_arena.rs`
@@ -466,30 +479,78 @@ measured locally (sandbox `rustc`/`cargo` 1.75, standalone
 criterion — see the file-level entries below for the exact numbers)
 against **this project's own benchmark shape specifically**: a fresh
 arena, `with_capacity(N)`, then N sequential inserts with nothing ever
-removed first. That shape means every single call takes the "grow"
-branch — the free list is never non-empty — so the split's whole
-premise (keep the *common* case small; only the *rare* growth case
-pays a real function-call boundary) doesn't hold for this specific
-`insert` benchmark: the "rare" case is the *only* case being measured,
-and forcing it out of line cost ~20–50% per op across repeated runs, a
-real and reproducible regression, not noise. Reverted in full.
-Splitting into two functions *without* `#[inline(never)]` measured at
-parity with the original single function (±5%, inside this harness's
-own noise band) — no benefit either, so that half of the change wasn't
-kept separately.
+removed first. Under this crate's own `with_capacity` (reserves raw
+`Vec` capacity only, free list starts empty), that shape means every
+single call takes the "grow" branch — so the split's whole premise
+(keep the *common* case small; only the *rare* growth case pays a real
+function-call boundary) doesn't hold here: forcing the *only* case out
+of line cost ~20–50% per op across repeated runs, a real and
+reproducible regression, not noise. Reverted in full. Splitting into
+two functions *without* `#[inline(never)]` measured at parity with the
+original single function (±5%, inside this harness's own noise band)
+— no benefit either.
 
-**What this does and doesn't mean:** it doesn't mean
-`generational-arena`/`typed-generational-arena` are wrong to use this
-technique, or that their real CI numbers are somehow suspect — their
-*own* insert benchmark has the identical always-grow shape, so if
-anything this raises a real open question (not resolved here) about
-*why* the same technique helps their code and hurts this one on the
-same rustc version's inlining heuristics — plausibly something in the
-surrounding function's size or register pressure tips LLVM's own
-inlining cost model differently for the two implementations, not
-something visible from reading either source alone. Worth a
-disassembly-level look before trying this again, not source-level
-pattern-matching.
+**Correction, made after a direct question about it (see below): the
+claim two paragraphs up that "their own insert benchmark has the
+identical always-grow shape" was wrong, and wrong in a way that
+mattered.** `generational-arena::Arena::with_capacity(n)` doesn't just
+reserve raw `Vec` capacity — its real `reserve()` (source re-read,
+same pinned version) *eagerly pre-fills* `n` `Entry::Free` placeholder
+slots, linked into an actual free list, before any insert happens. And
+their real `insert_slow_path` doesn't grow by one slot either: it calls
+`self.reserve(self.items.len())` — doubling the arena by pre-filling
+*that many more* free placeholders, then retries. So across N=100,000
+sequential inserts starting from `Arena::new()` (default capacity 4),
+their code hits `insert_slow_path` roughly `log2(100,000/4) ≈ 15`
+times total, not 100,000 — the other ~99,985 calls all take the fast,
+always-inlined "pop from an already-there free list" path. That is a
+completely different call-path ratio than this crate's own lazy
+grow-by-one-via-`push` model, where every insert into a fresh arena
+really does take the slow path, every time. The `#[inline(never)]`
+split isn't wasted on their code the way it is on this crate's current
+growth model — it's protecting a path that's genuinely rare *for them*,
+because their own growth strategy is deliberately shaped to make it
+rare.
+
+**So a direct follow-up experiment was run: does adopting their real
+prefill-and-double growth strategy (not just the `#[inline(never)]`
+annotation in isolation) recover the win, now that the actual mechanism
+is understood?** Built as an isolated experiment (not applied to the
+real `slot_arena.rs` — see below for why), mirroring their real
+`reserve()`/`insert_slow_path` shape exactly, combined with the
+`#[inline]`/`#[inline(never)]` split. Measured **60–87% slower** than
+the current lazy-growth `SlotArena`, consistently across four runs —
+worse than the annotation-only attempt, not better. A plausible reason,
+worth stating since it's checkable arithmetic rather than another
+guess: the prefill model writes every slot *twice* over the life of the
+benchmark (once as a placeholder `Vacant` entry during `reserve()`,
+once overwritten to `Occupied` at actual insert time) where the current
+lazy model writes each slot *once* (pushed directly as `Occupied`) —
+roughly double the real memory-write volume for the whole run, which
+would plausibly cost more than hot/cold inlining saves, at least on
+this sandbox's rustc/CPU.
+
+**What this means, stated plainly rather than smoothed over:** this is
+now the *second* real, source-grounded technique — used by real,
+measurably-faster crates on the actual CI runner — that measures as a
+clear regression in this specific sandbox (rustc 1.75, whatever CPU
+this container runs on, non-statistical single-process timing). That's
+a pattern, not a coincidence anymore, and it changes what this
+sandbox's negative results are worth here: for these specific
+allocator-hot-path micro-optimizations, a local "it got slower" result
+might reflect this sandbox/toolchain's own codegen decisions rather
+than the technique itself being wrong — unlike the *first* time this
+came up, this can no longer be presented as "reverted, confirmed
+regression, case closed." **Two honest options from here, not resolved
+in this pass:** accept the current ~1.2 ns/op (≈18%) insert gap as the
+practical cost of this crate's simpler, lazier growth model and stop
+chasing it — `SlotArena`/`CompactSlotArena` already beat `thunderdome`
+and `atomic-arena` outright and roughly tie `slotmap`, and `SlotArena`'s
+own `get` already beats `generational-arena`'s; or actually try the
+real prefill-and-double growth change directly on real CI, accepting
+that it cannot be verified locally first the way everything else in
+this crate has been — a genuinely different, higher-uncertainty kind of
+change than anything shipped into this crate so far.
 
 ## C arena libraries (real, compiled `-O3 -march=native`, actually run)
 
