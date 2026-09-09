@@ -682,26 +682,6 @@ that returning an owned value does not, regardless of how much work
 built that owned value or how the fetch that produced it was
 structured.
 
-### `bevy_ptr` and `ThinSlicePtr` (found this pass, points at the real fix)
-
-Checked `Mid-D-Man/bevy`'s actual `crates/bevy_ptr/src/lib.rs` directly
-on the lead the user gave: bevy_ecs doesn't just happen to avoid this,
-it has a dedicated crate (`bevy_ptr`, `#![no_std]`, one dependency,
-`bevy_utils`) built specifically so its storage layer never holds
-plain `&[T]` slice references across a fetch boundary. The relevant
-type is `ThinSlicePtr<'a, T>`: a `NonNull<T>` plus a debug-only `len`
-plus `PhantomData<&'a [T]>` for the borrow checker, with
-`get_unchecked(&self, index) -> &'a T` doing the same
-pointer-add-and-deref `Iter2RawPtr` does below. Confirmed this is not
-a coincidence: `query/fetch.rs` imports it directly
-(`use bevy_ptr::{ThinSlicePtr, UnsafeCellDeref};`), and `ReadFetch<'w,
-T>`, the real `WorldQuery::Fetch` type for a plain `&T` query (its own
-doc comment says so), stores its table column as exactly
-`Option<ThinSlicePtr<'w, UnsafeCell<T>>>`, never a `&'w [T]`. A
-2-component query composes two of these side by side, same shape
-`Iter2UnusedBCol`/`Iter2Composed` tested, except bevy's two fields are
-`ThinSlicePtr` and mid-ecs's are `&'a [_]`.
-
 ### `Iter2RawPtr` (built this pass, not yet run on real CI)
 
 Direct test of this. Same struct and archetype-advance logic as
@@ -871,3 +851,122 @@ out harness structure too, and leaves indirect-call-specifically (not
 owned return, not harness shape) as the one remaining explanation with
 any real evidence behind it, which would need a real disassembly
 comparison on rustc 1.98.1 to actually resolve.
+
+### Real CI result for the `inline_never` wrapper test (Archetype Core builds #12 and #13, rustc 1.98.1)
+
+Not a clean answer either way. The user ran this twice specifically to
+check it wasn't a fluke, and both runs agree with each other, but not
+in a way that confirms the wrapper hypothesis. What actually moved:
+
+`query2_static_two_components` (real `Iter2`, no wrapper): 37.7µs
+historical -> ~27.5-28.5µs both builds. `real_query2_inline_never_wrapper`
+(same real `Iter2`, wrapped): ~27.5-28.9µs, indistinguishable from the
+unwrapped version right next to it. So the wrapper itself changed
+nothing — wrapped and unwrapped moved together.
+
+But `query_static_single_component` (real `Iter1`, its own separate
+top-level group, unrelated to this pass's diagnostic work) went the
+other direction: ~9.4-11.6µs historical -> ~24.5-26.2µs both builds,
+over *twice* as slow. And `raw_slice_ceiling` — zero mid-ecs code at
+all, two plain `Vec`s — dropped from ~9.3-10.5µs to ~6.0-6.5µs, faster
+in the opposite direction from `query_static_single_component`. Three
+benchmarks that share no code moved three different amounts in two
+different directions in the same run, twice.
+
+That's not "the regression closed." The `query2_static_two_components`
+vs `query_static_single_component` ratio only looks good (1.1-1.25x
+this run, versus the usual ~4x) because the denominator got worse by
+coincidence, not because the numerator got better for a real reason.
+The number that actually matters was checked the same day and didn't
+move: `ecs-vs-bevy-ecs` build #14, `dense_query_iteration`, still
+3.99x (37.440µs vs bevy's fresh, independently-compiled 9.3733µs).
+That comparison doesn't share this file's internal noise sources at
+all, and it's unchanged. Treating builds #12/#13 as resolution would
+mean trusting the one measurement that's easiest to fool and ignoring
+the one that isn't.
+
+Real, useful signal from this regardless: `archetype_core.rs`'s
+internal "regression guard" ratio can swing this wide from
+measurement conditions alone, with zero code change on either side of
+the ratio. That's a concrete argument for the granular rework below —
+a comparison with more independent, narrowly-scoped operations makes
+a coincidence like this easier to catch (three unrelated numbers
+moving inconsistently is a clearer tell than two numbers producing a
+falsely-reassuring ratio).
+
+### `benches/ecs-vs-bevy-ecs/benches/vs_bevy_ecs.rs`: single-op and multi-op rework
+
+The four original groups (`spawn_n_entities_two_components`,
+`query_static_single_component`, `dense_query_iteration`,
+`raw_slice_ceiling`, `structural_churn_insert_remove` — five, not
+four; that miscount predates this pass, fixed in the file's own doc
+comment while here) were broad workload buckets. Six more added this
+pass break specific operations out individually, matching
+`crates/mid-math/benches/vs_glam.rs`'s own granularity: one
+`bench_function` pair per concrete operation, not per broad workload.
+
+`spawn_single_component`, `insert_single_component`,
+`remove_single_component`: single-component versions of operations
+the existing groups only measure bundled with a second component
+(`spawn_n_entities_two_components`) or not at all (bare insert/remove
+with no spawn or churn mixed in). `get_component_random_access`: a
+genuinely different code path from every iteration group above, N
+separate entity-by-id lookups rather than one contiguous archetype
+scan. `insert_bundle_on_existing_entity`, `remove_bundle_two_components`:
+multi-component structural moves on an entity that already carries
+data, distinct from `spawn_n_entities_two_components`'s spawn-then-
+immediately-bundle case and `structural_churn_insert_remove`'s
+single-component churn.
+
+Every new loop is wrapped in a `#[inline(never)]` free function,
+matching bevy_ecs's own benchmark convention (confirmed by direct
+source read this pass, see the `diag_query2_unchecked.rs` module
+section above) — adopted unconditionally, not because builds #12/#13
+confirmed it matters for mid-ecs specifically (they didn't confirm
+anything either way), but because using bevy's own practice can only
+make the comparison fairer, never less fair.
+
+Verification: `ecs-vs-bevy-ecs` itself still can't be checked in this
+sandbox at all (`bevy_ecs`'s `rust-version = "1.95.0"` blocks even
+reaching this crate's own code on the sandbox's rustc 1.91, same wall
+as always). The mid-ecs half of all six new functions was verified for
+real instead: extracted into a standalone throwaway binary crate
+depending on real `mid-ecs` directly (no `bevy_ecs` involved, so it
+actually compiles here), with assertions checking each operation's
+actual effect (entity count after spawn, `has_static` after
+insert/remove, the summed value after random-access get, bundle
+membership after insert/remove onto a non-empty entity) — all passed,
+then deleted. The bevy_ecs half is grounded the same way the original
+four groups already were: read directly against real source
+(`World::spawn_empty`, `World::get`, `World::get_mut`,
+`EntityWorldMut::insert`/`remove`, all confirmed in
+`Mid-D-Man/bevy`'s `world/mod.rs` and `world/entity_access/world_mut.rs`),
+not locally compiled. Confirm it actually builds on the next real CI
+run before trusting bevy_ecs's numbers specifically, same standing
+caveat the file's own header has always carried.
+
+`.github/workflows/bench-vs-bevy-ecs.yml`'s own summary text hardcoded
+"Three groups" — already wrong before this pass (there were five), now
+updated to describe all eleven. `scripts/bench_vs_bevy_ecs.py` needed
+no changes at all: it discovers groups by name from criterion's own
+output and builds one table per group automatically, so the six new
+groups just show up.
+
+Checked `Mid-D-Man/bevy`'s actual `crates/bevy_ptr/src/lib.rs` directly
+on the lead the user gave: bevy_ecs doesn't just happen to avoid this,
+it has a dedicated crate (`bevy_ptr`, `#![no_std]`, one dependency,
+`bevy_utils`) built specifically so its storage layer never holds
+plain `&[T]` slice references across a fetch boundary. The relevant
+type is `ThinSlicePtr<'a, T>`: a `NonNull<T>` plus a debug-only `len`
+plus `PhantomData<&'a [T]>` for the borrow checker, with
+`get_unchecked(&self, index) -> &'a T` doing the same
+pointer-add-and-deref `Iter2RawPtr` does below. Confirmed this is not
+a coincidence: `query/fetch.rs` imports it directly
+(`use bevy_ptr::{ThinSlicePtr, UnsafeCellDeref};`), and `ReadFetch<'w,
+T>`, the real `WorldQuery::Fetch` type for a plain `&T` query (its own
+doc comment says so), stores its table column as exactly
+`Option<ThinSlicePtr<'w, UnsafeCell<T>>>`, never a `&'w [T]`. A
+2-component query composes two of these side by side, same shape
+`Iter2UnusedBCol`/`Iter2Composed` tested, except bevy's two fields are
+`ThinSlicePtr` and mid-ecs's are `&'a [_]`.
+

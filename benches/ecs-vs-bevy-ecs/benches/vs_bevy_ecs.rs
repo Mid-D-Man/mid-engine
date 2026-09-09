@@ -15,9 +15,13 @@
 //! actually builds on the next CI run before trusting bevy_ecs's numbers
 //! specifically.
 //!
-//! WORKLOAD DESIGN: four groups, each a real, meaningfully different
-//! stress on a storage engine, not just "spawn a lot of entities" four
-//! times over:
+//! WORKLOAD DESIGN: eleven groups now, not four -- the original four
+//! (below) were a broad-workload overview; six more were added this
+//! pass as single-op and multi-op comparisons, matching the
+//! granularity `crates/mid-math/benches/vs_glam.rs` already uses (one
+//! bench_function pair per concrete operation). See each new group's
+//! own comment at its `fn bench_*` definition further down for what
+//! it isolates and why. The four original groups:
 //!
 //! - `spawn`: raw entity + two-component creation throughput. Note this
 //!   isn't perfectly apples-to-apples -- bevy's `World::spawn(bundle)`
@@ -415,12 +419,414 @@ fn bench_structural_churn(c: &mut Criterion) {
     g.finish();
 }
 
+// ── Single-op comparisons ───────────────────────────────────────────────
+// Everything above this line predates this pass: 5 broad workload
+// buckets. These 6 below break specific operations out individually,
+// one-to-one, the same granularity crates/mid-math/benches/vs_glam.rs
+// already uses (one bench_function pair per concrete operation, not
+// one pair per broad workload). Every loop here is wrapped in a
+// #[inline(never)] free function, matching bevy_ecs's own convention
+// confirmed by direct source read (benches/benches/bevy_ecs/iteration/
+// in Mid-D-Man/bevy -- iter_simple.rs, iter_frag.rs,
+// iter_simple_foreach.rs, iter_simple_contiguous.rs all wrap their loop
+// in a #[inline(never)] fn run(&mut self), no exceptions found among
+// the ones checked). Adopted unconditionally here, not because it's
+// been confirmed to matter for mid-ecs (crates/mid-ecs/benches/
+// archetype_core.rs's own real_query1/2_inline_never_wrapper arms are
+// the actual test of that, still awaiting a real CI result) -- using
+// bevy's own practice can only make this comparison fairer, never
+// less fair, regardless of how that question resolves.
+
+#[inline(never)]
+fn mid_spawn_single(n: usize) -> MidWorld {
+    let mut world = MidWorld::new();
+    for _ in 0..n {
+        let e = world.spawn();
+        world.insert_static(
+            e,
+            Position { x: 1.0, y: 2.0, z: 3.0 },
+        );
+    }
+    world
+}
+
+#[inline(never)]
+fn bevy_spawn_single(n: usize) -> BevyWorld {
+    let mut world = BevyWorld::new();
+    for _ in 0..n {
+        world.spawn(BevyPosition { x: 1.0, y: 2.0, z: 3.0 });
+    }
+    world
+}
+
+fn bench_spawn_single_component(c: &mut Criterion) {
+    // Isolates spawn+single-insert from spawn+bundle-insert
+    // (`spawn_n_entities_two_components` above): one component, not
+    // two, so `insert_bundle`'s own Bundle-trait machinery never
+    // enters the picture on the mid-ecs side. Same non-apples-to-
+    // apples caveat as that group applies here too -- bevy's
+    // `World::spawn(single_component)` is one step; mid-ecs's closest
+    // equivalent is still `spawn()` then `insert_static()`, two steps.
+    let mut g = c.benchmark_group("spawn_single_component");
+
+    g.bench_function("mid-ecs", |b| {
+        b.iter(|| black_box(mid_spawn_single(N)));
+    });
+
+    g.bench_function("bevy_ecs", |b| {
+        b.iter(|| black_box(bevy_spawn_single(N)));
+    });
+
+    g.finish();
+}
+
+#[inline(never)]
+fn mid_insert_single(world: &mut MidWorld, entities: &[mid_ecs::world::Entity]) {
+    for &e in entities {
+        world.insert_static(e, Position { x: 1.0, y: 2.0, z: 3.0 });
+    }
+}
+
+#[inline(never)]
+fn bevy_insert_single(world: &mut BevyWorld, entities: &[bevy_ecs::prelude::Entity]) {
+    for &e in entities {
+        world.entity_mut(e).insert(BevyPosition { x: 1.0, y: 2.0, z: 3.0 });
+    }
+}
+
+fn bench_insert_single_component(c: &mut Criterion) {
+    // Single-component insert onto an already-spawned, otherwise-empty
+    // entity -- the structural-migration cost alone, no spawn cost
+    // mixed in, no bundle machinery on either side (bevy's own
+    // `insert` takes `T: Bundle`, but a lone component satisfies that
+    // via its blanket impl -- this is still the single-component path,
+    // same as mid-ecs's `insert_static`).
+    let mut g = c.benchmark_group("insert_single_component");
+
+    g.bench_function("mid-ecs", |b| {
+        b.iter_batched(
+            || {
+                let mut world = MidWorld::new();
+                let entities: Vec<_> = (0..N).map(|_| world.spawn()).collect();
+                (world, entities)
+            },
+            |(mut world, entities)| {
+                mid_insert_single(&mut world, &entities);
+                black_box(world);
+            },
+            BatchSize::LargeInput,
+        );
+    });
+
+    g.bench_function("bevy_ecs", |b| {
+        b.iter_batched(
+            || {
+                let mut world = BevyWorld::new();
+                let entities: Vec<_> = (0..N).map(|_| world.spawn_empty().id()).collect();
+                (world, entities)
+            },
+            |(mut world, entities)| {
+                bevy_insert_single(&mut world, &entities);
+                black_box(world);
+            },
+            BatchSize::LargeInput,
+        );
+    });
+
+    g.finish();
+}
+
+#[inline(never)]
+fn mid_remove_single(world: &mut MidWorld, entities: &[mid_ecs::world::Entity]) {
+    for &e in entities {
+        world.remove_static::<Position>(e);
+    }
+}
+
+#[inline(never)]
+fn bevy_remove_single(world: &mut BevyWorld, entities: &[bevy_ecs::prelude::Entity]) {
+    for &e in entities {
+        world.entity_mut(e).remove::<BevyPosition>();
+    }
+}
+
+fn bench_remove_single_component(c: &mut Criterion) {
+    // Mirror of insert_single_component: each entity starts with
+    // exactly one component and loses it, the single-component
+    // structural migration back toward empty.
+    let mut g = c.benchmark_group("remove_single_component");
+
+    g.bench_function("mid-ecs", |b| {
+        b.iter_batched(
+            || {
+                let mut world = MidWorld::new();
+                let entities: Vec<_> = (0..N)
+                    .map(|_| {
+                        let e = world.spawn();
+                        world.insert_static(e, Position { x: 1.0, y: 2.0, z: 3.0 });
+                        e
+                    })
+                    .collect();
+                (world, entities)
+            },
+            |(mut world, entities)| {
+                mid_remove_single(&mut world, &entities);
+                black_box(world);
+            },
+            BatchSize::LargeInput,
+        );
+    });
+
+    g.bench_function("bevy_ecs", |b| {
+        b.iter_batched(
+            || {
+                let mut world = BevyWorld::new();
+                let entities: Vec<_> = (0..N)
+                    .map(|_| world.spawn(BevyPosition { x: 1.0, y: 2.0, z: 3.0 }).id())
+                    .collect();
+                (world, entities)
+            },
+            |(mut world, entities)| {
+                bevy_remove_single(&mut world, &entities);
+                black_box(world);
+            },
+            BatchSize::LargeInput,
+        );
+    });
+
+    g.finish();
+}
+
+#[inline(never)]
+fn mid_get_random_access(world: &MidWorld, entities: &[mid_ecs::world::Entity]) -> f32 {
+    let mut sum = 0.0f32;
+    for &e in entities {
+        if let Some(pos) = world.get_static::<Position>(e) {
+            sum += pos.x;
+        }
+    }
+    sum
+}
+
+#[inline(never)]
+fn bevy_get_random_access(world: &BevyWorld, entities: &[bevy_ecs::prelude::Entity]) -> f32 {
+    let mut sum = 0.0f32;
+    for &e in entities {
+        if let Some(pos) = world.get::<BevyPosition>(e) {
+            sum += pos.x;
+        }
+    }
+    sum
+}
+
+fn bench_get_component_random_access(c: &mut Criterion) {
+    // Deliberately different code path from every iteration group
+    // above: N separate entity -> archetype -> column lookups by id,
+    // not one contiguous archetype scan. Isolates per-lookup overhead
+    // (mid-ecs's entity/archetype-location table vs bevy_ecs's own)
+    // from anything about dense iteration specifically.
+    let mut mid_world = MidWorld::new();
+    let mid_entities: Vec<_> = (0..N)
+        .map(|_| {
+            let e = mid_world.spawn();
+            mid_world.insert_bundle(
+                e,
+                (
+                    Position { x: 1.0, y: 2.0, z: 3.0 },
+                    Velocity { dx: 0.1, dy: 0.2, dz: 0.3 },
+                ),
+            );
+            e
+        })
+        .collect();
+
+    let mut bevy_world = BevyWorld::new();
+    let bevy_entities: Vec<_> = (0..N)
+        .map(|_| {
+            bevy_world
+                .spawn((
+                    BevyPosition { x: 1.0, y: 2.0, z: 3.0 },
+                    BevyVelocity { dx: 0.1, dy: 0.2, dz: 0.3 },
+                ))
+                .id()
+        })
+        .collect();
+
+    let mut g = c.benchmark_group("get_component_random_access");
+
+    g.bench_function("mid-ecs", |b| {
+        b.iter(|| black_box(mid_get_random_access(&mid_world, &mid_entities)));
+    });
+
+    g.bench_function("bevy_ecs", |b| {
+        b.iter(|| black_box(bevy_get_random_access(&bevy_world, &bevy_entities)));
+    });
+
+    g.finish();
+}
+
+#[inline(never)]
+fn mid_insert_bundle_existing(world: &mut MidWorld, entities: &[mid_ecs::world::Entity]) {
+    for &e in entities {
+        world.insert_bundle(
+            e,
+            (
+                Position { x: 1.0, y: 2.0, z: 3.0 },
+                Velocity { dx: 0.1, dy: 0.2, dz: 0.3 },
+            ),
+        );
+    }
+}
+
+#[inline(never)]
+fn bevy_insert_bundle_existing(world: &mut BevyWorld, entities: &[bevy_ecs::prelude::Entity]) {
+    for &e in entities {
+        world.entity_mut(e).insert((
+            BevyPosition { x: 1.0, y: 2.0, z: 3.0 },
+            BevyVelocity { dx: 0.1, dy: 0.2, dz: 0.3 },
+        ));
+    }
+}
+
+fn bench_insert_bundle_on_existing_entity(c: &mut Criterion) {
+    // Multi-op counterpart to insert_single_component: a 2-component
+    // bundle insert, but onto an entity that already carries an
+    // unrelated component (Marker), not a bare freshly-spawned one.
+    // Genuinely different from `spawn_n_entities_two_components`
+    // above, which inserts the bundle immediately after spawning an
+    // empty entity -- this measures the migration cost when there's
+    // already real data on the entity to carry across archetypes.
+    let mut g = c.benchmark_group("insert_bundle_on_existing_entity");
+
+    g.bench_function("mid-ecs", |b| {
+        b.iter_batched(
+            || {
+                let mut world = MidWorld::new();
+                let entities: Vec<_> = (0..N)
+                    .map(|_| {
+                        let e = world.spawn();
+                        world.insert_static(e, Marker);
+                        e
+                    })
+                    .collect();
+                (world, entities)
+            },
+            |(mut world, entities)| {
+                mid_insert_bundle_existing(&mut world, &entities);
+                black_box(world);
+            },
+            BatchSize::LargeInput,
+        );
+    });
+
+    g.bench_function("bevy_ecs", |b| {
+        b.iter_batched(
+            || {
+                let mut world = BevyWorld::new();
+                let entities: Vec<_> = (0..N).map(|_| world.spawn(BevyMarker).id()).collect();
+                (world, entities)
+            },
+            |(mut world, entities)| {
+                bevy_insert_bundle_existing(&mut world, &entities);
+                black_box(world);
+            },
+            BatchSize::LargeInput,
+        );
+    });
+
+    g.finish();
+}
+
+#[inline(never)]
+fn mid_remove_bundle(world: &mut MidWorld, entities: &[mid_ecs::world::Entity]) {
+    for &e in entities {
+        world.remove_bundle::<(Position, Velocity)>(e);
+    }
+}
+
+#[inline(never)]
+fn bevy_remove_bundle(world: &mut BevyWorld, entities: &[bevy_ecs::prelude::Entity]) {
+    for &e in entities {
+        world.entity_mut(e).remove::<(BevyPosition, BevyVelocity)>();
+    }
+}
+
+fn bench_remove_bundle(c: &mut Criterion) {
+    // Mirror of insert_bundle_on_existing_entity: each entity starts
+    // with [Marker, Position, Velocity] and loses the 2-component
+    // bundle, landing back on [Marker] -- not the empty archetype,
+    // so this is a genuine migration between two non-empty archetypes
+    // on both sides, not a return to a degenerate base case.
+    let mut g = c.benchmark_group("remove_bundle_two_components");
+
+    g.bench_function("mid-ecs", |b| {
+        b.iter_batched(
+            || {
+                let mut world = MidWorld::new();
+                let entities: Vec<_> = (0..N)
+                    .map(|_| {
+                        let e = world.spawn();
+                        world.insert_static(e, Marker);
+                        world.insert_bundle(
+                            e,
+                            (
+                                Position { x: 1.0, y: 2.0, z: 3.0 },
+                                Velocity { dx: 0.1, dy: 0.2, dz: 0.3 },
+                            ),
+                        );
+                        e
+                    })
+                    .collect();
+                (world, entities)
+            },
+            |(mut world, entities)| {
+                mid_remove_bundle(&mut world, &entities);
+                black_box(world);
+            },
+            BatchSize::LargeInput,
+        );
+    });
+
+    g.bench_function("bevy_ecs", |b| {
+        b.iter_batched(
+            || {
+                let mut world = BevyWorld::new();
+                let entities: Vec<_> = (0..N)
+                    .map(|_| {
+                        world
+                            .spawn((
+                                BevyMarker,
+                                BevyPosition { x: 1.0, y: 2.0, z: 3.0 },
+                                BevyVelocity { dx: 0.1, dy: 0.2, dz: 0.3 },
+                            ))
+                            .id()
+                    })
+                    .collect();
+                (world, entities)
+            },
+            |(mut world, entities)| {
+                bevy_remove_bundle(&mut world, &entities);
+                black_box(world);
+            },
+            BatchSize::LargeInput,
+        );
+    });
+
+    g.finish();
+}
+
 criterion_group!(
     benches,
     bench_spawn,
+    bench_spawn_single_component,
     bench_query_static_single_component,
     bench_dense_query_iteration,
     bench_raw_slice_ceiling,
-    bench_structural_churn
+    bench_structural_churn,
+    bench_insert_single_component,
+    bench_remove_single_component,
+    bench_get_component_random_access,
+    bench_insert_bundle_on_existing_entity,
+    bench_remove_bundle
 );
 criterion_main!(benches);
