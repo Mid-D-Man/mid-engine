@@ -1,5 +1,17 @@
 // crates/mid-math/src/lib.rs
 #![cfg_attr(feature = "coresimd", feature(portable_simd))]
+// This crate's own [lints] workspace = true (Cargo.toml) pulls in the
+// root workspace's `unsafe_code = "deny"` -- opted back out of here,
+// explicitly, per docs/RUST_AND_CRATE_GUIDELINES.md §3: mid-math has a
+// real, load-bearing reason for unsafe (SIMD intrinsics throughout
+// wide/, the FFI boundary in ffi/), so the exception is this one
+// visible line rather than the crate silently failing to compile.
+// `undocumented_unsafe_blocks = "warn"` (clippy) still applies and is
+// NOT suppressed here -- it's a real, pre-existing backlog across this
+// crate's unsafe blocks (most don't yet carry a `// SAFETY:` comment;
+// docs/roadmap.md's own Decision 5 already flagged this), left as
+// visible warnings rather than silenced, not fixed in this pass.
+#![allow(unsafe_code)]
 
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 pub(crate) mod sse2;
@@ -23,6 +35,10 @@ pub mod swizzle;
 mod features;
 pub mod f32;
 pub mod f64;
+// C-ABI exports, ~1,300+ #[no_mangle] extern "C" functions as of this
+// pass -- behind the `ffi` feature (Cargo.toml), off by default. See
+// that feature's own comment for why.
+#[cfg(feature = "ffi")]
 pub mod ffi;
 pub mod constants;
 pub mod int8;

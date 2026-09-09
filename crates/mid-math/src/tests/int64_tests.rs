@@ -760,6 +760,7 @@ mod tests {
     //  FFI round-trips
     // ═══════════════════════════════════════════════════════════════════════
 
+    #[cfg(feature = "ffi")]
     #[test]
     fn ffi_ci64vec2_roundtrip_and_layout() {
         use crate::ffi::CI64Vec2;
@@ -771,6 +772,7 @@ mod tests {
         assert_eq!(v, v2);
     }
 
+    #[cfg(feature = "ffi")]
     #[test]
     fn ffi_ci64vec3_roundtrip_and_layout() {
         use crate::ffi::CI64Vec3;
@@ -783,6 +785,7 @@ mod tests {
         assert_eq!(v, v2);
     }
 
+    #[cfg(feature = "ffi")]
     #[test]
     fn ffi_ci64vec4_roundtrip_and_layout() {
         use crate::ffi::CI64Vec4;
@@ -794,6 +797,7 @@ mod tests {
         assert_eq!(v, v2);
     }
 
+    #[cfg(feature = "ffi")]
     #[test]
     fn ffi_cu64vec2_roundtrip_and_layout() {
         use crate::ffi::CU64Vec2;
@@ -805,6 +809,7 @@ mod tests {
         assert_eq!(v, v2);
     }
 
+    #[cfg(feature = "ffi")]
     #[test]
     fn ffi_cu64vec3_roundtrip_and_layout() {
         use crate::ffi::CU64Vec3;
@@ -816,6 +821,7 @@ mod tests {
         assert_eq!(v, v2);
     }
 
+    #[cfg(feature = "ffi")]
     #[test]
     fn ffi_cu64vec4_roundtrip_and_layout() {
         use crate::ffi::CU64Vec4;

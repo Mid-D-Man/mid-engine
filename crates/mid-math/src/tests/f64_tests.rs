@@ -697,18 +697,20 @@ mod tests {
     // ── FFI round-trips ───────────────────────────────────────────────────────
     // Verify that converting Rust→C→Rust preserves values exactly.
 
- #[test]
-fn ffi_dvec3_roundtrip() {
-    use crate::ffi::types::CDVec3;
-    let v  = DVec3::new(1.5, -2.5, 3.5);
-    let cv = CDVec3::from(v);
-    let v2 = DVec3::from(cv);
-    assert!(vec3_approx(v, v2));
-    // CDVec3 is 24 bytes, align 8 — no _pad field (matches DVec3 exactly)
-    assert_eq!(core::mem::size_of::<CDVec3>(), 24);
-    assert_eq!(core::mem::align_of::<CDVec3>(), 8);
-}
+    #[cfg(feature = "ffi")]
+    #[test]
+    fn ffi_dvec3_roundtrip() {
+        use crate::ffi::types::CDVec3;
+        let v  = DVec3::new(1.5, -2.5, 3.5);
+        let cv = CDVec3::from(v);
+        let v2 = DVec3::from(cv);
+        assert!(vec3_approx(v, v2));
+        // CDVec3 is 24 bytes, align 8 — no _pad field (matches DVec3 exactly)
+        assert_eq!(core::mem::size_of::<CDVec3>(), 24);
+        assert_eq!(core::mem::align_of::<CDVec3>(), 8);
+    }
 
+    #[cfg(feature = "ffi")]
     #[test]
     fn ffi_dquat_roundtrip() {
         use crate::ffi::types::CDQuat;
@@ -719,6 +721,7 @@ fn ffi_dvec3_roundtrip() {
              && approx(q.z, q2.z) && approx(q.w, q2.w));
     }
 
+    #[cfg(feature = "ffi")]
     #[test]
     fn ffi_dmat4_roundtrip() {
         use crate::ffi::types::CDMat4;
@@ -732,6 +735,7 @@ fn ffi_dvec3_roundtrip() {
         assert!(mat4_approx(m, m2));
     }
 
+    #[cfg(feature = "ffi")]
     #[test]
     fn ffi_daffine3_roundtrip() {
         use crate::ffi::types::CDAffine3;
