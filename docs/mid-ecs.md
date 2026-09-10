@@ -970,3 +970,95 @@ doc comment says so), stores its table column as exactly
 `Iter2UnusedBCol`/`Iter2Composed` tested, except bevy's two fields are
 `ThinSlicePtr` and mid-ecs's are `&'a [_]`.
 
+
+### Builds #11 and #13 (Archetype Core, rustc 1.98.1): the regression-guard ratio's own instability
+
+Two real CI runs pasted back this pass, not adjacent — build #11 (03:36)
+showed the regression-guard ratio at a "bad" 3.14-4.08x (flagged red by
+the job summary itself); build #13 (12:51, same day) showed it at a
+"good" 1.09-1.24x (flagged green, "consistent with the ~1.28-1.35x
+currently-observed baseline"). Read at face value, that looks like the
+gap closed on its own between the two runs. It didn't — the ratio's own
+denominator moved, not its numerator.
+
+**What actually moved, `build #13 / build #11`, at N=100,000:**
+
+| Group | Build #11 | Build #13 | Ratio (13/11) |
+|---|---|---|---|
+| `query_static_single_component` (Iter1, safe, real) | 106.09µs | 262.06µs | **1.90x SLOWER** |
+| `query_static_unchecked_1col` (Iter1Unchecked) | 106.01µs | 65.413µs | 0.617x (38% faster) |
+| `two_tuple_item` (Iter2TwoTupleItem) | 106.39µs | 89.366µs | 0.840x (16% faster) |
+| `query2_static_two_components` (Iter2, safe, real) | 433.32µs | 299.11µs | 0.690x (31% faster) |
+| `query2_static_unchecked_2col` (Iter2Unchecked) | 423.22µs | 265.28µs | 0.627x (37% faster) |
+| `raw_slice_ceiling — one_field_sum` (zero ECS code) | 105.76µs | 65.626µs | 0.620x (38% faster) |
+| `spawn_insert_bundle` | 19.906ms | 12.234ms | 0.615x (39% faster) |
+| `structural_churn_insert_remove` | 21.624ms | 14.708ms | 0.680x (32% faster) |
+
+Every group in the binary got faster in build #13 — between 16% and
+39% — except one: `query_static_single_component`, which got 90%
+*slower*, enough on its own to land it almost exactly inside build
+#13's "slow" cluster (262.06µs, next to `query2_static_unchecked_2col`'s
+265.28µs) despite querying one column, not two. Its own nearest
+sibling, `query_static_unchecked_1col` — same state machine, same
+archetype-advance logic, the *only* line that differs is
+`get_unchecked` instead of safe indexing — moved with the crowd (38%
+faster). This is not "everything is noisy in the same direction," the
+usual, dismissable pattern (see `structural_churn`/`spawn_insert_bundle`
+above, which did move together with the crowd, consistent with a
+faster run in general). One specific, safe, real, production function
+moved alone, against 15+ others in the same binary, by a wide margin.
+
+**The clean signal, unaffected by any of this:** `query_static_unchecked_1col`
+vs `query2_static_unchecked_2col` — both diagnostics, both `get_unchecked`,
+neither touched by whatever hit `query_static_single_component` — sits
+at 3.99x (build #11) and 4.06x (build #13) at N=100,000, 3.33x/3.18x at
+N=100. Stable, in lockstep, across a run where literally everything
+else's absolute numbers moved by up to 39%. **This is the trustworthy
+number, and it says unchanged: still ~4x, matching `ecs-vs-bevy-ecs`'s
+own `dense_query_iteration` (3.99x as of build #14, a separate binary
+sharing none of `archetype_core.rs`'s internal noise sources).** Build
+#13's 1.24x reading is real data, correctly transcribed, and still
+wrong to trust as "fixed" — its denominator broke, not its numerator.
+
+**Cross-referencing this against `diag_inline.rs`'s own Never/Always/
+Default group, already present in both these builds but not yet read
+this way:** at N=100,000, `Default` (`query2_static_two_components`
+itself) sits 1.1% from `Never` and 2.4% from `Always` in build #11; 0.2%
+from `Never` and 10.7% from `Always` in build #13. Default tracks
+Never, not Always, in both runs — the compiler is not silently
+auto-inlining `Iter2::next` by default on rustc 1.98.1. That specific
+theory (a hidden default-heuristic inline causing the gap) is ruled
+out. What's *not* ruled out: build #13 shows `Always` measurably faster
+than `Default`/`Never` (267.06µs vs ~298-299µs, ~11% at N=100,000,
+~14-17% at smaller N) — the opposite of what the sandbox found when
+`#[inline(always)]` was tried and reverted on `Iter2::next` itself (see
+that method's own doc comment in `archetype.rs`, and this module's
+header). Build #11 shows no such gap (all three within ~3.5% of each
+other). One run showing an effect and one showing nothing is a lead,
+not a finding — needs a third run to know if build #13's edge for
+`Always` is real or noise.
+
+**Built this pass, not yet run on real CI:** `Iter1Never`/`Iter1Always`
+in `diag_inline.rs`, exposed as `World::query_static_diag_never`/
+`_always`, benched as the new `query_static_single_component_diag_inlining`
+group in `archetype_core.rs` — the exact same Never/Always/Default
+treatment `Iter2` already has, applied to `Iter1` for the first time.
+Motivation is the table above: `query_static_single_component` just
+produced the single most specific, isolable anomaly this investigation
+has seen (one real function, alone, moving hard against everything else
+in its own binary), and until now nothing has ever tested whether
+`Iter1`'s inline attribute matters the way `Iter2`'s might. If `Iter1`
+shows the same Default≈Never pattern with `Always` pulling ahead, that's
+a second, independent signal pointing at the same lever as `Iter2`'s —
+and worth actually shipping `#[inline(always)]` on both real functions
+if a third run confirms it, reversing the earlier sandbox-only-informed
+revert (which never had real-CI `Iter2` data to check against — it does
+now, partially, and this adds the `Iter1` half). If `Iter1` does *not*
+show the pattern, `query_static_single_component`'s build #13 anomaly
+has some other cause, and that's worth knowing too before spending more
+time on the inlining line of investigation specifically.
+
+Not a fix yet. Land this, run Archetype Core at least twice more (one
+run already looked like a fluke this project — build #10 — and was
+caught only by rerunning), and read `Iter1`'s new group the same way
+the table above reads `query_static_single_component`'s.

@@ -193,6 +193,45 @@ fn bench_query2_static_two_components(c: &mut Criterion) {
 
 // ── TEMPORARY, real-CI inlining-regression diagnostic ──────────────
 // See crates/mid-ecs/src/diag_inline.rs's own doc comment for the full
+// story and current status (real CI has already answered part of the
+// question this was built to ask — Default tracks Never, not Always,
+// ruling out silent auto-inlining as the mechanism; what Default vs
+// Always in build #13 specifically showed is still open). New this
+// pass: `query_static_single_component` above (Iter1, real production
+// code, not a diagnostic) has its own real build-to-build anomaly —
+// see docs/mid-ecs.md's "diag_inline.rs" section — so it gets the same
+// Never/Always/Default treatment Iter2 already has, for the first
+// time. Delete this function and its criterion_group! entry together
+// with diag_inline.rs once the investigation concludes.
+fn bench_query_static_single_component_diag_inlining(c: &mut Criterion) {
+    let mut group = c.benchmark_group("query_static_single_component_diag_inlining");
+    for &n in &SIZES {
+        group.throughput(Throughput::Elements(n as u64));
+        let world = populated_world(n);
+        group.bench_with_input(BenchmarkId::new("inline_never", n), &n, |b, _| {
+            b.iter(|| {
+                let mut sum = 0.0f32;
+                for (_, pos) in world.query_static_diag_never::<Position>() {
+                    sum += pos.x;
+                }
+                black_box(sum);
+            });
+        });
+        group.bench_with_input(BenchmarkId::new("inline_always", n), &n, |b, _| {
+            b.iter(|| {
+                let mut sum = 0.0f32;
+                for (_, pos) in world.query_static_diag_always::<Position>() {
+                    sum += pos.x;
+                }
+                black_box(sum);
+            });
+        });
+    }
+    group.finish();
+}
+
+// ── TEMPORARY, real-CI inlining-regression diagnostic ──────────────
+// See crates/mid-ecs/src/diag_inline.rs's own doc comment for the full
 // story: `query2_static_two_components` above runs ~4x slower than
 // bevy_ecs on real CI (rustc 1.98.0) but within noise of it on this
 // sandbox's rustc 1.91.1. `#[inline(always)]` on Iter2::next made
@@ -470,6 +509,7 @@ criterion_group!(
     bench_spawn_insert_bundle,
     bench_query_static_single_component,
     bench_query2_static_two_components,
+    bench_query_static_single_component_diag_inlining,
     bench_query2_static_two_components_diag_inlining,
     bench_query2_static_diag_unchecked,
     bench_structural_churn,

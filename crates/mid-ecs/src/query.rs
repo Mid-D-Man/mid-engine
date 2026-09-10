@@ -74,11 +74,23 @@ impl World {
 
     // ── TEMPORARY, real-CI inlining-regression diagnostic ──
     // See src/diag_inline.rs's own doc comment for the full story.
-    // Delete these two methods together with that module once the
+    // Delete these four methods together with that module once the
     // investigation concludes. `pub`, not `pub(crate)`, only because
     // `benches/archetype_core.rs` is compiled as an external binary
     // and needs real public API to reach them — not meant for any
     // other use.
+    #[doc(hidden)]
+    pub fn query_static_diag_never<T: 'static>(&self) -> impl Iterator<Item = (Entity, &T)> + '_ {
+        self.archetypes.iter_diag_never::<T>()
+    }
+
+    #[doc(hidden)]
+    pub fn query_static_diag_always<T: 'static>(
+        &self,
+    ) -> impl Iterator<Item = (Entity, &T)> + '_ {
+        self.archetypes.iter_diag_always::<T>()
+    }
+
     #[doc(hidden)]
     pub fn query2_static_diag_never<A: 'static, B: 'static>(
         &self,
