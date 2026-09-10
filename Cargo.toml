@@ -107,6 +107,30 @@ members = [
 # build. `-p ecs-vs-bevy-ecs` needs the newer toolchain; nothing else does.
 resolver = "2"
 
+# Restored 2026-09-08: docs/RUST_AND_CRATE_GUIDELINES.md §1 already
+# documented this exact table as existing ("The workspace now has a
+# [workspace.lints] table and a [workspace.dependencies] table"), but
+# it was actually missing from this file -- confirmed directly (grepped
+# for `[workspace.lints]`/`[workspace.dependencies]` in this file before
+# concluding that, not assumed from the doc alone), which is what made
+# `mid-math`'s `criterion = { workspace = true, ... }` fail to resolve
+# ("`workspace.dependencies` was not defined") and would have failed the
+# same way on its `[lints]\nworkspace = true` opt-in right after, since
+# `[workspace.lints]` was equally absent. Content below matches the
+# guidelines doc's own quoted block exactly, not reconstructed from
+# guesswork. `missing_docs`/`undocumented_unsafe_blocks` are `"warn"`,
+# not `"deny"` -- opting in (`mid-math` only, so far, per that same
+# doc's §1) won't fail anyone's build even if it surfaces new warnings.
+[workspace.lints.rust]
+unsafe_code  = "deny"
+missing_docs = "warn"
+
+[workspace.lints.clippy]
+undocumented_unsafe_blocks = "warn"
+
+[workspace.dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }
+
 [profile.release]
 opt-level     = 3
 lto           = true
