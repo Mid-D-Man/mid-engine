@@ -4,6 +4,24 @@ version     = "0.1.0"
 edition     = "2021"
 description = "SIMD-aligned math primitives for Mid Engine — FFI-ready, cross-platform, f32+f64"
 
+# Opts into the root Cargo.toml's [workspace.lints] table (unsafe_code =
+# "deny" among others) -- see lib.rs's own #![allow(unsafe_code)] for
+# why this crate specifically needs to opt back out of that one lint
+# immediately after opting in here.
+[lints]
+workspace = true
+
+# Several non-ffi files (f32/, f64/, int32/, int64/) carry "C interop: see
+# crate::ffi::..." intra-doc links in their own /// comments -- now that
+# `ffi` is feature-gated (see [features] below), those links only resolve
+# when docs are built with it enabled. This only fixes the PUBLISHED
+# docs.rs build (docs.rs always passes --all-features); it does NOT fix a
+# plain local `cargo doc` without `--features ffi`, which will still show
+# these as broken intra-doc links -- a real, disclosed limitation, not
+# something this one line solves completely.
+[package.metadata.docs.rs]
+all-features = true
+
 [lib]
 name = "mid_math"
 crate-type = ["rlib", "cdylib", "staticlib"]
@@ -35,11 +53,11 @@ wide = { version = "1.6" }
 
 [target.'cfg(target_arch = "wasm32")'.dev-dependencies]
 # default-features = false drops the rayon feature — so WASM compilation doesn't fail since it can't target wasi.
-criterion = { version = "0.5", features = ["html_reports"], default-features = false }
+criterion = { workspace = true, default-features = false }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 # Native builds keep default features (including rayon) for faster, parallel benchmark execution.
-criterion      = { version = "0.5", features = ["html_reports"] }
+criterion      = { workspace = true }
 # Bumped 0.33 -> 0.35 (2026-07-16): crates.io latest at time of bump: 0.35.0.
 nalgebra       = { version = "0.35" }
 # Bumped 0.9 -> 0.10 (2026-07-16): crates.io latest at time of bump: 0.10.0.
@@ -146,5 +164,16 @@ simd         = []
 avx2         = []
 coresimd     = []
 force-scalar = []
+# Enable interoperation with the real mint crate's Vector/Point/Quaternion/Matrix types.
 mint         = ["dep:mint"]
+# Compile ffi/ -- C-ABI #[no_mangle] exports for essentially every type
+# in this crate (well over 1,300 functions as of this pass, counted
+# directly via `pub extern "C" fn` across every ffi/*.rs file -- an
+# earlier draft of this comment guessed "~500+" without counting;
+# corrected before this shipped). Off by default per
+# docs/RUST_AND_CRATE_GUIDELINES.md §2: most consumers of mid-math are
+# other Rust crates in this workspace and never touch the C ABI, so
+# this stays opt-in rather than wasted compile time and binary size
+# for them.
+ffi          = []
  
