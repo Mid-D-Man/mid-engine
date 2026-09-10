@@ -52,6 +52,21 @@
 //! need dropping at all, kept here for the same reason: skip the check
 //! entirely rather than pay a branch that a `T: Copy` (for example)
 //! payload can never actually take.
+//!
+//! # Growth: same eager prefill-and-double strategy as `SlotArena`,
+//! same untested-locally reasoning
+//!
+//! Shares [`SlotArena`](crate::SlotArena)'s exact
+//! `DEFAULT_CAPACITY`/[`reserve`](CompactSlotArena::reserve)/
+//! `insert_slow_path` growth strategy, adapted to this file's union
+//! storage -- pre-filled placeholder slots get `generation: 0`
+//! (even/vacant, `Drop for Slot<T>`'s own `occupied()` check already
+//! skips these correctly, so pre-filling introduces no new drop risk).
+//! See `SlotArena`'s own doc comment for the full real-source grounding
+//! (`generational-arena` 0.2.9, re-verified directly) and the honest
+//! reason this couldn't be verified for speed in this sandbox before
+//! shipping. Same observable change here too: `slot_count()` right
+//! after `new()`/`with_capacity(n)` now reports `4`/`n`, not `0`.
 
 use alloc::vec::Vec;
 use core::mem::ManuallyDrop;
@@ -98,20 +113,49 @@ pub struct CompactSlotArena<T> {
 }
 
 impl<T> CompactSlotArena<T> {
+    /// Creates an arena, eagerly pre-filled with `DEFAULT_CAPACITY`
+    /// free slots -- see this module's doc comment on growth.
     pub fn new() -> Self {
-        Self {
+        Self::with_capacity(crate::slot_arena::DEFAULT_CAPACITY)
+    }
+
+    /// Creates an arena, eagerly pre-filled with `capacity` free slots
+    /// (at least 1) -- see this module's doc comment on growth.
+    pub fn with_capacity(capacity: usize) -> Self {
+        let mut arena = Self {
             slots: Vec::new(),
             free_head: 0,
             live_count: 0,
-        }
+        };
+        arena.reserve(capacity.max(1));
+        arena
     }
 
-    pub fn with_capacity(capacity: usize) -> Self {
-        Self {
-            slots: Vec::with_capacity(capacity),
-            free_head: 0,
-            live_count: 0,
+    /// Eagerly pre-fills `additional` fresh `Vacant`-equivalent slots
+    /// (`generation: 0`, union's `next_free` field live) linked into a
+    /// real free list. Same shape and same reasoning as
+    /// [`SlotArena::reserve`](crate::SlotArena) -- see that method's
+    /// doc comment.
+    fn reserve(&mut self, additional: usize) {
+        let start = self.slots.len();
+        let new_len = start + additional;
+        debug_assert!(
+            new_len < u32::MAX as usize,
+            "CompactSlotArena holds u32::MAX slots -- index would overflow"
+        );
+        self.slots.reserve_exact(additional);
+        for i in start..new_len {
+            let next_free = if i == new_len - 1 {
+                new_len as u32
+            } else {
+                (i + 1) as u32
+            };
+            self.slots.push(Slot {
+                u: SlotUnion { next_free },
+                generation: 0,
+            });
         }
+        self.free_head = start as u32;
     }
 
     #[inline]
@@ -129,11 +173,22 @@ impl<T> CompactSlotArena<T> {
         self.slots.capacity()
     }
 
+    /// Total slots ever created. **Changed by the growth-strategy
+    /// update documented in this module's doc comment: no longer 0
+    /// right after `new()`/`with_capacity(n)`** -- see `SlotArena`'s
+    /// doc comment on growth for the full reasoning.
     #[inline]
     pub fn slot_count(&self) -> usize {
         self.slots.len()
     }
 
+    /// Split into this fast, always-inlined common case and
+    /// [`insert_slow_path`](Self::insert_slow_path) for the growth
+    /// case -- same real technique, same growth strategy, applied to
+    /// [`SlotArena::insert`](crate::SlotArena), see that module's doc
+    /// comment for the source it's read from and the honest caveat on
+    /// verifying it.
+    #[inline]
     pub fn insert(&mut self, value: T) -> ArenaKey {
         let free_head = self.free_head;
 
@@ -161,22 +216,22 @@ impl<T> CompactSlotArena<T> {
             self.live_count += 1;
             ArenaKey::new(free_head, occupied_generation)
         } else {
-            debug_assert_eq!(
-                free_head as usize,
-                self.slots.len(),
-                "free_head should never point past a single new slot beyond the end"
-            );
-            let generation = 1;
-            self.slots.push(Slot {
-                u: SlotUnion {
-                    value: ManuallyDrop::new(value),
-                },
-                generation,
-            });
-            self.free_head = free_head + 1;
-            self.live_count += 1;
-            ArenaKey::new(free_head, generation)
+            self.insert_slow_path(value)
         }
+    }
+
+    /// The "grow" branch of [`insert`](Self::insert) -- see
+    /// [`SlotArena::insert_slow_path`](crate::SlotArena)'s doc comment
+    /// for the real source and reasoning this mirrors exactly.
+    #[inline(never)]
+    fn insert_slow_path(&mut self, value: T) -> ArenaKey {
+        let additional = if self.slots.is_empty() {
+            1
+        } else {
+            self.slots.len()
+        };
+        self.reserve(additional);
+        self.insert(value)
     }
 
     pub fn remove(&mut self, key: ArenaKey) -> Option<T> {
@@ -281,7 +336,30 @@ mod tests {
         let a: CompactSlotArena<u32> = CompactSlotArena::new();
         assert_eq!(a.len(), 0);
         assert!(a.is_empty());
-        assert_eq!(a.slot_count(), 0);
+        assert_eq!(
+            a.slot_count(),
+            4,
+            "new() eagerly pre-fills DEFAULT_CAPACITY slots now -- see this module's doc comment on growth"
+        );
+    }
+
+    #[test]
+    fn growth_doubles_by_prefilling_a_fresh_free_list_batch() {
+        // Same mechanism, same test shape as SlotArena's own -- see
+        // that module's test of the same name for the real source this
+        // mirrors.
+        let mut a: CompactSlotArena<u32> = CompactSlotArena::with_capacity(1);
+        assert_eq!(a.slot_count(), 1);
+        a.insert(1);
+        assert_eq!(a.slot_count(), 1);
+        a.insert(2);
+        assert_eq!(a.slot_count(), 2);
+        a.insert(3);
+        assert_eq!(a.slot_count(), 4);
+        a.insert(4);
+        assert_eq!(a.slot_count(), 4);
+        a.insert(5);
+        assert_eq!(a.slot_count(), 8);
     }
 
     #[test]

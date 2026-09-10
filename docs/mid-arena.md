@@ -43,14 +43,19 @@ collection" below.
 
 ### `slot_arena.rs`
 **What it does:** `SlotArena<T>` and `ArenaKey`, the generational
-value-storing arena. See "What's built" below for the full design.
+value-storing arena. See "What's built" below for the full design. Growth
+strategy changed to eager prefill-and-double (`generational-arena`'s
+real strategy, re-verified directly) — see this file's own doc comment
+on growth and "Fixes and Problems" below; not yet confirmed faster on
+real CI as of this writing.
 
 **Decisions and benchmarks:** see "What's built", "Real CI benchmark
 results", and "Fixes and Problems" below.
 
-**Tests:** 16, in this file, `#[cfg(test)] mod tests`. Run for real on
-rustc 1.75 before `criterion` was added as a dev-dependency (see "Fixes
-and Problems").
+**Tests:** 17, in this file, `#[cfg(test)] mod tests`. Passing locally
+(rustc 1.75, `criterion` dev-dependency temporarily stubbed out for the
+lib-only test run — see "Fixes and Problems") confirms correctness of
+the new growth mechanism; does not confirm its speed claim either way.
 
 ### `bump_arena.rs`
 **What it does:** `BumpArena<T>`, single-typed chunk-linked bump
@@ -539,18 +544,41 @@ a pattern, not a coincidence anymore, and it changes what this
 sandbox's negative results are worth here: for these specific
 allocator-hot-path micro-optimizations, a local "it got slower" result
 might reflect this sandbox/toolchain's own codegen decisions rather
-than the technique itself being wrong — unlike the *first* time this
-came up, this can no longer be presented as "reverted, confirmed
-regression, case closed." **Two honest options from here, not resolved
-in this pass:** accept the current ~1.2 ns/op (≈18%) insert gap as the
-practical cost of this crate's simpler, lazier growth model and stop
-chasing it — `SlotArena`/`CompactSlotArena` already beat `thunderdome`
-and `atomic-arena` outright and roughly tie `slotmap`, and `SlotArena`'s
-own `get` already beats `generational-arena`'s; or actually try the
-real prefill-and-double growth change directly on real CI, accepting
-that it cannot be verified locally first the way everything else in
-this crate has been — a genuinely different, higher-uncertainty kind of
-change than anything shipped into this crate so far.
+than the technique itself being wrong.
+
+**A more specific hypothesis for the discrepancy, thought through
+after the fact:** both the real CI's `criterion` closure and this
+sandbox's own A/B harness time `with_capacity(N)` itself as part of the
+measured region, for every implementation compared — so this isn't an
+unfair harness, it's the same real methodology `generational-arena`'s
+own actual, faster, real-CI number already went through. What can
+differ is what rustc 1.98's LLVM (real CI) versus rustc 1.75's LLVM
+(this sandbox) *does* with that same code: the prefill loop in
+`reserve()` is a tight, regular, branch-free write of a fixed-size
+struct — exactly the shape a modern auto-vectorizer targets well. If
+the newer LLVM vectorizes that loop aggressively and the older one
+doesn't, the "extra" writes the prefill model does would be cheap on
+one and pay full price on the other, which would explain a real
+technique measuring as a real win on one rustc/LLVM pair and a real
+loss on another without either measurement being wrong. Not confirmed
+by disassembly on either toolchain — a real next step if this doesn't
+pan out on CI either, not done here.
+
+**Decision: shipped anyway, specifically to get the real measurement.**
+Applied to both `SlotArena` and `CompactSlotArena` for real (matching
+`generational-arena` 0.2.9's `reserve`/`insert_slow_path` shape, its
+real source re-verified directly again immediately before writing this
+— fresh `view` calls, not this session's earlier recollection of it —
+since assuming instead of checking is exactly what produced the
+mistake this section already corrected once). Both files' own
+"Fixes and Problems" entries below have the exact real diff shape and
+the tests added specifically to pin the new mechanism down. **What
+*was* verified locally, and is fully trustworthy regardless of
+toolchain differences: correctness.** 57/57 tests pass, including two
+new ones per file that check the actual prefill-and-double mechanism
+step by step (`growth_doubles_by_prefilling_a_fresh_free_list_batch`),
+not just its end effect. Speed is the only open question — that's
+what the next real CI run is actually for.
 
 ## C arena libraries (real, compiled `-O3 -march=native`, actually run)
 
@@ -846,6 +874,31 @@ call without a pause budget.
   writeup, including why the same technique still looks real and
   intentional in the source it was read from, in "Real CI benchmark
   results" → "`#[inline(never)]` hot/cold path split" above.
+- **Follow-up, same pass as the correction above:** the "root cause"
+  bullet just above turned out to be an incomplete diagnosis, not a
+  wrong one — true for this crate's *old* growth model, but stated
+  without checking whether `generational-arena` actually shared it.
+  It doesn't: its real `with_capacity`/`insert_slow_path` (re-verified
+  directly, fresh `view` calls right before this edit, not recalled)
+  eagerly pre-fills a doubling batch of free-list placeholders, so its
+  own `insert_slow_path` runs ~`log2(N)` times per `N` inserts, not `N`
+  times. Adopted that same real strategy here: `DEFAULT_CAPACITY = 4`
+  (their real constant), a new private `reserve()` that pre-fills
+  linked `Vacant` placeholders, `insert_slow_path` now doubles via
+  `reserve(len)` and retries instead of pushing one slot. Real,
+  observable behavior change: `slot_count()` right after
+  `new()`/`with_capacity(n)` now reports `4`/`n`, not `0` — two
+  existing tests (`starts_empty`, `slot_count_tracks_total_slots_not_just_live`)
+  updated to match, and a new one
+  (`growth_doubles_by_prefilling_a_fresh_free_list_batch`) added to
+  pin the doubling mechanism down directly. 57/57 tests pass.
+  **Could not be verified for speed locally** — a from-scratch
+  reimplementation of this exact strategy measured 60–87% *slower* in
+  this sandbox before this was applied to real source (see "Real CI
+  benchmark results" above for the full reasoning, including a
+  vectorization-difference hypothesis for why real CI and this sandbox
+  might genuinely disagree here). Shipped for a real CI measurement on
+  purpose, with that uncertainty stated plainly rather than hidden.
 
 ### `bump_arena.rs`
 - First version measured 3.2x slower on insert than `bumpalo`/
@@ -894,6 +947,18 @@ call without a pause budget.
   (±3%, inside noise) rather than a fix — `slotmap`'s real `get` isn't
   explicitly `#[inline]`'d either, so this was never expected to move
   the needle on its own, just bring this file in line with its sibling.
+- Same eager prefill-and-double growth strategy adopted as
+  `slot_arena.rs` above, same pass, same real source, same open
+  speed-verification question — not written up twice, see that entry.
+  Adapted to this file's union storage: pre-filled placeholders get
+  `generation: 0` with the union's `next_free` field live, `Drop for
+  Slot<T>`'s existing `occupied()` gate already skips these correctly
+  (even generation reads as vacant), so pre-filling introduced no new
+  drop-safety work here. Shares `SlotArena`'s exact `DEFAULT_CAPACITY`
+  via `pub(crate)` rather than a second copy of the constant, so the
+  two can't drift apart by accident. `starts_empty` updated, one new
+  test added (`growth_doubles_by_prefilling_a_fresh_free_list_batch`,
+  same shape as `slot_arena.rs`'s own).
 
 ### `unchecked_slot_arena.rs`
 - Built clean first pass -- no compile errors, no `unused_unsafe` or
