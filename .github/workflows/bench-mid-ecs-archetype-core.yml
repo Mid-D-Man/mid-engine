@@ -48,6 +48,27 @@
 # slower than bevy_ecs on both, same order of magnitude, no evidence
 # yet they share a cause with the now-fixed query-iteration gap.
 #
+# FIXED: "Publish summary" used to `cat` the entire raw log (compiler
+# warnings and all) into $GITHUB_STEP_SUMMARY, which GitHub hard-caps at
+# 1024 KiB -- a real run tripped it (1065k), and the cause wasn't "too
+# much bench data": a `raw_slice_ceiling`-only local run (8 benchmark
+# instances) produced 712,833 bytes on its own, ~18,900 of whose ~18,950
+# lines were `cargo bench`'s own build warnings (mid-math alone can
+# emit 3,110+ on a cold cache), not benchmark output -- see docs/
+# benching-standards.md's "step-summary size limit" section for the
+# full numbers and why this can recur on ANY cache miss, for ANY crate
+# in the dependency graph, regardless of what this bench file itself
+# contains. Fixed by skipping everything before cargo's own `Finished
+# \`bench\` profile` marker before embedding the log (falling back to
+# the untouched log if that marker's missing at all -- a genuine
+# compile failure, where the "noise" upstream of it is the actual
+# signal), plus a defensive 900k hard cap either way. The untouched raw
+# file, warnings included, still goes to the uploaded artifact --
+# nothing lost, just kept off the size-capped surface. Same latent
+# issue fixed the same way in bench-mid-collections-sparse-set.yml and
+# bench-mid-ecs-sparse-shell.yml, the only other two workflows sharing
+# this exact `cat raw.txt` pattern.
+#
 # Run: Actions -> "mid-ecs — bench Archetype Core" -> Run workflow
 # DO NOT add push/pull_request triggers.
 
@@ -156,8 +177,20 @@ jobs:
             echo ""
             echo "<details><summary>Full raw output</summary>"
             echo ""
+            echo "_Build output (compiler warnings, \`Compiling\`/\`Finished\` lines) is_"
+            echo "_stripped below to stay clear of GitHub's 1024k step-summary limit --_"
+            echo "_the untouched log, warnings included, is in this run's uploaded_"
+            echo "_artifact. Also hard-capped at 900k here as a second guard, however_"
+            echo "_that budget ends up used._"
+            echo ""
             echo '```'
-            cat bench-mid-ecs-archetype-core-raw.txt
+            if grep -q 'Finished `bench` profile' bench-mid-ecs-archetype-core-raw.txt; then
+              awk '/Finished `bench` profile/{f=1} f' bench-mid-ecs-archetype-core-raw.txt | head -c 900000
+            else
+              echo "(Compilation never finished -- showing the full raw log, including build errors, since there's no benchmark output to isolate it from.)"
+              echo ""
+              head -c 900000 bench-mid-ecs-archetype-core-raw.txt
+            fi
             echo '```'
             echo ""
             echo "</details>"

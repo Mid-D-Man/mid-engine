@@ -122,8 +122,20 @@ jobs:
             echo ""
             echo "<details><summary>Full raw output</summary>"
             echo ""
+            echo "_Build output (compiler warnings, \`Compiling\`/\`Finished\` lines) is_"
+            echo "_stripped below to stay clear of GitHub's 1024k step-summary limit --_"
+            echo "_the untouched log, warnings included, is in this run's uploaded_"
+            echo "_artifact. Also hard-capped at 900k here as a second guard, however_"
+            echo "_that budget ends up used._"
+            echo ""
             echo '```'
-            cat bench-mid-ecs-sparse-shell-raw.txt
+            if grep -q 'Finished `bench` profile' bench-mid-ecs-sparse-shell-raw.txt; then
+              awk '/Finished `bench` profile/{f=1} f' bench-mid-ecs-sparse-shell-raw.txt | head -c 900000
+            else
+              echo "(Compilation never finished -- showing the full raw log, including build errors, since there's no benchmark output to isolate it from.)"
+              echo ""
+              head -c 900000 bench-mid-ecs-sparse-shell-raw.txt
+            fi
             echo '```'
             echo ""
             echo "</details>"
