@@ -570,15 +570,49 @@ Applied to both `SlotArena` and `CompactSlotArena` for real (matching
 real source re-verified directly again immediately before writing this
 — fresh `view` calls, not this session's earlier recollection of it —
 since assuming instead of checking is exactly what produced the
-mistake this section already corrected once). Both files' own
-"Fixes and Problems" entries below have the exact real diff shape and
-the tests added specifically to pin the new mechanism down. **What
-*was* verified locally, and is fully trustworthy regardless of
-toolchain differences: correctness.** 57/57 tests pass, including two
-new ones per file that check the actual prefill-and-double mechanism
-step by step (`growth_doubles_by_prefilling_a_fresh_free_list_batch`),
-not just its end effect. Speed is the only open question — that's
-what the next real CI run is actually for.
+mistake this section already corrected once). **What *was* verified
+locally, and is fully trustworthy regardless of toolchain differences:
+correctness.** 57/57 tests pass, including two new ones per file that
+check the actual prefill-and-double mechanism step by step, not just
+its end effect. Speed was the deliberately open question.
+
+**Real CI answered it, twice: it's genuinely slower, not a sandbox
+artifact.** Two consecutive runs on the actual code, both real
+`criterion` results, not this sandbox's `Instant` harness:
+`SlotArena` insert went 6.87 ns/op (before, run #16) → 7.98 (run #18)
+→ 9.04 (run #19). `CompactSlotArena` moved the same direction, same
+two runs: 6.90 → 8.34 → 9.06. That's not noise inside one run's
+variance — it's a consistent, repeated, real regression on the exact
+measurement this whole detour existed to get. **The vectorization
+hypothesis above is therefore wrong** — real CI's newer rustc/LLVM
+doesn't rescue this the way that hypothesis predicted. Left in this
+section rather than deleted, as a real dead end that's now closed, not
+an open one: the simpler explanation from the very first local
+measurement (writing every slot twice — once as a placeholder, once at
+real-insert time — costs more than the hot/cold split saves) was
+probably right all along, on both toolchains, and the search for a
+toolchain-difference excuse was an unnecessary detour that a real CI
+measurement was always going to settle faster than more reasoning
+would have.
+
+**Reverted in full, for real, on real CI's evidence rather than this
+sandbox's.** Both files back to the original lazy grow-by-one-via-push
+model — `DEFAULT_CAPACITY`, `reserve`, `insert_slow_path`, the two
+rewritten tests, and the growth-mechanism tests all removed, not left
+commented out. Whatever makes `generational-arena`/
+`typed-generational-arena` faster on real CI, it is now confirmed
+**not** simply "adopt their growth strategy" — that was the one
+concrete, real, checkable thing their source offered, and it's been
+tried twice (once as annotation-only, once as the full real mechanism)
+and measured worse both times, the second time on the actual runner
+that matters. **This thread is closed** without a source-level
+explanation for the remaining ~1.1-1.3 ns/op (≈15-18%) insert gap.
+`SlotArena`/`CompactSlotArena` still beat `thunderdome` and
+`atomic-arena` outright and stay competitive with `slotmap`; that gap
+is now the accepted cost of this crate's simpler model, not an open
+investigation, unless a future pass has something genuinely new to
+check (real disassembly, not another source-reading pass over the same
+two crates).
 
 ## C arena libraries (real, compiled `-O3 -march=native`, actually run)
 
@@ -899,6 +933,14 @@ call without a pause budget.
   vectorization-difference hypothesis for why real CI and this sandbox
   might genuinely disagree here). Shipped for a real CI measurement on
   purpose, with that uncertainty stated plainly rather than hidden.
+- **Follow-up:** real CI answered it. Two consecutive runs, same code,
+  both regressed vs. the pre-change baseline (6.87 → 7.98 → 9.04 ns/op
+  insert) — not a sandbox artifact this time, the actual measurement
+  this detour existed to get. Reverted in full: `DEFAULT_CAPACITY`,
+  `reserve`, `insert_slow_path`, and the growth-strategy tests all
+  removed, back to the original lazy grow-by-one model. See "Real CI
+  benchmark results" → the `#[inline(never)]` section above for the
+  full closing writeup — this specific thread is done, not paused.
 
 ### `bump_arena.rs`
 - First version measured 3.2x slower on insert than `bumpalo`/
@@ -959,6 +1001,49 @@ call without a pause budget.
   two can't drift apart by accident. `starts_empty` updated, one new
   test added (`growth_doubles_by_prefilling_a_fresh_free_list_batch`,
   same shape as `slot_arena.rs`'s own).
+- **Follow-up, same as `slot_arena.rs` above:** confirmed regressed on
+  two consecutive real CI runs (6.90 → 8.34 → 9.06 ns/op insert), not
+  written up twice here. Reverted in full, same pass.
+
+### `Cargo.toml` (workspace root)
+- Real CI run #17 failed before reaching the bench at all: workspace
+  manifest resolution error, `mid-math`'s `criterion = { workspace =
+  true, ... }` failing because `workspace.dependencies` wasn't defined
+  in the root manifest. Traced, not guessed: cloned the repo fresh,
+  read the actual root `Cargo.toml` directly (confirmed `[workspace]`
+  existed with no `[workspace.dependencies]`/`[workspace.lints]` sub-
+  tables at all), then found `docs/RUST_AND_CRATE_GUIDELINES.md` §1
+  already documented the exact intended content of both tables as
+  already having been added — it hadn't been, a real gap between what
+  the docs said was done and what the file actually had. Restored both
+  tables verbatim from that doc (not reconstructed from guessing):
+  `[workspace.lints.rust]` (`unsafe_code = "deny"`, `missing_docs =
+  "warn"`), `[workspace.lints.clippy]` (`undocumented_unsafe_blocks =
+  "warn"`), `[workspace.dependencies]` (`criterion = { version = "0.5",
+  features = ["html_reports"] }`). Verified with `cargo metadata
+  --no-deps` before and after (confirmed the exact failure reproduces
+  unpatched, confirmed it's gone after) rather than assuming the fix
+  worked from the diff alone. Real, low-risk: both tables are opt-in
+  per crate (`[lints] workspace = true` / `dep.workspace = true`), and
+  `mid-math` is the *only* crate currently opted into either, already
+  carrying its own `#![allow(unsafe_code)]` for the one lint that
+  would otherwise fail it — checked directly, not assumed safe.
+- A real, separate, pre-existing, unrelated warning surfaced once the
+  table existed: `mid-math`'s wasm32-only `criterion = { workspace =
+  true, default-features = false }` override gets silently ignored --
+  a genuine, still-open upstream Cargo limitation (confirmed against
+  Cargo's own docs and rust-lang/cargo#11329/#12162: a member can only
+  override `default-features` to `false` when the *workspace* entry
+  itself already says `false`). First attempt to quiet it by adding
+  `default-features = true` to the workspace entry was backwards and
+  didn't fix anything, just reworded the same warning -- caught by
+  actually re-checking Cargo's real documented rule before shipping it,
+  not by assuming the first attempt worked. Left alone: harmless,
+  wasm32-only, unrelated to the mid-arena bench this pass exists for,
+  and Cargo itself doesn't cleanly support having it both ways
+  (wasm32 without rayon, native with it) through workspace inheritance
+  alone -- a real follow-up for whoever next touches `mid-math`'s wasm
+  bench setup, not fixed here.
 
 ### `unchecked_slot_arena.rs`
 - Built clean first pass -- no compile errors, no `unused_unsafe` or

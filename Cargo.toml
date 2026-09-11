@@ -130,6 +130,18 @@ undocumented_unsafe_blocks = "warn"
 
 [workspace.dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }
+# NOTE: `mid-math`'s wasm32-target dev-dependency overrides this to
+# `default-features = false` -- Cargo ignores that override (a real,
+# unresolved upstream limitation: a member can only override
+# `default-features` to `false` when the *workspace* entry already
+# says `false`, confirmed against Cargo's own docs and
+# rust-lang/cargo#11329/#12162, not guessed at -- an earlier attempt
+# here to "fix" this by setting `default-features = true` explicitly
+# didn't actually resolve it either, just reworded the same warning).
+# Harmless and unrelated to this pass: nothing here touches the wasm32
+# target, and the warning says "could become a hard error in the
+# future," not that it is one. Real follow-up for whoever next touches
+# `mid-math`'s wasm bench setup, not fixed here.
 
 [profile.release]
 opt-level     = 3

@@ -62,63 +62,32 @@
 //! specific algorithm, is the right general-purpose default rather than
 //! an untested pick.
 //!
-//! # Growth: eager prefill-and-double, not lazy grow-by-one -- an
-//! untested-locally change, shipped for a real CI measurement on
-//! purpose
+//! # Growth: grows by one on demand, not eagerly -- a real technique
+//! from faster crates was tried here and confirmed, on real CI, not to
+//! help
 //!
-//! [`new`](SlotArena::new)/[`with_capacity`](SlotArena::with_capacity)
-//! used to just reserve raw `Vec` capacity and grow by pushing one
-//! `Occupied` slot per insert past that. This module now instead
-//! mirrors `generational-arena` 0.2.9's *real* growth strategy exactly
-//! (re-verified against its actual source directly before writing this,
-//! not recalled from an earlier pass): [`reserve`](SlotArena::reserve)
-//! eagerly pre-fills `additional` fresh `Vacant` placeholder slots,
-//! linked into a real free list, before any insert touches them --
-//! `new()` calls it with `DEFAULT_CAPACITY = 4` (their real constant),
-//! and [`insert`](SlotArena::insert)'s growth path
-//! ([`insert_slow_path`](SlotArena::insert_slow_path)) doubles by
-//! calling `reserve(current_len)` and retrying, instead of pushing
-//! exactly one new slot.
-//!
-//! Why this matters, and why it's real: on `generational-arena`'s own
-//! insert benchmark shape (fresh arena, N sequential inserts), this
-//! means their `#[inline(never)]`-marked "grow" branch is only ever
-//! called ~`log2(N)` times, not N times -- the other ~N calls all hit
-//! their small, always-inlined "pop from an already-there free list"
-//! path. This crate's *previous* growth model took the grow branch on
-//! literally every call in that same benchmark shape, which is exactly
-//! why an earlier attempt at just the `#[inline(never)]` annotation (no
-//! growth-strategy change) measured as a real regression here -- see
-//! `docs/mid-arena.md`'s `#[inline(never)]` writeup for that full,
-//! corrected investigation, including the mistake in the original
-//! version of it.
-//!
-//! **This specific change could not be verified locally before
-//! shipping, unlike everything else in this crate.** A from-scratch
-//! reimplementation of this same prefill-and-double strategy measured
-//! 60-87% *slower* in this sandbox (rustc 1.75, non-statistical
-//! `std::time::Instant` timing) across four repeated runs -- the
-//! working theory (checkable arithmetic, not confirmed by
-//! disassembly) is that eagerly writing every slot twice (once as a
-//! placeholder, once at real-insert time) roughly doubles total
-//! memory-write volume for the run, and that this sandbox's older
-//! LLVM (bundled with rustc 1.75) doesn't auto-vectorize the tight,
-//! regular prefill loop in `reserve()` the way whatever LLVM ships
-//! with the real CI's rustc 1.98 plausibly does -- which would make
-//! the "extra" writes cheap there and not here. Not confirmed either
-//! way. Shipped anyway, specifically to get a real measurement on real
-//! CI, because local testing has now produced a *second* real,
-//! source-grounded technique that regresses in this exact sandbox
-//! while the crates that actually use it measure faster on the real
-//! runner -- see `docs/mid-arena.md`'s "Fixes and Problems" entry for
-//! this file for the full reasoning and the open decision if this
-//! doesn't pan out on real CI either.
-//!
-//! One real, observable behavior change from this: `slot_count()`
-//! immediately after `with_capacity(n)`/`new()` now reports `n`/`4`
-//! rather than `0` -- every pre-filled slot counts as "created," even
-//! before anything is inserted into it. Documented here and in the
-//! affected tests, not left as a silent surprise.
+//! Grows by pushing exactly one new `Occupied` slot per insert past
+//! whatever's currently free, matching `Vec`'s own "reserve raw
+//! capacity, populate lazily" convention. `generational-arena`/
+//! `typed-generational-arena` (both real source read, `Cargo.toml`'s
+//! exact pinned versions) instead eagerly pre-fill a doubling batch of
+//! `Vacant` placeholders on every growth and mark their "grow" branch
+//! `#[inline(never)]`, since it becomes rare rather than universal
+//! under that strategy. That exact real technique was tried here too
+//! -- not guessed at, the real `reserve()`/`insert_slow_path` shape
+//! ported over, re-verified against the actual downloaded source
+//! directly before writing it. It measured 60-87% slower in this
+//! sandbox before it shipped, and slower again on two consecutive real
+//! CI runs after it shipped (`SlotArena` insert went from 6.87 ns/op
+//! to 7.98, then 9.04, on the same code, two different runs) -- a real
+//! regression confirmed on the actual measurement that matters, not
+//! just a sandbox artifact this time. Reverted in full. Complete
+//! writeup, including the corrected understanding of *why*
+//! `generational-arena` benefits from this and this crate's own code
+//! apparently doesn't, in `docs/mid-arena.md`'s `#[inline(never)]`
+//! section -- closed there as a settled result, not an open question
+//! to keep re-attempting without new information (disassembly-level,
+//! not source-level).
 
 use alloc::vec::Vec;
 use core::mem::replace;
@@ -210,60 +179,24 @@ pub struct SlotArena<T> {
 /// name exactly -- see this module's doc comment on growth.
 /// `pub(crate)` so `compact_slot_arena.rs` shares this exact value
 /// rather than risking a second copy drifting out of sync with it.
-pub(crate) const DEFAULT_CAPACITY: usize = 4;
-
 impl<T> SlotArena<T> {
-    /// Creates an arena, eagerly pre-filled with `DEFAULT_CAPACITY`
-    /// free slots -- see this module's doc comment on growth for why.
+    /// Creates an arena with nothing allocated yet.
     pub fn new() -> Self {
-        Self::with_capacity(DEFAULT_CAPACITY)
-    }
-
-    /// Creates an arena, eagerly pre-filled with `capacity` free slots
-    /// (at least 1) ready for the first `capacity` inserts to reuse
-    /// without growing -- see this module's doc comment on growth.
-    pub fn with_capacity(capacity: usize) -> Self {
-        let mut arena = Self {
+        Self {
             slots: Vec::new(),
             free_head: 0,
             live_count: 0,
-        };
-        arena.reserve(capacity.max(1));
-        arena
+        }
     }
 
-    /// Eagerly pre-fills `additional` fresh `Vacant` slots, linked into
-    /// a real free list ready for immediate reuse. Mirrors
-    /// `generational-arena::Arena::reserve`'s real shape (re-verified
-    /// against its actual source directly, not recalled) adapted to
-    /// this arena's own `free_head == slots.len()` sentinel convention
-    /// -- their version chains a new batch onto whatever was already on
-    /// the free list via a stored `Option<usize>` head; this one is
-    /// only ever called when the free list is already empty (from
-    /// `with_capacity` on a fresh arena, or from `insert_slow_path`
-    /// exactly when nothing is free), so the new batch's tail simply
-    /// terminates at the new total length, which already means "empty"
-    /// under this arena's own convention.
-    fn reserve(&mut self, additional: usize) {
-        let start = self.slots.len();
-        let new_len = start + additional;
-        debug_assert!(
-            new_len < u32::MAX as usize,
-            "SlotArena holds u32::MAX slots -- index would overflow"
-        );
-        self.slots.reserve_exact(additional);
-        for i in start..new_len {
-            let next_free = if i == new_len - 1 {
-                new_len as u32
-            } else {
-                (i + 1) as u32
-            };
-            self.slots.push(Slot::Vacant {
-                generation: 0,
-                next_free,
-            });
+    /// Creates an arena pre-sized for `capacity` live values before the
+    /// next insert past that would reallocate.
+    pub fn with_capacity(capacity: usize) -> Self {
+        Self {
+            slots: Vec::with_capacity(capacity),
+            free_head: 0,
+            live_count: 0,
         }
-        self.free_head = start as u32;
     }
 
     /// Number of currently-live (inserted, not yet removed) values.
@@ -278,27 +211,15 @@ impl<T> SlotArena<T> {
         self.live_count == 0
     }
 
-    /// Backing `Vec`'s raw allocated capacity. Since
-    /// [`reserve`](Self::reserve) always fills exactly what it
-    /// allocates, this now tracks [`slot_count`](Self::slot_count)
-    /// closely in practice (not guaranteed exactly equal --
-    /// `Vec::reserve_exact` is "at least this much," not "exactly this
-    /// much") -- kept as a distinct method rather than merged into
-    /// `slot_count` since they answer different questions (raw backing
-    /// allocation vs. logical slots created) even though the numbers
-    /// now usually agree.
+    /// Live values this arena can hold before the next insert past that
+    /// reallocates.
     #[inline]
     pub fn capacity(&self) -> usize {
         self.slots.capacity()
     }
 
-    /// Total slots ever created (live + freed-but-not-yet-reused).
-    /// **Changed by the growth-strategy update documented in this
-    /// module's doc comment: this is no longer 0 right after
-    /// `new()`/`with_capacity(n)`** -- those now eagerly pre-fill
-    /// `DEFAULT_CAPACITY`/`n` slots immediately, so `slot_count()`
-    /// reports that count right away, before any insert. Still not the
-    /// same as [`len`](Self::len) once anything has been removed.
+    /// Total slots ever created (live + freed-but-not-yet-reused). Not
+    /// the same as [`len`](Self::len) once anything has been removed.
     #[inline]
     pub fn slot_count(&self) -> usize {
         self.slots.len()
@@ -307,21 +228,7 @@ impl<T> SlotArena<T> {
     /// Inserts `value`, returning a handle that can later
     /// [`get`](Self::get)/[`get_mut`](Self::get_mut)/[`remove`](Self::remove)
     /// it. Either reuses the most recently freed slot (LIFO) or grows
-    /// by doubling if nothing is free -- see this module's doc comment
-    /// on growth.
-    ///
-    /// Split into this fast, always-inlined common case and
-    /// [`insert_slow_path`](Self::insert_slow_path) for the growth
-    /// case -- real technique read directly from
-    /// `generational-arena`/`typed-generational-arena`'s own source
-    /// (`insert`/`try_insert` marked `#[inline]`, the growth branch
-    /// pulled into a separate `#[inline(never)] fn insert_slow_path`).
-    /// Unlike the first time this split was tried in this file (see
-    /// `docs/mid-arena.md`), the growth strategy now actually makes the
-    /// "grow" branch rare rather than universal, which is the whole
-    /// premise this split needs to be worth anything -- see this
-    /// module's doc comment on growth for the real reasoning.
-    #[inline]
+    /// by one if nothing is free -- see this module's doc comment.
     pub fn insert(&mut self, value: T) -> ArenaKey {
         let free_head = self.free_head;
 
@@ -349,28 +256,24 @@ impl<T> SlotArena<T> {
                 generation,
             }
         } else {
-            self.insert_slow_path(value)
+            debug_assert_eq!(
+                free_head as usize,
+                self.slots.len(),
+                "free_head should never point past a single new slot beyond the end"
+            );
+            debug_assert!(
+                self.slots.len() < u32::MAX as usize,
+                "SlotArena holds u32::MAX slots -- index would overflow"
+            );
+            let generation = 1;
+            self.slots.push(Slot::Occupied { generation, value });
+            self.free_head = free_head + 1;
+            self.live_count += 1;
+            ArenaKey {
+                index: free_head,
+                generation,
+            }
         }
-    }
-
-    /// The "grow" branch of [`insert`](Self::insert), pulled out and
-    /// marked `#[inline(never)]` on purpose -- see this module's doc
-    /// comment on growth for why this is now the *rare* case rather
-    /// than, as in the first attempt at this split, the *only* case.
-    /// Doubles by [`reserve`](Self::reserve)-ing `slots.len()` more
-    /// slots (or 1, from empty), matching
-    /// `generational-arena::Arena::insert_slow_path`'s real shape
-    /// exactly, then retries -- the retry always takes the fast path
-    /// above, since `reserve` just populated the free list.
-    #[inline(never)]
-    fn insert_slow_path(&mut self, value: T) -> ArenaKey {
-        let additional = if self.slots.is_empty() {
-            1
-        } else {
-            self.slots.len()
-        };
-        self.reserve(additional);
-        self.insert(value)
     }
 
     /// Removes and returns the value at `key`, if it's still alive.
@@ -500,11 +403,7 @@ mod tests {
         let a: SlotArena<u32> = SlotArena::new();
         assert_eq!(a.len(), 0);
         assert!(a.is_empty());
-        assert_eq!(
-            a.slot_count(),
-            4,
-            "new() eagerly pre-fills DEFAULT_CAPACITY slots now -- see this module's doc comment on growth"
-        );
+        assert_eq!(a.slot_count(), 0);
     }
 
     #[test]
@@ -641,55 +540,17 @@ mod tests {
 
     #[test]
     fn slot_count_tracks_total_slots_not_just_live() {
-        // Rewritten for the eager-prefill growth strategy (see this
-        // module's doc comment): slot_count is now set at construction
-        // time by the capacity hint, not grown one at a time by insert.
-        let mut a = SlotArena::with_capacity(3);
-        assert_eq!(
-            a.slot_count(),
-            3,
-            "with_capacity pre-fills its slots immediately now"
-        );
+        let mut a = SlotArena::new();
         let k0 = a.insert(1u32);
         a.insert(2u32);
         a.insert(3u32);
-        assert_eq!(
-            a.slot_count(),
-            3,
-            "inserting within the pre-filled capacity doesn't grow it"
-        );
+        assert_eq!(a.slot_count(), 3);
         a.remove(k0);
         assert_eq!(a.slot_count(), 3, "freeing doesn't shrink slot_count");
         assert_eq!(a.len(), 2);
         a.insert(4u32); // reuses k0's freed slot
         assert_eq!(a.slot_count(), 3, "reuse shouldn't grow it either");
         assert_eq!(a.len(), 3);
-        a.insert(5u32); // 4th live value, exceeds the initial capacity of 3
-        assert!(
-            a.slot_count() > 3,
-            "exceeding the pre-filled capacity must grow slot_count"
-        );
-    }
-
-    #[test]
-    fn growth_doubles_by_prefilling_a_fresh_free_list_batch() {
-        // The actual mechanism insert_slow_path now uses, matching
-        // generational-arena's real reserve()/insert_slow_path (source
-        // re-read directly before writing this, see this module's doc
-        // comment on growth) -- checked directly rather than only
-        // asserted in prose.
-        let mut a: SlotArena<u32> = SlotArena::with_capacity(1);
-        assert_eq!(a.slot_count(), 1);
-        a.insert(1); // consumes the one pre-filled slot
-        assert_eq!(a.slot_count(), 1);
-        a.insert(2); // free list empty -> insert_slow_path -> reserve(1) -> doubles to 2
-        assert_eq!(a.slot_count(), 2);
-        a.insert(3); // free list empty again -> reserve(2) -> doubles to 4
-        assert_eq!(a.slot_count(), 4);
-        a.insert(4); // still within the 4 just reserved
-        assert_eq!(a.slot_count(), 4);
-        a.insert(5); // exceeds 4 -> reserve(4) -> doubles to 8
-        assert_eq!(a.slot_count(), 8);
     }
 
     #[test]
