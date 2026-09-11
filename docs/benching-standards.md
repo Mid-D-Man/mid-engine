@@ -49,6 +49,62 @@ Not fixed as part of this pass (real, but out of scope for what was
 asked); worth a deliberate cleanup pass, not a silent gap to
 rediscover the hard way later.
 
+## The step-summary size limit — a real, hard GitHub constraint, not a formatting choice
+
+GitHub caps `$GITHUB_STEP_SUMMARY` at 1024 KiB total; write past it and
+the *entire* summary for that step is dropped, with only a terse
+`GITHUB_STEP_SUMMARY upload aborted... got NNNk` line in the log to say
+why — no partial summary, no indication of which content pushed it
+over. Hit for real on `bench-mid-ecs-archetype-core.yml` (1065k against
+the 1024k limit), on the run right after a new diagnostic bench group
+landed — the natural read is "too much new bench data," and it's wrong.
+A `raw_slice_ceiling`-only local run (8 benchmark instances total, no
+other group involved) produced 712,833 bytes and 18,952 lines on its
+own, and all but ~68 of those lines were `cargo bench`'s own build
+output — specifically a `warning: \`mid-math\` (lib) generated 3110
+warnings` worth of compiler lint noise (unnecessary-`unsafe`,
+missing-docs, and similar, from mid-math's own SIMD backends),
+captured because the run step's `2>&1 | tee raw.txt` pipes stderr
+(where rustc's warnings go) into the same file a later step `cat`s
+whole into the step summary. Real criterion result text is tiny by
+comparison — roughly 8-9 lines per benchmark instance; even every group
+`archetype_core.rs` has as of this pass (~76 instances total) comes to
+maybe 600-700 lines, well under 100 KB.
+
+**The bench data was never the risk. The compiler-warning preamble —
+which reappears in full on any cache miss, for any crate anywhere in
+the dependency graph, regardless of what the bench file itself
+contains — is.** A cold cache (GitHub Actions cache eviction, a
+`Cargo.toml` touch, or just a repo with enough *other* bench workflows
+competing for the same repo-wide 10 GB cache quota) can reintroduce
+thousands of warning lines at any time, on any of these workflows, with
+zero relationship to how much the benchmarks themselves grew.
+
+**Fix, applied to `bench-mid-ecs-archetype-core.yml`,
+`bench-mid-collections-sparse-set.yml`, and `bench-mid-ecs-sparse-
+shell.yml`** (`grep -l "Full raw output" .github/workflows/*.yml` shows
+these are the only three using the raw-`cat` pattern, so all three
+carried the same latent risk): before embedding the raw log in the step
+summary, skip everything before cargo's own `` Finished `bench` profile ``
+marker — the line it always prints once compilation succeeds, right
+before the benchmarked binary actually runs — so only real bench
+output reaches the summary, no build noise. Falls back to the untouched
+full log if that marker is missing entirely (a genuine compile
+failure, where the noise upstream of it *is* the signal and must not
+be hidden). A defensive `head -c 900000` cap sits behind that either
+way — current real output isn't remotely close to it, but it means
+this specific failure mode structurally can't recur here regardless of
+how much more diagnostic bench code gets added later. The untouched raw
+file, warnings and all, still goes to the uploaded artifact unchanged —
+nothing lost, just kept off the size-capped surface.
+
+**New bench workflows: don't `cat` a raw `cargo bench`/`cargo test` log
+into `$GITHUB_STEP_SUMMARY` without stripping the pre-`` Finished ``
+build output first.** A clean sandbox or a cold cache brings it back in
+full, on any crate, at any time — it has nothing to do with how much
+the bench file itself has grown, so growth in the bench matrix is not
+what to watch for here; cache-miss frequency is.
+
 ## The recommended shape, end to end
 
 What `bench-vs-bevy-ecs.yml` now does, as the canonical reference:
@@ -73,10 +129,18 @@ What `bench-vs-bevy-ecs.yml` now does, as the canonical reference:
    `bevy_ecs` structural-churn case, extended to 7.5s on its own) that
    would otherwise sit buried in a wall of raw text.
 6. `if: always()` **summary step** — either the Python parser or the
-   bash-grep pattern above, not the raw dump alone.
+   bash-grep pattern above, not the raw dump alone. If it embeds any
+   slice of the raw log (even inside a `<details>` fold), strip
+   everything before cargo's own `` Finished `bench` profile `` marker
+   first and cap the result (e.g. `head -c 900000`) — see "The
+   step-summary size limit" above for why a raw `cat` of build output
+   plus bench output is a real, GitHub-hard-capped failure mode, not a
+   formatting nicety.
 7. `if: always()` **upload the raw log as an artifact**, 30-day
-   retention. The step summary is for skimming; the raw file is for
-   when someone actually needs the full confidence intervals.
+   retention, *untouched* — no stripping or capping here, that's only
+   for the step-summary embed. The step summary is for skimming; the
+   raw file is for when someone actually needs the full confidence
+   intervals (or the build warnings the summary deliberately left out).
 
 ## Writing a `scripts/bench_vs_*.py`
 
