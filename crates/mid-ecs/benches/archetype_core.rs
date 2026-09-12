@@ -492,6 +492,15 @@ fn bench_query2_static_diag_unchecked(c: &mut Criterion) {
                 black_box(sum);
             });
         });
+        group.bench_with_input(BenchmarkId::new("cold_split", n), &n, |b, _| {
+            b.iter(|| {
+                let mut sum = 0.0f32;
+                for (_, pos, vel) in world.query2_static_diag_cold_split::<Position, Velocity>() {
+                    sum += pos.x + vel.dx;
+                }
+                black_box(sum);
+            });
+        });
         group.bench_with_input(BenchmarkId::new("real_query1_inline_never_wrapper", n), &n, |b, _| {
             let mut bench = RealQuery1 { world: &world };
             b.iter(|| black_box(bench.run()));

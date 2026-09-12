@@ -163,6 +163,13 @@ impl World {
     ) -> impl Iterator<Item = (Entity, A)> + '_ {
         self.archetypes.iter2_diag_owned_direct::<A, B>()
     }
+
+    #[doc(hidden)]
+    pub fn query2_static_diag_cold_split<A: 'static, B: 'static>(
+        &self,
+    ) -> impl Iterator<Item = (Entity, &A, &B)> + '_ {
+        self.archetypes.iter2_diag_cold_split::<A, B>()
+    }
 }
 
 #[cfg(test)]
@@ -640,5 +647,87 @@ mod tests {
             w.query2_static_diag_owned_direct::<Position, Velocity>().count(),
             0
         );
+    }
+
+    #[test]
+    fn diag_query2_static_cold_split_matches_the_real_query2_static() {
+        let (w, both, _position_only) = two_archetype_world();
+
+        let expected: Vec<(Entity, Position, Velocity)> = w
+            .query2_static::<Position, Velocity>()
+            .map(|(e, p, v)| (e, *p, *v))
+            .collect();
+        let actual: Vec<(Entity, Position, Velocity)> = w
+            .query2_static_diag_cold_split::<Position, Velocity>()
+            .map(|(e, p, v)| (e, *p, *v))
+            .collect();
+
+        assert_eq!(actual, expected);
+        assert_eq!(
+            actual,
+            vec![(
+                both,
+                Position { x: 1.0, y: 1.0 },
+                Velocity { dx: 9.0, dy: 9.0 }
+            )]
+        );
+    }
+
+    #[test]
+    fn diag_query2_static_cold_split_empty_when_one_side_was_never_registered() {
+        let mut w = World::new();
+        let e = w.spawn();
+        assert!(w.insert_static(e, Position { x: 0.0, y: 0.0 }));
+        assert_eq!(
+            w.query2_static_diag_cold_split::<Position, Velocity>().count(),
+            0
+        );
+    }
+
+    #[test]
+    fn diag_query2_static_cold_split_walks_multiple_matching_archetypes_and_skips_a_non_matching_one_between_them() {
+        // The thing that's actually new and risky about this variant:
+        // the archetype-advance logic now lives in its own `advance`
+        // function instead of inline in `next`'s own body, so a bug in
+        // how it hands control back to `next` (wrong `row`/`len` left
+        // behind, an off-by-one before the first item of a freshly
+        // resolved archetype) would only show up once there's more
+        // than one archetype to actually advance *across*.
+        // `two_archetype_world`'s own two archetypes aren't quite
+        // enough to be confident of that; build a three-archetype
+        // world here where a genuinely non-matching archetype
+        // (Position only -- matches neither query) sits, in spawn
+        // order, between two archetypes that both match, forcing at
+        // least one real archetype-to-archetype advance through
+        // `advance`'s own loop.
+        let mut w = World::new();
+
+        let e1 = w.spawn();
+        assert!(w.insert_static(e1, Position { x: 1.0, y: 1.0 }));
+        assert!(w.insert_static(e1, Velocity { dx: 1.0, dy: 1.0 }));
+
+        // Position-only archetype -- matches neither query, sits
+        // between the two real matches in spawn/archetype order.
+        let e2 = w.spawn();
+        assert!(w.insert_static(e2, Position { x: 2.0, y: 2.0 }));
+
+        let e3 = w.spawn();
+        assert!(w.insert_static(e3, Position { x: 3.0, y: 3.0 }));
+        assert!(w.insert_static(e3, Velocity { dx: 3.0, dy: 3.0 }));
+
+        let expected: Vec<(Entity, Position, Velocity)> = w
+            .query2_static::<Position, Velocity>()
+            .map(|(e, p, v)| (e, *p, *v))
+            .collect();
+        let actual: Vec<(Entity, Position, Velocity)> = w
+            .query2_static_diag_cold_split::<Position, Velocity>()
+            .map(|(e, p, v)| (e, *p, *v))
+            .collect();
+
+        assert_eq!(actual, expected);
+        assert_eq!(actual.len(), 2);
+        assert!(actual.iter().any(|(e, _, _)| *e == e1));
+        assert!(actual.iter().any(|(e, _, _)| *e == e3));
+        assert!(actual.iter().all(|(e, _, _)| *e != e2));
     }
 }

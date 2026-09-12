@@ -1062,3 +1062,114 @@ Not a fix yet. Land this, run Archetype Core at least twice more (one
 run already looked like a fluke this project — build #10 — and was
 caught only by rerunning), and read `Iter1`'s new group the same way
 the table above reads `query_static_single_component`'s.
+
+### Builds #15 and #16: the `Iter1` attribute test came back negative, and something more useful came back positive instead
+
+Landed the `Iter1Never`/`Iter1Always` diagnostic from the previous
+section, then ran Archetype Core twice (builds #15, #16) specifically
+to check the result wasn't a fluke, same discipline as everywhere else
+in this investigation. It wasn't a fluke — the two runs agree with
+each other to within 1-2% on nearly every group, a level of internal
+consistency this suite hasn't shown since build #7. But the answer
+itself is a clean negative on the question asked, and a clean positive
+on a different, better question asked by accident.
+
+**The negative result:** `query_static_single_component_diag_inlining`
+— `inline_never`, `inline_always`, and `Default` (`query_static_single_component`
+itself) — all landed within 1% of each other in both builds (e.g.
+build #15 @ N=100,000: 377.18µs / 375.18µs / 375.25µs). No split at all,
+in either direction. Pinning `Iter1::next`'s own inline attribute does
+nothing, for either extreme — the same clean negative `Iter2Never`/
+`Iter2Always` already gave for the 2-column case. **An attribute on
+`next` itself, in isolation, is not the lever, for either arity.** That
+line of investigation is closed.
+
+**The accidental finding:** every benchmark that used to separate into
+a "fast" 1-column cluster and a "slow" 2-column cluster has collapsed
+into one cluster in both builds — including `query_static_single_component`
+itself (375-377µs, up from its historical ~65-106µs) *and*
+`query_static_unchecked_1col` (Iter1Unchecked — 375µs, also up from its
+own historical ~65-106µs, and previously the single most reliable
+"stays fast no matter what" reference point in this whole matrix).
+Three things are still fast, unmoved, matching their own historical
+numbers exactly: `raw_slice_ceiling` (~94µs, zero ECS code — nothing
+for a binary-layout shift to grab onto), `two_tuple_item` (~94µs,
+unchanged), and — this is the one worth sitting with —
+`real_query1_inline_never_wrapper` (~94µs, unchanged), while its
+structural twin `real_query2_inline_never_wrapper` sits at ~395-400µs,
+matching `query2_static_two_components` exactly.
+
+`RealQuery1::run`/`RealQuery2::run` (in `archetype_core.rs`'s
+`bench_query2_static_diag_unchecked`) are byte-for-byte identical in
+shape — same `#[inline(never)] fn run(&mut self) -> f32`, same for-loop
+calling the real, unmodified `query_static`/`query2_static`, differing
+only in `sum += pos.x` vs `sum += pos.x + vel.dx`. Wrapping the *whole
+consuming loop* in an outer `#[inline(never)]` boundary reliably fixes
+the 1-column case and reliably does not touch the 2-column case — this
+is now the same result across at least three separate builds (#12/#13
+per the previous session, #15/#16 this one). **"Just wrap the call
+site" is ruled out as a sufficient fix for `query2_static` specifically
+— whatever's different has to be something `Iter2::next` carries on its
+own, not something fixable purely from outside it.**
+
+**The likely explanation for the collapse itself, stated plainly since
+it changes how to read the last several sections:** nothing in
+`archetype.rs` changed between build #13 and build #15 — `Iter1::next`
+is the exact same source it's been all session. What changed is that
+`diag_inline.rs` and `query.rs` grew new code in the same compilation
+unit `Iter1::next` lives in. The most likely read is that this shifted
+enough about the compiled binary's layout to tip `Iter1::next` — which
+build #13 already showed *can* tip, just not reliably before now — into
+whatever regime `Iter2::next` sits in permanently. Shipping the next
+diagnostic pushed the very thing it was trying to observe into a new,
+now-stable state. Worth stating plainly rather than treating as a
+side note: the regression-guard table's own baseline
+(`query_static_single_component`) is not currently a safe thing to read
+at face value, and won't be until this is actually understood, not just
+patched around.
+
+**Patched around in the meantime, because leaving it silent is worse
+than a workaround:** `scripts/bench_mid_ecs_archetype_core.py` now
+cross-checks `query_static_single_component` against `raw_slice_ceiling`'s
+own floor at N≥1,000 (N=100 excluded — checked directly against build
+#11's own healthy numbers, which still show a 2.6× baseline/floor ratio
+at N=100 alone from ordinary fixed-per-call overhead, a false positive
+this exclusion avoids) and refuses to print a clean ✅ — downgrading
+every row to at least ⚠️ regardless of how good the raw ratio looks —
+if that baseline is running >2.0× the floor. Verified against both
+regimes directly: build #11's real numbers (healthy baseline, genuine
+4.08× worst ratio) still correctly print the original 🔴 for the
+original reason; build #15's real numbers (collapsed baseline, a
+misleadingly clean 1.07-1.13×) now correctly print a drift warning and
+downgrade every ✅ to ⚠️ instead of reporting a false pass. This doesn't
+fix the underlying issue — it stops the summary from actively lying
+about it while it's unresolved.
+
+**Built and shipped this pass, not yet run on real CI:**
+`Iter2ColdSplit` in `diag_query2_unchecked.rs` — `Iter2`'s exact logic
+with the archetype-advance ("cold") branch physically moved into its
+own `#[inline(never)] fn advance`, leaving `next`'s own body as just
+the per-entity fast path and a call out to `advance` on the rare
+branch. Different question than the already-closed one above: not "does
+an attribute on `next` matter" (closed, no) and not "does wrapping the
+*caller* matter" (closed for 2 columns, no) but "does the *cold path's
+own size*, sitting physically inside `next`, affect how well the *hot*
+path inlines at 2 columns' worth of state" — untested until now, and
+the one remaining structural difference between `Iter2` and
+`Iter1`/`Iter2TwoTupleItem` this investigation hasn't tried adjusting.
+Three new tests (`diag_query2_static_cold_split_matches_the_real_query2_static`,
+`_empty_when_one_side_was_never_registered`, and a new three-archetype
+`_walks_multiple_matching_archetypes_and_skips_a_non_matching_one_between_them`
+case — `two_archetype_world`'s own two archetypes weren't enough to be
+confident the split between `next`/`advance` hands off state correctly
+across more than one real archetype boundary) — 185/185 mid-ecs tests
+pass, bench compiles clean. Benched as a new `cold_split` entry in the
+existing `query2_static_diag_unchecked` group — no new bench group
+needed, it slots in next to `composed`/`raw_ptr`/`owned_direct`.
+
+Land it, run Archetype Core at least twice (same standing discipline),
+and read `cold_split` against `two_tuple_item`/`raw_slice_ceiling` (the
+still-reliable fast references) rather than against
+`query_static_single_component` — which, per the section above, isn't
+a safe comparison point right now regardless of what the automated
+table says about it.

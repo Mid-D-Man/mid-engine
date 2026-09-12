@@ -373,6 +373,85 @@ impl<'a, A: 'static + Copy + DiagCombine<B>, B: 'static> Iterator for Iter2Owned
     }
 }
 
+// Real Iter1's outer-#[inline(never)]-wrapper test (RealQuery1/
+// RealQuery2 in archetype_core.rs's bench_query2_static_diag_unchecked)
+// is structurally byte-identical for both arities -- same
+// `#[inline(never)] fn run(&mut self) -> f32`, same for-loop shape,
+// only the summed expression differs (`pos.x` vs `pos.x + vel.dx`) --
+// yet real CI (Archetype Core builds #12/#13, reconfirmed #15/#16)
+// consistently shows the 1-column wrapper fast and the 2-column
+// wrapper just as slow as unwrapped `Iter2`. An outer wrapper around
+// the *whole consuming loop* isn't sufficient for 2 columns, whatever
+// it does for 1 -- so the difference has to be inside `Iter2::next`
+// itself, not in how its caller is (or isn't) walled off.
+//
+// `Iter2::next`'s own doc comment already establishes the shape: a
+// tiny, per-entity hot path (`if row < len {...}`) and a much larger,
+// per-archetype-only cold path (id lookup, column resolution, `if let`
+// unwrapping) that only runs once per archetype, not once per entity
+// -- see `archetype.rs`. Untested until now: does the hot path being
+// small enough to inline cleanly actually matter on its own, decoupled
+// from the cold path's own size? This variant is `Iter2`'s exact logic
+// with the cold path physically moved into its own `#[inline(never)]`
+// function, so the hot path -- the part that runs N times, not once
+// per archetype -- is the only thing left for the compiler to inline
+// at the call site, regardless of how big or small the (now
+// irrelevant, walled off) archetype-resolution code is.
+pub(crate) struct Iter2ColdSplit<'a, A, B> {
+    archetypes: &'a Archetypes,
+    ids: Option<(ComponentId, ComponentId)>,
+    matched: std::vec::IntoIter<ArchetypeId>,
+    entities: &'a [Entity],
+    a_col: &'a [A],
+    b_col: &'a [B],
+    row: usize,
+    len: usize,
+}
+
+impl<'a, A: 'static, B: 'static> Iter2ColdSplit<'a, A, B> {
+    #[inline(never)]
+    fn advance(&mut self) -> Option<(Entity, &'a A, &'a B)> {
+        loop {
+            let (a_id, b_id) = self.ids?;
+            let archetype_id = self.matched.next()?;
+            let (entities, a_col, b_col) = self
+                .archetypes
+                .diag_entities_and_columns::<A, B>(archetype_id, a_id, b_id);
+            self.len = entities.len().min(a_col.len()).min(b_col.len());
+            self.entities = entities;
+            self.a_col = a_col;
+            self.b_col = b_col;
+            self.row = 0;
+            if self.row < self.len {
+                let item = (
+                    self.entities[self.row],
+                    &self.a_col[self.row],
+                    &self.b_col[self.row],
+                );
+                self.row += 1;
+                return Some(item);
+            }
+        }
+    }
+}
+
+impl<'a, A: 'static, B: 'static> Iterator for Iter2ColdSplit<'a, A, B> {
+    type Item = (Entity, &'a A, &'a B);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.row < self.len {
+            let item = (
+                self.entities[self.row],
+                &self.a_col[self.row],
+                &self.b_col[self.row],
+            );
+            self.row += 1;
+            return Some(item);
+        }
+        self.advance()
+    }
+}
+
 impl Archetypes {
     pub(crate) fn iter_diag_unchecked<T: 'static>(&self) -> Iter1Unchecked<'_, T> {
         let (id, matched) = self.diag_matched_and_id::<T>();
@@ -469,6 +548,22 @@ impl Archetypes {
     ) -> Iter2OwnedDirect<'_, A, B> {
         let (ids, matched) = self.diag_matched_and_ids::<A, B>();
         Iter2OwnedDirect {
+            archetypes: self,
+            ids,
+            matched: matched.into_iter(),
+            entities: &[],
+            a_col: &[],
+            b_col: &[],
+            row: 0,
+            len: 0,
+        }
+    }
+
+    pub(crate) fn iter2_diag_cold_split<A: 'static, B: 'static>(
+        &self,
+    ) -> Iter2ColdSplit<'_, A, B> {
+        let (ids, matched) = self.diag_matched_and_ids::<A, B>();
+        Iter2ColdSplit {
             archetypes: self,
             ids,
             matched: matched.into_iter(),
