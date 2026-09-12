@@ -165,3 +165,51 @@ opt-level     = 3
 lto           = true
 codegen-units = 1
 debug         = true
+
+# Added after checking two things directly, both prompted by the
+# query2_static investigation (docs/mid-ecs.md) reaching a point where
+# every source-level Iter2 variant had been tried: (1) `[profile.bench]`
+# above already sets codegen-units=1 + lto=true workspace-wide, so
+# `benches/ecs-vs-bevy-ecs` compiles real bevy_ecs under this same
+# regime too (it's a workspace member, not a separate workspace --
+# checked directly). (2) bevy's OWN root Cargo.toml (Mid-D-Man/bevy,
+# real source, not assumed) has no bare [profile.release] and no
+# [profile.bench] at all -- its own benchmarks (the same
+# benches/benches/bevy_ecs/iteration/*.rs already read for the
+# #[inline(never)]-wrapper convention) run under cargo's plain,
+# unconfigured default: codegen-units=16, no LTO. bevy relies on
+# explicit #[inline(always)] on the functions that need it (confirmed
+# on QueryIterationCursor::next itself) rather than whole-program LTO
+# to guarantee their codegen -- a different strategy than this
+# workspace's "LTO everything, let the compiler see the whole graph"
+# choice, one this project never deliberately chose FOR mid-ecs's own
+# query iterators specifically, it's just what the wide-crate fix above
+# happens to apply to everything.
+#
+# Searched before adding this: LTO making a *specific* loop's own
+# codegen worse, independent of any codegen-unit-reshuffling question,
+# is real and confirmed upstream, not a stretch -- rust-lang/rust#106609
+# ("LTO produces worse codegen for a loop," a fat-vs-thin-vs-off
+# comparison on real disassembly) and rust-lang/rust#146497 (a 2025
+# nalgebra/criterion reproduction showing >4000% degradation from
+# `lto="fat"` alone, no codegen-units change needed). Separately,
+# vortex-data/vortex#9259 hit the *other* mechanism this project
+# already avoids (codegen-units=16 reshuffling which functions share a
+# unit when unrelated code is added) and fixed it by moving TO
+# codegen-units=1+lto=true -- the setting this workspace already has.
+# So: two distinct, independently-real mechanisms exist, this project's
+# current profile is already the fix for one of them, and might be the
+# active cause of the other for this specific loop shape. Worth an
+# actual A/B test on the one thing this investigation hasn't varied
+# yet: the profile itself, not another Iter2 source variant.
+#
+# `inherits = "release"` is required by cargo for any custom profile;
+# every field below is then set explicitly anyway, so nothing
+# unintended carries over from release (strip/debug in particular).
+[profile.bench-nolto]
+inherits      = "release"
+opt-level     = 3
+lto           = false
+codegen-units = 16
+strip         = false
+debug         = true
