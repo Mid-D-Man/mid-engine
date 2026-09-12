@@ -1173,3 +1173,98 @@ still-reliable fast references) rather than against
 `query_static_single_component` — which, per the section above, isn't
 a safe comparison point right now regardless of what the automated
 table says about it.
+
+### Builds #17 and #18: `cold_split` is a clean negative, and the profile itself became a suspect
+
+Ran Archetype Core twice more (builds #17, #18 — same commit,
+triggered together, ~12-13% apart in absolute terms across every group
+uniformly — the ordinary "different runner" pattern this project has
+always treated as dismissable noise, not the isolated single-function
+pattern builds #13/#15/#16 showed). `cold_split` landed in the slow
+cluster in both — 376.37µs / 423.40µs at N=100,000, indistinguishable
+from `composed`/`raw_ptr`/`owned_direct`/`unused_b_col`. **Clean
+negative: the cold path's own size, factored out into its own
+`#[inline(never)]` function, is not what's holding the hot path back.**
+That closes this specific structural line of inquiry — outlining
+doesn't help, at least not the way it was tried here. `query_static_single_component`
+and `query_static_unchecked_1col` are still sitting in the collapsed
+state builds #15/#16 first showed, in both #17 and #18 — four
+consecutive builds now, so whatever tipped it during the `Iter1Never`/
+`Iter1Always` addition looks like a settled new state, not a fluke.
+
+At this point every source-level variant of `Iter2`'s own logic this
+investigation has tried — safe, unchecked, raw-pointer, owned,
+composed-fetch, attribute-pinned, cold-path-split — reproduces the same
+number, with the sole exception of the one that adds a genuine indirect
+call. That's a strong pattern in one direction (something about a fully
+analyzable, fully inlinable 2-column loop specifically) but seven-plus
+negative results without a working fix for the real API starts to look
+like the wrong axis is being varied. Two things checked this pass that
+aren't another `Iter2` source variant:
+
+**Checked directly, not assumed: this workspace's own build profile.**
+Root `Cargo.toml`'s `[profile.bench]` sets `codegen-units = 1` and
+`lto = true` workspace-wide — added 2026-08-23, for a real, different,
+already-fixed problem (`wide::i32x4::add` benching ~14x slower than
+mid-math's own equivalent, a cross-crate inlining gap; see
+docs/platform-optimization.md §9). Two things about it worth stating
+plainly: (1) `benches/ecs-vs-bevy-ecs` is a workspace member, not a
+separate workspace (checked directly, per its own Cargo.toml's
+comment), so real `bevy_ecs` compiles under this exact same
+codegen-units=1+LTO regime whenever that comparison runs — it isn't
+somehow exempt. (2) Mid-D-Man/bevy's own root `Cargo.toml` (real
+source, re-checked this pass) has neither a bare `[profile.release]`
+nor any `[profile.bench]` at all — bevy's own benchmarks, the same
+`benches/benches/bevy_ecs/iteration/*.rs` already read for the
+`#[inline(never)]`-wrapper convention, run under cargo's plain,
+unconfigured default: `codegen-units = 16`, no LTO. Bevy leans on
+explicit `#[inline(always)]` (confirmed on `QueryIterationCursor::next`
+itself) to guarantee its own hot path's codegen, not on whole-program
+LTO to let the compiler figure it out. This project's workspace applies
+LTO+single-codegen-unit to `Iter1`/`Iter2` as a side effect of fixing an
+unrelated crate's problem, not as a deliberate choice for these two
+functions specifically.
+
+Searched before treating this as more than a coincidence: LTO making
+one *specific* loop's own codegen measurably worse, independent of any
+codegen-unit-reshuffling question, is real and already confirmed
+upstream — rust-lang/rust#106609 ("LTO produces worse codegen for a
+loop," with real before/after disassembly showing the LTO'd version
+adds an extra live pointer the non-LTO'd version optimizes away) and
+rust-lang/rust#146497 (a 2025 nalgebra/criterion reproduction showing
+over 4000% degradation from `lto = "fat"` alone). Separately,
+vortex-data/vortex#9259 (real PR, months old) hit the *other*
+mechanism — `codegen-units = 16` reshuffling which functions share a
+unit when unrelated code is added, moving benchmarks with no source
+change on the branch that added them — and fixed it by moving *to*
+codegen-units=1+lto=true, the setting this workspace already has. Two
+distinct, independently-real mechanisms; this project's current
+profile is already the known fix for one of them, and has never been
+tested against the other for `Iter2`'s specific loop shape.
+
+**Built and shipped, not yet run on real CI:** a `profile.bench-nolto`
+entry in the root `Cargo.toml` (`inherits = "release"`, then every
+field set explicitly: `opt-level = 3, lto = false, codegen-units = 16,
+strip = false, debug = true` — matching bevy's own actual, unconfigured
+numbers rather than guessing at them), plus a `profile` dispatch input
+on this workflow (`bench`, the current default, or `bench-nolto`),
+wired into the actual `cargo bench --profile` invocation and into the
+cache key so the two don't share a `target/` cache entry. Verified
+directly on this sandbox: `cargo build -p mid-ecs --profile bench-nolto`
+and `cargo bench -p mid-ecs --bench archetype_core --profile bench-nolto`
+both compile and run cleanly (rustc 1.91.1) — this only confirms the
+plumbing works, not anything about the performance question itself,
+which this sandbox has never been able to speak to for this
+investigation either way.
+
+Run Archetype Core once with `profile: bench-nolto` and once more with
+the default `bench` on the same commit, and read the two side by side —
+particularly `query2_static_two_components`, `query2_static_unchecked_2col`,
+and (now that it's a clean negative under the current profile)
+`cold_split` again under the other one. If any of them move
+meaningfully between the two profiles while `raw_slice_ceiling` and
+`two_tuple_item` don't, that's the profile, not the source, and the
+seven-plus negative source-level results above stop being seven-plus
+negative results and start being seven-plus results that were never
+going to show anything because the actual lever was never in the
+source to begin with.
