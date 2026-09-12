@@ -71,6 +71,20 @@
 #
 # Run: Actions -> "mid-ecs — bench Archetype Core" -> Run workflow
 # DO NOT add push/pull_request triggers.
+#
+# ADDED: a `profile` dispatch input, `bench` (default, this workspace's
+# existing codegen-units=1+lto=true) or `bench-nolto` (matches
+# Mid-D-Man/bevy's own real, unconfigured default -- confirmed directly
+# against its root Cargo.toml, which has neither a bare [profile.release]
+# nor any [profile.bench] at all). See Cargo.toml's own profile.bench-nolto
+# comment and docs/mid-ecs.md for the full reasoning -- short version:
+# this workspace's LTO+single-codegen-unit setting already fixes one
+# real, confirmed mechanism (unrelated code reshuffling which functions
+# share a codegen unit) but LTO specifically making one particular
+# loop's own codegen worse is a separate, also-real, upstream-confirmed
+# mechanism (rust-lang/rust#106609, #146497) that's never been ruled
+# out for Iter2's loop specifically. This flag makes that a one-click
+# A/B test instead of another source-level diagnostic variant.
 
 name: mid-ecs — bench Archetype Core
 
@@ -81,6 +95,14 @@ on:
         description: 'Context for this run (e.g. "after iter2 column-resolution fix")'
         required: false
         default: 'manual Archetype Core benchmark run'
+      profile:
+        description: 'Cargo profile: bench (current, LTO+codegen-units=1) or bench-nolto (matches bevy''s own unconfigured default -- see Cargo.toml''s profile.bench-nolto comment for why this exists)'
+        required: false
+        type: choice
+        default: 'bench'
+        options:
+          - 'bench'
+          - 'bench-nolto'
 
 permissions:
   contents: read
@@ -116,9 +138,9 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ runner.os }}-bench-mid-ecs-archetype-core-${{ hashFiles('crates/mid-ecs/**/Cargo.toml', 'crates/mid-collections/**/Cargo.toml', 'crates/mid-math/**/Cargo.toml') }}
+          key: ${{ runner.os }}-bench-mid-ecs-archetype-core-${{ inputs.profile }}-${{ hashFiles('crates/mid-ecs/**/Cargo.toml', 'crates/mid-collections/**/Cargo.toml', 'crates/mid-math/**/Cargo.toml', 'Cargo.toml') }}
           restore-keys: |
-            ${{ runner.os }}-bench-mid-ecs-archetype-core-
+            ${{ runner.os }}-bench-mid-ecs-archetype-core-${{ inputs.profile }}-
 
       - name: Confirm environment
         env:
@@ -132,6 +154,7 @@ jobs:
             echo "| Rust   | \`${RUST_VERSION}\` |"
             echo "| Branch | \`${{ github.ref_name }}\` |"
             echo "| Commit | \`${GITHUB_SHA:0:8}\` |"
+            echo "| Profile | \`${{ inputs.profile }}\` |"
             echo "| Note   | ${{ inputs.baseline_note }} |"
             echo ""
           } >> "$GITHUB_STEP_SUMMARY"
@@ -145,7 +168,8 @@ jobs:
           # workflow has it from the start, not as a later fix.
           set -o pipefail
           echo "Note: ${{ inputs.baseline_note }}"
-          cargo bench -p mid-ecs --bench archetype_core -- --color never \
+          echo "Profile: ${{ inputs.profile }}"
+          cargo bench -p mid-ecs --bench archetype_core --profile ${{ inputs.profile }} -- --color never \
             2>&1 | tee bench-mid-ecs-archetype-core-raw.txt
           echo "Bench exit code: $?" >> "$GITHUB_STEP_SUMMARY"
 
