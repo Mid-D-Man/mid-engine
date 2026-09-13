@@ -69,6 +69,21 @@
 # bench-mid-ecs-sparse-shell.yml, the only other two workflows sharing
 # this exact `cat raw.txt` pattern.
 #
+# FIXED (this pass): the "Publish summary" step's own grep/awk pattern
+# for finding where build output ends and real bench output begins was
+# `Finished \`bench\` profile` -- an exact match that only fires for a
+# profile literally named "bench". Running with `profile: bench-nolto`
+# (added this same pass) makes cargo print `Finished \`bench-nolto\`
+# profile` instead, which doesn't contain that exact substring -- so
+# build #20's own run (bench-nolto) silently fell through to the
+# "compilation never finished" fallback despite compiling and running
+# cleanly, which is both wrong (nothing failed) and pointless work
+# (dumping the same warning-heavy preamble the whole fix above exists to
+# strip). Caught by testing the pattern against both real strings
+# directly rather than assuming a one-word profile name was safe to
+# hardcode. Fixed by matching the `` `bench `` prefix only, which fires
+# correctly for any profile name starting with it.
+#
 # Run: Actions -> "mid-ecs — bench Archetype Core" -> Run workflow
 # DO NOT add push/pull_request triggers.
 #
@@ -208,8 +223,8 @@ jobs:
             echo "_that budget ends up used._"
             echo ""
             echo '```'
-            if grep -q 'Finished `bench` profile' bench-mid-ecs-archetype-core-raw.txt; then
-              awk '/Finished `bench` profile/{f=1} f' bench-mid-ecs-archetype-core-raw.txt | head -c 900000
+            if grep -q 'Finished `bench' bench-mid-ecs-archetype-core-raw.txt; then
+              awk '/Finished `bench/{f=1} f' bench-mid-ecs-archetype-core-raw.txt | head -c 900000
             else
               echo "(Compilation never finished -- showing the full raw log, including build errors, since there's no benchmark output to isolate it from.)"
               echo ""

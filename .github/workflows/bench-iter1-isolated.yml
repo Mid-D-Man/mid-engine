@@ -1,0 +1,171 @@
+# .github/workflows/bench-iter1-isolated.yml
+#
+# Runs benches/iter1-isolated -- see that crate's own Cargo.toml for the
+# one question it exists to answer: with nothing else in the same crate
+# (no Iter2, no diag_*.rs variants, none of what archetype_core.rs has
+# accumulated across the query2_static investigation), does the real,
+# unmodified `query_static` come back close to `raw_slice_ceiling`'s
+# floor -- matching Archetype Core build #11 (~1.0x) -- or does it stay
+# at the ~4x gap builds #15 through #20 have all shown in
+# archetype_core.rs itself? Same [profile.bench] LTO setting as always
+# (default `profile` input below) so that variable stays held constant
+# against the one thing this test actually varies: how much else is
+# compiled into the same binary. See docs/mid-ecs.md's "Builds #19 and
+# #20" section for the profile A/B test this follows directly from.
+#
+# Modeled on bench-mid-collections-sparse-set.yml's structure (the
+# simpler bash-grep summary pattern -- two groups, four N values each,
+# doesn't need archetype_core.rs's own Python parser/regression-guard
+# machinery for a comparison this small), including its `set -o
+# pipefail` and the step-summary size-limit stripping already applied
+# to the other three bench workflows sharing that pattern (see
+# docs/benching-standards.md's "step-summary size limit" section).
+#
+# Verified directly before shipping, unlike bench-mid-collections-sparse-
+# set.yml's own honest gap here: this sandbox's rustc 1.91.1 actually
+# compiled and ran this exact bench crate+workflow logic end to end
+# (reduced sample-size/measurement-time, not for the real numbers --
+# this sandbox has never once reproduced this investigation's regression
+# in either direction -- purely to confirm the crate, its Cargo.toml,
+# and this grep pattern all actually work before asking for a real CI
+# run on top of everything else this investigation has already asked
+# for).
+#
+# Run: Actions -> "mid-ecs — bench Iter1 Isolated" -> Run workflow
+# DO NOT add push/pull_request triggers.
+
+name: mid-ecs — bench Iter1 Isolated
+
+on:
+  workflow_dispatch:
+    inputs:
+      baseline_note:
+        description: 'Context for this run (e.g. "checking isolation alone")'
+        required: false
+        default: 'manual Iter1-isolated benchmark run'
+      profile:
+        description: 'Cargo profile: bench (default, matches Archetype Core build #11''s own original condition) or bench-nolto'
+        required: false
+        type: choice
+        default: 'bench'
+        options:
+          - 'bench'
+          - 'bench-nolto'
+
+permissions:
+  contents: read
+  actions:  read
+
+jobs:
+  bench:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Get Rust version
+        id: rustver
+        run: echo "ver=$(rustc --version)" >> $GITHUB_OUTPUT
+
+      - name: Cache cargo registry + build artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-bench-iter1-isolated-${{ inputs.profile }}-${{ hashFiles('benches/iter1-isolated/Cargo.toml', 'crates/mid-ecs/**/Cargo.toml', 'Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-bench-iter1-isolated-${{ inputs.profile }}-
+
+      - name: Confirm environment
+        env:
+          RUST_VERSION: ${{ steps.rustver.outputs.ver }}
+        run: |
+          {
+            echo "## Iter1 Isolated Bench — Build #${{ github.run_number }}"
+            echo ""
+            echo "| | |"
+            echo "|---|---|"
+            echo "| Rust    | \`${RUST_VERSION}\` |"
+            echo "| Branch  | \`${{ github.ref_name }}\` |"
+            echo "| Commit  | \`${GITHUB_SHA:0:8}\` |"
+            echo "| Profile | \`${{ inputs.profile }}\` |"
+            echo "| Note    | ${{ inputs.baseline_note }} |"
+            echo ""
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Run Iter1-isolated criterion benchmarks
+        run: |
+          # set -o pipefail: without it, `cargo bench | tee file`
+          # reports tee's exit code (always 0), not cargo bench's, and
+          # a real failure would show as green -- same incident this
+          # applies to in every other bench workflow in this workspace.
+          set -o pipefail
+          echo "Note: ${{ inputs.baseline_note }}"
+          echo "Profile: ${{ inputs.profile }}"
+          cargo bench -p iter1-isolated --profile ${{ inputs.profile }} -- --color never \
+            2>&1 | tee bench-iter1-isolated-raw.txt
+          echo "Bench exit code: $?" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Surface bench diagnostics
+        if: always()
+        run: |
+          {
+            echo "### Diagnostics"
+            echo '```'
+            grep -E 'took zero time|Unable to complete|Warning:|panicked|Completed [0-9]+ iterations' \
+              bench-iter1-isolated-raw.txt | head -60 || echo "(none found)"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Publish summary
+        if: always()
+        run: |
+          {
+            echo "### Results"
+            echo ""
+            echo "Lower is faster. \`query_static_single_component\` (the real, unmodified"
+            echo "Iter1) against \`raw_slice_ceiling\` (zero ECS abstraction) -- the same"
+            echo "two groups as in \`crates/mid-ecs/benches/archetype_core.rs\`, byte-for-byte,"
+            echo "just with nothing else compiled alongside them in this crate. Read the"
+            echo "ratio between them directly; there's no regression-guard script here,"
+            echo "just the two numbers."
+            echo ""
+            echo '```'
+            grep -B 1 "time:" bench-iter1-isolated-raw.txt | grep -v "^--$" || echo "(no results parsed -- see raw log)"
+            echo '```'
+            echo ""
+            echo "<details><summary>Full raw output</summary>"
+            echo ""
+            echo "_Build output (compiler warnings, \`Compiling\`/\`Finished\` lines) is_"
+            echo "_stripped below to stay clear of GitHub's 1024k step-summary limit --_"
+            echo "_the untouched log is in this run's uploaded artifact. Also hard-capped_"
+            echo "_at 900k here as a second guard, however that budget ends up used._"
+            echo ""
+            echo '```'
+            if grep -q 'Finished `bench' bench-iter1-isolated-raw.txt; then
+              awk '/Finished `bench/{f=1} f' bench-iter1-isolated-raw.txt | head -c 900000
+            else
+              echo "(Compilation never finished -- showing the full raw log, including build errors, since there's no benchmark output to isolate it from.)"
+              echo ""
+              head -c 900000 bench-iter1-isolated-raw.txt
+            fi
+            echo '```'
+            echo ""
+            echo "</details>"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bench-iter1-isolated-${{ github.run_number }}
+          path: |
+            bench-iter1-isolated-raw.txt
+            target/criterion
+          retention-days: 30
