@@ -95,6 +95,7 @@ members = [
     "examples/custom-transport-demo",
 
     "benches/ecs-vs-bevy-ecs",
+    "benches/iter1-isolated",
 ]
 
 # NOTE on benches/ecs-vs-bevy-ecs (added this pass): its bevy_ecs dependency
