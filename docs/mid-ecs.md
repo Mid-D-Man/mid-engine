@@ -1268,3 +1268,98 @@ seven-plus negative source-level results above stop being seven-plus
 negative results and start being seven-plus results that were never
 going to show anything because the actual lever was never in the
 source to begin with.
+
+### Builds #19 and #20: the A/B test landed, and it reframes the question rather than closing it
+
+Ran Archetype Core once on each profile, same commit (`ae43fc5`).
+Build #19 (`bench`, current default): the usual current numbers.
+Build #20 (`bench-nolto`, matches bevy's own real settings): and here
+is the actual result, stated plainly because it's not the clean "the
+profile explains everything" story the previous section was hoping
+for — it's more specific and, once seen, more useful than that.
+
+**`two_tuple_item` and `real_query1_inline_never_wrapper` — the two
+things that have been reliably fast (~94-106µs) in every single build
+this entire investigation has run — both collapsed under `bench-nolto`.**
+`two_tuple_item`: 106.37µs → 514.81µs (worse than the "slow" cluster).
+`real_query1_inline_never_wrapper`: 106.15µs → 376.91µs (now
+indistinguishable from unwrapped `query_static_single_component`,
+377.11µs, in the same run). Everything else moved by the ordinary
+~10-13% a different run/profile produces on its own — `raw_slice_ceiling`
+stayed the true floor in both (105.75µs → 93.943µs, actually a bit
+faster without LTO, consistent with the general trend, not a collapse).
+
+Read together, this says something more specific than "LTO matters":
+**both of this investigation's clean "fast" reference points depend on
+LTO's whole-program view being able to prove something about them that
+isn't true without it.** `two_tuple_item`'s combine step is a stored
+`fn(&A,&B)->A` pointer — genuinely indirect in the source, but if it's
+only ever constructed with one concrete function in the whole program,
+LTO can see that across crate/module boundaries and devirtualize it
+into a plain, inlinable call; without LTO, that proof isn't available
+and it's a real, un-inlinable indirect call, with real, unhidden
+overhead. `real_query1_inline_never_wrapper`'s own `#[inline(never)]`
+wrapper doesn't touch whether `Iter1::next` inlines into `run`'s own
+loop — whatever made that combination fast was something LTO's
+cross-module view was doing, not the wrapper attribute itself doing
+anything without it.
+
+**The more important thing this run showed:** without LTO's help,
+there is no meaningful gap between 1 column and 2 columns at all.
+`query_static_single_component` (377.11µs) and `query2_static_two_components`
+(397.29µs) sit within 5% of each other — both roughly 4x
+`raw_slice_ceiling`'s floor. This is worth stating as plainly as the
+reversal above: **the "query2_static costs ~4x query_static" framing
+that has organized this entire investigation has, in every build this
+session, only ever shown up when the comparison's 1-column side was
+something LTO specifically blesses** (build #11's original
+`query_static_single_component`, before whatever this session's own
+`Iter1Never`/`Iter1Always` addition did to it; `two_tuple_item`;
+`real_query1_inline_never_wrapper`). Take those out of the picture —
+compare `query_static_single_component` to `query2_static_two_components`
+directly, either profile — and both cost roughly the same, both roughly
+4x the floor. The seven-plus `Iter2`-only diagnostic variants this
+investigation has built were all answering "what's different about 2
+columns," a question this run casts real doubt on as the right one to
+be asking. The steadier, more basic question underneath it, that this
+investigation hasn't actually asked yet: **why does going through
+`Iter1`/`Iter2` at all — for either arity — cost ~4x a raw slice sum**,
+when build #11 shows that cost used to be ~1x for the 1-column case,
+specifically.
+
+**Built and shipped, not yet run on real CI:** `benches/iter1-isolated`,
+a new, minimal workspace member containing exactly two groups —
+`query_static_single_component` and `raw_slice_ceiling`'s
+`one_field_sum`, mirrored byte-for-byte from `archetype_core.rs` — and
+nothing else. No `Iter2`, no diagnostics, none of what
+`archetype_core.rs` has accumulated across this entire investigation.
+Same workspace, same `[profile.bench]` (or `[profile.bench-nolto]` —
+new workflow takes the same profile choice) held constant, so the one
+variable this isolates is exactly the one the "builds #15-#20" section
+above flags but never tests directly: does `query_static` come back
+close to the floor once it's the only thing in the crate, the way it
+was in build #11, before this investigation's own accumulated code
+apparently pushed it into the same regime `query2_static` has been in
+all along? New workflow: `bench-iter1-isolated.yml`, modeled on
+`bench-mid-collections-sparse-set.yml`'s simpler bash-grep summary
+(two groups doesn't need `archetype_core.py`'s regression-guard
+machinery). Verified end-to-end on this sandbox (compiles, runs,
+produces correctly-shaped output) — meaningless for the actual
+question, as always, since this sandbox has never reproduced this
+investigation's regression in either direction.
+
+**Also caught and fixed while building the above:** the `profile`
+dispatch input added to this workflow two sessions ago broke its own
+step-summary size-limit fix for any profile name other than the literal
+word `bench` — the guard's `grep`/`awk` pattern was `` Finished `bench`
+profile `` (an exact match), and `cargo bench --profile bench-nolto`
+prints `` Finished `bench-nolto` profile `` instead, which doesn't
+contain that exact substring. Build #20's run fell through to the
+"compilation never finished" fallback despite compiling and running
+cleanly — wrong, and pointless, since that fallback exists specifically
+to show build *errors*, not a clean run's own already-stripped-of-value
+warning preamble. Caught by testing the pattern against both real
+strings directly (not assumed safe from one string alone) and fixed by
+matching the `` `bench `` prefix only, which fires for any profile name
+starting with it. Applied to the new `bench-iter1-isolated.yml` from
+the start, so it isn't carrying the same bug into its first run.
