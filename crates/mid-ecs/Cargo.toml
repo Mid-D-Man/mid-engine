@@ -29,6 +29,16 @@ mid-math = { path = "../mid-math" }
 # same reason as mid-collections' own declaration: zerocopy has no
 # default features today, kept explicit as insurance anyway.
 zerocopy = { version = "0.8.56", default-features = false, features = ["derive"] }
+# Optional, feature-gated -- backs `scratch.rs`'s `BumpaloScratch`
+# (see docs/mid-ecs.md "scratch.rs"). Same version pin as mid-arena's
+# own `vs_arena_crates` comparison target (crates/mid-arena/Cargo.toml)
+# so both crates resolve the same real bumpalo build, not two
+# semver-compatible-but-different ones. `features = ["boxed"]`: only
+# `bumpalo::boxed::Box` is used here, not `bumpalo::collections` or
+# `std`/`serde` -- zero-dependency at that feature level (real source
+# checked directly, `bumpalo` 3.20.3's own `Cargo.toml`: `boxed = []`,
+# no transitive deps of its own).
+bumpalo = { version = "3.20.3", features = ["boxed"], optional = true }
 
 # rayon and its whole transitive tree (crossbeam-deque/epoch/utils, either,
 # rayon-core) depend on real OS threads, which wasm32-unknown-unknown
@@ -59,3 +69,9 @@ harness = false
 
 [features]
 default = []
+# `scratch.rs`'s bumpalo-backed `ScratchArena` implementation. Off by
+# default -- not wired into `Column`/`archetype.rs` yet (see
+# docs/mid-ecs.md "scratch.rs" for the current status), so there's no
+# reason to pull bumpalo into a normal build until there's a real call
+# site depending on it.
+scratch-arena = ["dep:bumpalo"]

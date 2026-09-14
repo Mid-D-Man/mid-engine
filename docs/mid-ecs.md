@@ -1363,3 +1363,115 @@ strings directly (not assumed safe from one string alone) and fixed by
 matching the `` `bench `` prefix only, which fires for any profile name
 starting with it. Applied to the new `bench-iter1-isolated.yml` from
 the start, so it isn't carrying the same bug into its first run.
+
+### Builds #1 and #2 (Iter1 Isolated, rustc 1.98.1): closing the investigation
+
+Real CI, `benches/iter1-isolated`, commit `f8412070`. Build #1 (`bench`,
+LTO on): `query_static_single_component` 106.09µs vs
+`raw_slice_ceiling`'s 105.71µs at N=100,000 — **~1.0x, matching
+Archetype Core build #11 almost to the microsecond.** Build #2
+(`bench-nolto`): 329.59µs vs 81.97µs — **~4.02x**, matching what
+`archetype_core.rs` itself has shown under either profile since build
+#13, and matching builds #19/#20's own no-LTO numbers for the same
+query.
+
+That's the answer builds #19/#20 reframed but didn't close: isolating
+`Iter1` from everything `archetype_core.rs` has accumulated (seven-plus
+`Iter2` diagnostic variants, their own `Iter1`-side additions,
+`Iter2ColdSplit`) restores it to the floor — **but only with LTO on**.
+Without LTO it costs the same ~4x as everything else in this
+investigation always has, isolated or not. Read together with #19/#20's
+own reversals (`two_tuple_item` and the outer wrapper both collapsing
+under `bench-nolto`), the whole thread comes down to one mechanism:
+**LTO's whole-program devirtualization is what made `Iter1` fast in
+build #11, and it stops fully resolving `Iter1::next`'s call sites once
+the compilation unit gets large enough** — which is exactly what
+`archetype_core.rs` became across this investigation's own diagnostic
+additions. Not a structural difference between 1 and 2 columns (#19/#20
+already ruled that out), not `Iter1`'s own codegen — just LTO losing
+headroom as the surrounding file grew. Upstream-confirmed pattern, not
+a stretch: rust-lang/rust#106609, #146497.
+
+**Closing here**, per the call made at the start of this pass rather
+than running a ninth diagnostic: the mechanism is confirmed and real;
+further digging is diminishing returns. `archetype_core.rs` and
+`benches/iter1-isolated` both stay as-is — kept for reference, not
+deleted — since "is the gap real" is answerable by pointing at these
+two builds now, not by re-running anything. Real, separate wins that
+came out of this thread regardless of the open question closing
+inconclusively-by-choice rather than definitively: the step-summary
+overflow fix, the regression-guard's N=100 false-positive fix, and
+`get_two_mut`/`get_disjoint_mut`'s real 1.83x/2.49x improvements.
+
+### `scratch.rs`: a swappable arena abstraction, not wired in yet
+
+Built to make good on the standing plan: bumpalo backs `mid-ecs`'s
+scratch storage today, a future `mid-arena`-backed type replaces it
+once that's been benched for this exact access pattern — without a
+second rewrite of whatever calls it. `archetype.rs`'s own doc comment
+already names the cost this targets: each migrated component value is
+boxed as `Box<dyn Any>` (`Column::swap_remove_and_forget`/`push_any`),
+one heap allocation per moved component per structural change.
+`spawn_insert_bundle` and `structural_churn` are flagged in
+`archetype_core.rs` as real, measured gaps against `bevy_ecs`
+(~2.9-5x) — but **no root-cause pass has been done on either yet**.
+This module doesn't claim boxing is that gap; it makes the one named,
+understood cost swappable so a future profiling pass has something to
+swap, rather than starting from a raw-pointer rewrite of `Column`
+itself.
+
+**Design:** `ScratchArena<'a>` (`alloc<T: 'static>(&'a self, value: T)
+-> Self::Erased`, `reset(&mut self)`) plus an `ErasedValue` trait
+(`downcast<T>(self) -> Result<T, Self>`) mirroring `Box<dyn
+Any>::downcast`'s own contract exactly — wrong type back unchanged in
+`Err`, never dropped or lost. Two real implementations:
+
+- `HeapScratch` — today's actual behavior, given a name. One real heap
+  allocation per `alloc`, zero new dependencies, default.
+- `BumpaloScratch` (behind the new `scratch-arena` feature,
+  `bumpalo = "3.20.3"`, `features = ["boxed"]`, optional) —
+  `bumpalo::Bump` plus its own `boxed::Box<'a, dyn Any>`.
+
+**Why bumpalo directly and not `mid-arena`'s own `BumpArena<T>`:**
+checked directly, `mid-arena`'s `BumpArena<T>` is single-typed —
+built for many values of *one* `T`, not a match for what a structural
+change needs (several *different* component types, one arena, for the
+width of one entity's migration, then thrown away). `bumpalo::Bump`
+already solves that shape — it's what `bevy_ecs`'s own `BundleScratch`
+uses, real source read directly — so it's the right backing today;
+`mid-arena` stays the eventual target once it grows a matching type,
+not before.
+
+**Why this doesn't need `Box<'a, T>`'s unstable `allocator_api`:**
+a naive trait returning `Box<dyn Any>` (the real, `alloc::boxed` type)
+would be impossible for a bump-backed implementation to satisfy on
+stable Rust — `Box` isn't allocator-parameterized outside nightly.
+`bumpalo`'s own `boxed` feature (stable, zero extra dependencies —
+checked directly, `bumpalo` 3.20.3's `Cargo.toml`: `boxed = []`) solves
+this with its own `Box<'a, T>`, which is the actual return type behind
+`ErasedValue` for the bumpalo-backed side. Its `Drop` impl was read
+directly (`src/boxed.rs`): calls `drop_in_place` and nothing else — the
+arena owns reclaiming memory, not the `Box` — exactly the property this
+module needs. Erasing a concrete `Box<'a, T>` into `Box<'a, dyn Any>`
+needs one small `unsafe` block (`Box::into_raw` -> unsize cast -> 
+`Box::from_raw`) — bumpalo's own documented pattern for building a
+type-erased `Box` (`boxed.rs`'s "Manually create a `Box`" example), not
+an invented technique, and narrow enough to audit in one function.
+
+**Verified, not assumed:** 4 tests with default features (`HeapScratch`
+only), 9 with `--features scratch-arena` (both implementations against
+the same shared test bodies, generic over `ScratchArena`) — roundtrip,
+wrong-type downcast returns the value unharmed, and critically,
+dropping an un-downcast value still runs its destructor exactly once
+(a `DropCounter` type with a real `Drop` impl, checked against a shared
+counter) for both `HeapScratch` and `BumpaloScratch`. Full existing
+suite re-run both ways: 189/189 (default), 194/194 (`scratch-arena`) —
+185 pre-existing plus this module's own, nothing broken either way.
+
+**Not done yet, on purpose:** `Column::swap_remove_and_forget`/
+`push_any` still use `Box<dyn Any>` directly — this module is
+standalone infrastructure, not wired into the migration path. Next
+step, not this one: wire `BumpaloScratch` into that one call site once
+there's been an actual root-cause pass confirming boxing is worth
+fixing before `spawn_insert_bundle`/`structural_churn` get touched
+further.

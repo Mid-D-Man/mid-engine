@@ -10,6 +10,7 @@ pub mod archetype;
 pub mod component;
 pub mod ffi;
 pub mod query;
+mod scratch;
 pub mod sync;
 pub mod transform;
 pub mod world;
