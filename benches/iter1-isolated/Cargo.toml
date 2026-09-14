@@ -1,0 +1,32 @@
+[package]
+name = "iter1-isolated"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# Exists for one question only, prompted directly by the profile A/B
+# test in docs/mid-ecs.md ("Builds #19 and #20"): with LTO on,
+# query_static_single_component (the real Iter1, unmodified) currently
+# costs ~4x raw_slice_ceiling's floor -- but it used to cost ~1x that
+# floor (Archetype Core build #11, long before this crate existed),
+# before archetype_core.rs accumulated seven-plus Iter2 diagnostic
+# variants plus their own Iter1-side additions across many sessions.
+# Every prior test of "does removing X restore it" changed one thing
+# inside that same, now-large file. This changes the one thing none of
+# those did: puts `Iter1` and a raw-slice floor in a crate with nothing
+# else in it at all -- no Iter2, no diagnostics, no other bench group --
+# same workspace, same [profile.bench] LTO setting held constant, so
+# the only variable is "how much else is compiled alongside it."
+#
+# NOT meant to stay long-term any more than the diag_*.rs modules in
+# mid-ecs are -- delete once the question above is answered either way.
+
+[dependencies]
+mid-ecs = { path = "../../crates/mid-ecs" }
+
+[dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[[bench]]
+name    = "iter1_isolated"
+harness = false
