@@ -96,6 +96,101 @@ impl<'a, A: 'static, B: 'static> Iterator for Iter2Unchecked<'a, A, B> {
 /// combines them into one derived value before returning, so `Item` is
 /// a 2-tuple instead of a 3-tuple. Isolates the tuple/Item-shape
 /// question from the two-slice-fields question below.
+/// `Iter1Unchecked` collapsed under LTO pressure just like the safe
+/// version once `archetype_core.rs` grew (see `docs/mid-ecs.md`) —
+/// `get_unchecked` alone wasn't bevy's actual technique, just one part
+/// of it. Real bevy source, read directly (`query/iter.rs`,
+/// `query/fetch.rs`): `QueryIter::next`, `QueryIterationCursor::next`,
+/// and `<&T as QueryData>::fetch` are *all three* `#[inline(always)]`,
+/// stacked, alongside `get_unchecked` at every access — not attribute
+/// alone (already tested, no effect: `diag_inline.rs`), not unsafe
+/// alone (already tested, collapsed same as everything else: this
+/// module's own `Iter1Unchecked`/`Iter2Unchecked`). This is the one
+/// combination — both together, on the same function — that hasn't
+/// been tried yet.
+pub(crate) struct Iter1UncheckedAlways<'a, T> {
+    archetypes: &'a Archetypes,
+    id: Option<ComponentId>,
+    matched: std::vec::IntoIter<ArchetypeId>,
+    entities: &'a [Entity],
+    column: &'a [T],
+    row: usize,
+    len: usize,
+}
+
+impl<'a, T: 'static> Iterator for Iter1UncheckedAlways<'a, T> {
+    type Item = (Entity, &'a T);
+
+    #[inline(always)]
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            if self.row < self.len {
+                // SAFETY: same invariant as Iter1Unchecked::next.
+                let item = unsafe {
+                    (
+                        *self.entities.get_unchecked(self.row),
+                        self.column.get_unchecked(self.row),
+                    )
+                };
+                self.row += 1;
+                return Some(item);
+            }
+            let id = self.id?;
+            let archetype_id = self.matched.next()?;
+            let (entities, column) = self
+                .archetypes
+                .diag_entities_and_column::<T>(archetype_id, id);
+            self.len = entities.len().min(column.len());
+            self.entities = entities;
+            self.column = column;
+            self.row = 0;
+        }
+    }
+}
+
+pub(crate) struct Iter2UncheckedAlways<'a, A, B> {
+    archetypes: &'a Archetypes,
+    ids: Option<(ComponentId, ComponentId)>,
+    matched: std::vec::IntoIter<ArchetypeId>,
+    entities: &'a [Entity],
+    a_col: &'a [A],
+    b_col: &'a [B],
+    row: usize,
+    len: usize,
+}
+
+impl<'a, A: 'static, B: 'static> Iterator for Iter2UncheckedAlways<'a, A, B> {
+    type Item = (Entity, &'a A, &'a B);
+
+    #[inline(always)]
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            if self.row < self.len {
+                // SAFETY: same invariant as Iter2Unchecked::next.
+                let item = unsafe {
+                    (
+                        *self.entities.get_unchecked(self.row),
+                        self.a_col.get_unchecked(self.row),
+                        self.b_col.get_unchecked(self.row),
+                    )
+                };
+                self.row += 1;
+                return Some(item);
+            }
+            let (a_id, b_id) = self.ids?;
+            let archetype_id = self.matched.next()?;
+            let (entities, a_col, b_col) =
+                self.archetypes
+                    .diag_entities_and_columns::<A, B>(archetype_id, a_id, b_id);
+            self.len = entities.len().min(a_col.len()).min(b_col.len());
+            self.entities = entities;
+            self.a_col = a_col;
+            self.b_col = b_col;
+            self.row = 0;
+        }
+    }
+}
+
 pub(crate) struct Iter2TwoTupleItem<'a, A, B> {
     archetypes: &'a Archetypes,
     ids: Option<(ComponentId, ComponentId)>,
@@ -469,6 +564,35 @@ impl Archetypes {
     pub(crate) fn iter2_diag_unchecked<A: 'static, B: 'static>(&self) -> Iter2Unchecked<'_, A, B> {
         let (ids, matched) = self.diag_matched_and_ids::<A, B>();
         Iter2Unchecked {
+            archetypes: self,
+            ids,
+            matched: matched.into_iter(),
+            entities: &[],
+            a_col: &[],
+            b_col: &[],
+            row: 0,
+            len: 0,
+        }
+    }
+
+    pub(crate) fn iter_diag_unchecked_always<T: 'static>(&self) -> Iter1UncheckedAlways<'_, T> {
+        let (id, matched) = self.diag_matched_and_id::<T>();
+        Iter1UncheckedAlways {
+            archetypes: self,
+            id,
+            matched: matched.into_iter(),
+            entities: &[],
+            column: &[],
+            row: 0,
+            len: 0,
+        }
+    }
+
+    pub(crate) fn iter2_diag_unchecked_always<A: 'static, B: 'static>(
+        &self,
+    ) -> Iter2UncheckedAlways<'_, A, B> {
+        let (ids, matched) = self.diag_matched_and_ids::<A, B>();
+        Iter2UncheckedAlways {
             archetypes: self,
             ids,
             matched: matched.into_iter(),

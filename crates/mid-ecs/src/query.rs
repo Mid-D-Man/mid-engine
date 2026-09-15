@@ -125,6 +125,24 @@ impl World {
         self.archetypes.iter2_diag_unchecked::<A, B>()
     }
 
+    // ── TEMPORARY, real-CI-only: unsafe + forced inlining together ──
+    // The one combination `Iter1Unchecked`/`Iter2Unchecked` above never
+    // tested — see diag_query2_unchecked.rs's own doc comment on
+    // `Iter1UncheckedAlways` and docs/mid-ecs.md for the full story.
+    #[doc(hidden)]
+    pub fn query_static_diag_unchecked_always<T: 'static>(
+        &self,
+    ) -> impl Iterator<Item = (Entity, &T)> + '_ {
+        self.archetypes.iter_diag_unchecked_always::<T>()
+    }
+
+    #[doc(hidden)]
+    pub fn query2_static_diag_unchecked_always<A: 'static, B: 'static>(
+        &self,
+    ) -> impl Iterator<Item = (Entity, &A, &B)> + '_ {
+        self.archetypes.iter2_diag_unchecked_always::<A, B>()
+    }
+
     #[doc(hidden)]
     pub fn query2_static_diag_two_tuple_item<A: 'static + Clone, B: 'static>(
         &self,
@@ -508,6 +526,67 @@ mod tests {
         assert!(w.insert_static(e, Position { x: 0.0, y: 0.0 }));
         assert_eq!(
             w.query2_static_diag_unchecked::<Position, Velocity>()
+                .count(),
+            0
+        );
+    }
+
+    #[test]
+    fn diag_query_static_unchecked_always_matches_the_real_query_static() {
+        let (w, both, position_only) = two_archetype_world();
+
+        let mut expected: Vec<(Entity, Position)> =
+            w.query_static::<Position>().map(|(e, p)| (e, *p)).collect();
+        let mut actual: Vec<(Entity, Position)> = w
+            .query_static_diag_unchecked_always::<Position>()
+            .map(|(e, p)| (e, *p))
+            .collect();
+        expected.sort_by_key(|(e, _)| e.index());
+        actual.sort_by_key(|(e, _)| e.index());
+
+        assert_eq!(actual, expected);
+        assert_eq!(actual.len(), 2);
+        assert!(actual.iter().any(|(e, _)| *e == both));
+        assert!(actual.iter().any(|(e, _)| *e == position_only));
+    }
+
+    #[test]
+    fn diag_query_static_unchecked_always_on_never_inserted_type_is_empty() {
+        let w = World::new();
+        assert_eq!(w.query_static_diag_unchecked_always::<Position>().count(), 0);
+    }
+
+    #[test]
+    fn diag_query2_static_unchecked_always_matches_the_real_query2_static() {
+        let (w, both, _position_only) = two_archetype_world();
+
+        let expected: Vec<(Entity, Position, Velocity)> = w
+            .query2_static::<Position, Velocity>()
+            .map(|(e, p, v)| (e, *p, *v))
+            .collect();
+        let actual: Vec<(Entity, Position, Velocity)> = w
+            .query2_static_diag_unchecked_always::<Position, Velocity>()
+            .map(|(e, p, v)| (e, *p, *v))
+            .collect();
+
+        assert_eq!(actual, expected);
+        assert_eq!(
+            actual,
+            vec![(
+                both,
+                Position { x: 1.0, y: 1.0 },
+                Velocity { dx: 9.0, dy: 9.0 }
+            )]
+        );
+    }
+
+    #[test]
+    fn diag_query2_static_unchecked_always_empty_when_one_side_was_never_registered() {
+        let mut w = World::new();
+        let e = w.spawn();
+        assert!(w.insert_static(e, Position { x: 0.0, y: 0.0 }));
+        assert_eq!(
+            w.query2_static_diag_unchecked_always::<Position, Velocity>()
                 .count(),
             0
         );

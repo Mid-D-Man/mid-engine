@@ -445,6 +445,34 @@ fn bench_query2_static_diag_unchecked(c: &mut Criterion) {
                 });
             },
         );
+        group.bench_with_input(
+            BenchmarkId::new("query_static_unchecked_always_1col", n),
+            &n,
+            |b, _| {
+                b.iter(|| {
+                    let mut sum = 0.0f32;
+                    for (_, pos) in world.query_static_diag_unchecked_always::<Position>() {
+                        sum += pos.x;
+                    }
+                    black_box(sum);
+                });
+            },
+        );
+        group.bench_with_input(
+            BenchmarkId::new("query2_static_unchecked_always_2col", n),
+            &n,
+            |b, _| {
+                b.iter(|| {
+                    let mut sum = 0.0f32;
+                    for (_, pos, vel) in
+                        world.query2_static_diag_unchecked_always::<Position, Velocity>()
+                    {
+                        sum += pos.x + vel.dx;
+                    }
+                    black_box(sum);
+                });
+            },
+        );
         group.bench_with_input(BenchmarkId::new("two_tuple_item", n), &n, |b, _| {
             b.iter(|| {
                 let mut sum = 0.0f32;

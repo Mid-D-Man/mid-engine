@@ -1571,3 +1571,70 @@ while any arena is inherently transient (one per structural change) —
 threading a transient arena's lifetime through a long-lived trait
 object's own signature doesn't have a clean answer on stable Rust, and
 isn't one this pass forced through on a guess.
+
+### `Iter1UncheckedAlways`/`Iter2UncheckedAlways`: the one combination never tested
+
+Prompted by a direct, real comparative source read of `Mid-D-Man/bevy`
+(`crates/bevy_ecs/src/query/iter.rs` and `fetch.rs`) after the Iter1
+Isolated investigation closed — worth doing since this crate's own
+documented policy already authorizes it: "the first `unsafe` in
+`mid-ecs`'s own query iteration path — agreed as a deliberate, scoped
+exception for this crate specifically" (this doc, `Iter1Unchecked`'s
+own entry above), and bevy's real numbers have been consistently ahead
+across every build this investigation has produced.
+
+**What the source comparison actually found, checked line by line, not
+assumed:** bevy's single-component fetch is three layers, every one
+`#[inline(always)]`, every one using `get_unchecked` — `QueryIter::next`
+(`iter.rs:1050`) calls `QueryIterationCursor::next` (`iter.rs:3143`,
+`get_unchecked` on the entity index) which calls `<&T as
+QueryData>::fetch` (`fetch.rs:1898`, `get_unchecked` on the table row).
+None of it depends on LTO deciding anything — the compiler is told,
+at every hop, regardless of codegen-units or whether LTO is even on.
+That's the real reason bevy's own numbers stay consistent under
+`codegen-units=16, no LTO` (its actual, already-confirmed real
+`Cargo.toml`) — it was never leaning on LTO's cooperation.
+
+**Neither existing mid-ecs diagnostic tested that full combination.**
+`diag_inline.rs`'s attribute-only three-way test (real CI, rustc
+1.98.0) found pinning `next()`'s own inline attribute does nothing —
+but that's the *safe*, bounds-checked version, attribute alone.
+`Iter1Unchecked`/`Iter2Unchecked` (this doc, above) are unsafe
+(`get_unchecked`) but carry no inline attribute at all, and collapsed
+under the same LTO/compilation-unit-size pressure as everything else
+once `archetype_core.rs` grew past whatever point trips it (builds
+#15 onward, this doc's "the collapse" section). Both real, both
+already spent — neither is what bevy actually does. `get_unchecked`
+*and* `#[inline(always)]`, stacked on the same function, is the one
+cell in this matrix that's never actually been filled in.
+
+**`Iter1UncheckedAlways`/`Iter2UncheckedAlways`** (`diag_query2_
+unchecked.rs`): `Iter1Unchecked`/`Iter2Unchecked`'s exact bodies,
+`#[inline(always)]` added to `next()` — nothing else changed, so a
+positive result isolates this specific combination rather than mixing
+in some other variable. Same soundness argument as the existing
+unchecked variants (`len` already proven ≤ every slice's length on
+each archetype advance, `get_unchecked` just stops re-deriving what the
+safe version's own bounds check already guaranteed). Correctness
+tested the same way every other diagnostic in this file has been —
+cross-checked against the real, safe `query_static`/`query2_static`,
+not trusted because it compiles: 4 new tests, 194/194 `mid-ecs` tests
+total, sandbox rustc 1.91.1. Wired into `archetype_core.rs`'s existing
+`query2_static_diag_unchecked` bench group as `query_static_unchecked_
+always_1col`/`query2_static_unchecked_always_2col`, exposed via
+`World::query_static_diag_unchecked_always`/`query2_static_diag_
+unchecked_always`, same `#[doc(hidden)] pub` convention as every other
+entry in this group.
+
+**Not yet run on real CI — that's the actual next step, same asymmetry
+as always.** If this closes the gap where the attribute-alone and
+unsafe-alone variants didn't, it's real, actionable evidence that
+`Iter1`/`Iter2`'s production `next()` should move to this same
+combination for real, not a diagnostic-only conclusion — the crate's
+own unsafe policy already clears that path if the numbers say so. If
+it *doesn't* close the gap, that's real evidence too: it would mean
+bevy's consistency isn't fully explained by this specific mechanism
+either, and the honest next move is the same one this investigation
+already reached once before — name what's confirmed, stop guessing at
+what isn't, and decide deliberately whether continuing is worth it
+rather than drifting into a ninth variant by default.
