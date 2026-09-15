@@ -70,12 +70,62 @@ version fixes it -- see "Fixes and Problems" below for the full story.
 Now: `Cell<NonNull<RegionNode<T>>>` intrusive linked list, matching
 `bumpalo::Bump`'s real structure directly. Geometric region growth
 ported from `tsoding/arena.h`'s real source, unchanged from the first
-version.
+version. `unsafe impl<T: Send> Send for BumpArena<T>` added after a
+feature-gap pass against `bumpalo` 3.20.3's real source: the argument
+matches `bumpalo::Bump`'s own `Send` impl (nothing aliases the owned
+regions until `alloc` is called, and every returned reference borrows
+`self`, blocking a move until that borrow ends), but the bound differs
+because `BumpArena<T>` owns and drops real `T` values where `Bump`
+only owns untyped bytes -- see "Fixes and Problems" below.
+`reset(&mut self)` added next, same feature-gap pass, second priority
+item: drops every live value across every region, then discards every
+region except the current one, kept and reused rather than freed and
+reallocated. Matches `bumpalo::Bump::reset`'s real `&mut self`
+signature and "keep the current chunk, free the rest" shape; the
+`Drop` loop over the kept region's own slots is the one real
+difference `BumpArena<T>`'s design forces that `bumpalo` never needs.
+`alloc_slice_fill_with`/`alloc_slice_fill_default` added third, same
+pass: bump-allocate `n` contiguous slots in one region rather than one
+slot at a time, matching `bumpalo`'s two real method names directly.
+Growth here sizes the new region for `n` elements outright
+(`capacity * 2` is not enough on its own if `n` is bigger than that),
+since a slice cannot span two regions. Does not replicate `bumpalo`'s
+own panic-rewind guard that reclaims a partially-written slice's
+space; a panic from the fill closure here leaves whatever prefix was
+already written committed rather than reclaimed, a real, accepted
+simplification (see "Fixes and Problems" below for why it stays
+sound anyway). `alloc_with` added fourth, same pass: initializes a
+slot in place from a closure instead of taking an already-constructed
+`value: T` by value, for the same real reason `bumpalo::Bump::
+alloc_with` exists (skips a stack-then-move for large `T`). Kept as
+an independent primitive rather than rebuilding `alloc` on top of it
+the way `bumpalo` does; see "Fixes and Problems" for why.
+`try_with_capacity`/`try_alloc`/`try_alloc_with` added fifth and last
+from this pass, completing the priority list: a non-panicking path
+for genuine allocator exhaustion, matching `bumpalo`'s own
+`AllocErr`/`try_alloc`/`try_with_capacity` names directly. Covers the
+one allocation that actually scales with `capacity * size_of::<T>()`
+(the region's element buffer, via `Vec::try_reserve_exact`); the small
+fixed-size `Box<RegionNode<T>>` allocation itself stays infallible,
+since stable Rust at this project's rustc 1.75 floor has no fallible
+`Box` constructor -- see "Fixes and Problems" below for the full
+reasoning.
 
-**Tests:** 11, in this file. Covers multi-region growth, geometric
+**Tests:** 24, in this file. Covers multi-region growth, geometric
 capacity doubling, `iter_mut` order (including specifically across a
-region boundary) and write-through, and running
-`Drop` for every value across every region on arena drop.
+region boundary), running `Drop` for every value across every region
+on arena drop, a compile-time check that `BumpArena<T>` is `Send`
+whenever `T` is, `reset`'s four real cases (no-op on a fresh arena,
+dropping every live value across every region including the one kept
+for reuse, preserving the kept region's actual grown capacity, and
+correct values after reuse), four for slice allocation (basic fill,
+default-fill, growing a region sized for the whole slice in one step,
+and a `catch_unwind` panic-safety case), two for `alloc_with`
+(correct value, and growing on the same threshold `alloc` does), and
+two for the fallible path (happy-path `try_with_capacity`/`try_alloc`/
+`try_alloc_with`, and growth through `try_alloc`) -- genuine allocator
+exhaustion itself is not exercised by any test, since there is no safe
+way to force real OOM in a unit test.
 
 ### `compact_slot_arena.rs`
 **What it does:** `CompactSlotArena<T>`, union-based generational slot
@@ -302,7 +352,47 @@ deleted, because the point of recording a surprise honestly is that it
 can turn out to be sandbox noise, and this project's own convention is
 to say so plainly rather than quietly edit the earlier claim away.
 
-## Real CI benchmark results (rustc 1.98.1, actual GitHub Actions runs #8, #10, #13, and #16 — not the sandbox pass above)
+## Real CI benchmark results (rustc 1.98.1, actual GitHub Actions runs #8, #10, #13, #16, and #20; not the sandbox pass above)
+
+**Run #20 update:** first real CI execution of `bench-vs-c-arena-libs.yml`
+that actually produced a populated Rust half. The "degrades to `—`
+gracefully until a real CI run produces `/tmp/rust.txt`" caveat in the
+"C arena libraries" section below no longer applies; that section now
+has the real combined table. Key points against the picture built up
+through run #16:
+
+- `id-arena`'s `with_capacity` fix (see "Fixes and Problems" below) is
+  confirmed stable, not a one-run result. This run measured 6.25 ns/op
+  insert, in the same normal band as run #13's 7.41. Two real runs
+  since the fix, both far from run #10's 1.51 ns/op artifact. That open
+  item is now closed.
+- `BumpArena`, `typed-arena`, and `bumpalo` measured closer together
+  than in any prior run: 1.29 / 1.31 / 1.37 ns/op insert, a 0.08 ns/op
+  spread. Per the noise floor established in "Run #13 vs run #8" below,
+  a spread this small does not support upgrading "ties `bumpalo`" to
+  "beats `bumpalo`." Recorded here as a data point, not a new claim.
+- `UncheckedSlotArena` kept its win over `slab`: 1.37 vs 1.65 ns/op
+  insert, 1.57 vs 1.61 ns/op churn, essentially tied on get (0.68 vs
+  0.66). Consistent with runs #16, #18, and #19.
+- `SlotArena` and `CompactSlotArena` measured together at 6.88 ns/op
+  insert, just behind `slotmap` (6.87) and about 22% behind
+  `generational-arena` (5.64). Inside the accepted, closed gap from the
+  `#[inline(never)]` section below, not a new finding.
+- `atomic-arena` measured 8.55 ns/op, continuing to move toward its
+  peer band across every run since the run #10 spike (15.98, then
+  9.11, then 8.55) rather than settling on a stable number. Still not
+  confirmed by reading `Controller`'s source further.
+- First real CI numbers for `gc` recorded in this doc: 46.77 ns/op
+  alloc, and one `force_collect` sweep over 100,000 still-live objects
+  at 384.37 µs total (about 3.84 ns/object). That is the same order of
+  magnitude as the sandbox pass's 4.6 to 5.1 ns/object figure for the
+  same live-set case (footnote 3 above), a real if imperfect cross
+  check. It still does not cover the after-drop cost; that loose end
+  stays open.
+- Criterion's incomplete-sample warning is still present, one warning
+  this run, suggesting either a longer target time or
+  `sample_size(60)`. The sampling-tuning pass flagged after run #13
+  still has not been done.
 
 **Run #16 update:** first real CI run with `UncheckedSlotArena` wired
 in. Clean, unambiguous win: 1.38 ns/op insert, 0.69 ns/op get, 1.56
@@ -652,6 +742,31 @@ not forced into one row:
   it's doing real recursive tree work the other two approaches don't
   do at all.
 
+**Run #20: the workflow's own combined table, populated for real for the
+first time.**
+
+| Library | insert (ns) | get (ns) |
+|---|---|---|
+| tsoding/arena.h | 12.09 | 0.64 |
+| APR pools | 16.91 | 0.68 |
+| talloc_pool | 63.39 | 2.92 |
+
+Reuse and free, same run:
+- tsoding: `reset_whole_arena` 180.00 ns, `reinsert_after_reset` 3.67 ns.
+- APR: `clear_whole_pool` 1592.00 ns, `reinsert_after_clear` 5.72 ns.
+- talloc: `free_half_no_reclaim` 15.08 ns, `free_whole_pool` 799690.00 ns.
+
+Comparing against the sandbox ranges above: talloc's whole-pool free
+(799690 ns) lands inside the sandbox-measured range (796585 to 885088
+ns), a clean cross-environment match on the most expensive single
+operation in this survey. APR's clear (1592 ns) and tsoding's reset
+(180 ns) both ran faster than their sandbox ranges (7793 to 32017 ns
+and 1255 ns), plausibly the GitHub Actions runner's hardware or
+allocator behaving differently from this project's own sandbox VM, not
+investigated further. tsoding's real CI insert (12.09 ns) sits above
+the sandbox range's own upper bound (8.6 ns), stated here plainly
+rather than smoothed over; not yet explained.
+
 **Cross-language sanity check:** `tsoding/arena.h`'s 6.3–8.6 ns insert
 lands right next to `typed-arena`/`bumpalo`'s 2.7–8.3 ns in the Rust
 table — the same bump-allocator approach measuring the same in both
@@ -664,8 +779,9 @@ talloc_bench.c}`, compiled and run directly in this sandbox (gcc 13.3.0,
 suite had to be. `scripts/bench_vs_c_arena_libs.py` parses all four
 outputs (three C, one Rust) into one step-summary table; tested against
 the real captured C output above, since that part could be verified
-directly — the Rust half degrades to `—` gracefully until a real CI run
-produces `/tmp/rust.txt`. `.github/workflows/bench-vs-c-arena-libs.yml`
+directly. The Rust half degrades to `—` gracefully until a real CI run
+produces `/tmp/rust.txt`; as of run #20 one has, and the combined table
+above is the result. `.github/workflows/bench-vs-c-arena-libs.yml`
 mirrors `bench-vs-c-libs.yml`'s structure exactly (apt-installs
 `libapr1-dev`/`libtalloc-dev`, curl-fetches `arena.h` at CI time the same
 way that workflow fetches `HandmadeMath.h` — not committed to the repo).
@@ -969,6 +1085,151 @@ call without a pause budget.
   only calls `alloc(&self)` and doesn't). Caught by re-running the full
   suite after the first edit instead of assuming it was right, fixed
   both, re-ran again to confirm.
+- Added `unsafe impl<T: Send> Send for BumpArena<T>`, the first item
+  from a feature-gap pass against `bumpalo` 3.20.3's real source
+  (`fetched fresh this pass, not reused from an earlier recollection`).
+  `bumpalo::Bump` has `unsafe impl<const MIN_ALIGN: usize> Send for
+  Bump<MIN_ALIGN> {}` with no bound on any stored type, because `Bump`
+  only owns raw byte chunks; its own comment states the arena is safe
+  to send because nothing aliases its owned chunks until an allocation
+  happens, and any returned reference then borrows the arena and blocks
+  a move until that borrow ends. That reasoning carries over to
+  `BumpArena<T>` for the pointer-management part, but `BumpArena<T>`
+  also owns real `T` values and runs their `Drop` when the arena drops,
+  so moving it to another thread also moves those `T` values with it --
+  `T: Send` is required here where `bumpalo` needs nothing. Without this
+  impl, `BumpArena<T>` could not move across threads at all, even when
+  `T: Send`, because `Cell<NonNull<RegionNode<T>>>` does not auto-derive
+  `Send` (`NonNull` opts out unconditionally, matching `bumpalo`'s own
+  need for an explicit impl for the same underlying reason). Verified
+  in an isolated scratch crate containing this file's real, unmodified
+  content plus the new impl (no dev-dependencies, since this crate's own
+  `criterion` dependency blocks `cargo test` on the project's rustc 1.75
+  floor -- same constraint as `Cargo.toml`'s own note below): 12/12
+  tests pass, including a new compile-time
+  `fn assert_send<T: Send>()` check rather than an actual
+  `std::thread::spawn`, since this crate is `#![no_std]` and a real
+  thread spawn would need pulling in `std` just for the test.
+- Added `reset(&mut self)`, the second item from the same feature-gap
+  pass. `bumpalo::Bump::reset` (fetched fresh this pass) takes `&mut
+  self` specifically to rule out any outstanding `&mut T` at compile
+  time, checks whether the current chunk is the empty sentinel (a
+  no-op if so), frees every chunk in the `prev` chain via its own
+  `dealloc_chunk_list`, and resets the bump finger on the one chunk it
+  kept back to the start. `BumpArena<T>` follows that same shape --
+  same `&mut self` signature, same "keep the current region, free the
+  rest" strategy, same no-op-on-a-fresh-arena behavior -- but adds one
+  real step `bumpalo` never needs: since `BumpArena<T>` owns real `T`
+  values and runs their `Drop`, resetting the kept region's `len` to 0
+  without first dropping its live slots would silently leak every
+  destructor in that region once a future `alloc` call overwrote the
+  slot. So `reset` walks `current.data[..len]` and calls
+  `assume_init_drop()` on each live slot before zeroing `len`, on top
+  of freeing the discarded regions (each of which already runs its own
+  `Drop` correctly through `RegionNode<T>`'s existing impl, the same
+  path this arena's own `Drop` impl already relies on). Verified in the
+  same scratch crate as the `Send` impl above: 16/16 tests pass,
+  including four new cases for `reset` specifically -- a no-op on a
+  fresh arena, dropping every live value across every region (not just
+  the discarded ones), keeping only the current region while
+  preserving its actual grown capacity rather than shrinking back to
+  the arena's original one, and reading back correct values from a
+  fresh allocation afterward.
+- Added `alloc_slice_fill_with`/`alloc_slice_fill_default`, the third
+  item from the same pass. `bumpalo::Bump::alloc_slice_fill_with`
+  (fetched fresh this pass) allocates a `Layout::array::<T>(len)`
+  region via its own layout-based path, writes each element with
+  `ptr::write` inside an unwind guard that rewinds the bump pointer if
+  the fill closure panics partway, then returns the initialized range
+  as `&mut [T]`; `alloc_slice_fill_default` is a two-line wrapper over
+  it, `|_| T::default()`. `BumpArena<T>`'s version does the same
+  writing and wrapping, but the growth and panic-safety mechanics
+  differ for real, stated reasons rather than being silently
+  approximated. Growth: a slice cannot span two regions here (unlike
+  `bumpalo`'s single growable-in-place chunk), so a request that does
+  not fit the current region grows a new one sized for `n` directly
+  (`capacity * 2` doubling on its own is not guaranteed to be enough
+  if `n` itself is large). Panic safety: instead of `bumpalo`'s guard
+  object that rewinds the bump pointer on unwind, this version advances
+  `len` by one slot at a time, immediately after each slot is actually
+  written, rather than reserving all `n` slots before the loop starts.
+  That ordering is what keeps a mid-loop panic from `f` sound: `len`
+  ends up pointing exactly at the last slot this call actually
+  finished writing, so `RegionNode`'s own `Drop` impl (and `reset`'s
+  drop loop) never calls `assume_init_drop` on a slot that was merely
+  reserved, only on slots genuinely written. The real cost of this
+  simplification, stated plainly rather than hidden: a partially
+  written slice on panic stays committed in place rather than having
+  its bump-pointer space reclaimed the way `bumpalo`'s guard would --
+  sound, not space-optimal. Verified in the same scratch crate as the
+  `Send`/`reset` work above: 20/20 tests pass, including a
+  `std::panic::catch_unwind` test (`extern crate std` inside the test
+  module only, since this crate is `#![no_std]`) that panics a fill
+  closure on its fourth call and confirms exactly the three elements
+  actually written before the panic run their destructor when the
+  arena later drops, not the two slots the closure never reached.
+- Added `alloc_with`, the fourth item from the same pass.
+  `bumpalo::Bump::alloc_with` (fetched fresh this pass) isolates its
+  actual write, `ptr::write(ptr, f())`, into a small `#[inline(always)]`
+  free function named `inner_writer` rather than inlining it directly
+  in the method body -- its own comment states this is deliberate,
+  aimed at giving LLVM the best chance of writing the closure's return
+  value straight into the heap slot instead of materializing it on the
+  stack first and copying it over. `RegionNode::alloc_with` copies that
+  exact shape, same isolated inner function, same reasoning. One real
+  decision made and stated rather than defaulted into: `bumpalo::Bump::
+  alloc` is itself defined as `self.alloc_with(|| val)`, unifying the
+  two methods, but `BumpArena::alloc` was NOT rebuilt the same way here.
+  `alloc` is this module's measured hot path -- the whole "Second
+  version" rewrite above exists because an earlier version of this file
+  measured 3.2x slower than `bumpalo` on real CI over a redundant
+  pointer read, so this file's hot path has already burned a real
+  regression once. Routing `alloc` through a closure indirection
+  "should" optimize away, but that claim has not been checked against
+  real CI, and this project's own established lesson from the
+  prefill-growth investigation (`docs/mid-arena.md`, the
+  `#[inline(never)]` section) is exactly that a plausible-sounding
+  technique from a faster crate's source is not guaranteed to transfer
+  without a real before/after measurement. Left independent rather than
+  unified on that untested assumption; unifying them remains available
+  as a future change if a real CI run ever shows it costs nothing.
+  Verified in the same scratch crate as the work above: 22/22 tests
+  pass, two of them new for `alloc_with` (correct value, and growing on
+  the same capacity threshold `alloc` itself uses).
+- Added `AllocErr`, `try_with_capacity`, `try_alloc`, and
+  `try_alloc_with`, the fifth and last item from the same pass,
+  closing out the priority list from the feature-gap analysis in
+  full. `bumpalo::AllocErr` (fetched fresh this pass, from
+  `src/alloc.rs`, not `lib.rs`) is a bare unit struct with
+  `#[derive(Clone, PartialEq, Eq, Debug)]` plus a manual `Display`
+  impl reading "memory allocation failed" -- copied here verbatim
+  rather than approximated, since matching it exactly is what makes
+  this a real drop-in-shaped counterpart rather than a look-alike.
+  `bumpalo::Bump::try_alloc`/`try_with_capacity` build on
+  `try_alloc_with`/an internal fallible chunk allocator the same way
+  their infallible counterparts do; this version mirrors that
+  layering with `try_grow` alongside the existing infallible `grow`,
+  and `RegionNode::try_new_boxed` alongside `new_boxed`, deliberately
+  left as separate functions rather than having the infallible ones
+  call the fallible ones and unwrap -- same reasoning as keeping
+  `alloc`/`alloc_with` independent above, this file's growth and
+  per-call paths are not the place to introduce an unverified
+  indirection. One real, load-bearing gap stated here rather than
+  glossed over: `RegionNode::try_new_boxed` only makes the region's
+  element buffer allocation fallible, via `Vec::try_reserve_exact`
+  (stable since 1.57), because that is the one allocation whose size
+  actually scales with `capacity * size_of::<T>()` and therefore the
+  one an application is realistically sizing to avoid. The
+  `Box::new` call wrapping the `RegionNode<T>` struct itself (three
+  words: the `Vec` header, `len`, and `prev`) stays infallible,
+  because stable Rust at this project's rustc 1.75 floor has no
+  fallible `Box` constructor (`Box::try_new` needs the unstable
+  `allocator_api` feature). Verified in the same scratch crate as the
+  work above: 24/24 tests pass, two of them new for the fallible
+  path, both happy-path only -- there is no safe way to force a real
+  allocator-exhaustion failure inside a unit test, so the actual
+  `Err(AllocErr)` return path is exercised by neither test, a real,
+  stated gap rather than a claimed one.
 
 ### `compact_slot_arena.rs`
 - First draft wrapped every union field write in `unsafe`, following
@@ -1132,9 +1393,12 @@ call without a pause budget.
   compile log were leaking into that step's raw-output display (cosmetic
   only -- `parse_c()` only matches lines ending in `ns/op`, so the parsed
   numbers were never affected). Next CI run is the real test of whether
-  the `with_capacity` fix actually stabilizes `id-arena`'s number; not
-  folded into "Real CI benchmark results" above until confirmed, since
-  run 10's figure for it specifically should not be trusted.
+  the `with_capacity` fix actually stabilizes `id-arena`'s number.
+  Confirmed since: run #13 measured 7.41 ns/op, run #20 measured 6.25
+  ns/op, both back inside the normal 5.5 to 7.5 ns/op band. Run 10's
+  1.51 ns/op figure remains an artifact of the missing `with_capacity`
+  call and should not be trusted, but the fix itself is no longer an
+  open question.
 
 ## Reproducing these numbers
 

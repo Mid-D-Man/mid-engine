@@ -61,9 +61,24 @@
 use alloc::boxed::Box;
 use alloc::vec::Vec;
 use core::cell::Cell;
+use core::fmt;
 use core::marker::PhantomData;
 use core::mem::MaybeUninit;
+use core::ptr;
 use core::ptr::NonNull;
+
+/// A fallible allocation could not reserve space. Matches
+/// `bumpalo::AllocErr`'s real shape directly: a bare marker carrying
+/// no payload, not the failed `Layout` or any other detail (checked
+/// against that source, not assumed to match).
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct AllocErr;
+
+impl fmt::Display for AllocErr {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("memory allocation failed")
+    }
+}
 
 struct RegionNode<T> {
     data: Vec<MaybeUninit<T>>,
@@ -87,6 +102,37 @@ impl<T> RegionNode<T> {
             len: Cell::new(0),
             prev,
         })
+    }
+
+    /// Fallible counterpart to `new_boxed` above, for `try_alloc`/
+    /// `try_with_capacity`. Covers the one allocation that actually
+    /// scales with `capacity * size_of::<T>()` (the element buffer)
+    /// via `Vec::try_reserve_exact` rather than the infallible
+    /// `Vec::with_capacity`. Does not cover the small, fixed-size
+    /// allocation for the `RegionNode<T>` struct itself, made a few
+    /// lines below by the ordinary, infallible `Box::new` -- stable
+    /// Rust at this project's rustc 1.75 floor has no fallible `Box`
+    /// constructor (`Box::try_new` needs the unstable `allocator_api`
+    /// feature), so that allocation can still abort. Stated plainly:
+    /// this makes the allocation that actually tends to be large and
+    /// therefore likely to fail fallible, not every allocation this
+    /// type makes.
+    fn try_new_boxed(
+        capacity: usize,
+        prev: Option<NonNull<RegionNode<T>>>,
+    ) -> Result<Box<Self>, AllocErr> {
+        let mut data = Vec::new();
+        data.try_reserve_exact(capacity).map_err(|_| AllocErr)?;
+        // SAFETY: same reasoning as `new_boxed` above -- `try_reserve_exact`
+        // just guaranteed room for exactly `capacity` elements.
+        unsafe {
+            data.set_len(capacity);
+        }
+        Ok(Box::new(Self {
+            data,
+            len: Cell::new(0),
+            prev,
+        }))
     }
 
     #[inline]
@@ -134,6 +180,79 @@ impl<T> RegionNode<T> {
             // and never touched again outside that one write.
             unsafe { slot.assume_init_mut() }
         })
+    }
+
+    /// Bump-allocates `n` contiguous slots, filling each with `f(i)`,
+    /// returning `&mut [T]` borrowing from `self`. Returns `None` if
+    /// the region does not have `n` slots remaining -- same division
+    /// of responsibility as `alloc` above, callers check `remaining()`
+    /// first.
+    fn alloc_slice_fill_with(&self, n: usize, mut f: impl FnMut(usize) -> T) -> Option<&mut [T]> {
+        let start = self.len.get();
+        if n > self.data.len() - start {
+            return None;
+        }
+        // SAFETY: slots [start, start + n) belong to this call alone --
+        // `len` only ever advances, and only one slot at a time as each
+        // is actually finished writing below, not all `n` reserved up
+        // front. That ordering is the real reason this loop is sound if
+        // `f` panics partway through: `len` ends up pointing exactly at
+        // the last slot this loop actually finished writing, so this
+        // region's `Drop` impl (and `reset`'s own drop loop) only ever
+        // calls `assume_init_drop` on slots that are genuinely
+        // initialized. Reserving all `n` slots before the loop instead
+        // would leave a mid-loop panic claiming slots as initialized
+        // that were never written, which is undefined behavior the
+        // first time anything tries to drop them.
+        let base = self.data.as_ptr() as *mut MaybeUninit<T>;
+        for i in 0..n {
+            let value = f(i);
+            // SAFETY: index `start + i` is within the bounds checked
+            // above and has not been written by any other call.
+            unsafe {
+                (*base.add(start + i)).write(value);
+            }
+            self.len.set(start + i + 1);
+        }
+        // SAFETY: every one of these `n` slots was just written above,
+        // contiguous within `self.data`'s own allocation.
+        unsafe { Some(core::slice::from_raw_parts_mut(base.add(start) as *mut T, n)) }
+    }
+
+    /// Bump-allocates one slot, initializes it in place with `f()`,
+    /// returning a `&mut T` borrowing from `self`. Returns `None` on a
+    /// full region, same division of responsibility as `alloc` above.
+    /// Kept as its own primitive rather than having `alloc` call this
+    /// with `|| value` (the way `bumpalo::Bump::alloc` really is built
+    /// on its own `alloc_with`) -- `alloc` is this module's measured
+    /// hot path (see this module's doc comment, "Second version"), and
+    /// nothing here has been benchmarked on real CI to confirm routing
+    /// it through a closure indirection costs nothing. Left independent
+    /// on purpose rather than unified on an untested assumption.
+    fn alloc_with(&self, f: impl FnOnce() -> T) -> Option<&mut T> {
+        let i = self.len.get();
+        if i >= self.data.len() {
+            return None;
+        }
+        self.len.set(i + 1);
+        // SAFETY: index `i` was exclusively reserved by the `len.set`
+        // above, same reasoning as `alloc`'s single-slot version.
+        unsafe {
+            let slot = self.data.as_ptr().add(i) as *mut T;
+            // Isolated into its own function so LLVM has the best
+            // chance of writing `f()`'s return value directly into
+            // `slot` instead of materializing it on the stack first
+            // and copying it over afterward -- the same real reason
+            // `bumpalo::Bump::alloc_with`'s own `inner_writer` is a
+            // separate function rather than inlined here directly
+            // (checked against that source, not assumed to match).
+            #[inline(always)]
+            unsafe fn inner_writer<T, F: FnOnce() -> T>(ptr: *mut T, f: F) {
+                ptr::write(ptr, f());
+            }
+            inner_writer(slot, f);
+            Some(&mut *slot)
+        }
     }
 }
 
@@ -193,6 +312,21 @@ impl<T> BumpArena<T> {
         }
     }
 
+    /// Fallible counterpart to [`with_capacity`](Self::with_capacity),
+    /// matching `bumpalo::Bump::try_with_capacity`'s real name. See
+    /// [`try_alloc`](Self::try_alloc) for what "fallible" does and
+    /// does not cover here.
+    pub fn try_with_capacity(capacity: usize) -> Result<Self, AllocErr> {
+        let capacity = capacity.max(1);
+        let first = RegionNode::try_new_boxed(capacity, None)?;
+        let ptr = Box::into_raw(first);
+        Ok(Self {
+            // SAFETY: Box::into_raw never returns a null pointer.
+            current: Cell::new(unsafe { NonNull::new_unchecked(ptr) }),
+            _marker: PhantomData,
+        })
+    }
+
     /// Allocates `value`, returning a `&mut T` borrowing from `self`,
     /// not from a `&mut self` call -- see this module's doc comment for
     /// why that matters. Never fails; grows the region chain instead.
@@ -228,11 +362,128 @@ impl<T> BumpArena<T> {
             .expect("a freshly grown region must have room for one more allocation")
     }
 
+    /// Allocates `n` contiguous elements, filling each with `f(i)`,
+    /// returning `&mut [T]` borrowing from `self`. Matches
+    /// `bumpalo::Bump::alloc_slice_fill_with`'s real name and shape
+    /// (checked directly against that source, not assumed to match).
+    /// A slice must live in one contiguous region, so unlike
+    /// [`alloc`](Self::alloc)'s single-slot growth, growing here must
+    /// guarantee room for all `n` elements at once, not just double the
+    /// current region and hope. Note, stated plainly rather than
+    /// matched silently: this does not replicate `bumpalo`'s own
+    /// panic-rewind behavior, which reclaims a partially-written
+    /// slice's bump-pointer space if `f` panics midway. Here, a panic
+    /// from `f` leaves whatever prefix of the slice was already
+    /// written committed in place rather than reclaimed -- sound (see
+    /// `RegionNode::alloc_slice_fill_with`'s own safety comment) but
+    /// not space-optimal, a real, accepted simplification against
+    /// `bumpalo`'s more involved guard.
+    pub fn alloc_slice_fill_with(&self, n: usize, f: impl FnMut(usize) -> T) -> &mut [T] {
+        // SAFETY: same reasoning as `alloc` above.
+        let node = unsafe { self.current.get().as_ref() };
+        if node.remaining() >= n {
+            return node
+                .alloc_slice_fill_with(n, f)
+                .expect("just checked remaining() >= n above");
+        }
+
+        self.grow(node.capacity().saturating_mul(2).max(n));
+
+        // SAFETY: `grow` just set `current` to a freshly allocated,
+        // empty region sized to hold at least `n` elements.
+        let node = unsafe { self.current.get().as_ref() };
+        node.alloc_slice_fill_with(n, f)
+            .expect("a freshly grown region sized for `n` must have room for `n` elements")
+    }
+
+    /// Allocates `n` contiguous elements, each set to `T::default()`.
+    /// Matches `bumpalo::Bump::alloc_slice_fill_default`'s real name;
+    /// built directly on [`alloc_slice_fill_with`](Self::alloc_slice_fill_with)
+    /// the same way `bumpalo`'s own version is built on its.
+    pub fn alloc_slice_fill_default(&self, n: usize) -> &mut [T]
+    where
+        T: Default,
+    {
+        self.alloc_slice_fill_with(n, |_| T::default())
+    }
+
+    /// Allocates one element, initialized in place by calling `f()`
+    /// directly into the reserved slot rather than constructing it on
+    /// the stack first and moving it in. Matches
+    /// `bumpalo::Bump::alloc_with`'s real name and the same real
+    /// motivation: for a large `T`, skipping the stack-then-move saves
+    /// a real `size_of::<T>()`-sized copy that plain
+    /// [`alloc`](Self::alloc) cannot avoid, since `alloc` takes `value:
+    /// T` by value and the caller has necessarily already constructed
+    /// it by the time it arrives.
+    pub fn alloc_with(&self, f: impl FnOnce() -> T) -> &mut T {
+        // SAFETY: same reasoning as `alloc` above.
+        let node = unsafe { self.current.get().as_ref() };
+        if node.remaining() > 0 {
+            return node
+                .alloc_with(f)
+                .expect("just checked remaining() > 0 above");
+        }
+
+        self.grow(node.capacity().saturating_mul(2));
+
+        // SAFETY: same reasoning as `alloc` above.
+        let node = unsafe { self.current.get().as_ref() };
+        node.alloc_with(f)
+            .expect("a freshly grown region must have room for one more allocation")
+    }
+
     fn grow(&self, next_capacity: usize) {
         let new_node = RegionNode::new_boxed(next_capacity.max(1), Some(self.current.get()));
         let ptr = Box::into_raw(new_node);
         // SAFETY: Box::into_raw never returns a null pointer.
         self.current.set(unsafe { NonNull::new_unchecked(ptr) });
+    }
+
+    /// Fallible counterpart to `grow` above, for `try_alloc`/
+    /// `try_alloc_with`.
+    fn try_grow(&self, next_capacity: usize) -> Result<(), AllocErr> {
+        let new_node = RegionNode::try_new_boxed(next_capacity.max(1), Some(self.current.get()))?;
+        let ptr = Box::into_raw(new_node);
+        // SAFETY: Box::into_raw never returns a null pointer.
+        self.current.set(unsafe { NonNull::new_unchecked(ptr) });
+        Ok(())
+    }
+
+    /// Fallible counterpart to [`alloc`](Self::alloc), matching
+    /// `bumpalo::Bump::try_alloc`'s real name and its own
+    /// `self.try_alloc_with(|| val)` shape. [`alloc`](Self::alloc)
+    /// never fails; it grows the region chain until the underlying
+    /// allocator itself aborts on exhaustion, which is standard for a
+    /// stable-Rust infallible allocation path but not always the right
+    /// fit for this crate's `#![no_std]`, embedded-adjacent target,
+    /// where a caller may want to detect and handle real allocator
+    /// exhaustion instead of aborting. See
+    /// [`RegionNode::try_new_boxed`] for exactly which allocation this
+    /// covers and which one it does not.
+    pub fn try_alloc(&self, value: T) -> Result<&mut T, AllocErr> {
+        self.try_alloc_with(|| value)
+    }
+
+    /// Fallible counterpart to [`alloc_with`](Self::alloc_with),
+    /// matching `bumpalo::Bump::try_alloc_with`'s real name.
+    pub fn try_alloc_with(&self, f: impl FnOnce() -> T) -> Result<&mut T, AllocErr> {
+        // SAFETY: same reasoning as `alloc` above.
+        let node = unsafe { self.current.get().as_ref() };
+        if node.remaining() > 0 {
+            return Ok(node
+                .alloc_with(f)
+                .expect("just checked remaining() > 0 above"));
+        }
+
+        self.try_grow(node.capacity().saturating_mul(2))?;
+
+        // SAFETY: `try_grow` just set `current` to a freshly allocated,
+        // empty region.
+        let node = unsafe { self.current.get().as_ref() };
+        Ok(node
+            .alloc_with(f)
+            .expect("a freshly grown region must have room for one more allocation"))
     }
 
     /// Total number of regions currently in the chain. Mostly useful
@@ -295,6 +546,53 @@ impl<T> BumpArena<T> {
             unsafe { ptr.as_mut() }.iter_mut()
         })
     }
+
+    /// Drops every value currently held, then discards every region
+    /// except the current one, which is kept and reused rather than
+    /// freed and reallocated. Matches `bumpalo::Bump::reset`'s real
+    /// `&mut self` signature and shape (checked directly against that
+    /// source, not assumed to match) -- `&mut self` rules out any
+    /// outstanding `&mut T` from an earlier `alloc` call the same way
+    /// it does there. Differs from `bumpalo`'s own `reset` in one real
+    /// way: `bumpalo::Bump` only ever holds raw, untyped bytes, so it
+    /// has nothing to drop; `BumpArena<T>` holds real `T` values and
+    /// must run their destructors here, or a value sitting in the kept
+    /// region would silently leak once a future `alloc` overwrites its
+    /// slot without ever calling `Drop` on what used to be there.
+    pub fn reset(&mut self) {
+        // SAFETY: `current` always points at a region allocated by
+        // `with_capacity`/`grow`, never freed until this arena's own
+        // `Drop` runs or this method frees it below.
+        let mut cursor = unsafe { self.current.get().as_ref() }.prev;
+        while let Some(ptr) = cursor {
+            // SAFETY: same invariant this arena's own `Drop` impl
+            // relies on -- each of these regions came from
+            // `Box::into_raw` in `with_capacity`/`grow` and is freed
+            // exactly once, right here.
+            let boxed = unsafe { Box::from_raw(ptr.as_ptr()) };
+            cursor = boxed.prev;
+            // `boxed` drops here: `RegionNode<T>`'s own `Drop` impl
+            // runs first, dropping every live value this now-discarded
+            // region held, then its heap allocation is freed.
+        }
+
+        // SAFETY: the loop above only ever followed `prev` links, never
+        // touching `current` itself, and `&mut self` rules out any
+        // other live reference into it.
+        let current = unsafe { self.current.get().as_mut() };
+        current.prev = None;
+        let len = current.len.get();
+        for slot in &mut current.data[..len] {
+            // SAFETY: every slot below `len` is a real, live value --
+            // must be dropped here since `len` resets to 0 right after,
+            // and a future `alloc` call would otherwise overwrite the
+            // slot without ever running its destructor.
+            unsafe {
+                slot.assume_init_drop();
+            }
+        }
+        current.len.set(0);
+    }
 }
 
 impl<T> Drop for BumpArena<T> {
@@ -319,6 +617,18 @@ impl<T> Drop for BumpArena<T> {
         }
     }
 }
+
+// SAFETY: nothing aliases `current`'s owned regions until `alloc` is
+// called, and every reference `alloc` hands out borrows from `&self`,
+// so an outstanding `&mut T` blocks a move of the arena itself until
+// that borrow ends -- same argument `bumpalo::Bump`'s own `Send` impl
+// relies on (checked directly against its real source, not assumed to
+// match). The bound differs from `bumpalo`'s blanket impl because
+// `BumpArena<T>` actually owns and drops `T` values, `bumpalo::Bump`
+// does not -- moving this arena to another thread also moves every
+// `T` it holds, so `T: Send` is required here where `bumpalo` needs
+// nothing at all.
+unsafe impl<T: Send> Send for BumpArena<T> {}
 
 impl<T> Default for BumpArena<T> {
     fn default() -> Self {
@@ -511,5 +821,207 @@ mod tests {
             a.alloc(());
         }
         assert_eq!(a.len(), 20);
+    }
+
+    #[test]
+    fn bump_arena_is_send_when_t_is_send() {
+        // Compile-time check, not a runtime one -- this crate is
+        // `#![no_std]` and pulling in `std::thread` just to spawn a
+        // no-op would add a real dependency for no real coverage. If
+        // the `unsafe impl<T: Send> Send for BumpArena<T>` above ever
+        // stopped holding, this function would fail to compile.
+        fn assert_send<T: Send>() {}
+        assert_send::<BumpArena<u32>>();
+    }
+
+    #[test]
+    fn reset_on_a_fresh_arena_is_a_no_op() {
+        let mut a: BumpArena<u32> = BumpArena::new();
+        a.reset();
+        assert_eq!(a.region_count(), 1);
+        assert_eq!(a.len(), 0);
+    }
+
+    #[test]
+    fn reset_drops_every_live_value_across_every_region() {
+        use core::cell::Cell as StdCell;
+
+        struct DropCounter<'a>(&'a StdCell<u32>);
+        impl<'a> Drop for DropCounter<'a> {
+            fn drop(&mut self) {
+                self.0.set(self.0.get() + 1);
+            }
+        }
+
+        let count = StdCell::new(0u32);
+        let mut a = BumpArena::with_capacity(2);
+        for _ in 0..10 {
+            a.alloc(DropCounter(&count));
+        }
+        assert!(
+            a.region_count() > 1,
+            "10 elements from a capacity-2 start should have grown past one region"
+        );
+        assert_eq!(count.get(), 0, "nothing dropped before reset");
+        a.reset();
+        assert_eq!(
+            count.get(),
+            10,
+            "every value across every region, including the one kept for reuse, must be dropped by reset"
+        );
+        assert_eq!(a.len(), 0);
+    }
+
+    #[test]
+    fn reset_keeps_only_the_current_region_but_preserves_its_capacity() {
+        let mut a = BumpArena::with_capacity(2);
+        a.alloc(0u32);
+        a.alloc(1u32);
+        a.alloc(2u32); // forces growth: current region now capacity 4
+        assert_eq!(a.region_count(), 2);
+
+        a.reset();
+        assert_eq!(
+            a.region_count(),
+            1,
+            "reset should discard every region except the current one"
+        );
+        assert_eq!(a.len(), 0);
+
+        for i in 0..4u32 {
+            a.alloc(i);
+        }
+        assert_eq!(
+            a.region_count(),
+            1,
+            "the kept region's real capacity (4, from growth before reset) should still \
+             be there, not shrunk back to the arena's original capacity (2)"
+        );
+        a.alloc(99u32);
+        assert_eq!(
+            a.region_count(),
+            2,
+            "a 5th allocation should still grow normally once the reused region's actual \
+             capacity is exhausted"
+        );
+    }
+
+    #[test]
+    fn arena_is_reusable_after_reset_and_reads_back_correctly() {
+        let mut a = BumpArena::with_capacity(4);
+        for i in 0..10u32 {
+            a.alloc(i);
+        }
+        a.reset();
+
+        let mut refs = Vec::new();
+        for i in 100..105u32 {
+            refs.push(a.alloc(i));
+        }
+        for (i, r) in refs.iter().enumerate() {
+            assert_eq!(**r, 100 + i as u32);
+        }
+    }
+
+    #[test]
+    fn alloc_slice_fill_with_writes_and_returns_correct_values() {
+        let a = BumpArena::with_capacity(8);
+        let s = a.alloc_slice_fill_with(5, |i| (i as u32) * 2);
+        assert_eq!(s, &[0, 2, 4, 6, 8]);
+    }
+
+    #[test]
+    fn alloc_slice_fill_default_zero_initializes() {
+        let a: BumpArena<u32> = BumpArena::with_capacity(8);
+        let s = a.alloc_slice_fill_default(3);
+        assert_eq!(s, &[0, 0, 0]);
+    }
+
+    #[test]
+    fn alloc_slice_that_does_not_fit_grows_a_region_sized_for_it_directly() {
+        let a = BumpArena::with_capacity(2);
+        let s = a.alloc_slice_fill_with(10, |i| i as u32);
+        assert_eq!(s.len(), 10);
+        assert_eq!(s[9], 9);
+        assert_eq!(
+            a.region_count(),
+            2,
+            "one grow call sized for `n` directly, not several doublings"
+        );
+        assert_eq!(a.len(), 10, "the original capacity-2 region holds nothing");
+    }
+
+    #[test]
+    fn alloc_slice_fill_with_stays_sound_if_the_closure_panics() {
+        extern crate std;
+        use core::cell::Cell as StdCell;
+        use std::panic::{self, AssertUnwindSafe};
+
+        struct DropCounter<'a>(&'a StdCell<u32>);
+        impl<'a> Drop for DropCounter<'a> {
+            fn drop(&mut self) {
+                self.0.set(self.0.get() + 1);
+            }
+        }
+
+        let count = StdCell::new(0u32);
+        let a = BumpArena::with_capacity(8);
+        let result = panic::catch_unwind(AssertUnwindSafe(|| {
+            a.alloc_slice_fill_with(5, |i| {
+                if i == 3 {
+                    panic!("boom");
+                }
+                DropCounter(&count)
+            });
+        }));
+        assert!(result.is_err(), "the closure was expected to panic");
+        // Only the 3 elements this call actually finished writing
+        // (i = 0, 1, 2) before the panic should ever run their
+        // destructor -- proving `len` was not advanced past what this
+        // call really wrote, the one real risk an incremental
+        // per-slot `len` update guards against (see
+        // `RegionNode::alloc_slice_fill_with`'s own safety comment).
+        drop(a);
+        assert_eq!(count.get(), 3);
+    }
+
+    #[test]
+    fn alloc_with_writes_and_returns_the_closures_value() {
+        let a = BumpArena::with_capacity(4);
+        let x = a.alloc_with(|| 7u32 * 6);
+        assert_eq!(*x, 42);
+    }
+
+    #[test]
+    fn alloc_with_grows_the_same_way_alloc_does() {
+        let a = BumpArena::with_capacity(2);
+        a.alloc_with(|| 0u32);
+        a.alloc_with(|| 1u32);
+        assert_eq!(a.region_count(), 1);
+        a.alloc_with(|| 2u32); // forces growth, same threshold as `alloc`
+        assert_eq!(a.region_count(), 2);
+        assert_eq!(a.len(), 3);
+    }
+
+    #[test]
+    fn try_with_capacity_and_try_alloc_succeed_on_the_happy_path() {
+        let a: BumpArena<u32> = BumpArena::try_with_capacity(4).expect("real capacity, should not fail");
+        let x = a.try_alloc(7).expect("plenty of room, should not fail");
+        assert_eq!(*x, 7);
+        let y = a.try_alloc_with(|| 8).expect("plenty of room, should not fail");
+        assert_eq!(*y, 8);
+        assert_eq!(a.len(), 2);
+    }
+
+    #[test]
+    fn try_alloc_grows_the_region_chain_the_same_as_alloc() {
+        let a = BumpArena::try_with_capacity(2).unwrap();
+        a.try_alloc(0u32).unwrap();
+        a.try_alloc(1u32).unwrap();
+        assert_eq!(a.region_count(), 1);
+        a.try_alloc(2u32)
+            .expect("growth path should still succeed under a real, working allocator");
+        assert_eq!(a.region_count(), 2);
+        assert_eq!(a.len(), 3);
     }
 }

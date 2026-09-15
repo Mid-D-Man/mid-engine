@@ -58,6 +58,7 @@
 //! toolchain that has it before this ships in anything that isn't
 //! itself still under active development.
 
+use crate::raw_alloc::RawAlloc;
 use alloc::vec::Vec;
 use core::cell::Cell;
 use core::mem;
@@ -219,6 +220,74 @@ impl StackAllocator {
             Ok(&mut *typed.as_ptr())
         }
     }
+    /// Attempts to resize a previously-returned raw allocation in
+    /// place, without moving it. `old_size` must be the size that was
+    /// originally requested for `ptr` (this allocator hands back a bare
+    /// pointer, not a sized slice, so the caller must supply it, same
+    /// as `try_dealloc_raw`'s own contract elsewhere in this crate).
+    /// Returns `true` if `ptr` is now valid to use up to `new_size`
+    /// bytes without moving, `false` if it could not be done in place --
+    /// the caller must then allocate fresh and copy, same as any other
+    /// allocator's resize contract.
+    ///
+    /// Directly modeled on `std.heap.FixedBufferAllocator`'s real
+    /// `resize`/`isLastAllocation` (source read,
+    /// `lib/std/heap/FixedBufferAllocator.zig`, not assumed from the
+    /// name): only the allocation that is genuinely the *most recent*
+    /// one (its end exactly matches the current bump position) can grow
+    /// or shrink in place, since nothing else sits between it and this
+    /// allocator's free space. Every other allocation can still shrink
+    /// *logically* -- report success without moving anything, since a
+    /// smaller size is always a valid view of the same bytes -- but can
+    /// never grow, since real live data may sit immediately after it.
+    pub fn resize_raw(&self, ptr: NonNull<u8>, old_size: usize, new_size: usize) -> bool {
+        let base = self.buf.as_ptr() as usize;
+        let addr = ptr.as_ptr() as usize;
+        let is_last_allocation = addr + old_size == base + self.top.get();
+
+        if !is_last_allocation {
+            return new_size <= old_size;
+        }
+
+        if new_size <= old_size {
+            // Shrinking the last allocation for real reclaims the
+            // freed tail immediately, rather than waiting for the
+            // usual `rewind`/`reset` reclamation.
+            self.top.set(self.top.get() - (old_size - new_size));
+            return true;
+        }
+
+        let grow_by = new_size - old_size;
+        if self.top.get() + grow_by > self.buf.len() {
+            return false;
+        }
+        self.top.set(self.top.get() + grow_by);
+        true
+    }
+}
+/// `allocator_traits` specialization directly (checked against that
+/// source, not assumed): its `try_deallocate_node` checks real pointer
+/// ownership (`state.arena_.owns(ptr)`) and does nothing beyond that,
+/// since actual reclamation only ever happens through `unwind()` --
+/// this stack allocator's own `rewind()`/`reset()`. There is no way to
+/// reclaim one arbitrary node out of bump order, and this allocator
+/// was never meant to.
+impl RawAlloc for StackAllocator {
+    fn try_alloc_raw(&self, size: usize, align: usize) -> Option<NonNull<u8>> {
+        self.alloc_raw(size, align)
+    }
+
+    unsafe fn try_dealloc_raw(&self, ptr: NonNull<u8>, _size: usize, _align: usize) -> bool {
+        let start = self.buf.as_ptr() as usize;
+        let end = start + self.buf.len();
+        let addr = ptr.as_ptr() as usize;
+        // `<= end`, not `< end`: a zero-sized allocation can validly
+        // land exactly one byte past the last real byte (the same
+        // "one past the end" pointer `Vec`'s own iterators rely on),
+        // and this check only ever gates ownership routing, not an
+        // actual memory access.
+        addr >= start && addr <= end
+    }
 }
 
 #[cfg(test)]
@@ -352,5 +421,84 @@ mod tests {
         assert!(a.alloc_raw(8, 1).is_some());
         // Nothing left at all now.
         assert!(a.alloc_raw(1, 1).is_none());
+    }
+
+    #[test]
+    fn raw_alloc_try_dealloc_recognizes_only_its_own_pointers() {
+        use crate::raw_alloc::{HeapAlloc, RawAlloc};
+
+        let s = StackAllocator::with_capacity(64);
+        let mine = s.try_alloc_raw(8, 8).expect("plenty of room");
+        let unrelated = HeapAlloc
+            .try_alloc_raw(8, 8)
+            .expect("a small heap allocation should not fail");
+
+        unsafe {
+            assert!(
+                s.try_dealloc_raw(mine, 8, 8),
+                "must recognize a pointer from its own buffer"
+            );
+            assert!(
+                !s.try_dealloc_raw(unrelated, 8, 8),
+                "must not falsely claim a pointer it never allocated"
+            );
+            // Real cleanup for the heap-backed pointer so this test
+            // doesn't leak.
+            assert!(HeapAlloc.try_dealloc_raw(unrelated, 8, 8));
+        }
+    }
+
+    #[test]
+    fn resize_raw_on_the_last_allocation_can_grow_in_place() {
+        let a = StackAllocator::with_capacity(64);
+        let ptr = a.alloc_raw(8, 1).unwrap();
+        assert!(a.resize_raw(ptr, 8, 20));
+        assert_eq!(a.used(), 20);
+        // The 12 grown bytes are real, usable memory at the same address.
+        unsafe {
+            core::ptr::write_bytes(ptr.as_ptr(), 0x42, 20);
+            assert_eq!(*ptr.as_ptr().add(19), 0x42);
+        }
+    }
+
+    #[test]
+    fn resize_raw_on_the_last_allocation_can_shrink_and_reclaims_the_tail() {
+        let a = StackAllocator::with_capacity(64);
+        let ptr = a.alloc_raw(20, 1).unwrap();
+        assert!(a.resize_raw(ptr, 20, 8));
+        assert_eq!(a.used(), 8, "the freed tail must be reclaimed immediately, not just logically");
+        // The reclaimed space is real: a fresh allocation can reuse it.
+        let next = a.alloc_raw(56, 1);
+        assert!(next.is_some(), "the 12 reclaimed bytes plus remaining capacity should fit 56 more");
+    }
+
+    #[test]
+    fn resize_raw_on_a_non_last_allocation_can_only_shrink_logically() {
+        let a = StackAllocator::with_capacity(64);
+        let first = a.alloc_raw(8, 1).unwrap();
+        let _second = a.alloc_raw(8, 1).unwrap(); // now `first` is no longer the last allocation
+        let used_before = a.used();
+
+        assert!(
+            a.resize_raw(first, 8, 4),
+            "a non-last allocation can still shrink logically"
+        );
+        assert_eq!(
+            a.used(),
+            used_before,
+            "shrinking a non-last allocation must not move the bump position at all"
+        );
+        assert!(
+            !a.resize_raw(first, 8, 16),
+            "a non-last allocation can never grow -- real live data sits right after it"
+        );
+    }
+
+    #[test]
+    fn resize_raw_growing_the_last_allocation_past_capacity_fails() {
+        let a = StackAllocator::with_capacity(16);
+        let ptr = a.alloc_raw(8, 1).unwrap();
+        assert!(!a.resize_raw(ptr, 8, 32));
+        assert_eq!(a.used(), 8, "a failed grow must not move the bump position");
     }
 }

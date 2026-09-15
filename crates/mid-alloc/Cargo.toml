@@ -26,7 +26,14 @@ default = []
 # reuses freed slots before growing). See docs/mid-alloc.md
 # "pool_allocator.rs".
 pool = []
-# Planned, not yet built -- see docs/mid-alloc.md "Module plan".
-# fallback   = []
-# segregator = []
-# tracking   = []
+# Try Primary, fall back to Secondary on failure -- foonathan's
+# fallback_allocator, real dispatch. See docs/mid-alloc.md
+# "fallback.rs".
+fallback = []
+# Routes by allocation size to Small or Large, no fallthrough --
+# foonathan's binary_segregator. See docs/mid-alloc.md "segregator.rs".
+segregator = []
+# Wraps any RawAlloc with lock-free AtomicU64 counters -- foonathan's
+# tracked_allocator hook shape + mod_alloc's real counter design. See
+# docs/mid-alloc.md "tracking.rs".
+tracking = []

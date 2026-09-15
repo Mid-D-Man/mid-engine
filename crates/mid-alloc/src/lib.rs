@@ -40,20 +40,43 @@
 //!   free list through unused slots. See that module's doc comment for
 //!   the full design and why it departs from foonathan's `memory_pool`
 //!   shape on purpose.
+//! - [`raw_alloc`] — [`RawAlloc`], the shared, always-fallible
+//!   allocation interface combinators build against, plus
+//!   [`HeapAlloc`], the natural terminal allocator for a combinator
+//!   chain. A real, stated simplification of `foonathan::memory`'s
+//!   `RawAllocator`/`allocator_traits` concept -- see that module's
+//!   doc comment for exactly what carries over and what doesn't.
+//! - `fallback` (behind the `fallback` feature) —
+//!   [`fallback::FallbackAllocator<Primary, Secondary>`]: try
+//!   `Primary`, fall back to `Secondary` on failure, routing
+//!   deallocation back to whichever side actually owns a given
+//!   pointer. Directly modeled on foonathan's `fallback_allocator`.
+//! - `segregator` (behind the `segregator` feature) —
+//!   [`segregator::Segregator<Small, Large>`]: routes an allocation to
+//!   `Small` or `Large` purely by comparing its size against a
+//!   threshold, no fallthrough if the chosen side fails -- a real,
+//!   deliberate difference from `FallbackAllocator`'s try-then-fall-
+//!   back behavior, not an oversight. Directly modeled on foonathan's
+//!   `binary_segregator`.
+//! - `tracking` (behind the `tracking` feature) —
+//!   [`tracking::Tracked<A>`]: wraps any `RawAlloc` with lock-free
+//!   `AtomicU64` counters (allocation/deallocation counts, current and
+//!   peak bytes, current and peak live count). Combines two real
+//!   sources: the hook shape from foonathan's `tracked_allocator`, the
+//!   counters and their update sequence ported directly from
+//!   `mod_alloc::ModAlloc` (crates.io, MSRV 1.75).
 //!
-//! # Module plan (catalogued in docs/mid-alloc.md, not yet built)
-//! - **`fallback`** — a generic `FallbackAllocator<Primary, Secondary>`
-//!   combinator: try `Primary`, fall back to `Secondary` on failure.
-//!   Directly modeled on foonathan's `fallback_allocator` — a real
-//!   ~10-line dispatch function in the source, not a complex feature.
-//! - **`segregator`** — routes an allocation to one of several
-//!   allocators based on its size (small → pool, large → heap), modeled
-//!   on foonathan's `segregator`.
-//! - **`tracking`** — wraps any allocator with alloc/dealloc hooks for
-//!   profiling, matching both foonathan's `tracking_allocator` and
-//!   Rust's own `dhat`/`mod-alloc` `GlobalAlloc`-wrapper pattern — the
-//!   same design in both ecosystems, confirmed by reading both, not
-//!   assumed from the resemblance alone.
+//! # Module plan
+//! Nothing left uncatalogued from the original survey — every module
+//! foonathan/memory's own real source suggested has either shipped
+//! above or was explicitly ruled out with a stated reason (see
+//! `docs/mid-alloc.md`). Two items came out of the Zig re-survey pass
+//! instead, both real and not yet built: a `no_std` spinlock (the
+//! prerequisite for a `ThreadSafeAllocator`-style mutex wrapper, which
+//! `tracking`'s atomics turned out not to need), and hierarchical
+//! "backed" allocators (letting one allocator provision another's
+//! backing memory, rather than every allocator reaching for the global
+//! heap independently).
 //!
 //! Every one of these traces to a specific real function this survey
 //! actually read (`docs/mid-alloc.md`), not to "allocator libraries
@@ -62,12 +85,32 @@
 #![no_std]
 extern crate alloc;
 
+pub mod raw_alloc;
 pub mod stack_allocator;
 
 #[cfg(feature = "pool")]
 pub mod pool_allocator;
 
+#[cfg(feature = "fallback")]
+pub mod fallback;
+
+#[cfg(feature = "segregator")]
+pub mod segregator;
+
+#[cfg(feature = "tracking")]
+pub mod tracking;
+
+pub use raw_alloc::{HeapAlloc, NullAlloc, RawAlloc};
 pub use stack_allocator::{StackAllocator, StackMarker};
 
 #[cfg(feature = "pool")]
 pub use pool_allocator::PoolAllocator;
+
+#[cfg(feature = "fallback")]
+pub use fallback::FallbackAllocator;
+
+#[cfg(feature = "segregator")]
+pub use segregator::Segregator;
+
+#[cfg(feature = "tracking")]
+pub use tracking::{AllocStats, Tracked};
