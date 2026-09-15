@@ -1475,3 +1475,99 @@ step, not this one: wire `BumpaloScratch` into that one call site once
 there's been an actual root-cause pass confirming boxing is worth
 fixing before `spawn_insert_bundle`/`structural_churn` get touched
 further.
+
+### `diag_alloc_count.rs` and the `remove_bundle`/`insert_bundle` allocation pass
+
+Root-caused rather than guessed at, using a real, sandbox-valid signal
+the Iter1/Iter2 investigation didn't have available: allocation
+*counts* through a `#[global_allocator]` wrapper are deterministic
+regardless of optimization level, unlike timing — same code, same
+allocations, every run. `examples/diag_alloc_count.rs` mirrors three of
+`vs_bevy_ecs.rs`'s real workloads exactly (N=10,000, same component
+shapes and call sequence) and reports real allocs/op, release profile.
+
+**A real correction found along the way, stated plainly:** `insert`/
+`get`/`has` are the *Sparse Shell*; `insert_static`/`get_static`/
+`has_static` are the *Archetype Core* — the reverse of what "static"
+sounds like it should mean, confirmed directly from this crate's own
+tests (`using_a_sparse_type_with_insert_static_panics`), not assumed.
+`Marker` in the real bench is inserted via `insert_static`, so it's a
+real, archetype-tracked, *surviving* column on every
+`remove_bundle_two_components`/`insert_bundle_on_existing_entity` call
+— not a sparse one sitting outside the archetype entirely, which is
+what an earlier pass through this same file mistakenly assumed. The
+initial "fast path, only when every column is being removed" design
+built on that wrong assumption was real and tested, but never actually
+fired on the real benchmark because of it — superseded below by a
+version of the same idea that's unconditionally true instead.
+
+**Three real, verified fixes, each checked against the diagnostic
+before being trusted:**
+
+1. **`Bundle::component_ids`/`existing_component_ids` returned
+   `Vec<ComponentId>`** — one heap allocation on *every*
+   `insert_bundle`/`remove_bundle` call, every arity, regardless of
+   whether that call ends up boxing anything. Replaced with
+   `ComponentIdList`, a fixed 8-slot inline buffer (`impl_bundle_for_
+   tuple!` never generates past arity 8) plus a real length — `Deref`/
+   `DerefMut` to `[ComponentId]` so every existing call site kept
+   working unchanged except one `for &id in &ids` → `for &id in
+   ids.iter()` (`for` loops need `IntoIterator` directly; `Deref`
+   coercion doesn't reach that far). Measured: `remove_bundle_two_
+   components` 4.00 → 3.00 allocs/op, `insert_bundle_on_existing_
+   entity` and `spawn_n_entities_two_components` both 1.00 → ~0.
+
+2. **`B`'s own removed elements never need `Box<dyn Any>` at all** —
+   true unconditionally, not just when nothing else survives. Added
+   `Bundle::take_direct`, which pulls `Self` straight out of the
+   source columns via typed `swap_remove`, and changed
+   `remove_bundle`'s migration loop to `continue` past any column
+   that's one of `ids` (handled by `take_direct` instead) rather than
+   boxing it into a `removed: HashMap<ComponentId, Box<dyn Any>>` the
+   way it used to. That `HashMap` — and the `Bundle::take_from` method
+   that only ever existed to drain it — are both gone entirely, not
+   just avoided in a special case. Only the genuinely-unknown-at-
+   compile-time *other* columns still go through `Column::
+   swap_remove_and_forget`/`push_any`'s type-erased path, since that
+   one's unavoidable (which components those are is a runtime fact).
+
+3. **Net result, measured, not estimated:** `remove_bundle_two_
+   components` 4.00 → 3.00 → **0.002** allocs/op. `insert_bundle_on_
+   existing_entity` 1.00 → **0.005**. `spawn_n_entities_two_components`
+   1.00 → **0.011**. All three are now allocation-free in practice —
+   the small residual counts are one-time archetype/edge-cache setup
+   cost on the first few calls, not per-op cost (they don't scale with
+   N). `Marker` itself was never contributing to any of the box-related
+   counts regardless of this fix — it's a zero-sized type, and boxing a
+   ZST is a well-known no-op for Rust's allocator (never reaches
+   `GlobalAlloc::alloc` at all), which is *why* the original wrong
+   "Marker is sparse" assumption didn't get caught by the numbers
+   sooner: the allocation counts were real and correct throughout, only
+   the narrative explaining *why* needed correcting.
+
+**190/190 tests pass**, including a new one this pass added
+specifically because none of the existing `remove_bundle` tests
+actually reached the surviving-column path (every one of them removed
+an entity's entire archetype-tracked signature) —
+`remove_bundle_migrates_a_surviving_component_to_the_new_archetype`
+uses a third component (`Health`) that must migrate intact, exercising
+exactly the branch the rest of the suite never touched.
+
+**What this means for `scratch.rs`, stated plainly:** its original
+motivation — `remove_bundle_two_components`'s boxing cost — is gone,
+not reduced. `B`'s own elements never box at all now, on any bundle
+shape. The only `Box<dyn Any>` still in play is for *surviving*,
+non-`B` columns during a structural change, which is real but
+narrower than what `scratch.rs` was built against, and hasn't itself
+been measured as a real cost anywhere yet (every survivor in the
+actual benchmarks measured this pass happens to be a free-to-box ZST).
+`scratch.rs` stays as real, tested, standalone infrastructure — not
+wired in, still correct, still the right tool if a future profiling
+pass finds a real non-ZST survivor path worth it — but wiring it into
+`Column` itself turned out to run into a real architectural tension
+this pass surfaced for the first time: `Column` is `Box<dyn Column>`
+(a trait object, long-lived, shared across many unrelated operations),
+while any arena is inherently transient (one per structural change) —
+threading a transient arena's lifetime through a long-lived trait
+object's own signature doesn't have a clean answer on stable Rust, and
+isn't one this pass forced through on a guess.

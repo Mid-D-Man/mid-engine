@@ -1061,6 +1061,35 @@ mod tests {
     }
 
     #[test]
+    fn remove_bundle_migrates_a_surviving_component_to_the_new_archetype() {
+        // Exercises remove_bundle's *general* path (`Bundle::take_from`,
+        // the `Box<dyn Any>` migration loop) rather than its fast path
+        // (`take_direct`) -- every other existing remove_bundle test
+        // removes an entity's *entire* archetype-tracked signature, so
+        // none of them actually reach this branch. `Health` here is a
+        // third archetype-tracked component that must survive the
+        // removal and migrate to the new archetype, which is exactly
+        // the condition (`ids.len() != columns.len()`) that selects the
+        // general path over the fast one.
+        let mut w = World::new();
+        let e = w.spawn();
+        w.insert(e, Health(100));
+        w.insert_bundle(e, (Mass(1.0), Charge(2.0)));
+
+        assert_eq!(
+            w.remove_bundle::<(Mass, Charge)>(e),
+            Some((Mass(1.0), Charge(2.0)))
+        );
+        assert_eq!(w.get::<Mass>(e), None);
+        assert_eq!(w.get::<Charge>(e), None);
+        assert_eq!(
+            w.get::<Health>(e),
+            Some(&Health(100)),
+            "a surviving component must migrate to the new archetype intact, not just avoid being removed"
+        );
+    }
+
+    #[test]
     fn insert_bundle_then_remove_bundle_round_trips() {
         let mut w = World::new();
         let e = w.spawn();

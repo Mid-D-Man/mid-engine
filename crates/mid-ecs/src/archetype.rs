@@ -298,6 +298,65 @@ struct EntityLocation {
 /// visibility doesn't block the call), it just can't write its own
 /// function generic over `B: Bundle` — a real, narrow limitation,
 /// flagged here rather than worked around at real architectural cost.
+/// Fixed-capacity, stack-allocated replacement for `Vec<ComponentId>` in
+/// `Bundle::component_ids`/`existing_component_ids`. `impl_bundle_for_tuple!`
+/// below only ever generates arities 1..=8, so 8 inline slots plus a
+/// real length cover every case this crate actually produces, with no
+/// heap allocation at all. Not a guess: a real allocation-counting
+/// diagnostic (`examples/diag_alloc_count.rs`, see
+/// `docs/mid-ecs.md`) confirmed this `Vec` was a real, unconditional
+/// allocation on *every* `insert_bundle`/`remove_bundle` call, every
+/// arity — the single most universal allocation source these two
+/// methods had, since it fires on every structural change regardless
+/// of whether that change ends up needing to box anything (unlike
+/// `Column::swap_remove_and_forget`'s `Box<dyn Any>`, which only fires
+/// when the source archetype actually has columns to migrate).
+///
+/// `ComponentId::from_u32(0)` as the unused-slot filler is deliberate,
+/// not arbitrary — its own doc comment already establishes that a
+/// bogus, never-registered value is safe to hold and simply reads back
+/// as "not registered" anywhere it's (incorrectly) read; `Deref`/
+/// `DerefMut` below bound every real access to `..len`, so those slots
+/// are never actually read regardless.
+#[derive(Clone, Copy)]
+pub(crate) struct ComponentIdList {
+    buf: [ComponentId; Self::CAP],
+    len: u8,
+}
+
+impl ComponentIdList {
+    const CAP: usize = 8;
+
+    fn new() -> Self {
+        Self {
+            buf: [ComponentId::from_u32(0); Self::CAP],
+            len: 0,
+        }
+    }
+
+    /// Panics past 8 elements — a real bug, not an input to handle
+    /// gracefully, since `impl_bundle_for_tuple!` never generates more
+    /// than 8 and every caller of `push` is that macro's own generated
+    /// code.
+    fn push(&mut self, id: ComponentId) {
+        self.buf[self.len as usize] = id;
+        self.len += 1;
+    }
+}
+
+impl std::ops::Deref for ComponentIdList {
+    type Target = [ComponentId];
+    fn deref(&self) -> &[ComponentId] {
+        &self.buf[..self.len as usize]
+    }
+}
+
+impl std::ops::DerefMut for ComponentIdList {
+    fn deref_mut(&mut self) -> &mut [ComponentId] {
+        &mut self.buf[..self.len as usize]
+    }
+}
+
 pub(crate) trait Bundle: Sized + 'static {
     /// Component ids for every element, in the same tuple-position
     /// order every other method here expects them back in —
@@ -305,7 +364,7 @@ pub(crate) trait Bundle: Sized + 'static {
     /// first use. Matches plain `insert::<T>`'s own registering
     /// `Archetypes::component_id::<T>()` convention (see
     /// `World::insert_static`), generalized to every element.
-    fn component_ids(archetypes: &mut Archetypes) -> Vec<ComponentId>;
+    fn component_ids(archetypes: &mut Archetypes) -> ComponentIdList;
 
     /// Same ids, without registering — `None` if *any* element was
     /// never registered as an archetype-tracked component for
@@ -314,7 +373,7 @@ pub(crate) trait Bundle: Sized + 'static {
     /// `World::remove_static`), generalized: one missing registration
     /// anywhere in the bundle means the whole bundle can't possibly be
     /// present on any entity, by construction.
-    fn existing_component_ids(archetypes: &Archetypes) -> Option<Vec<ComponentId>>;
+    fn existing_component_ids(archetypes: &Archetypes) -> Option<ComponentIdList>;
 
     /// Pushes every element into its matching column of `table`, in
     /// the exact order `ids` gives them back in. `table` must already
@@ -324,25 +383,45 @@ pub(crate) trait Bundle: Sized + 'static {
     /// appends, never creates a table.
     fn push_into(self, table: &mut Table, ids: &[ComponentId]);
 
-    /// The `remove_bundle` counterpart to `push_into`: reassembles
-    /// `Self` from `removed`, a type-erased row value per id already
-    /// extracted from the source table's columns by the caller.
-    /// `removed` must have a real entry for every id in `ids` — it's
-    /// built by `remove_bundle` from the exact same `ids` this is
-    /// called with, so a missing entry here means a real bug in that
-    /// caller, not malformed input to guard against gracefully.
-    fn take_from(removed: &mut HashMap<ComponentId, Box<dyn Any>>, ids: &[ComponentId]) -> Self;
+    /// `remove_bundle`'s allocation-free extraction for `B`'s own
+    /// elements: pulls `Self` straight out of `columns` via typed
+    /// `swap_remove`, no `Box<dyn Any>` round trip. Unconditionally
+    /// correct regardless of what else survives on the source
+    /// archetype — every type involved is already known statically
+    /// through `B`, unlike the *other*, non-`B` columns `remove_bundle`
+    /// still has to migrate via `Column::swap_remove_and_forget`/
+    /// `push_any`'s type-erased path, since which components those are
+    /// is only knowable at runtime. `remove_bundle` calls this only
+    /// after every non-`B` column has already been migrated out of
+    /// `columns` — never touches those, only the ids in `ids`.
+    ///
+    /// This replaced an earlier, narrower version of this idea (a
+    /// fast path gated on "every column is being removed") after real
+    /// measurement (`examples/diag_alloc_count.rs`) showed that gate
+    /// never actually fires for the real `remove_bundle_two_components`
+    /// benchmark — `insert_static` (confirmed directly from this
+    /// crate's own tests, not assumed: `using_a_sparse_type_with_
+    /// insert_static_panics`) claims a type for the *Archetype Core*,
+    /// not the Sparse Shell, so `Marker` there is a real, surviving,
+    /// archetype-tracked column, not a sparse one. `B`'s own elements
+    /// never needing boxing at all, independent of what survives, is
+    /// the version of this idea that's actually true unconditionally.
+    fn take_direct(columns: &mut SparseSet<ComponentId, Box<dyn Column>>, ids: &[ComponentId], row: usize) -> Self;
 }
 
 macro_rules! impl_bundle_for_tuple {
     ($($t:ident : $idx:tt),+) => {
         impl<$($t: 'static),+> Bundle for ($($t,)+) {
-            fn component_ids(archetypes: &mut Archetypes) -> Vec<ComponentId> {
-                vec![$(archetypes.component_id::<$t>()),+]
+            fn component_ids(archetypes: &mut Archetypes) -> ComponentIdList {
+                let mut list = ComponentIdList::new();
+                $( list.push(archetypes.component_id::<$t>()); )+
+                list
             }
 
-            fn existing_component_ids(archetypes: &Archetypes) -> Option<Vec<ComponentId>> {
-                Some(vec![$(archetypes.existing_component_id::<$t>()?),+])
+            fn existing_component_ids(archetypes: &Archetypes) -> Option<ComponentIdList> {
+                let mut list = ComponentIdList::new();
+                $( list.push(archetypes.existing_component_id::<$t>()?); )+
+                Some(list)
             }
 
             fn push_into(self, table: &mut Table, ids: &[ComponentId]) {
@@ -359,14 +438,16 @@ macro_rules! impl_bundle_for_tuple {
                 )+
             }
 
-            fn take_from(removed: &mut HashMap<ComponentId, Box<dyn Any>>, ids: &[ComponentId]) -> Self {
+            fn take_direct(columns: &mut SparseSet<ComponentId, Box<dyn Column>>, ids: &[ComponentId], row: usize) -> Self {
                 (
                     $(
-                        *removed
-                            .remove(&ids[$idx])
-                            .expect("remove_bundle must have collected every id in the bundle before calling take_from")
-                            .downcast::<$t>()
-                            .expect("column type must match component_id's T — existing_component_ids and take_from share one fixed tuple-position order"),
+                        columns
+                            .get_mut(ids[$idx])
+                            .expect("remove_bundle's fast path only runs when every id in `ids` has a real column")
+                            .as_any_mut()
+                            .downcast_mut::<Vec<$t>>()
+                            .expect("column type must match component_id's T — existing_component_ids and take_direct share one fixed tuple-position order")
+                            .swap_remove(row),
                     )+
                 )
             }
@@ -1002,7 +1083,7 @@ impl Archetypes {
         }
 
         let mut to_id = from_id;
-        for &id in &ids {
+        for &id in ids.iter() {
             to_id = self.edge_for_insert(to_id, id);
         }
 
@@ -1085,13 +1166,19 @@ impl Archetypes {
 
         let (from_archetype, to_archetype) = self.get_two_mut(from_id, to_id);
 
-        let mut removed: HashMap<ComponentId, Box<dyn Any>> = HashMap::with_capacity(ids.len());
+        // Every non-B column on this archetype survives the removal
+        // and must migrate to `to_archetype` — type erasure is
+        // unavoidable for those specifically, since which components
+        // they are is only known at runtime. B's own columns are
+        // skipped here entirely (`continue`) and extracted afterward by
+        // `take_direct` instead, which needs no boxing at all, since
+        // every type involved is already known statically through B —
+        // true regardless of how many other columns also survive.
         for (comp, column) in from_archetype.table.columns.iter_mut() {
-            let moved = column.swap_remove_and_forget(from_location.row);
             if ids.contains(&comp) {
-                removed.insert(comp, moved);
                 continue;
             }
+            let moved = column.swap_remove_and_forget(from_location.row);
             ensure_column(&mut to_archetype.table.columns, comp, || {
                 column.new_same_type()
             });
@@ -1102,6 +1189,8 @@ impl Archetypes {
                 .expect("just ensured present")
                 .push_any(moved);
         }
+        let result = B::take_direct(&mut from_archetype.table.columns, &ids, from_location.row);
+
         let old_last = from_archetype.table.entities.len() - 1;
         from_archetype.table.entities.swap_remove(from_location.row);
         let swapped_entity = (from_location.row != old_last)
@@ -1120,7 +1209,7 @@ impl Archetypes {
         if let Some(swapped) = swapped_entity {
             self.fix_up_row_after_swap(swapped, from_location.row);
         }
-        Some(B::take_from(&mut removed, &ids))
+        Some(result)
     }
 
     /// Chains [`Self::edge_for_remove`] once per id in `ids` — the
