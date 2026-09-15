@@ -37,3 +37,11 @@ segregator = []
 # tracked_allocator hook shape + mod_alloc's real counter design. See
 # docs/mid-alloc.md "tracking.rs".
 tracking = []
+# no_std spinlock (SpinLock) + SyncAlloc, a RawAlloc wrapper using it --
+# grounded in the real `spin` crate's algorithm and Zig's
+# ThreadSafeAllocator's real shape. See docs/mid-alloc.md "sync.rs".
+sync = []
+# BackedStack: a StackAllocator-shaped bump allocator whose backing
+# block comes from a parent RawAlloc instead of the global allocator.
+# See docs/mid-alloc.md "backed.rs".
+backed = []

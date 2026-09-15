@@ -492,26 +492,115 @@ the two peak fields absolute (matching `mod_alloc::Profiler::stop`'s
 own real math), and a failed deallocation (routed through `NullAlloc`,
 which always refuses) is confirmed to never get counted.
 
+## What's built: `SpinLock` / `SyncAlloc`
+
+`crates/mid-alloc/src/sync.rs`, behind the `sync` feature. The `no_std`
+spinlock every other combinator in this crate had been waiting on,
+plus `SyncAlloc<A>`, which uses it to make any `RawAlloc` safe to share
+across threads.
+
+`SpinLock<T>` is not modeled on foonathan/memory or Zig — neither
+source this survey read had a matching `no_std`-compatible locking
+primitive to port (Zig's `ThreadSafeAllocator` wraps `std.Thread.Mutex`,
+an OS-backed mutex, not a spinlock). Grounded instead in the `spin`
+crate's real, widely used `SpinMutex` (source read, `spin` 0.10.0 from
+crates.io): a "test, then test-and-set" loop — attempt the actual
+atomic compare-exchange first, and only if that fails, spin on a plain
+`Relaxed` load (cheaper, avoids hammering the cache line with repeated
+read-modify-write traffic under contention) until the lock looks free
+before attempting the compare-exchange again. Ported directly, `Send`/
+`Sync` unsafe impls included (mirroring `std::sync::Mutex`'s own:
+`Send` when `T: Send`, `Sync` when `T: Send` — not `T: Sync`, since the
+lock itself is what supplies the exclusion a bare `Sync` bound would
+otherwise have to), simplified by dropping `spin`'s generic
+relax-strategy type parameter (`core::hint::spin_loop()` hardcoded).
+
+`SyncAlloc<A>` wraps `A` behind a `SpinLock<A>` and forwards both
+`RawAlloc` methods through a lock/call/unlock sequence — the same real
+shape as Zig's `ThreadSafeAllocator` (source read,
+`ThreadSafeAllocator.zig`, from the Zig re-survey pass): lock, forward
+to a child allocator, unlock, on every call, nothing more.
+
+**Tests:** 6, and this is the one module in the whole crate whose
+correctness genuinely needed real concurrency to check, not just
+single-threaded logic run through multiple assertions. Two of the six
+spawn actual OS threads (`extern crate std` inside the test module,
+same idiom used elsewhere in this crate and in `mid-arena`'s
+`bump_arena.rs` for the same reason):
+`many_real_threads_racing_a_spin_lock_lose_no_updates` has 8 real
+threads each increment a shared counter 2,000 times through one
+`SpinLock` and checks the final total is exactly 16,000 — any lost
+update from a real race would show up as a wrong number here, not a
+compile-time property.
+`many_real_threads_allocating_through_sync_alloc_never_overlap` has 8
+real threads each make 200 single-byte allocations through one
+`SyncAlloc<StackAllocator>` sized for exactly that many, then checks
+every returned address across every thread is unique — without real
+mutual exclusion, concurrent calls racing `StackAllocator`'s own
+`Cell`-based `top` would be expected to hand out duplicate or corrupted
+addresses well within this many real attempts. The other four cover
+the non-concurrent surface: basic lock/mutate, `try_lock` correctly
+refusing while a guard is held, a compile-time check that
+`SpinLock<StackAllocator>` is both `Send` and `Sync` even though
+`StackAllocator` alone is `Send`-but-not-`Sync` (the real property this
+whole module exists to add back), and `SyncAlloc` wrapping `HeapAlloc`
+specifically since it needs no lock to already be thread-safe.
+
+## What's built: `BackedStack`
+
+`crates/mid-alloc/src/backed.rs`, behind the `backed` feature. A
+`StackAllocator`-shaped bump allocator whose one backing block comes
+from a parent `RawAlloc` (`parent.try_alloc_raw` at construction,
+`parent.try_dealloc_raw` on drop) instead of an owned `Vec<u8>` pulled
+from the global allocator. This is the real gap the Zig re-survey pass
+flagged and the info-dump sift (this session) agreed was worth keeping:
+every allocator in this crate up to this point reached for the global
+heap independently the moment it needed backing memory, with no way
+for one allocator to provision another's.
+
+Not modeled on a specific foonathan/memory or Zig type — this survey
+never found one real source with a matching "carve a contiguous
+sub-region out of an arbitrary parent `RawAlloc`" shape to port
+(foonathan's own allocators are template-parameterized over a
+`RawAllocator`, but none this survey read used that parameterization
+to carve a sub-region the way this does). The bump-allocation math
+itself is not reinvented either: a direct copy of
+`StackAllocator::alloc_raw`'s own already-reviewed checked-arithmetic
+logic, just measured against a parent-provisioned buffer instead of a
+`Vec<u8>`. `rewind`/`reset` keep `StackAllocator`'s own real reason for
+taking `&mut self` rather than `&self`: retroactively invalidating any
+`&mut T` still borrowed from an allocation after the rewind point, with
+`&mut self` being what makes the borrow checker enforce none are still
+alive when it's called.
+
+**A real, stated limitation carried over from `StackAllocator::
+try_dealloc_raw` itself, not introduced here:** dropping a
+`BackedStack` gives its whole block back to the parent via
+`try_dealloc_raw`, but if that parent is itself a `StackAllocator`, its
+own `try_dealloc_raw` is a real no-op (see that module's own "What's
+built" section) — the block stays reserved in the parent until the
+parent itself rewinds or resets, it is not actually reclaimed just
+because the child `BackedStack` carved from it dropped. Proven by a
+dedicated test
+(`a_stack_can_be_backed_by_another_stack`) rather than left as a
+theoretical implication of composing the two types.
+
+**Tests:** 6: construction failing cleanly when the parent can't
+provide the block (`NullAlloc` as parent), basic alloc/read-back
+correctness, marker/rewind reclaiming exactly what came after the
+marker, respecting its own capacity boundary, 10,000 real
+construct/allocate/drop round trips against the actual global
+allocator via `HeapAlloc` (an indirect check that `drop` never
+double-frees or otherwise corrupts state across many real cycles, not
+a direct leak measurement), and the stack-backed-by-a-stack case above.
+
 ## Module plan (catalogued, not built)
 
-Every module from the original foonathan/memory survey has now
-shipped (`stack_allocator`, `pool_allocator`, `fallback`, `segregator`,
-`tracking` above) — nothing from that original plan was ruled out or
-left behind. What's left below is what the Zig re-survey pass added,
-not the original plan:
+Every module from the original foonathan/memory survey has shipped
+(`stack_allocator`, `pool_allocator`, `fallback`, `segregator`,
+`tracking`), and so has both real gaps the Zig re-survey pass added
+(`sync`, `backed`). What's left is one specific thing, not a category:
 
-- **A `no_std` spinlock, then `ThreadSafeAllocator`-style
-  `SyncStackAllocator`/similar** — `tracking`'s own atomics turned out
-  to sidestep this for that one module, but a mutex-wrapped combinator
-  still needs a real spinlock primitive first; none exists in this
-  crate yet.
-- **Hierarchical "backed" allocators** — letting one allocator
-  provision another's backing memory (e.g. a `PoolAllocator` carving
-  its regions out of a parent `StackAllocator` instead of the global
-  heap) rather than every allocator reaching for the heap
-  independently. Real, useful, not built; would need `StackAllocator`/
-  `PoolAllocator` parameterized over a `RawAlloc` backing source
-  instead of hard-coding `Vec`.
 - **`debug_allocator.zig`'s two remaining techniques** (size-class
   buckets, canary-word corruption checks) — noted in the Zig re-survey
   above as candidates for `tracking`, not acted on in `tracking`'s own
@@ -683,3 +772,50 @@ guess, not a confirmed one.
   upstream and b) leaving `RawAlloc`'s richer contract underused. All 6
   tests pass on this sandbox's rustc 1.75, alongside the rest of the
   crate's 44 total.
+
+### `sync.rs`
+
+- First pass, new file. The one real correctness question this pass
+  had to answer with a real test rather than a compile-time argument:
+  does the lock actually prevent lost updates under genuine concurrent
+  access, not just type-check as `Sync`. `SpinLock<StackAllocator>`
+  compiling and being `Sync` proves the type system accepts it; it
+  says nothing about whether concurrent calls through it are actually
+  serialized correctly. Wrote two tests that spawn real OS threads
+  (`extern crate std`, same idiom `bump_arena.rs` in `mid-arena` uses
+  for its own no_std-but-testing-with-std tests) specifically to check
+  this for real: 8 threads racing 2,000 increments each through one
+  `SpinLock<u64>` land on exactly 16,000, not something less; 8 threads
+  making 200 single-byte allocations each through one
+  `SyncAlloc<StackAllocator>` sized for exactly that many produce that
+  many real, all-unique addresses. Both passed on the first real run,
+  which is itself worth stating rather than treating as unremarkable --
+  a genuine lock bug (wrong ordering, a dropped guard, an off-by-one in
+  the compare-exchange) would very plausibly have still passed a
+  smaller thread count or fewer iterations by luck, so the numbers here
+  (8 threads, thousands of iterations) were chosen to make a real race
+  likely to surface if one existed, not left at a token "2 threads,
+  10 iterations" that would pass even with a real bug most of the time.
+
+### `backed.rs`
+
+- First pass, new file. One real question resolved by writing a test
+  rather than leaving it as an assumption: what actually happens when
+  a `BackedStack` is backed by a `StackAllocator` specifically, given
+  `StackAllocator::try_dealloc_raw` is a documented no-op. Confirmed
+  via `a_stack_can_be_backed_by_another_stack` that the parent's
+  `used()` stays exactly where it was after the child drops -- the
+  block is correctly still "spent" from the parent's own accounting,
+  not silently reclaimed, matching `StackAllocator`'s own real
+  contract rather than contradicting it. Also deliberately did not
+  reuse `StackAllocator`'s own `StackMarker` type for `BackedStack`'s
+  markers, even though the two are structurally identical (`usize`
+  wrapper) -- `StackMarker`'s inner field is private to
+  `stack_allocator.rs`, so reusing it would have meant either widening
+  that module's own visibility for a second module's benefit (a real
+  touch to already-tested code, avoided on purpose, same standing
+  reason as elsewhere in this file) or accepting that a marker from one
+  allocator type could be silently interchanged with the other's,
+  which the doc comment on `BackedStackMarker` states explicitly is
+  the reason a distinct type exists instead. All 6 tests pass on this
+  sandbox's rustc 1.75, alongside the rest of the crate's 56 total.

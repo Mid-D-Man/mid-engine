@@ -65,22 +65,24 @@
 //!   sources: the hook shape from foonathan's `tracked_allocator`, the
 //!   counters and their update sequence ported directly from
 //!   `mod_alloc::ModAlloc` (crates.io, MSRV 1.75).
+//! - `sync` (behind the `sync` feature) — [`sync::SpinLock<T>`], a
+//!   `no_std` mutual-exclusion primitive grounded in the real `spin`
+//!   crate's algorithm, plus [`sync::SyncAlloc<A>`], which uses it to
+//!   turn any `RawAlloc` into one safe to share across threads.
+//!   Matches Zig's `std.heap.ThreadSafeAllocator`'s real shape (from
+//!   this crate's own Zig re-survey): lock, forward, unlock.
+//! - `backed` (behind the `backed` feature) —
+//!   [`backed::BackedStack<'p, P>`]: a `StackAllocator`-shaped bump
+//!   allocator whose backing block is provisioned by a parent
+//!   `RawAlloc` instead of the global allocator -- one allocator
+//!   carving its buffer out of another, rather than every allocator
+//!   reaching for the heap independently.
 //!
 //! # Module plan
-//! Nothing left uncatalogued from the original survey — every module
-//! foonathan/memory's own real source suggested has either shipped
-//! above or was explicitly ruled out with a stated reason (see
-//! `docs/mid-alloc.md`). Two items came out of the Zig re-survey pass
-//! instead, both real and not yet built: a `no_std` spinlock (the
-//! prerequisite for a `ThreadSafeAllocator`-style mutex wrapper, which
-//! `tracking`'s atomics turned out not to need), and hierarchical
-//! "backed" allocators (letting one allocator provision another's
-//! backing memory, rather than every allocator reaching for the global
-//! heap independently).
-//!
-//! Every one of these traces to a specific real function this survey
-//! actually read (`docs/mid-alloc.md`), not to "allocator libraries
-//! tend to have this."
+//! Nothing left uncatalogued. Every module foonathan/memory's own real
+//! source suggested has shipped, and both items the Zig re-survey pass
+//! added (`sync`, `backed`) have too. See `docs/mid-alloc.md` for the
+//! full history and every real source each module traces back to.
 
 #![no_std]
 extern crate alloc;
@@ -100,6 +102,12 @@ pub mod segregator;
 #[cfg(feature = "tracking")]
 pub mod tracking;
 
+#[cfg(feature = "sync")]
+pub mod sync;
+
+#[cfg(feature = "backed")]
+pub mod backed;
+
 pub use raw_alloc::{HeapAlloc, NullAlloc, RawAlloc};
 pub use stack_allocator::{StackAllocator, StackMarker};
 
@@ -114,3 +122,9 @@ pub use segregator::Segregator;
 
 #[cfg(feature = "tracking")]
 pub use tracking::{AllocStats, Tracked};
+
+#[cfg(feature = "sync")]
+pub use sync::{SpinLock, SpinLockGuard, SyncAlloc};
+
+#[cfg(feature = "backed")]
+pub use backed::{BackedStack, BackedStackMarker};
