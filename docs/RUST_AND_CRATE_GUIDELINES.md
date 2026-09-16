@@ -242,3 +242,54 @@ between.
   that specific cross-feature-doc-link situation may not need it at all.
 - `[workspace.package]` (edition/license inheritance) — still not added;
   see section 1 for why (no license decision made yet).
+
+## 7. CI Triggering
+
+Established this pass, on `mid-ptr`'s own workflow (the first to use it):
+path-filter the `on: push`/`on: pull_request` triggers to that crate's own
+directory and its own workflow file, so the workflow runs automatically the
+moment something relevant changes. No manual step, no magic string to
+remember.
+
+```yaml
+on:
+  push:
+    branches: [main, master, develop]
+    paths:
+      - "crates/mid-ptr/**"
+      - ".github/workflows/mid-ptr-test.yml"
+  pull_request:
+    branches: [main, master]
+    paths:
+      - "crates/mid-ptr/**"
+      - ".github/workflows/mid-ptr-test.yml"
+  workflow_dispatch:
+```
+
+Older workflows (`mid-log-test.yml`, and others copied from it) use a
+different convention instead: every push runs a `parse-trigger` job that
+greps the commit message for `--<crate-name>` or `--mid-all` before deciding
+whether to actually run tests. That convention was never written down
+anywhere before this section — it only ever existed as a copy-pasted `.yml`
+pattern. Not retrofitted onto the older workflows in this pass: a separate,
+disclosed follow-up, the same way section 3's unsafe_code opt-in and section
+6's ffi-feature question are both handled — found and named, not silently
+changed underneath a crate nobody is actively working on.
+
+**Real regression found and fixed the same pass, worth its own note:**
+`mid-ptr-test.yml`'s cache step originally cached `~/.cargo/bin/` under a
+workspace-wide-generic `cargo-registry-` key prefix, copied directly from
+`mid-log-test.yml`'s own cache block. That's what broke this workflow's
+first real run — not the trigger convention above. `~/.cargo/bin/` holds the
+actual `cargo`/`rustc` binaries, which are architecture-specific; the
+generic prefix let this run's `restore-keys` fallback match a *different*
+workflow's cache (`benches/ecs-vs-bevy-ecs`, built on an `ubuntu-24.04-arm`
+runner) and silently overwrite this run's real x86_64 `cargo` with an
+incompatible ARM one — every `cargo` invocation afterward failed with
+`cannot execute binary file: Exec format error`. Fixed in `mid-ptr-test.yml`
+by dropping `~/.cargo/bin/` from the cached paths (only the registry
+index/cache/git dirs are safe to share across architectures) and scoping the
+cache key to `${{ runner.os }}` plus the crate name specifically, never a
+bare `cargo-registry-` prefix. `mid-log-test.yml` and any other workflow
+copied from its cache block carries the same latent risk — flagged here, not
+fixed there in this pass.

@@ -44,18 +44,23 @@ made, this crate specifically needs either a compatible license or an upstream
 attribution/notice, since it's a substantial derivative of licensed code, not an
 independent reimplementation. Flagging this now rather than letting it get lost.
 
-**Two documentation-convention mismatches found while doing this port**, neither
-fixed here, both worth a decision:
-- `docs/DOCUMENTATION_AND_COMMENTING_GUIDELINES.md` §1 says a crate's doc file
-  lives "inside that crate's own directory, not a shared repo-wide docs folder" —
-  but all eight existing per-crate doc files (`mid-math.md`, `mid-ecs.md`, etc.)
-  live at the top-level `docs/`, none nested under `crates/<name>/docs/`. This
-  file follows the actual, universal practice (top-level `docs/mid-ptr.md`) over
-  the written rule.
-- `docs/RUST_AND_CRATE_GUIDELINES.md` §5 says every crate starts at `0.0.1` and
-  stays there until an official `1.0.0` release. All 19 existing crates are at
-  `0.1.0`. This crate follows the same real, universal practice (`0.1.0`) over
-  the written rule.
+**One documentation-convention mismatch found while doing this port, still
+open:** `docs/DOCUMENTATION_AND_COMMENTING_GUIDELINES.md` §1 says a crate's doc
+file lives "inside that crate's own directory, not a shared repo-wide docs
+folder" — but all eight existing per-crate doc files (`mid-math.md`,
+`mid-ecs.md`, etc.) live at the top-level `docs/`, none nested under
+`crates/<name>/docs/`. This file follows the actual, universal practice
+(top-level `docs/mid-ptr.md`) over the written rule, same as the other eight.
+Not resolved either way — still worth a decision.
+
+**Versioning mismatch found in the same pass — resolved:** `docs/
+RUST_AND_CRATE_GUIDELINES.md` §5 says every crate starts at `0.0.1` and stays
+there until an official `1.0.0` release; all 19 pre-existing crates are
+actually at `0.1.0`, none of them touched here. mid-ptr's own `Cargo.toml`
+now follows the documented rule (`0.0.1`) rather than the older crates'
+practice — on direct instruction, not a default I picked on my own. The other
+19 crates are unchanged; bringing them in line (or updating the doc to match
+them instead) is a separate, disclosed follow-up.
 
 ## Modules
 
@@ -177,14 +182,39 @@ returning a copy without disturbing it.
 ## CI and Workflows
 
 - `.github/workflows/mid-ptr-test.yml` — build, clippy, fmt check, unit +
-  doc-tests. Triggered by `--mid-ptr` or `--mid-all` in the commit message (or
-  manual dispatch), matching `mid-log-test.yml`'s gating convention.
+  doc-tests. Runs **automatically** on any push/PR touching `crates/mid-ptr/**`
+  or the workflow file itself (path-filtered `on:` triggers), plus manual
+  `workflow_dispatch`. This is the first workflow in the repo to use that
+  convention instead of `mid-log-test.yml`'s commit-message-grep gate
+  (`--mid-log`/`--mid-all`) — see `docs/RUST_AND_CRATE_GUIDELINES.md` §7 for
+  the full writeup, including why the older convention was never documented
+  anywhere until now.
   **Scoped down from `mid-log-test.yml`'s pattern**: no JSON-parsing step, no
   HTML report, no `gh-pages` deploy — this crate doesn't have benchmarks or a
   results dashboard yet, so that machinery would be dead weight. If mid-ptr
   later wants parity with mid-log's reporting, that's a separate, disclosed
   follow-up (would also need its own `.github/mid-ptr-test-template.html`).
+- **First real run failed on a cache bug, fixed same pass**: the cache step
+  originally cached `~/.cargo/bin/` under a bare `cargo-registry-` key prefix
+  (copied from `mid-log-test.yml`), which matched a different, ARM-runner
+  workflow's cache and replaced this run's real `cargo` binary with an
+  incompatible one (`Exec format error` on every `cargo` call). Fixed by
+  dropping `~/.cargo/bin/` from the cached paths and scoping the cache key to
+  `${{ runner.os }}` plus `mid-ptr` specifically. Full root-cause writeup in
+  `docs/RUST_AND_CRATE_GUIDELINES.md` §7 — `mid-log-test.yml` carries the same
+  latent risk, not fixed there in this pass.
 
 ## Fixes and Problems
 
-*(none yet — this is the initial port)*
+### `.github/workflows/mid-ptr-test.yml`
+- **Fixed:** first real CI run failed on every `cargo` invocation with
+  `cannot execute binary file: Exec format error`. Root cause: the cache step
+  cached `~/.cargo/bin/` (architecture-specific binaries) under a
+  workspace-wide-generic `cargo-registry-` key prefix, copied from
+  `mid-log-test.yml`'s own cache block. `restore-keys` fell through to a
+  different workflow's cache (`benches/ecs-vs-bevy-ecs`, built on an
+  `ubuntu-24.04-arm` runner) and silently swapped in an ARM `cargo` binary on
+  this run's x86_64 `ubuntu-latest` runner. Fixed by dropping `~/.cargo/bin/`
+  from the cached paths and scoping the cache key to `${{ runner.os }}` plus
+  `mid-ptr` specifically — see `docs/RUST_AND_CRATE_GUIDELINES.md` §7 for the
+  full writeup.
