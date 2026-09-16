@@ -100,6 +100,14 @@ use crate::world::Entity;
 /// two systems actually store.
 type FfiSpanAccessor = fn(&dyn Any) -> FfiSpan;
 
+// Query iterators live in the child module `iter` (crates/mid-ecs/src/
+// archetype/iter.rs). Child, not sibling: `Table::columns`, `Table::
+// entities`, the `Column` trait and `Archetype` itself are all private to
+// this module, and a child can see its parent's private items while a
+// sibling cannot. Nothing had to be made more visible to move them there.
+mod iter;
+pub(crate) use iter::{Iter1, Iter1Ref, Iter2, Iter2Ref};
+
 /// Dense identifier for one archetype (one exact component-type set).
 /// `ArchetypeId(0)` is always the empty archetype — every entity starts
 /// there at spawn, before any archetype-tracked component is ever
@@ -598,15 +606,7 @@ impl Archetypes {
             Some(id) => self.archetypes_with(id).collect(),
             None => Vec::new(),
         };
-        Iter1 {
-            archetypes: self,
-            id,
-            matched: matched.into_iter(),
-            entities: &[],
-            column: &[],
-            row: 0,
-            len: 0,
-        }
+        Iter1::new(self, id, matched)
     }
 
     /// Iterates every `(Entity, &A, &B)` for entities alive with *both*
@@ -624,7 +624,7 @@ impl Archetypes {
         let ids = self
             .existing_component_id::<A>()
             .zip(self.existing_component_id::<B>());
-        let matched = match ids {
+        let matched: Vec<ArchetypeId> = match ids {
             Some((a_id, b_id)) => self
                 .archetypes_with(a_id)
                 .filter(|&archetype_id| {
@@ -635,16 +635,7 @@ impl Archetypes {
                 .collect(),
             None => Vec::new(),
         };
-        Iter2 {
-            archetypes: self,
-            ids,
-            matched: matched.into_iter(),
-            entities: &[],
-            a_col: &[],
-            b_col: &[],
-            row: 0,
-            len: 0,
-        }
+        Iter2::new(self, ids, matched)
     }
 
     /// Opts `T` into FFI span exposure under `name` — the Archetype
@@ -1300,176 +1291,6 @@ impl Archetypes {
             archetype_a.expect("archetype must exist"),
             archetype_b.expect("archetype must exist"),
         )
-    }
-}
-
-/// The real `Iterator` behind [`Archetypes::iter`] — see that method's
-/// own doc comment and [`Iter2`]'s doc comment for the full
-/// real-numbers writeup of why this is a hand-written state machine,
-/// not `flat_map`/`zip` adaptors. Same shape as [`Iter2`], one column
-/// instead of two.
-pub(crate) struct Iter1<'a, T> {
-    archetypes: &'a Archetypes,
-    id: Option<ComponentId>,
-    matched: std::vec::IntoIter<ArchetypeId>,
-    entities: &'a [Entity],
-    column: &'a [T],
-    row: usize,
-    len: usize,
-}
-
-impl<'a, T: 'static> Iterator for Iter1<'a, T> {
-    type Item = (Entity, &'a T);
-
-    // Deliberately NOT #[inline(always)] — tried it (reasoning: bevy's
-    // own `QueryIterationCursor::next` has it explicitly, and this
-    // method's sibling `Iter2::next` regressed ~4x on real CI's rustc
-    // 1.98.0 specifically), and it made this method measurably WORSE
-    // on this sandbox's rustc 1.91.1 — a real, reproducible ~4x
-    // regression (28.6µs vs 6.6-7.2µs at N=10,000, confirmed across
-    // repeated runs, not noise), the opposite of the intended fix.
-    // Reverted rather than shipped on an unproven, one-toolchain-tested
-    // hypothesis. The real Iter2 regression on rustc 1.98.0 is still
-    // real and still unexplained — this specific fix for it was wrong.
-    fn next(&mut self) -> Option<Self::Item> {
-        loop {
-            if self.row < self.len {
-                let item = (self.entities[self.row], &self.column[self.row]);
-                self.row += 1;
-                return Some(item);
-            }
-            let id = self.id?;
-            let archetype_id = self.matched.next()?;
-            let archetype = self.archetypes.archetypes.get(archetype_id).expect(
-                "iter's precomputed matched list only ever contains real, currently-existing archetype ids",
-            );
-            let entities: &[Entity] = &archetype.table.entities;
-            let column: &[T] = match archetype.table.columns.get(id) {
-                Some(column) => column
-                    .as_any()
-                    .downcast_ref::<Vec<T>>()
-                    .expect("column type must match component_id's T")
-                    .as_slice(),
-                None => &[],
-            };
-            self.len = entities.len().min(column.len());
-            self.entities = entities;
-            self.column = column;
-            self.row = 0;
-        }
-    }
-}
-
-/// flat state machine, not a chain of `flat_map`/`filter`/`zip`
-/// adaptors. Shape (precompute matching storages once, then a single
-/// `if current_row == current_len { advance } else { fetch, ++ }`
-/// loop) copied deliberately from `bevy_ecs`'s own
-/// `QueryIterationCursor::next` (`query/iter.rs`, real source read
-/// directly — see this module's doc comment) after a controlled bench
-/// showed it mattered.
-///
-/// **What the earlier combinator-based `iter2` still got wrong,** even
-/// after the per-entity-lookup fix (see git history / the previous
-/// version of this doc comment for that writeup): `for` loops in Rust
-/// always drive an iterator through repeated `Iterator::next()` calls
-/// (this is worth stating precisely — an earlier internal writeup of
-/// this exact investigation incorrectly assumed `for` loops could
-/// dispatch to a custom `fold` override; they can't, `for` only ever
-/// calls `next()`). The real difference is what `next()` *is*: `bevy_ecs`
-/// writes `QueryIterationCursor::next` as a single, self-contained,
-/// `#[inline(always)]`-adjacent function — one `loop`, `get_unchecked`
-/// (no bounds check), no nested generic adaptor types. The old `iter2`
-/// composed `Option::into_iter().flat_map(|_| ...filter(...).flat_map(|_|
-/// ...zip...))` — each layer is its *own* `Iterator` impl with its own
-/// `next()`, and driving the outer one means threading through all of
-/// them, even once "locked onto" one archetype's `zip`. Controlled,
-/// same-machine bench (`crates/mid-ecs/benches/archetype_core.rs`,
-/// N=10,000, single archetype, `--sample-size 30`): the combinator
-/// version measured 152.34µs; the flat hand-written loop below, with
-/// the exact same bounds-checked (safe, no `unsafe`) indexing,
-/// measured 9.1605µs — a ~94% reduction, landing within noise of
-/// `bevy_ecs`'s own real CI number for the same N=10,000 workload
-/// (9.3882µs, `benches/ecs-vs-bevy-ecs`'s real run). The per-entity
-/// redundant-lookup fix (the version this replaced) was real and
-/// worth keeping, but it was never the dominant cost — the generic
-/// `flat_map`/`filter`/`zip` adaptor stack itself was, and removing
-/// it closed nearly the entire gap against `bevy_ecs`, with zero
-/// `unsafe`.
-///
-/// `entities`/`a_col`/`b_col` are always the *same* length by
-/// construction (`next` clamps `len` to the min of all three on every
-/// archetype advance — belt-and-suspenders on top of the "no column
-/// implies no rows" invariant [`Archetypes::iter`] already documents
-/// and relies on), so `row < len` alone is what makes every
-/// `entities[row]`/`a_col[row]`/`b_col[row]` access below provably
-/// in-bounds — safe, ordinary Rust indexing, not `unsafe`. Revisit
-/// only if a *further* real bench shows the three redundant bounds
-/// checks this still pays (one per slice, per item) are themselves
-/// the next real cost — `docs/mid-ecs.md`'s "zero unsafe by choice,
-/// revisit only against a real profile" policy applies exactly the
-/// same way here as it always has.
-pub(crate) struct Iter2<'a, A, B> {
-    archetypes: &'a Archetypes,
-    ids: Option<(ComponentId, ComponentId)>,
-    matched: std::vec::IntoIter<ArchetypeId>,
-    entities: &'a [Entity],
-    a_col: &'a [A],
-    b_col: &'a [B],
-    row: usize,
-    len: usize,
-}
-
-impl<'a, A: 'static, B: 'static> Iterator for Iter2<'a, A, B> {
-    type Item = (Entity, &'a A, &'a B);
-
-    // Deliberately NOT #[inline(always)] — see Iter1::next's doc
-    // comment above for the full story: tried it here specifically
-    // (this method has the real, confirmed CI regression it was meant
-    // to fix — 26.605µs/9.1913µs on this sandbox's rustc 1.91.1 vs a
-    // genuine ~4x against bevy_ecs on real CI's rustc 1.98.0), and it
-    // made this method measurably WORSE on this sandbox too (~29µs,
-    // matching Iter1's own regression exactly). Reverted. The real
-    // rustc-1.98.0-specific regression this was meant to explain is
-    // still real and still unexplained — this fix for it was wrong.
-    fn next(&mut self) -> Option<Self::Item> {
-        loop {
-            if self.row < self.len {
-                let item = (
-                    self.entities[self.row],
-                    &self.a_col[self.row],
-                    &self.b_col[self.row],
-                );
-                self.row += 1;
-                return Some(item);
-            }
-            let (a_id, b_id) = self.ids?;
-            let archetype_id = self.matched.next()?;
-            let archetype = self.archetypes.archetypes.get(archetype_id).expect(
-                "iter2's precomputed matched list only ever contains real, currently-existing archetype ids",
-            );
-            let entities: &[Entity] = &archetype.table.entities;
-            let a_col: &[A] = match archetype.table.columns.get(a_id) {
-                Some(column) => column
-                    .as_any()
-                    .downcast_ref::<Vec<A>>()
-                    .expect("column type must match component_id's T")
-                    .as_slice(),
-                None => &[],
-            };
-            let b_col: &[B] = match archetype.table.columns.get(b_id) {
-                Some(column) => column
-                    .as_any()
-                    .downcast_ref::<Vec<B>>()
-                    .expect("column type must match component_id's T")
-                    .as_slice(),
-                None => &[],
-            };
-            self.len = entities.len().min(a_col.len()).min(b_col.len());
-            self.entities = entities;
-            self.a_col = a_col;
-            self.b_col = b_col;
-            self.row = 0;
-        }
     }
 }
 

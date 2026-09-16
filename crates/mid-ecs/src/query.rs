@@ -71,6 +71,56 @@ impl World {
     ) -> impl Iterator<Item = (Entity, &A, &B)> + '_ {
         self.archetypes.iter2::<A, B>()
     }
+
+    /// Entity-free counterpart to [`Self::query_static`]: yields `&T`
+    /// alone. Same data, same order, same archetype walk — the entity is
+    /// simply not in the item.
+    ///
+    /// Exists for symmetry with [`Self::query2_static_ref`], which is
+    /// where the real reason lives. `query_static`'s own item is already
+    /// under the 16-byte register-return threshold, so this one is not
+    /// expected to be faster than it — if it measures faster by any
+    /// meaningful margin, that is a result worth chasing, not a win to
+    /// quietly bank.
+    pub fn query_static_ref<T: 'static>(&self) -> impl Iterator<Item = &T> + '_ {
+        self.archetypes.iter_ref::<T>()
+    }
+
+    /// Entity-free counterpart to [`Self::query2_static`]: yields
+    /// `(&A, &B)` instead of `(Entity, &A, &B)`.
+    ///
+    /// **This is the apples-to-apples shape against `bevy_ecs`.**
+    /// `bevy_ecs`'s own `Query<(&A, &B)>` yields exactly `(&A, &B)` —
+    /// `Entity` there is opt-in query data, not a mandatory first tuple
+    /// element — so `benches/ecs-vs-bevy-ecs`'s `dense_query_iteration`
+    /// has never actually compared the same thing on both sides. It puts
+    /// `query2_static`'s three-element item against bevy's two-element
+    /// one and discards the entity with `_` on the mid-ecs side only.
+    ///
+    /// Why that matters, and why this method exists rather than a tuning
+    /// flag: `Entity` is 8 bytes (a `mid-collections`
+    /// `GenerationalIndex`, two `u32`s) and every reference is 8, so
+    /// `Option<(Entity, &A, &B)>` is 24 bytes while
+    /// `Option<(&A, &B)>` is 16. System V AMD64 §3.2.3 returns an
+    /// aggregate over two eightbytes in MEMORY — a hidden pointer, a
+    /// caller-allocated stack slot, a store and a reload, per item —
+    /// and anything at or under 16 bytes in the RAX:RDX register pair.
+    /// That threshold falls exactly between `query_static` (16 B, at
+    /// parity with bevy: 9.42µs vs 9.35µs) and `query2_static` (24 B,
+    /// 3.99x). It is the one structural difference that no amount of
+    /// `unsafe`, `#[inline(always)]`, raw-pointer columns or cold-path
+    /// splitting could ever have reached — which is exactly why all four
+    /// of those came back negative (`docs/mid-ecs.md`, builds #11-#18).
+    ///
+    /// **Still a hypothesis.** `benches/abi-return-size` is the decisive
+    /// test and links against nothing, so it cannot be tipped by this
+    /// crate's compilation-unit layout the way `archetype_core.rs`'s own
+    /// controls were. Run it before treating any of the above as settled.
+    pub fn query2_static_ref<A: 'static, B: 'static>(
+        &self,
+    ) -> impl Iterator<Item = (&A, &B)> + '_ {
+        self.archetypes.iter2_ref::<A, B>()
+    }
 }
 
 #[cfg(test)]
