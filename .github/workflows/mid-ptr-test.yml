@@ -1,0 +1,97 @@
+# .github/workflows/mid-ptr-test.yml
+name: mid-ptr — Tests
+
+on:
+  push:
+    branches: [main, master, develop]
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions:  read
+
+jobs:
+
+  parse-trigger:
+    runs-on: ubuntu-latest
+    outputs:
+      run_tests: ${{ steps.decide.outputs.run_tests }}
+    steps:
+      - name: Decide whether to run
+        id: decide
+        run: |
+          RUN=false
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            RUN=true
+          else
+            MSG="${{ github.event.head_commit.message }}${{ github.event.pull_request.title }}"
+            echo "$MSG" | grep -qiE '\-\-mid-ptr\b|\-\-mid-all\b' && RUN=true || true
+          fi
+          echo "run_tests=$RUN" >> $GITHUB_OUTPUT
+          echo "Run mid-ptr tests: $RUN"
+
+  run-tests:
+    runs-on: ubuntu-latest
+    needs: parse-trigger
+    if: needs.parse-trigger.outputs.run_tests == 'true'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # mid-ptr needs the &raw const / &raw mut operators (RFC 2582), stabilized
+      # in Rust 1.82 — well above this workspace's usual rustc-1.75 floor. See
+      # docs/mid-ptr.md and the root Cargo.toml's MSRV-wall comment. `@stable`
+      # is always well past 1.82 by now, so no explicit version pin is needed.
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Get Rust version
+        run: rustc --version
+
+      - name: Cache cargo registry
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+          key: cargo-registry-${{ hashFiles('crates/mid-ptr/Cargo.toml') }}
+          restore-keys: |
+            cargo-registry-
+
+      - name: Check formatting
+        run: cargo fmt -p mid-ptr --check
+        continue-on-error: true
+
+      - name: Clippy
+        run: cargo clippy -p mid-ptr -- -D warnings
+        continue-on-error: true
+
+      - name: Build (no_std, zero dependencies)
+        run: cargo build -p mid-ptr
+
+      - name: Run unit tests + doc-tests
+        run: cargo test -p mid-ptr --no-fail-fast -- --show-output
+
+  summary:
+    runs-on: ubuntu-latest
+    needs: [parse-trigger, run-tests]
+    if: always()
+    steps:
+      - name: Print summary
+        run: |
+          echo "============================================="
+          echo "  mid-ptr Test Summary"
+          echo "============================================="
+          echo "Build:  #${{ github.run_number }}"
+          echo "Branch: ${{ github.ref_name }}"
+          echo "Tests:  ${{ needs.run-tests.result || 'skipped' }}"
+          if [ "${{ needs.parse-trigger.outputs.run_tests }}" != "true" ]; then
+            echo "Not triggered. Add --mid-ptr or --mid-all to your commit message."
+          fi
