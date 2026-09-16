@@ -1,11 +1,20 @@
 # .github/workflows/mid-ptr-test.yml
 name: mid-ptr — Tests
 
+# Runs automatically the moment something relevant changes -- no manual
+# commit-message trigger needed (see docs/RUST_AND_CRATE_GUIDELINES.md §7,
+# "CI Triggering," for why this differs from mid-log-test.yml's convention).
 on:
   push:
     branches: [main, master, develop]
+    paths:
+      - "crates/mid-ptr/**"
+      - ".github/workflows/mid-ptr-test.yml"
   pull_request:
     branches: [main, master]
+    paths:
+      - "crates/mid-ptr/**"
+      - ".github/workflows/mid-ptr-test.yml"
   workflow_dispatch:
 
 permissions:
@@ -14,28 +23,8 @@ permissions:
 
 jobs:
 
-  parse-trigger:
-    runs-on: ubuntu-latest
-    outputs:
-      run_tests: ${{ steps.decide.outputs.run_tests }}
-    steps:
-      - name: Decide whether to run
-        id: decide
-        run: |
-          RUN=false
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            RUN=true
-          else
-            MSG="${{ github.event.head_commit.message }}${{ github.event.pull_request.title }}"
-            echo "$MSG" | grep -qiE '\-\-mid-ptr\b|\-\-mid-all\b' && RUN=true || true
-          fi
-          echo "run_tests=$RUN" >> $GITHUB_OUTPUT
-          echo "Run mid-ptr tests: $RUN"
-
   run-tests:
     runs-on: ubuntu-latest
-    needs: parse-trigger
-    if: needs.parse-trigger.outputs.run_tests == 'true'
 
     steps:
       - name: Checkout
@@ -53,17 +42,31 @@ jobs:
       - name: Get Rust version
         run: rustc --version
 
+      # NOTE (fixed after the first real run of this workflow failed): only the
+      # registry index/cache/git dirs are cached here, deliberately NOT
+      # ~/.cargo/bin/. That directory holds the actual `cargo`/`rustc` binaries,
+      # which are architecture-specific -- caching them under a workspace-wide
+      # generic `cargo-registry-` key prefix (this workflow's first version
+      # copied that prefix from mid-log-test.yml) let this run's restore-keys
+      # fallback match a DIFFERENT workflow's cache
+      # (`benches/ecs-vs-bevy-ecs`, built on an `ubuntu-24.04-arm` runner) and
+      # overwrite this run's real x86_64 `cargo` with an incompatible ARM
+      # binary -- "cannot execute binary file: Exec format error" on every
+      # cargo invocation that followed. The key below is scoped to this crate
+      # and this runner's OS specifically, so it can only ever hit mid-ptr's
+      # own, same-architecture cache. mid-log-test.yml and any other workflow
+      # copied from its cache block carries the same latent risk -- flagged in
+      # docs/RUST_AND_CRATE_GUIDELINES.md §7, not fixed there in this pass.
       - name: Cache cargo registry
         uses: actions/cache@v3
         with:
           path: |
-            ~/.cargo/bin/
             ~/.cargo/registry/index/
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
-          key: cargo-registry-${{ hashFiles('crates/mid-ptr/Cargo.toml') }}
+          key: cargo-registry-mid-ptr-${{ runner.os }}-${{ hashFiles('crates/mid-ptr/Cargo.toml') }}
           restore-keys: |
-            cargo-registry-
+            cargo-registry-mid-ptr-${{ runner.os }}-
 
       - name: Check formatting
         run: cargo fmt -p mid-ptr --check
@@ -81,7 +84,7 @@ jobs:
 
   summary:
     runs-on: ubuntu-latest
-    needs: [parse-trigger, run-tests]
+    needs: [run-tests]
     if: always()
     steps:
       - name: Print summary
@@ -92,6 +95,3 @@ jobs:
           echo "Build:  #${{ github.run_number }}"
           echo "Branch: ${{ github.ref_name }}"
           echo "Tests:  ${{ needs.run-tests.result || 'skipped' }}"
-          if [ "${{ needs.parse-trigger.outputs.run_tests }}" != "true" ]; then
-            echo "Not triggered. Add --mid-ptr or --mid-all to your commit message."
-          fi
