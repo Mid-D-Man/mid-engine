@@ -14,11 +14,39 @@ crate-type = ["lib"]
 # dependency graph, wasm32-reachable).
 
 [dev-dependencies]
-# None yet. First real module (stack_allocator) ships with plain
-# #[test]s, same sequencing mid-arena/mid-collections both used: verify
-# on this project's rustc-1.75 floor for real before criterion (if a
-# bench is ever added here) closes that window the same way it did for
-# both of those.
+# Same real wall mid-arena/mid-collections both already hit (root
+# Cargo.toml's own comment block): criterion pulls in clap_builder,
+# which needs edition2024. `cargo test -p mid-alloc` stayed on this
+# project's rustc-1.75 floor through every module up to this point --
+# see docs/mid-alloc.md's own "Tests" lines, all run for real on 1.75
+# before this dependency landed. Adding criterion now closes that
+# window for THIS crate the same way it already did for the other two;
+# `cargo build -p mid-alloc` (no --tests/--benches) still works on
+# 1.75, verified directly, immediately after this was added. The
+# `cargo test` regression itself was also hit for real, not just
+# predicted from the other two crates' precedent (`failed to download
+# clap_builder v4.6.6`... `feature 'edition2024' is required`) --
+# the same scratch-crate technique used throughout this crate's own
+# development (mirror every src/*.rs file, plus a Cargo.toml
+# `[features]` block matching this one exactly, into a crate with no
+# criterion dependency) re-confirmed all 63 tests still pass for real
+# on this project's rustc-1.75 floor after this dependency landed.
+criterion = { version = "0.5", features = ["html_reports"] }
+# Comparison target for benches/allocators.rs's StackAllocator-vs-Bump
+# group -- both are untyped, raw bump allocators, the same fair-
+# baseline reasoning mid-arena's own BumpArena-vs-bumpalo bench uses.
+# Version pinned to what actually resolved and was actually benched
+# (checked via Cargo.lock once a real run exists), not left to range
+# drift.
+bumpalo = "3.20.3"
+
+[[bench]]
+name    = "allocators"
+harness = false
+# Every module this bench exercises is feature-gated -- see
+# docs/mid-alloc.md "benches/allocators.rs" for exactly which groups
+# get skipped under which subset and why that's a real result, not
+# a placeholder. Run with `--all-features` for the full suite.
 
 [features]
 default = []
@@ -45,3 +73,8 @@ sync = []
 # block comes from a parent RawAlloc instead of the global allocator.
 # See docs/mid-alloc.md "backed.rs".
 backed = []
+# BumpVec: a growable, Vec-shaped collection backed by any RawAlloc --
+# the correct home for a bumpalo::collections::Vec equivalent, since
+# mid-arena's BumpArena<T> cannot host one soundly. See
+# docs/mid-alloc.md "bump_vec.rs".
+bump_vec = []

@@ -594,6 +594,133 @@ allocator via `HeapAlloc` (an indirect check that `drop` never
 double-frees or otherwise corrupts state across many real cycles, not
 a direct leak measurement), and the stack-backed-by-a-stack case above.
 
+## What's built: `BumpVec`
+
+`crates/mid-alloc/src/bump_vec.rs`, behind the `bump_vec` feature. A
+growable, `[T]`-shaped collection backed by any `RawAlloc`. This
+answers a real question raised while working on `mid-arena`: does that
+crate's `BumpArena<T>` need something like
+`bumpalo::collections::Vec`? Checked directly against
+`bumpalo::collections::vec.rs`/`raw_vec.rs` (source read) rather than
+assumed from the name: **no, and not because it was skipped -- because
+it cannot be built soundly on `BumpArena<T>` as that type is designed.**
+`bumpalo::Bump` can host a growable `Vec` because it is an untyped byte
+arena that never runs destructors on its own (the exact reason
+`bumpalo::boxed::Box` has to exist as a separate opt-in for `Drop`).
+`BumpArena<T>` is the deliberate opposite: single-typed, and its own
+`RegionNode<T>::drop` unconditionally runs `assume_init_drop` on every
+slot from `0..len`, where `len` is the *only* counter -- both the bump
+cursor and the drop-tracked count at once. A growable `Vec` needs
+"capacity reserved beyond what's actually been pushed," which directly
+conflicts with that single counter: advancing it to reserve space would
+make the arena believe uninitialized memory is a real, live `T`, and
+try to drop it on the next reset or the arena's own `Drop`. `RawAlloc`
+has no such invariant -- `try_alloc_raw`/`try_dealloc_raw` deal in
+untyped bytes, not `T` -- the same real reason `bumpalo::Bump` can host
+one. `BumpVec` is a real, if smaller, fork of
+`bumpalo::collections::vec`'s own design: grow by allocating a new,
+bigger block, move the live elements into it, and give the old block
+back to the parent allocator -- a real, immediate reclaim when the
+parent actually supports it (`HeapAlloc`), a documented no-op when it
+doesn't (`StackAllocator`), same composition story as everywhere else
+in this crate.
+
+**Tests:** 7: push/pop/deref behaving like a real `Vec` including
+reading back correct values, growing past an initial `with_capacity_in`
+while keeping earlier elements intact, push failing cleanly (and
+leaving what's already there untouched) when the parent allocator is
+genuinely exhausted, every live element's destructor running exactly
+once including ones moved across a real grow cycle, `pop` handing back
+ownership without double-dropping (checked by dropping the popped value
+separately from the vec itself and counting both), `new_in` never
+touching the parent allocator at all until the first `push` (using
+`NullAlloc` as the parent specifically so any premature call would fail
+loudly), and zero-sized types not panicking or looping forever.
+
+## Benches: `benches/allocators.rs`, `.github/workflows/bench-mid-alloc.yml`
+
+**A real, immediate side effect of adding criterion, stated up front
+rather than buried:** `cargo test -p mid-alloc` itself now hits the
+same `clap_builder`-needs-`edition2024` wall `mid-arena`/
+`mid-collections` already document for themselves (root `Cargo.toml`'s
+own comment block) -- not just `cargo bench`. Every test count in this
+file up to this section was run directly against the real crate on
+this sandbox's rustc 1.75; from here on, that path is closed, and
+verification goes back through the same scratch-crate technique used
+throughout `mid-arena`'s own development (mirror every `src/*.rs` file
+plus a matching `[features]` block into a crate with no criterion
+dependency). Confirmed immediately after this dependency landed: all
+63 tests from every module above still pass for real this way, and
+`cargo build -p mid-alloc` (no `--tests`/`--benches`) still works
+directly, so consuming this crate from elsewhere in the workspace
+stays on the 1.75 floor -- only testing/benching `mid-alloc` itself
+locally doesn't, same real split `mid-arena`/`mid-collections` already
+made.
+
+First bench suite this crate has had (previously noted as an open gap
+in `PoolAllocator`'s own "What's built" entry above). Five groups, one
+per real comparison rather than one giant do-everything group:
+`raw_alloc_sequential` (`StackAllocator` vs `bumpalo::Bump` -- both
+untyped raw bump allocators, same fair-baseline reasoning `mid-arena`'s
+own `BumpArena`-vs-`bumpalo` bench already uses), `create_destroy_churn`
+(`PoolAllocator` vs `Box`, since `Box` is the honest default anyone
+reaching for "heap-allocate one value, free it later" would use),
+`combinator_dispatch_overhead` (`FallbackAllocator`/`Segregator`/
+`Tracked`/`SyncAlloc` vs plain `HeapAlloc`, each constructed once
+outside the timed loop so this measures dispatch cost specifically, not
+construction), `backed_stack_vs_direct` (`BackedStack` vs
+`StackAllocator`, the cost of the extra parent-`RawAlloc` indirection),
+and `push_sequential` (`BumpVec` vs `std::vec::Vec`, same real
+comparison `mid-collections`' own `sparse_set.rs` bench uses for its
+own collection type). Every optional-feature entry is gated with
+`#[cfg(feature = "...")]` *inside* its group rather than whole
+conditional groups, matching `mid-arena/benches/vs_arena_crates.rs`'s
+own real pattern -- `cargo bench -p mid-alloc` stays buildable under
+any feature subset, just with fewer bars in whichever group needed the
+missing one. Full suite needs `--all-features`.
+
+Every entry constructs its own fresh allocator inside the timed
+closure and measures construct+use together (`b.iter(|| { ... })`),
+not `iter_batched` -- kept consistent with `vs_arena_crates.rs`'s own
+real, already-proven convention rather than introducing a second
+pattern into the same workspace; construction cost is real but shared
+identically across every entry in a given group, so relative
+comparisons stay fair.
+
+**Honest verification, stated in the file's own header too:** this
+sandbox's rustc 1.75 cannot compile anything depending on criterion
+(clap_builder needs edition2024, same wall every other bench in this
+workspace already hit -- root `Cargo.toml`'s own comments), and no
+newer toolchain is reachable here (checked directly: `apt-cache policy
+rustc` offers nothing past 1.75, `rustup`'s install domain is outside
+this sandbox's allowed network list). What *was* verified for real: a
+scratch crate depending on `mid-alloc` (all features) and `bumpalo`,
+with no criterion, replicating every real method call each bench group
+makes as a plain `#[test]` -- all 5 passed on rustc 1.75. That caught
+one real bug before it ever reached CI:
+`PoolAllocator::destroy`'s actual signature is
+`unsafe fn destroy(&self, item: &mut T)`, and this bench's first draft
+called it assuming `&mut self` and no `unsafe`. Criterion's own macros
+(`criterion_group!`/`bench_with_input`/`throughput`/etc.) could not be
+verified the same way; they match `vs_arena_crates.rs`'s and
+`sparse_set.rs`'s own already-proven usage exactly, but this bench's
+first real CI trigger is what actually proves it, the same honest gap
+`bench-mid-collections-sparse-set.yml`'s own header states for itself.
+
+`.github/workflows/bench-mid-alloc.yml` follows the bash-grep pattern
+from `docs/benching-standards.md` (`bench-mid-collections-sparse-
+set.yml` as the template) rather than the Python-parser pattern --
+five independent groups with different baselines each, not one "vs X"
+comparison with a single natural ratio to compute throughout, matching
+that doc's own stated guidance for which pattern fits which shape. No
+SIMD `target_cpu` dispatch matrix: nothing in this crate is vectorized
+or has a dispatched backend to sweep, same real reasoning that
+template's own header gives for `SparseSet`. `workflow_dispatch` only,
+`set -o pipefail`, diagnostics step, step-summary strip-before-`
+Finished \`bench\` profile`, untouched raw log uploaded as a 30-day
+artifact -- every real requirement from `docs/benching-standards.md`'s
+"recommended shape."
+
 ## Module plan (catalogued, not built)
 
 Every module from the original foonathan/memory survey has shipped
@@ -819,3 +946,41 @@ guess, not a confirmed one.
   which the doc comment on `BackedStackMarker` states explicitly is
   the reason a distinct type exists instead. All 6 tests pass on this
   sandbox's rustc 1.75, alongside the rest of the crate's 56 total.
+
+### `bump_vec.rs`
+
+- First pass, new file. This one started as a planned addition to
+  `mid-arena/src/bump_arena.rs` (an "uninitialized-reserve" primitive
+  on `BumpArena<T>`), and the plan changed mid-implementation once
+  actually tracing `RegionNode<T>::drop`'s real invariant through
+  showed it was unsound -- documented here rather than silently
+  redirected, since the reasoning is the reason this file exists in
+  `mid-alloc` instead of `mid-arena`.rs at all (see this file's own
+  "What's built" section above for the full argument). One real bug
+  caught by an actual test run, not by review: the first test for
+  "push fails when the parent is exhausted" assumed the first `push`
+  on a fresh `BumpVec` would succeed against a 4-byte `StackAllocator`
+  before failing on the second -- wrong, because `grow`'s own
+  empty-to-4-elements growth factor means the *first* push already
+  requests room for 4 elements, not 1, so it failed immediately rather
+  than on the second call as written. Fixed by using
+  `with_capacity_in(&s, 1)` to set up the exhaustion boundary
+  precisely instead of relying on the growth factor's own default.
+  All 7 tests pass on this sandbox's rustc 1.75, alongside the rest of
+  the crate's 63 total.
+
+### `benches/allocators.rs`
+
+- First pass, new file. Real bug caught before it ever reached CI, by
+  actually replicating every call in a scratch crate rather than
+  trusting a `grep` of the signature alone: the first draft called
+  `pool.destroy(v)` assuming `&mut self` and a safe fn, based on
+  pattern-matching against this crate's other `&self`-based methods
+  (`create`, `try_alloc_raw`, etc.) rather than checking `destroy`
+  specifically. `PoolAllocator::destroy`'s real signature is
+  `unsafe fn destroy(&self, item: &mut T)` -- `&self` like the rest,
+  but `unsafe`, which the pattern-match alone would have missed. Fixed
+  by grepping the real signature directly, then re-verifying the fixed
+  version actually compiles and runs (not just re-reading it) via the
+  scratch-crate replication described in this file's own "Benches"
+  section above.

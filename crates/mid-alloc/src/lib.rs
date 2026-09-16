@@ -77,12 +77,21 @@
 //!   `RawAlloc` instead of the global allocator -- one allocator
 //!   carving its buffer out of another, rather than every allocator
 //!   reaching for the heap independently.
+//! - `bump_vec` (behind the `bump_vec` feature) —
+//!   [`bump_vec::BumpVec<'p, T, P>`]: a growable, `Vec`-shaped
+//!   collection backed by any `RawAlloc`. The real, correct home for
+//!   "does this crate have something like `bumpalo::collections::Vec`"
+//!   -- `mid-arena`'s `BumpArena<T>` cannot host one soundly (see this
+//!   module's own doc comment for exactly why), `RawAlloc` can, for
+//!   the same real reason `bumpalo::Bump` can.
 //!
 //! # Module plan
 //! Nothing left uncatalogued. Every module foonathan/memory's own real
-//! source suggested has shipped, and both items the Zig re-survey pass
-//! added (`sync`, `backed`) have too. See `docs/mid-alloc.md` for the
-//! full history and every real source each module traces back to.
+//! source suggested has shipped, both items the Zig re-survey pass
+//! added (`sync`, `backed`) have too, and `bump_vec` closes the one
+//! real question left over from `mid-arena`'s own feature-gap pass.
+//! See `docs/mid-alloc.md` for the full history and every real source
+//! each module traces back to.
 
 #![no_std]
 extern crate alloc;
@@ -108,6 +117,9 @@ pub mod sync;
 #[cfg(feature = "backed")]
 pub mod backed;
 
+#[cfg(feature = "bump_vec")]
+pub mod bump_vec;
+
 pub use raw_alloc::{HeapAlloc, NullAlloc, RawAlloc};
 pub use stack_allocator::{StackAllocator, StackMarker};
 
@@ -128,3 +140,6 @@ pub use sync::{SpinLock, SpinLockGuard, SyncAlloc};
 
 #[cfg(feature = "backed")]
 pub use backed::{BackedStack, BackedStackMarker};
+
+#[cfg(feature = "bump_vec")]
+pub use bump_vec::BumpVec;
