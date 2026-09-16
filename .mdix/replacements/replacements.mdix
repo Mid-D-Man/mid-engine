@@ -1,17 +1,96 @@
+// Brought to u by MidManStudio
+// FILE: .mdix/replacements/replacements.mdix
+//
+// Replacement set: the `query2_static` 4x investigation.
+//
+// Six files, delivered as one archive (`mid-ecs-abi-fix.tar.gz`) sitting
+// next to this manifest — the mobile path. Commit two files through the
+// GitHub web UI (this manifest and the archive), run
+// `.github/workflows/run-replacements.yml`, done. No local shell needed,
+// no six-file web-UI editing session on a 2141-line source file.
+//
+// WHAT THIS CHANGES
+//
+//   Cargo.toml                                (workspace member added)
+//   crates/mid-ecs/src/archetype.rs           (Iter1/Iter2 moved out; `mod iter;`)
+//   crates/mid-ecs/src/archetype/iter.rs      (NEW — all query iterators)
+//   crates/mid-ecs/src/query.rs               (query_static_ref/query2_static_ref)
+//   benches/abi-return-size/Cargo.toml        (NEW)
+//   benches/abi-return-size/benches/abi_return_size.rs  (NEW)
+//
+// Nothing else in the workspace is touched. `Iter1`/`Iter2` keep their
+// exact public behaviour and item types — every existing caller, test
+// and bench compiles and behaves unchanged. The new `_ref` methods are
+// purely additive.
+//
+// ORDER OF OPERATIONS — do not skip step 1
+//
+//   1. Run `benches/abi-return-size` first. It links against NOTHING
+//      (no mid-ecs, no bevy_ecs) precisely so it cannot be tipped by
+//      mid-ecs's own compilation-unit layout the way archetype_core.rs's
+//      controls were in builds #15-#18. Its `ret16_ref_ref` group is the
+//      control that separates "item size" from "reads a second column" —
+//      a distinction every diagnostic so far has had confounded.
+//   2. Only then read `query2_static_ref` against `query2_static`.
+//
+//   If `ret16_ref_ref` lands with `ret24_entity_ref_ref` rather than with
+//   `raw_two_field`, the ABI hypothesis is dead and `query2_static_ref`
+//   is just an API convenience. That outcome is a genuinely useful
+//   negative and should be written up in docs/mid-ecs.md the same way
+//   the seven before it were.
+//
+// DRY RUN FIRST
+//
+//   run-replacements.yml defaults `dry_run` to 'true' on manual
+//   dispatch. Leave it there for the first run and read the diff —
+//   archetype.rs is a real edit to a real 2141-line file, not a new
+//   file, and it is the one entry here worth eyeballing before writing.
+//   Note the push trigger on `.mdix/replacements/**` also defaults to a
+//   dry run, so committing these two files does not itself write
+//   anything.
+//
+// THE ROOT Cargo.toml IS DELIBERATELY NAMED `ROOT_Cargo.toml`
+//
+//   Inside an archive, flat-vs-nested is decided by the member's path
+//   relative to the ARCHIVE's own root, not the archive's position in
+//   replacements/. So a `Cargo.toml` at the archive's top level is a
+//   FLAT candidate — resolved by basename search across all of
+//   target_root — and this workspace has a Cargo.toml per crate, which
+//   makes that an immediate hard ambiguity error.
+//
+//   The fix is not an `overrides::` entry keyed on "Cargo.toml":
+//   overrides are checked against bare basenames BEFORE the nested-path
+//   check, so that would also capture `benches/abi-return-size/Cargo.toml`
+//   and silently collapse both onto the same destination. The archive
+//   therefore ships the workspace manifest under a name nothing else can
+//   collide with, and the override below is keyed on that name. The
+//   bench crate's own Cargo.toml is nested, so its path pins it with no
+//   override needed.
 
 @CONFIG(
   version    -> "1.0.0"
-  author     -> "MidManStudio"
+  
   debug_mode -> "off"
 )
 
-
 @QUICKFUNCS(
+  // Explicit filename -> exact path. Wins outright, no search performed.
   ~target<object>(name, path) { return { name = name, path = path } }
 )
 
-
 @DATA(
-    target_root = "."
-   // overrides:: target("Cargo.toml", "./Cargo.toml") 
+  // Repo root. Every nested member of the archive carries its own real
+  // path (crates/mid-ecs/src/archetype.rs, benches/abi-return-size/...),
+  // so each one pins itself with no search and no ambiguity.
+  target_root = "."
+
+  // Documentation that lives in this folder, not content to apply.
+  // The manifest itself and any dotfile are always excluded anyway.
+  ignore::
+    "README.md"
+
+  // The one flat member in the archive. See the note above for why it is
+  // keyed on `ROOT_Cargo.toml` and not on `Cargo.toml`.
+  overrides::
+    target("ROOT_Cargo.toml", "Cargo.toml")
 )
