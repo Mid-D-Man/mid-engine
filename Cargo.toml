@@ -78,6 +78,13 @@
 # this crate does, and nothing else in the workspace is affected. No
 # rustc at all was available to verify this by actually compiling it --
 # see docs/mid-ptr.md for the full note.
+# NOTE on duplicate members (fixed this pass): `tools/mdix-compiler` and
+# `examples/headless-server` were each listed twice in the block below --
+# docs/RUST_AND_CRATE_GUIDELINES.md §1 already claimed this was "found and
+# fixed," but the actual file still had both duplicates until now. Harmless
+# in practice (Cargo doesn't error on an exact-duplicate member path), but
+# real drift between the doc and the file it describes. Removed the second
+# occurrence of each, doc's own description matches the file again.
 members = [
     "crates/mid-log",
     "crates/mid-net",
@@ -96,8 +103,6 @@ members = [
     "crates/mid-geom",
     "crates/mid-common",
     "crates/mid-trace",
-    "tools/mdix-compiler",
-    "examples/headless-server",
       # New this pass (docs/roadmap.md, "What can be built in parallel"):
     # v0 stubs, not yet compiled/verified in this sandbox (no rustc
     # available here at all -- see that section's own honesty note).
