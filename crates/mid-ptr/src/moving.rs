@@ -287,6 +287,14 @@ impl<'a, T, A: IsAligned> From<MovingPtr<'a, T, A>> for OwningPtr<'a, A> {
     }
 }
 
+/// `MovingPtr::try_from(unaligned)` alone often needs an explicit type
+/// annotation on the binding (or a turbofish) even though only one impl of
+/// this trait exists for `MovingPtr` — rustc's inference for a bare
+/// `Type::trait_method(arg)` call doesn't always pin down a `Self` type that
+/// still has more than one free generic parameter (here, `T` and `A`),
+/// even when the argument's own type would make the choice unambiguous by
+/// hand. `unaligned.try_into()` assigned into an already-typed binding
+/// avoids it; so does spelling out `let x: MovingPtr<'_, T, Aligned> = ...`.
 impl<'a, T> TryFrom<MovingPtr<'a, T, Unaligned>> for MovingPtr<'a, T, Aligned> {
     type Error = MovingPtr<'a, T, Unaligned>;
     #[inline]
@@ -393,8 +401,8 @@ mod tests {
         // returned `MovingPtr`.
         let ptr = unsafe { MovingPtr::from_value(&mut slot) };
         let unaligned = ptr.to_unaligned();
-        let aligned = MovingPtr::try_from(unaligned)
+        let aligned: MovingPtr<'_, u32, Aligned> = MovingPtr::try_from(unaligned)
             .unwrap_or_else(|_| panic!("a naturally aligned u32 stack slot must be aligned"));
         assert_eq!(aligned.read(), 5);
     }
-}
+    }
