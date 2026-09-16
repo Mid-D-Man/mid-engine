@@ -257,6 +257,20 @@ without a profiled reason to. Same trigger as Decision 3: if
 migration ever gets profiled as a real bottleneck, that's when this
 gets revisited — not before.
 
+**Reopened (2026-09-16):** built anyway, on direct instruction, after
+the above was surfaced and the conflict was made explicit rather than
+silently overridden. Neither of the two reasons above turned out to
+be wrong — `FfiSpan` still covers the FFI-facing half, and
+`archetype.rs`'s own rejection of the migration technique stands
+un-revisited, still with no profiled bottleneck behind it. `mid-ptr`
+now exists as a full, close port of upstream `bevy_ptr` (including
+`MovingPtr` and its deconstruction macros — the exact half this
+decision turned down), but nothing in `mid-ecs`/`archetype.rs` calls
+into it. See `docs/mid-ptr.md` for the port itself, including a
+second, independent MSRV-wall note this introduces. This entry is
+left in place rather than rewritten so the original reasoning stays
+on record.
+
 ---
 
 ## Updated build order

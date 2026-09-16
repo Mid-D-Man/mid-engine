@@ -1,0 +1,13 @@
+[package]
+name        = "mid-ptr"
+version     = "0.1.0"
+edition     = "2021"
+description = "Type-erased raw pointer wrappers (Ptr/PtrMut/OwningPtr/MovingPtr) for mid-engine, ported from Bevy's bevy_ptr — no_std, zero dependencies"
+
+[lib]
+name = "mid_ptr"
+
+[dependencies]
+
+[lints]
+workspace = true
