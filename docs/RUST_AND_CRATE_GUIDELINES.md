@@ -19,14 +19,21 @@ against the member list this pass — an earlier draft of this doc said 20,
 which was already stale), already wired together with `path = "../.."`-style
 dependencies (`mid-anim` on `mid-math`, `mid-app` on `mid-ecs`, `mid-ecs` on
 `mid-collections` and `mid-math`, `mid-physics` on `mid-math` and
-`mid-geom`, and more). The root `Cargo.toml` also carries a growing block of
-real, dated comments documenting every per-crate MSRV/toolchain wall found
-so far (rayon on `mid-ecs`, `web-transport-quinn` on
-`mid-net-transport-quinn`, the `edition2024`-via-criterion wall on
-`mid-collections`/`mid-arena`, and others) — read those before assuming a
-bare `cargo build`/`cargo test` with no `-p` flag will resolve cleanly;
-several members deliberately need a newer toolchain than this project's
-rustc-1.75 floor, and the comments say exactly which ones and why.
+`mid-geom`, and more).
+
+**Moved out of the root `Cargo.toml` this pass**: the growing block of real,
+dated comments documenting every per-crate MSRV/toolchain wall found so far
+(rayon on `mid-ecs`, `web-transport-quinn` on `mid-net-transport-quinn`, the
+`edition2024`-via-criterion wall on `mid-collections`/`mid-arena`, `mid-ptr`,
+and others) now lives in `docs/workspace-cargo.md` instead of as inline `#`
+comments — read that before assuming a bare `cargo build`/`cargo test` with
+no `-p` flag will resolve cleanly; several members deliberately need a newer
+toolchain than this project's rustc-1.75 floor, and that doc says exactly
+which ones and why. The root `Cargo.toml` itself now carries only terse
+one-line pointers into it, per `DOCUMENTATION_AND_COMMENTING_GUIDELINES.md`'s
+"no fix history or decision logs inline" rule — the same rule source files
+already follow via their NOTICE headers, applied here to a config file that
+had grown past the point that rule was meant to prevent.
 
 Found and fixed while adding the tables below (unrelated to them, just
 noticed in the same file): the `members` list had `"tools/mdix-compiler"`

@@ -34,7 +34,9 @@ that's revisited.
 
 **MSRV wall:** the `deconstruct_moving_ptr!` macro's field-projection arms use the
 `&raw mut`/`&raw const` operators (RFC 2582), stabilized in Rust 1.82 — above this
-workspace's usual rustc-1.75 floor. See the root Cargo.toml's own comment block.
+workspace's usual rustc-1.75 floor. Full note: `docs/workspace-cargo.md`,
+"MSRV / toolchain walls" (moved there from the root Cargo.toml's own
+comments this pass — that file now carries only a one-line pointer).
 Nothing else in this crate needs anything newer than the workspace floor.
 
 **License note, unresolved:** `bevy_ptr` is dual MIT/Apache-2.0. This crate
