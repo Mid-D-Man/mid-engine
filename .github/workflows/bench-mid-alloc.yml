@@ -1,0 +1,160 @@
+# .github/workflows/bench-mid-alloc.yml
+#
+# Every allocator strategy mid-alloc has built, against the honest
+# baseline each one actually has (bumpalo for raw bump allocation, Box
+# for create/destroy churn, plain HeapAlloc for combinator dispatch
+# overhead, std::Vec for BumpVec). See
+# crates/mid-alloc/benches/allocators.rs's own doc comment for exactly
+# why each baseline is fair, not a strawman.
+#
+# Modeled on bench-mid-collections-sparse-set.yml's structure (bash-grep
+# pattern, not the Python parser -- this bench has several independent
+# groups, not one "vs X" comparison with a single natural baseline
+# throughout, matching docs/benching-standards.md's own guidance for
+# when to use which). No SIMD target-cpu matrix: none of this crate's
+# code is vectorized or has a dispatched backend to sweep (same real
+# reasoning that file's own header comment gives for SparseSet).
+#
+# HONEST VERIFICATION NOTE: same real wall bench-mid-collections-
+# sparse-set.yml's own header states for itself -- criterion's
+# dependency tree needs edition2024, past this sandbox's rustc 1.75
+# floor (checked directly: no newer toolchain reachable here, see
+# crates/mid-alloc/benches/allocators.rs's own header for what that
+# means and what WAS verified locally instead: every real API call the
+# bench makes, replicated without criterion in a scratch crate, ran
+# correctly on rustc 1.75). The grep pattern below is grounded in
+# criterion 0.5.1's real report.rs source (not memory), same as that
+# other workflow's pattern -- but has never been run against real
+# output. This workflow's first real trigger is what actually proves
+# it.
+#
+# Run: Actions -> "mid-alloc — bench allocators" -> Run workflow
+# DO NOT add push/pull_request triggers.
+
+name: mid-alloc — bench allocators
+
+on:
+  workflow_dispatch:
+    inputs:
+      baseline_note:
+        description: 'Context for this run (e.g. "after resize_raw change")'
+        required: false
+        default: 'manual mid-alloc allocators benchmark run'
+
+permissions:
+  contents: read
+  actions:  read
+
+jobs:
+  bench:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Get Rust version
+        id: rustver
+        run: echo "ver=$(rustc --version)" >> $GITHUB_OUTPUT
+
+      - name: Cache cargo registry + build artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-bench-mid-alloc-${{ hashFiles('crates/mid-alloc/**/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-bench-mid-alloc-
+
+      - name: Confirm environment
+        env:
+          RUST_VERSION: ${{ steps.rustver.outputs.ver }}
+        run: |
+          {
+            echo "## mid-alloc Allocators Bench — Build #${{ github.run_number }}"
+            echo ""
+            echo "| | |"
+            echo "|---|---|"
+            echo "| Rust   | \`${RUST_VERSION}\` |"
+            echo "| Branch | \`${{ github.ref_name }}\` |"
+            echo "| Commit | \`${GITHUB_SHA:0:8}\` |"
+            echo "| Note   | ${{ inputs.baseline_note }} |"
+            echo ""
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Run mid-alloc criterion benchmarks
+        run: |
+          # set -o pipefail: see Abench-vs-all-f64.yml's own "Run f64
+          # criterion benchmarks" step comment for the exact incident
+          # this guards against -- without it, `cargo bench | tee file`
+          # reports tee's exit code (always 0), not cargo bench's, and
+          # a real failure would show as green.
+          set -o pipefail
+          echo "Note: ${{ inputs.baseline_note }}"
+          cargo bench -p mid-alloc --all-features --bench allocators -- --color never \
+            2>&1 | tee bench-mid-alloc-raw.txt
+          echo "Bench exit code: $?" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Surface bench diagnostics
+        if: always()
+        run: |
+          {
+            echo "### Diagnostics"
+            echo '```'
+            grep -E 'took zero time|Unable to complete|Warning:|panicked|Completed [0-9]+ iterations' \
+              bench-mid-alloc-raw.txt | head -60 || echo "(none found)"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Publish summary
+        if: always()
+        run: |
+          {
+            echo "### Results"
+            echo ""
+            echo "Lower is faster. Groups: raw_alloc_sequential (StackAllocator vs"
+            echo "bumpalo::Bump), create_destroy_churn (PoolAllocator vs Box),"
+            echo "combinator_dispatch_overhead (Fallback/Segregator/Tracked/SyncAlloc"
+            echo "vs plain HeapAlloc), backed_stack_vs_direct (BackedStack vs"
+            echo "StackAllocator), push_sequential (BumpVec vs std::Vec). See the raw"
+            echo "log below for full confidence intervals."
+            echo ""
+            echo '```'
+            grep -B 1 "time:" bench-mid-alloc-raw.txt | grep -v "^--$" || echo "(no results parsed -- see raw log)"
+            echo '```'
+            echo ""
+            echo "<details><summary>Full raw output</summary>"
+            echo ""
+            echo "_Build output (compiler warnings, \`Compiling\`/\`Finished\` lines) is_"
+            echo "_stripped below to stay clear of GitHub's 1024k step-summary limit --_"
+            echo "_the untouched log, warnings included, is in this run's uploaded_"
+            echo "_artifact. Also hard-capped at 900k here as a second guard, however_"
+            echo "_that budget ends up used._"
+            echo ""
+            echo '```'
+            if grep -q 'Finished `bench` profile' bench-mid-alloc-raw.txt; then
+              awk '/Finished `bench` profile/{f=1} f' bench-mid-alloc-raw.txt | head -c 900000
+            else
+              echo "(Compilation never finished -- showing the full raw log, including build errors, since there's no benchmark output to isolate it from.)"
+              echo ""
+              head -c 900000 bench-mid-alloc-raw.txt
+            fi
+            echo '```'
+            echo ""
+            echo "</details>"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bench-mid-alloc-${{ github.run_number }}
+          path: |
+            bench-mid-alloc-raw.txt
+            target/criterion
+          retention-days: 30
