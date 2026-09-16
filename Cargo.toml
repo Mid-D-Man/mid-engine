@@ -64,6 +64,20 @@
 # docs/mid-arena.md) -- same sequencing mid-collections used, same
 # reason: verify everything the current toolchain still can, before
 # adding the thing that closes that window.
+# NOTE on mid-ptr (added this pass, docs/roadmap.md Decision 6 reopened --
+# see that section): a ported crate, not an upstream-dependency wall like
+# every note above it. `crates/mid-ptr/src/moving_macros.rs`'s
+# `deconstruct_moving_ptr!` field-projection arms use the `&raw mut`/
+# `&raw const` operators (RFC 2582), stabilized in Rust 1.82.0 (confirmed
+# against the actual 1.82.0 release notes, not assumed from the RFC alone
+# -- the raw-reference operators themselves are edition-independent, so
+# this is a straight rustc-version floor, not an edition2024 situation
+# like the walls above). A SEVENTH independent MSRV-wall instance, but the
+# only one so far caused by this workspace's own code rather than a
+# dependency's manifest. `-p mid-ptr` alone needs 1.82+; nothing else in
+# this crate does, and nothing else in the workspace is affected. No
+# rustc at all was available to verify this by actually compiling it --
+# see docs/mid-ptr.md for the full note.
 members = [
     "crates/mid-log",
     "crates/mid-net",
@@ -77,6 +91,7 @@ members = [
     "crates/mid-collections",
     "crates/mid-arena",
     "crates/mid-alloc",
+    "crates/mid-ptr",
     "crates/mid-math",
     "crates/mid-geom",
     "crates/mid-common",
