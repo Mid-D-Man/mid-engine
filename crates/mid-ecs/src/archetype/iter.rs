@@ -1,145 +1,99 @@
 //! Archetype query iterators.
 //!
-//! Split out of `archetype.rs` as a **child module** rather than a
-//! sibling, deliberately: `Table::columns`, `Table::entities`, the
-//! `Column` trait and the `Archetype` struct are all private to
-//! `archetype`, and a child module can see its parent's private items
-//! while a sibling cannot. No visibility had to be widened to move this
-//! code here, which matters -- `Column` staying module-private is what
-//! keeps the `Vec<T>`-backed column representation an implementation
-//! detail rather than API surface.
+//! Split out of `archetype.rs` as a child module -- `Table::columns`,
+//! `Table::entities`, the `Column` trait and `Archetype` are all
+//! private to `archetype`, and a child module sees its parent's
+//! private items without any visibility being widened.
 //!
-//! # Why these iterators look the way they do
+//! # Revision history, stated plainly rather than silently overwritten
 //!
-//! Two prior rewrites are already recorded in `docs/mid-ecs.md` and
-//! should not be re-litigated here:
+//! The first version of this module (this crate's own history has the
+//! diff) restructured `Iter1`/`Iter2::next` into a `#[cold]
+//! #[inline(never)] fn advance` cold/hot split, added `#[inline]` to
+//! `next` itself, and added `fold`/`size_hint` overrides -- on the
+//! hypothesis that `Iter2`'s `Item` being 24 bytes (`(Entity, &A, &B)`,
+//! MEMORY-class under SysV AMD64) rather than 16
+//! (`Iter1`'s `(Entity, &T)`, RAX:RDX-class) was the dominant cost.
 //!
-//! 1. The original `flat_map`/`filter`/`zip` combinator chains measured
-//!    145-152µs at N=10,000. Replacing them with flat hand-written state
-//!    machines took that to ~7-9µs. That finding stands and this module
-//!    keeps the flat shape.
-//! 2. `unsafe`/`get_unchecked` alone, `#[inline(always)]` alone, raw
-//!    pointer columns, composed per-component fetches, and splitting the
-//!    cold archetype-advance into its own `#[inline(never)]` function
-//!    were each tried against the remaining ~4x two-column gap and each
-//!    came back negative. Those are closed questions.
+//! Real CI (Archetype Core builds #29/#30, immediately after that
+//! version shipped) refuted it directly, and did so by breaking
+//! something that was previously fine: `query_static_single_component`
+//! -- previously at parity with `bevy_ecs` (9.42µs vs 9.35µs, build
+//! #22) -- collapsed to the same ~4x-over-floor regime
+//! `query2_static_two_components` has always been in, while
+//! `query2_static_two_components` itself and `raw_slice_ceiling` both
+//! stayed exactly where they'd always been. The project's own
+//! regression-guard script caught this live and flagged it correctly
+//! ("query_static_single_component itself is running 4.3×
+//! raw_slice_ceiling's floor this run... a low ratio here likely means
+//! the baseline got worse, not that query2_static got better").
 //!
-//! **What this module changes is the one thing none of those touched:
-//! the size of what `next()` returns.**
+//! That result should have been read against `docs/mid-ecs.md`'s own
+//! closing sections (builds #19/#20 and "Iter1 Isolated" #1/#2) --
+//! read in full only after the fact, which is the real process failure
+//! here, not the hypothesis itself being tried. Those sections had
+//! *already run* effectively this same comparison (1-column item vs
+//! 2-column item, LTO held fixed) and found the two within ~5% of each
+//! other under `bench-nolto` -- item size is not the dominant factor.
+//! The actual, upstream-corroborated (rust-lang/rust#106609, #146497)
+//! mechanism they identify instead: **LTO's whole-program inliner has
+//! a finite budget, and it stops fully resolving `next()`'s call sites
+//! once the surrounding compilation unit gets large enough** --
+//! confirmed by `benches/iter1-isolated`, where the real, unmodified
+//! `Iter1` returns to parity with LTO and to the same ~4x everything
+//! else shows without it, with nothing about `Iter1`'s own source
+//! changed between those two runs.
 //!
-//! `Entity` is 8 bytes (a `mid-collections` `GenerationalIndex`: two
-//! `u32`s). Every reference is 8 bytes. So:
+//! Under that mechanism, the cold-split version here is the textbook
+//! way to trigger the regression, not fix it: it made `next()`'s own
+//! estimated inline cost bigger (a real, un-inlined call to `advance`
+//! on the cold branch; a `fold` override; an added attribute) inside a
+//! bench binary (`archetype_core.rs`) already right at the edge of
+//! that budget, per the same closing sections. This revision undoes
+//! all of it -- `Iter1`/`Iter2` below are byte-for-byte the same
+//! bodies that measured at parity/4x respectively before any of this
+//! module existed. The investigation itself was explicitly closed in
+//! `docs/mid-ecs.md` ("further digging is diminishing returns"); this
+//! module doesn't reopen it, it just stops actively fighting its
+//! conclusion.
 //!
-//! - `Iter1::Item` = `(Entity, &T)` -> `Option<Item>` is 16 bytes, which
-//!   SysV AMD64 returns in the RAX:RDX register pair.
-//! - `Iter2::Item` = `(Entity, &A, &B)` -> `Option<Item>` is 24 bytes.
-//!   SysV AMD64 §3.2.3 classifies any aggregate over two eightbytes as
-//!   MEMORY: the caller allocates stack space, the callee stores the
-//!   result into it, the caller loads it back. Every single item.
+//! # What's still here, and why
 //!
-//! That threshold sits exactly between `Iter1` and `Iter2` and nowhere
-//! else, which is why `query_static_single_component` is at parity with
-//! `bevy_ecs` (9.42µs vs 9.35µs) while `dense_query_iteration` is 3.99x.
-//! `bevy_ecs` does not cross it: its `Query<(&A, &B)>` yields `(&A, &B)`
-//! -- 16 bytes -- because `Entity` there is opt-in query data, not a
-//! mandatory first tuple element. The gap is an API-shape difference,
-//! not a storage-architecture one.
+//! `Iter1Ref`/`Iter2Ref` (16-byte item, no `Entity`) stay -- they're
+//! the real, apples-to-apples shape against `bevy_ecs`'s
+//! `Query<&A>`/`Query<(&A, &B)>` regardless of which mechanism turns
+//! out to explain the gap, and dropping them would throw away a
+//! legitimate API improvement over an unrelated regression. They're
+//! built with the exact same structure as `Iter1`/`Iter2` -- same
+//! inline cold path, no attribute, no overrides -- so the only
+//! remaining difference between `Iter1`/`Iter1Ref` and between
+//! `Iter2`/`Iter2Ref` is genuinely just the returned item.
 //!
-//! **This is a hypothesis with a cheap decisive test, not a conclusion.**
-//! Run `benches/abi-return-size` -- which links against nothing and so
-//! cannot be tipped by this crate's compilation-unit layout the way
-//! `archetype_core.rs`'s own controls were in builds #15-#18 -- before
-//! treating any of the below as the explanation. Its `ret16_ref_ref`
-//! group is the control that separates "item size" from "reads a second
-//! column", which every diagnostic so far has had confounded.
-//!
-//! # The two fixes, and why both ship
-//!
-//! **Narrowed items** (`Iter1Ref`, `Iter2Ref`): drop `Entity` from the
-//! tuple. `Iter2Ref::Item` is `(&A, &B)`, 16 bytes, register-returned.
-//! This is the only fix that helps a plain `for` loop, because a `for`
-//! loop can only ever drive an iterator through repeated `next()`.
-//!
-//! **A `fold` override** (on all four): `for_each`, `sum`, `fold` and
-//! `collect` do *not* go through `next()` -- they go through `fold`,
-//! where the per-archetype run is one flat contiguous loop and no
-//! `Option<Item>` crosses a call boundary at all. This is what
-//! `bevy_ecs` does (`QueryIter::fold` delegating to
-//! `fold_over_table_range`, `query/iter.rs`, read directly from the
-//! `Mid-D-Man/bevy` checkout). It keeps `Entity` available at full speed
-//! for anything willing to write `.for_each(..)` instead of `for ..`.
-//!
-//! `try_fold` is deliberately *not* overridden: `std::ops::Try` is
-//! unstable to implement against, so `find`/`any`/`position` still route
-//! through `next()`. They are not hot paths here. Revisit only if a real
-//! profile says otherwise.
-//!
-//! # Safety
-//!
-//! Every `get_unchecked` below is guarded by the same single invariant:
-//! `len` is recomputed on every archetype advance as the minimum of all
-//! participating slice lengths, and every access is gated on
-//! `row < len`. The `advance` functions are the only writers of `len`,
-//! and they set `entities`/columns in the same statement sequence, so
-//! the three (or two) slices and `len` can never be out of step. This
-//! replaces the previous bounds-checked indexing; per `docs/mid-ecs.md`
-//! that swap alone was measured to be worth ~nothing, and it is kept
-//! here only because the `fold` inner loops want the bounds check gone
-//! to vectorise, not because it was ever the gap.
+//! Whether that remaining difference matters is now an open question
+//! again, not a closed one -- and the right way to ask it, per this
+//! project's own established method, is `benches/iter1-isolated`'s
+//! approach (the real method, in a minimal real compilation unit, real
+//! `mid-ecs` dependency, nothing else in the binary), not another
+//! bundled change to the file that's already known to be tight on
+//! budget. See `benches/query2-ref-isolated` for that test.
 
-use super::{Archetype, ArchetypeId, Archetypes, Column};
+use super::{ArchetypeId, Archetypes, Column};
 use crate::component::ComponentId;
 use crate::world::Entity;
-
-/// Resolves one archetype's column for `id` as a typed slice, or an
-/// empty slice if no column exists.
-///
-/// "No column" is not a broken invariant and must not panic:
-/// `insert_bundle` chains one `edge_for_insert` per bundle element, so a
-/// two-element bundle creates an *intermediate* archetype that is
-/// correctly registered in `component_ids` but that no entity is ever
-/// moved into. Such an archetype has zero rows, so "no column" and "an
-/// empty column" are observationally identical from here -- both
-/// contribute zero items. This was a real panic once (`archetypes_with
-/// guarantees component_id is in this archetype's own signature`), hit
-/// by exactly the bulk `insert_bundle` calls the bench harness makes.
-///
-/// Called once per archetype, never per item -- it is the expensive part
-/// (a `SparseSet` probe, a `dyn Column` vtable dispatch through
-/// `as_any`, and a `TypeId` comparison in `downcast_ref`) and lives
-/// entirely on the cold path below.
-#[inline]
-fn column_slice<'a, T: 'static>(archetype: &'a Archetype, id: ComponentId) -> &'a [T] {
-    match archetype.table.columns.get(id) {
-        Some(column) => column
-            .as_any()
-            .downcast_ref::<Vec<T>>()
-            .expect("column type must match component_id's T")
-            .as_slice(),
-        None => &[],
-    }
-}
-
-/// Looks up an archetype that the precomputed `matched` list promised
-/// exists. `matched` is built inside `Archetypes::iter`/`iter2` from
-/// `archetypes_with`, and nothing can remove an archetype while the
-/// returned iterator borrows `&self`, so this is infallible in practice.
-#[inline]
-fn archetype_of(archetypes: &Archetypes, id: ArchetypeId) -> &Archetype {
-    archetypes
-        .archetypes
-        .get(id)
-        .expect("a query's precomputed matched list only ever contains real, currently-existing archetype ids")
-}
 
 // =====================================================================
 // One component
 // =====================================================================
 
-/// Yields `(Entity, &T)`. `Option<Item>` is 16 bytes -> register return.
-/// This one was already at the `raw_slice_ceiling` floor and at parity
-/// with `bevy_ecs`; it is moved here unchanged in behaviour, gaining
-/// only the `fold` override and the cold-path split.
+/// The real `Iterator` behind [`Archetypes::iter`] -- see that method's
+/// own doc comment and [`Iter2`]'s doc comment for the full
+/// real-numbers writeup of why this is a hand-written state machine,
+/// not `flat_map`/`zip` adaptors. Same shape as [`Iter2`], one column
+/// instead of two.
+///
+/// Body unchanged from before this module existed -- see this module's
+/// own header for why that's now a deliberate constraint, not an
+/// oversight.
 pub(crate) struct Iter1<'a, T> {
     archetypes: &'a Archetypes,
     id: Option<ComponentId>,
@@ -167,97 +121,66 @@ impl<'a, T: 'static> Iter1<'a, T> {
             len: 0,
         }
     }
-
-    /// Moves to the next matching archetype that actually has rows.
-    /// Returns `false` once the matched list is exhausted.
-    ///
-    /// `#[cold]` + `#[inline(never)]`: this runs once per archetype, the
-    /// hot path runs once per entity. Note that splitting the cold path
-    /// out was already tested on its own (`Iter2ColdSplit`,
-    /// `docs/mid-ecs.md` builds #17/#18) and came back negative -- it is
-    /// kept here because it is the right shape, not because it is
-    /// expected to move the number by itself.
-    #[cold]
-    #[inline(never)]
-    fn advance(&mut self) -> bool {
-        let Some(id) = self.id else {
-            return false;
-        };
-        loop {
-            let Some(archetype_id) = self.matched.next() else {
-                return false;
-            };
-            let archetype = archetype_of(self.archetypes, archetype_id);
-            let entities: &[Entity] = &archetype.table.entities;
-            let column: &[T] = column_slice(archetype, id);
-            let len = entities.len().min(column.len());
-            if len == 0 {
-                continue;
-            }
-            self.entities = entities;
-            self.column = column;
-            self.len = len;
-            self.row = 0;
-            return true;
-        }
-    }
 }
 
 impl<'a, T: 'static> Iterator for Iter1<'a, T> {
     type Item = (Entity, &'a T);
 
-    #[inline]
+    // Deliberately NOT #[inline(always)] -- tried it (reasoning: bevy's
+    // own `QueryIterationCursor::next` has it explicitly, and this
+    // method's sibling `Iter2::next` regressed ~4x on real CI's rustc
+    // 1.98.0 specifically), and it made this method measurably WORSE
+    // on this sandbox's rustc 1.91.1 -- a real, reproducible ~4x
+    // regression (28.6µs vs 6.6-7.2µs at N=10,000, confirmed across
+    // repeated runs, not noise), the opposite of the intended fix.
+    // Reverted rather than shipped on an unproven, one-toolchain-tested
+    // hypothesis. Also NOT split into a separate cold `advance` -- that
+    // was tried too, real CI (Archetype Core builds #29/#30), and it
+    // reproduced this exact regression for the first time on this
+    // function specifically. See this module's own header.
     fn next(&mut self) -> Option<Self::Item> {
         loop {
             if self.row < self.len {
-                let row = self.row;
-                self.row = row + 1;
-                // SAFETY: `row < len`, and `len` is the min of both slice
-                // lengths as of the last `advance`.
-                return Some(unsafe {
-                    (
-                        *self.entities.get_unchecked(row),
-                        self.column.get_unchecked(row),
-                    )
-                });
+                let item = (self.entities[self.row], &self.column[self.row]);
+                self.row += 1;
+                return Some(item);
             }
-            if !self.advance() {
-                return None;
-            }
-        }
-    }
-
-    #[inline]
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        (self.len - self.row, None)
-    }
-
-    #[inline]
-    fn fold<Acc, F>(mut self, init: Acc, mut f: F) -> Acc
-    where
-        F: FnMut(Acc, Self::Item) -> Acc,
-    {
-        let mut acc = init;
-        loop {
-            let (entities, column) = (self.entities, self.column);
-            for row in self.row..self.len {
-                // SAFETY: `row < len`, as above.
-                let item =
-                    unsafe { (*entities.get_unchecked(row), column.get_unchecked(row)) };
-                acc = f(acc, item);
-            }
-            self.row = self.len;
-            if !self.advance() {
-                return acc;
-            }
+            let id = self.id?;
+            let archetype_id = self.matched.next()?;
+            let archetype = self.archetypes.archetypes.get(archetype_id).expect(
+                "iter's precomputed matched list only ever contains real, currently-existing archetype ids",
+            );
+            let entities: &[Entity] = &archetype.table.entities;
+            let column: &[T] = match archetype.table.columns.get(id) {
+                Some(column) => column
+                    .as_any()
+                    .downcast_ref::<Vec<T>>()
+                    .expect("column type must match component_id's T")
+                    .as_slice(),
+                None => &[],
+            };
+            self.len = entities.len().min(column.len());
+            self.entities = entities;
+            self.column = column;
+            self.row = 0;
         }
     }
 }
 
-/// Yields `&T`. `Option<Item>` is 8 bytes. The counterpart to
-/// `bevy_ecs`'s `Query<&T>`, which yields exactly this.
+/// Entity-free counterpart to [`Iter1`]: yields `&T` alone. Same
+/// fields (including the unused `entities` slice -- kept only for
+/// structural parity with [`Iter1`], not because this type needs it,
+/// so the two types differ in exactly one place: `Item`), same body
+/// shape, same lack of any inline attribute or cold-path split. The
+/// counterpart to `bevy_ecs`'s `Query<&T>`, which yields exactly this.
 pub(crate) struct Iter1Ref<'a, T> {
-    inner: Iter1<'a, T>,
+    archetypes: &'a Archetypes,
+    id: Option<ComponentId>,
+    matched: std::vec::IntoIter<ArchetypeId>,
+    entities: &'a [Entity],
+    column: &'a [T],
+    row: usize,
+    len: usize,
 }
 
 impl<'a, T: 'static> Iter1Ref<'a, T> {
@@ -268,7 +191,13 @@ impl<'a, T: 'static> Iter1Ref<'a, T> {
         matched: Vec<ArchetypeId>,
     ) -> Self {
         Self {
-            inner: Iter1::new(archetypes, id, matched),
+            archetypes,
+            id,
+            matched: matched.into_iter(),
+            entities: &[],
+            column: &[],
+            row: 0,
+            len: 0,
         }
     }
 }
@@ -276,42 +205,31 @@ impl<'a, T: 'static> Iter1Ref<'a, T> {
 impl<'a, T: 'static> Iterator for Iter1Ref<'a, T> {
     type Item = &'a T;
 
-    #[inline]
     fn next(&mut self) -> Option<Self::Item> {
         loop {
-            if self.inner.row < self.inner.len {
-                let row = self.inner.row;
-                self.inner.row = row + 1;
-                // SAFETY: `row < len`, as in `Iter1::next`.
-                return Some(unsafe { self.inner.column.get_unchecked(row) });
+            if self.row < self.len {
+                let item = &self.column[self.row];
+                self.row += 1;
+                return Some(item);
             }
-            if !self.inner.advance() {
-                return None;
-            }
-        }
-    }
-
-    #[inline]
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        (self.inner.len - self.inner.row, None)
-    }
-
-    #[inline]
-    fn fold<Acc, F>(mut self, init: Acc, mut f: F) -> Acc
-    where
-        F: FnMut(Acc, Self::Item) -> Acc,
-    {
-        let mut acc = init;
-        loop {
-            let column = self.inner.column;
-            for row in self.inner.row..self.inner.len {
-                // SAFETY: `row < len`, as above.
-                acc = f(acc, unsafe { column.get_unchecked(row) });
-            }
-            self.inner.row = self.inner.len;
-            if !self.inner.advance() {
-                return acc;
-            }
+            let id = self.id?;
+            let archetype_id = self.matched.next()?;
+            let archetype = self.archetypes.archetypes.get(archetype_id).expect(
+                "iter's precomputed matched list only ever contains real, currently-existing archetype ids",
+            );
+            let entities: &[Entity] = &archetype.table.entities;
+            let column: &[T] = match archetype.table.columns.get(id) {
+                Some(column) => column
+                    .as_any()
+                    .downcast_ref::<Vec<T>>()
+                    .expect("column type must match component_id's T")
+                    .as_slice(),
+                None => &[],
+            };
+            self.len = entities.len().min(column.len());
+            self.entities = entities;
+            self.column = column;
+            self.row = 0;
         }
     }
 }
@@ -320,17 +238,57 @@ impl<'a, T: 'static> Iterator for Iter1Ref<'a, T> {
 // Two components
 // =====================================================================
 
-/// Yields `(Entity, &A, &B)`. `Option<Item>` is **24 bytes** -- MEMORY
-/// class under SysV AMD64, returned through a hidden pointer with a
-/// stack round-trip per item.
+/// flat state machine, not a chain of `flat_map`/`filter`/`zip`
+/// adaptors. Shape (precompute matching storages once, then a single
+/// `if current_row == current_len { advance } else { fetch, ++ }`
+/// loop) copied deliberately from `bevy_ecs`'s own
+/// `QueryIterationCursor::next` (`query/iter.rs`, real source read
+/// directly -- see this module's doc comment) after a controlled bench
+/// showed it mattered.
 ///
-/// Kept, because dropping `Entity` from a two-component query is an API
-/// break and because `Entity` is genuinely needed by plenty of callers.
-/// But `next()` here is the shape currently suspected of the whole 4x
-/// gap, so: **prefer `Iter2Ref` when the entity is not needed, and
-/// prefer `.for_each(..)`/`.fold(..)` over `for ..` when it is.** The
-/// `fold` override below sidesteps the return ABI entirely; the `for`
-/// loop cannot.
+/// **What the earlier combinator-based `iter2` still got wrong,** even
+/// after the per-entity-lookup fix (see git history / the previous
+/// version of this doc comment for that writeup): `for` loops in Rust
+/// always drive an iterator through repeated `Iterator::next()` calls
+/// (this is worth stating precisely -- an earlier internal writeup of
+/// this exact investigation incorrectly assumed `for` loops could
+/// dispatch to a custom `fold` override; they can't, `for` only ever
+/// calls `next()`). The real difference is what `next()` *is*: `bevy_ecs`
+/// writes `QueryIterationCursor::next` as a single, self-contained,
+/// `#[inline(always)]`-adjacent function -- one `loop`, `get_unchecked`
+/// (no bounds check), no nested generic adaptor types. The old `iter2`
+/// composed `Option::into_iter().flat_map(|_| ...filter(...).flat_map(|_|
+/// ...zip...))` -- each layer is its *own* `Iterator` impl with its own
+/// `next()`, and driving the outer one means threading through all of
+/// them, even once "locked onto" one archetype's `zip`. Controlled,
+/// same-machine bench (`crates/mid-ecs/benches/archetype_core.rs`,
+/// N=10,000, single archetype, `--sample-size 30`): the combinator
+/// version measured 152.34µs; the flat hand-written loop below, with
+/// the exact same bounds-checked (safe, no `unsafe`) indexing,
+/// measured 9.1605µs -- a ~94% reduction, landing within noise of
+/// `bevy_ecs`'s own real CI number for the same N=10,000 workload
+/// (9.3882µs, `benches/ecs-vs-bevy-ecs`'s real run). The per-entity
+/// redundant-lookup fix (the version this replaced) was real and
+/// worth keeping, but it was never the dominant cost -- the generic
+/// `flat_map`/`filter`/`zip` adaptor stack itself was, and removing
+/// it closed nearly the entire gap against `bevy_ecs`, with zero
+/// `unsafe`.
+///
+/// `entities`/`a_col`/`b_col` are always the *same* length by
+/// construction (`next` clamps `len` to the min of all three on every
+/// archetype advance -- belt-and-suspenders on top of the "no column
+/// implies no rows" invariant [`Archetypes::iter`] already documents
+/// and relies on), so `row < len` alone is what makes every
+/// `entities[row]`/`a_col[row]`/`b_col[row]` access below provably
+/// in-bounds -- safe, ordinary Rust indexing, not `unsafe`. Revisit
+/// only if a *further* real bench shows the three redundant bounds
+/// checks this still pays (one per slice, per item) are themselves
+/// the next real cost -- `docs/mid-ecs.md`'s "zero unsafe by choice,
+/// revisit only against a real profile" policy applies exactly the
+/// same way here as it always has.
+///
+/// Body unchanged from before this module existed, same as [`Iter1`] --
+/// see this module's own header.
 pub(crate) struct Iter2<'a, A, B> {
     archetypes: &'a Archetypes,
     ids: Option<(ComponentId, ComponentId)>,
@@ -360,105 +318,86 @@ impl<'a, A: 'static, B: 'static> Iter2<'a, A, B> {
             len: 0,
         }
     }
-
-    #[cold]
-    #[inline(never)]
-    fn advance(&mut self) -> bool {
-        let Some((a_id, b_id)) = self.ids else {
-            return false;
-        };
-        loop {
-            let Some(archetype_id) = self.matched.next() else {
-                return false;
-            };
-            let archetype = archetype_of(self.archetypes, archetype_id);
-            let entities: &[Entity] = &archetype.table.entities;
-            let a_col: &[A] = column_slice(archetype, a_id);
-            let b_col: &[B] = column_slice(archetype, b_id);
-            let len = entities.len().min(a_col.len()).min(b_col.len());
-            if len == 0 {
-                continue;
-            }
-            self.entities = entities;
-            self.a_col = a_col;
-            self.b_col = b_col;
-            self.len = len;
-            self.row = 0;
-            return true;
-        }
-    }
 }
 
 impl<'a, A: 'static, B: 'static> Iterator for Iter2<'a, A, B> {
     type Item = (Entity, &'a A, &'a B);
 
-    #[inline]
+    // Deliberately NOT #[inline(always)] -- see Iter1::next's doc
+    // comment above for the full story: tried it here specifically
+    // (this method has the real, confirmed CI regression it was meant
+    // to fix -- 26.605µs/9.1913µs on this sandbox's rustc 1.91.1 vs a
+    // genuine ~4x against bevy_ecs on real CI's rustc 1.98.0), and it
+    // made this method measurably WORSE on this sandbox too (~29µs,
+    // matching Iter1's own regression exactly). Reverted. The real
+    // rustc-1.98.0-specific regression this was meant to explain is
+    // now understood -- see this module's own header -- and isn't
+    // fixable by any attribute or structural change to this function
+    // alone; also NOT split into a separate cold `advance`, same
+    // reasoning as `Iter1::next`.
     fn next(&mut self) -> Option<Self::Item> {
         loop {
             if self.row < self.len {
-                let row = self.row;
-                self.row = row + 1;
-                // SAFETY: `row < len`, and `len` is the min of all three
-                // slice lengths as of the last `advance`.
-                return Some(unsafe {
-                    (
-                        *self.entities.get_unchecked(row),
-                        self.a_col.get_unchecked(row),
-                        self.b_col.get_unchecked(row),
-                    )
-                });
+                let item = (
+                    self.entities[self.row],
+                    &self.a_col[self.row],
+                    &self.b_col[self.row],
+                );
+                self.row += 1;
+                return Some(item);
             }
-            if !self.advance() {
-                return None;
-            }
-        }
-    }
-
-    #[inline]
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        (self.len - self.row, None)
-    }
-
-    /// The escape hatch from the 24-byte return. One flat contiguous
-    /// loop per archetype, no `Option`, nothing crossing a call
-    /// boundary. Structurally the same as `bevy_ecs`'s
-    /// `fold_over_table_range`.
-    #[inline]
-    fn fold<Acc, F>(mut self, init: Acc, mut f: F) -> Acc
-    where
-        F: FnMut(Acc, Self::Item) -> Acc,
-    {
-        let mut acc = init;
-        loop {
-            let (entities, a_col, b_col) = (self.entities, self.a_col, self.b_col);
-            for row in self.row..self.len {
-                // SAFETY: `row < len`, as above.
-                let item = unsafe {
-                    (
-                        *entities.get_unchecked(row),
-                        a_col.get_unchecked(row),
-                        b_col.get_unchecked(row),
-                    )
-                };
-                acc = f(acc, item);
-            }
-            self.row = self.len;
-            if !self.advance() {
-                return acc;
-            }
+            let (a_id, b_id) = self.ids?;
+            let archetype_id = self.matched.next()?;
+            let archetype = self.archetypes.archetypes.get(archetype_id).expect(
+                "iter2's precomputed matched list only ever contains real, currently-existing archetype ids",
+            );
+            let entities: &[Entity] = &archetype.table.entities;
+            let a_col: &[A] = match archetype.table.columns.get(a_id) {
+                Some(column) => column
+                    .as_any()
+                    .downcast_ref::<Vec<A>>()
+                    .expect("column type must match component_id's T")
+                    .as_slice(),
+                None => &[],
+            };
+            let b_col: &[B] = match archetype.table.columns.get(b_id) {
+                Some(column) => column
+                    .as_any()
+                    .downcast_ref::<Vec<B>>()
+                    .expect("column type must match component_id's T")
+                    .as_slice(),
+                None => &[],
+            };
+            self.len = entities.len().min(a_col.len()).min(b_col.len());
+            self.entities = entities;
+            self.a_col = a_col;
+            self.b_col = b_col;
+            self.row = 0;
         }
     }
 }
 
-/// Yields `(&A, &B)`. `Option<Item>` is **16 bytes** -> RAX:RDX.
+/// Entity-free counterpart to [`Iter2`]: yields `(&A, &B)`. Same
+/// fields as [`Iter2`] (including the unused `entities` slice), same
+/// body shape, same lack of any inline attribute or cold-path split --
+/// the only difference anywhere in this type from [`Iter2`] is `Item`.
 ///
-/// The direct counterpart to `bevy_ecs`'s `Query<(&A, &B)>`, and the
-/// only two-component shape that is apples-to-apples against it. If the
-/// ABI hypothesis holds, this is the variant that closes
-/// `dense_query_iteration`'s 3.99x on its own, without touching storage,
-/// `unsafe`-ness anywhere else, or any inline attribute.
+/// The apples-to-apples shape against `bevy_ecs`'s `Query<(&A, &B)>`.
+/// `benches/ecs-vs-bevy-ecs`'s `dense_query_iteration` has never
+/// actually compared the same thing on both sides: it puts `Iter2`'s
+/// three-element item against bevy's two-element one, discarding the
+/// entity with `_` on the mid-ecs side only. Whether that gap matters
+/// once measured cleanly is now open again -- see
+/// `benches/query2-ref-isolated`, not this doc comment, for an answer.
 pub(crate) struct Iter2Ref<'a, A, B> {
-    inner: Iter2<'a, A, B>,
+    archetypes: &'a Archetypes,
+    ids: Option<(ComponentId, ComponentId)>,
+    matched: std::vec::IntoIter<ArchetypeId>,
+    entities: &'a [Entity],
+    a_col: &'a [A],
+    b_col: &'a [B],
+    row: usize,
+    len: usize,
 }
 
 impl<'a, A: 'static, B: 'static> Iter2Ref<'a, A, B> {
@@ -469,7 +408,14 @@ impl<'a, A: 'static, B: 'static> Iter2Ref<'a, A, B> {
         matched: Vec<ArchetypeId>,
     ) -> Self {
         Self {
-            inner: Iter2::new(archetypes, ids, matched),
+            archetypes,
+            ids,
+            matched: matched.into_iter(),
+            entities: &[],
+            a_col: &[],
+            b_col: &[],
+            row: 0,
+            len: 0,
         }
     }
 }
@@ -477,71 +423,56 @@ impl<'a, A: 'static, B: 'static> Iter2Ref<'a, A, B> {
 impl<'a, A: 'static, B: 'static> Iterator for Iter2Ref<'a, A, B> {
     type Item = (&'a A, &'a B);
 
-    #[inline]
     fn next(&mut self) -> Option<Self::Item> {
         loop {
-            if self.inner.row < self.inner.len {
-                let row = self.inner.row;
-                self.inner.row = row + 1;
-                // SAFETY: `row < len`, as in `Iter2::next`. `entities` is
-                // still tracked and still clamps `len` -- it is simply
-                // not returned.
-                return Some(unsafe {
-                    (
-                        self.inner.a_col.get_unchecked(row),
-                        self.inner.b_col.get_unchecked(row),
-                    )
-                });
+            if self.row < self.len {
+                let item = (&self.a_col[self.row], &self.b_col[self.row]);
+                self.row += 1;
+                return Some(item);
             }
-            if !self.inner.advance() {
-                return None;
-            }
-        }
-    }
-
-    #[inline]
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        (self.inner.len - self.inner.row, None)
-    }
-
-    #[inline]
-    fn fold<Acc, F>(mut self, init: Acc, mut f: F) -> Acc
-    where
-        F: FnMut(Acc, Self::Item) -> Acc,
-    {
-        let mut acc = init;
-        loop {
-            let (a_col, b_col) = (self.inner.a_col, self.inner.b_col);
-            for row in self.inner.row..self.inner.len {
-                // SAFETY: `row < len`, as above.
-                let item =
-                    unsafe { (a_col.get_unchecked(row), b_col.get_unchecked(row)) };
-                acc = f(acc, item);
-            }
-            self.inner.row = self.inner.len;
-            if !self.inner.advance() {
-                return acc;
-            }
+            let (a_id, b_id) = self.ids?;
+            let archetype_id = self.matched.next()?;
+            let archetype = self.archetypes.archetypes.get(archetype_id).expect(
+                "iter2's precomputed matched list only ever contains real, currently-existing archetype ids",
+            );
+            let entities: &[Entity] = &archetype.table.entities;
+            let a_col: &[A] = match archetype.table.columns.get(a_id) {
+                Some(column) => column
+                    .as_any()
+                    .downcast_ref::<Vec<A>>()
+                    .expect("column type must match component_id's T")
+                    .as_slice(),
+                None => &[],
+            };
+            let b_col: &[B] = match archetype.table.columns.get(b_id) {
+                Some(column) => column
+                    .as_any()
+                    .downcast_ref::<Vec<B>>()
+                    .expect("column type must match component_id's T")
+                    .as_slice(),
+                None => &[],
+            };
+            self.len = entities.len().min(a_col.len()).min(b_col.len());
+            self.entities = entities;
+            self.a_col = a_col;
+            self.b_col = b_col;
+            self.row = 0;
         }
     }
 }
 
 // =====================================================================
-// Constructors for the entity-free variants
+// Constructors reached from `archetype.rs`
 // =====================================================================
 
-/// These sit here rather than next to `iter`/`iter2` in `archetype.rs`
-/// purely so the whole entity-free path is one reviewable file. Being a
-/// child module, this can reach `Archetypes`' private `archetypes` field
-/// and `Archetype`'s private `component_ids` exactly as the parent can —
-/// the matching logic below is a verbatim copy of `iter`/`iter2`'s own,
-/// and deliberately so: if the two ever diverge, the entity-free query
-/// would silently visit a different archetype set than its counterpart,
-/// which is a correctness bug, not a performance one. Keep them in step.
+/// Verbatim copies of [`Archetypes::iter`]/[`Archetypes::iter2`]'s own
+/// matched-archetype-list logic -- see those methods' doc comments in
+/// `archetype.rs` for the real explanation. Duplicated here rather than
+/// shared, deliberately: if the two ever diverge, an entity-free query
+/// would silently visit a different archetype set than its
+/// entity-carrying counterpart, which is a correctness bug, not a
+/// performance one. Keep them in step by inspection, not by sharing.
 impl Archetypes {
-    /// Entity-free counterpart to [`Archetypes::iter`]. Same matched
-    /// set, same order, same rows — `Iter1Ref` simply does not return
-    /// the entity.
     pub(crate) fn iter_ref<T: 'static>(&self) -> Iter1Ref<'_, T> {
         let id = self.existing_component_id::<T>();
         let matched: Vec<ArchetypeId> = match id {
@@ -551,10 +482,6 @@ impl Archetypes {
         Iter1Ref::new(self, id, matched)
     }
 
-    /// Entity-free counterpart to [`Archetypes::iter2`], and the
-    /// apples-to-apples shape against `bevy_ecs`'s `Query<(&A, &B)>`.
-    /// See `World::query2_static_ref`'s doc comment for why the item
-    /// shape is the whole point.
     pub(crate) fn iter2_ref<A: 'static, B: 'static>(&self) -> Iter2Ref<'_, A, B> {
         let ids = self
             .existing_component_id::<A>()

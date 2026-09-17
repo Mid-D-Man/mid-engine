@@ -1,0 +1,63 @@
+[package]
+name = "query2-ref-isolated"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# Sibling to `benches/iter1-isolated` -- same method, same question,
+# pointed at the one thing that crate never tested: `query2_static_ref`
+# (2 columns, no `Entity`, 16-byte item), not `query_static`
+# (1 column, with `Entity`, also 16 bytes).
+#
+# `docs/mid-ecs.md`'s closing sections ("Builds #19 and #20", "Builds
+# #1 and #2 (Iter1 Isolated)") establish the real mechanism behind the
+# whole query2_static investigation: LTO's whole-program inliner has a
+# finite budget, and stops fully resolving `next()`'s call sites once
+# the surrounding compilation unit (the bench BINARY -- mid-ecs's
+# compiled code plus the bench file's own, not mid-ecs's source size by
+# itself) gets large enough. Confirmed there by isolating `Iter1`
+# itself: same method, same source, parity with LTO (build #1, 106.09µs
+# vs raw_slice_ceiling's 105.71µs) vs ~4x without it (build #2,
+# 329.59µs vs 81.97µs) -- nothing about `Iter1::next` changed between
+# those two runs, only how much else shared its compilation unit.
+#
+# That investigation was explicitly closed on the strength of that
+# result plus builds #19/#20's own direct A/B (query_static vs
+# query2_static, LTO off, same compilation unit: within ~5% of each
+# other) -- together read as fairly strong evidence that item size
+# specifically is NOT what LTO's budget is sensitive to. This crate
+# is not reopening that call. It tests a narrower, different question
+# builds #19/#20 didn't ask, because `query2_static_ref` didn't exist
+# yet when they ran: not "does a smaller item run a non-inlined call
+# faster" (already answered: barely) but "does a smaller item have a
+# better chance of BEING inlined at all, under the same budget
+# pressure that tips a larger one over" -- a threshold effect, not a
+# per-call cost, and a real, separate question from the one #19/#20
+# and Iter1-Isolated already closed.
+#
+# Same method: real `mid-ecs` dependency (not a synthetic
+# reimplementation), nothing else in this crate, same [profile.bench]
+# LTO setting held constant against the one thing varied --
+# `query2_static_ref` (2 columns, no Entity) against `raw_slice_ceiling`
+# (zero ECS abstraction, two-field sum). Workflow takes the same
+# `bench`/`bench-nolto` choice `bench-iter1-isolated.yml` does, for the
+# same reason: if this ALSO shows ~1x with LTO and ~4x without, that
+# confirms the closed investigation's mechanism a second, independent
+# way and settles that item size doesn't matter here either. If it
+# shows something with LTO even `bench-mid-ecs-archetype-core.yml`'s
+# own build #29/#30 didn't (closer to parity than query2_static ever
+# gets there), that's the first real evidence the narrowed item
+# changes anything, and worth a real diagnostic pass -- not before.
+#
+# NOT meant to stay long-term any more than `benches/iter1-isolated`
+# is -- delete once the question above is answered either way.
+
+[dependencies]
+mid-ecs = { path = "../../crates/mid-ecs" }
+
+[dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[[bench]]
+name    = "query2_ref_isolated"
+harness = false

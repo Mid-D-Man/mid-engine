@@ -96,12 +96,6 @@ members = [
     "crates/mid-net/transport-wasm/wasm-test-server",
     "crates/mid-ecs",
     "crates/mid-collections",
-    # Standalone falsification bench for the query2_static 4x gap. Links
-    # against nothing -- no mid-ecs, no bevy_ecs -- specifically so it
-    # cannot be tipped by mid-ecs's own compilation-unit layout the way
-    # archetype_core.rs's controls were in builds #15-#18. criterion only,
-    # so no MSRV wall: this is the one bench runnable anywhere.
-    "benches/abi-return-size",
     "crates/mid-arena",
     "crates/mid-alloc",
     "crates/mid-ptr",
@@ -122,6 +116,9 @@ members = [
 
     "benches/ecs-vs-bevy-ecs",
     "benches/iter1-isolated",
+    # Sibling to iter1-isolated, same method, pointed at query2_static_ref
+    # instead of query_static -- see that crate's own Cargo.toml.
+    "benches/query2-ref-isolated",
 ]
 
 # NOTE on benches/ecs-vs-bevy-ecs (added this pass): its bevy_ecs dependency
