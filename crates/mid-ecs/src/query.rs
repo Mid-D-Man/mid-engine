@@ -112,14 +112,37 @@ impl World {
     /// splitting could ever have reached — which is exactly why all four
     /// of those came back negative (`docs/mid-ecs.md`, builds #11-#18).
     ///
-    /// **Still a hypothesis.** `benches/abi-return-size` is the decisive
-    /// test and links against nothing, so it cannot be tipped by this
-    /// crate's compilation-unit layout the way `archetype_core.rs`'s own
-    /// controls were. Run it before treating any of the above as settled.
+    /// **Tested, and refuted as the full explanation.**
+    /// `benches/query2-ref-isolated` ran this exact method, real
+    /// `mid-ecs`, nothing else in the compilation unit — the same
+    /// isolation that took `Iter1` to parity — and it still sits at
+    /// ~4x the raw-slice floor in both `bench` and `bench-nolto`
+    /// profiles (Query2-Ref Isolated builds #1/#2). Sixteen bytes was
+    /// supposed to be the side of the register/memory threshold that
+    /// gets inlined cleanly; it isn't, here. Whatever the real cause
+    /// is, it isn't the ABI classification by itself, and it isn't a
+    /// compilation-unit-size artifact either — isolation is exactly
+    /// what fixed `Iter1`, and it didn't fix this. Still an open
+    /// question, not a closed one; see `Iter2RefUncheckedAlways`
+    /// (`archetype/iter.rs`) for the next thing actually being tried,
+    /// not this comment, for the current state.
     pub fn query2_static_ref<A: 'static, B: 'static>(
         &self,
     ) -> impl Iterator<Item = (&A, &B)> + '_ {
         self.archetypes.iter2_ref::<A, B>()
+    }
+
+    // ── TEMPORARY, real-CI-only: unsafe + forced inlining, in true
+    // isolation. See `archetype/iter.rs`'s own doc comment on
+    // `Iter2RefUncheckedAlways` and `benches/query2-ref-isolated` for
+    // the full story. `pub`, not `pub(crate)`, for the same reason as
+    // every other `#[doc(hidden)]` method here: that crate is external
+    // to this one and needs real public API to reach it.
+    #[doc(hidden)]
+    pub fn query2_static_ref_unchecked_always<A: 'static, B: 'static>(
+        &self,
+    ) -> impl Iterator<Item = (&A, &B)> + '_ {
+        self.archetypes.iter2_ref_unchecked_always::<A, B>()
     }
 }
 
@@ -374,5 +397,78 @@ mod tests {
         let static_found: Vec<Entity> = w.query_static::<Velocity>().map(|(e, _)| e).collect();
         assert_eq!(sparse_found, vec![sparse_entity]);
         assert_eq!(static_found, vec![static_entity]);
+    }
+
+    #[test]
+    fn query_static_ref_yields_the_same_values_as_query_static() {
+        let mut w = World::new();
+        let e1 = w.spawn();
+        let e2 = w.spawn();
+        assert!(w.insert_static(e1, Position { x: 1.0, y: 1.0 }));
+        assert!(w.insert_static(e2, Position { x: 2.0, y: 2.0 }));
+
+        let mut expected: Vec<Position> = w.query_static::<Position>().map(|(_, p)| *p).collect();
+        let mut actual: Vec<Position> = w.query_static_ref::<Position>().copied().collect();
+        expected.sort_by(|a, b| a.x.partial_cmp(&b.x).unwrap());
+        actual.sort_by(|a, b| a.x.partial_cmp(&b.x).unwrap());
+        assert_eq!(actual, expected);
+        assert_eq!(actual.len(), 2);
+    }
+
+    #[test]
+    fn query2_static_ref_returns_matching_component_references() {
+        let mut w = World::new();
+        let e = w.spawn();
+        assert!(w.insert_static(e, Position { x: 3.0, y: 4.0 }));
+        assert!(w.insert_static(e, Velocity { dx: 1.0, dy: -1.0 }));
+
+        let (pos, vel) = w.query2_static_ref::<Position, Velocity>().next().unwrap();
+        assert_eq!(*pos, Position { x: 3.0, y: 4.0 });
+        assert_eq!(*vel, Velocity { dx: 1.0, dy: -1.0 });
+    }
+
+    #[test]
+    fn query2_static_ref_empty_when_one_side_was_never_registered() {
+        let mut w = World::new();
+        let e = w.spawn();
+        assert!(w.insert_static(e, Position { x: 0.0, y: 0.0 }));
+        assert_eq!(w.query2_static_ref::<Position, Velocity>().count(), 0);
+    }
+
+    #[test]
+    fn query2_static_ref_unchecked_always_matches_the_real_query2_static_ref() {
+        let mut w = World::new();
+        let e1 = w.spawn();
+        let e2 = w.spawn();
+        assert!(w.insert_static(e1, Position { x: 1.0, y: 1.0 }));
+        assert!(w.insert_static(e1, Velocity { dx: 0.5, dy: 0.5 }));
+        assert!(w.insert_static(e2, Position { x: 2.0, y: 2.0 }));
+        assert!(w.insert_static(e2, Velocity { dx: 1.5, dy: 1.5 }));
+
+        let mut expected: Vec<(Position, Velocity)> = w
+            .query2_static_ref::<Position, Velocity>()
+            .map(|(p, v)| (*p, *v))
+            .collect();
+        let mut actual: Vec<(Position, Velocity)> = w
+            .query2_static_ref_unchecked_always::<Position, Velocity>()
+            .map(|(p, v)| (*p, *v))
+            .collect();
+        expected.sort_by(|a, b| a.0.x.partial_cmp(&b.0.x).unwrap());
+        actual.sort_by(|a, b| a.0.x.partial_cmp(&b.0.x).unwrap());
+
+        assert_eq!(actual, expected);
+        assert_eq!(actual.len(), 2);
+    }
+
+    #[test]
+    fn query2_static_ref_unchecked_always_empty_when_one_side_was_never_registered() {
+        let mut w = World::new();
+        let e = w.spawn();
+        assert!(w.insert_static(e, Position { x: 0.0, y: 0.0 }));
+        assert_eq!(
+            w.query2_static_ref_unchecked_always::<Position, Velocity>()
+                .count(),
+            0
+        );
     }
 }

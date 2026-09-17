@@ -1638,3 +1638,44 @@ either, and the honest next move is the same one this investigation
 already reached once before — name what's confirmed, stop guessing at
 what isn't, and decide deliberately whether continuing is worth it
 rather than drifting into a ninth variant by default.
+
+### `Iter2RefUncheckedAlways`: unsafe + forced inlining, in true isolation this time
+
+Follows directly from `benches/query2-ref-isolated`'s own real result
+(Query2-Ref Isolated builds #1/#2): `query2_static_ref` — the
+apples-to-apples, entity-free, 16-byte-item shape against `bevy_ecs`'s
+own `Query<(&A, &B)>` — still sits at ~4x the raw-slice floor in *true
+isolation*, both `bench` and `bench-nolto`. That's a stronger result
+than anything `archetype_core.rs` itself could produce: it rules out
+the ABI-register-threshold theory (16 bytes was supposed to be the
+side that inlines cleanly; it isn't) and the compilation-unit-size
+theory at the same time (isolation is exactly what fixed `Iter1`, and
+it didn't fix this).
+
+One combination was still untested: `get_unchecked` +
+`#[inline(always)]` together, the same pairing `Iter2UncheckedAlways`
+already tried and found negative — but only ever inside
+`archetype_core.rs`, never in true isolation. `Iter2RefUncheckedAlways`
+(`archetype/iter.rs`) is `Iter2Ref`'s exact body with both added,
+wired into `benches/query2-ref-isolated` as a second bench function
+(`query2_static_ref_two_components — unchecked_always`) alongside the
+real one, same bench binary, same isolation. 5 new correctness tests
+added for `query_static_ref`/`query2_static_ref`/this variant — none
+of the three had any coverage before this pass, cross-checked against
+the real, safe `query2_static_ref` output the same way every unsafe
+diagnostic in this crate's history has been. 185/185 tests
+(`scratch-arena`), nothing broken.
+
+**Not yet run on real CI.** If it reaches the floor, that's a real,
+actionable result — the two-column cost really was about inlining
+after all, just never tested with isolation as a precondition before.
+If it doesn't, that closes off the last variant in this specific
+family (attribute alone, unsafe alone, both together — each now tested
+both inside `archetype_core.rs` and in true isolation), and the honest
+next move is the one already named twice in this document: stop
+adding local-code variants to this specific question and either look
+somewhere structurally different (why bevy's *generic, tuple-composed*
+fetch doesn't pay whatever cost two independent hand-written slice
+accesses do — not yet actually checked) or accept the gap as a real,
+documented, currently-unsolved limitation and move on to other engine
+work.

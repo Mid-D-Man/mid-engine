@@ -465,6 +465,102 @@ impl<'a, A: 'static, B: 'static> Iterator for Iter2Ref<'a, A, B> {
 // Constructors reached from `archetype.rs`
 // =====================================================================
 
+/// `Iter2UncheckedAlways` (this crate's own diagnostic history) already
+/// tested `get_unchecked` + `#[inline(always)]` together — but only
+/// ever inside `archetype_core.rs`, whose own size is exactly what the
+/// closed investigation found LTO's inliner sensitive to. `Iter1`'s
+/// real fix turned out to be isolation itself (`benches/iter1-isolated`),
+/// not any attribute — so the one combination never actually tried is
+/// unsafe + forced inlining *and* true isolation, together, on the
+/// entity-free 16-byte item specifically. `benches/query2-ref-isolated`
+/// is where that gets tested; this type is the same body as
+/// [`Iter2Ref`], nothing else changed, so a result isolates exactly
+/// this one variable the same way every other diagnostic in this
+/// crate's history has.
+pub(crate) struct Iter2RefUncheckedAlways<'a, A, B> {
+    archetypes: &'a Archetypes,
+    ids: Option<(ComponentId, ComponentId)>,
+    matched: std::vec::IntoIter<ArchetypeId>,
+    entities: &'a [Entity],
+    a_col: &'a [A],
+    b_col: &'a [B],
+    row: usize,
+    len: usize,
+}
+
+impl<'a, A: 'static, B: 'static> Iter2RefUncheckedAlways<'a, A, B> {
+    #[inline]
+    pub(crate) fn new(
+        archetypes: &'a Archetypes,
+        ids: Option<(ComponentId, ComponentId)>,
+        matched: Vec<ArchetypeId>,
+    ) -> Self {
+        Self {
+            archetypes,
+            ids,
+            matched: matched.into_iter(),
+            entities: &[],
+            a_col: &[],
+            b_col: &[],
+            row: 0,
+            len: 0,
+        }
+    }
+}
+
+impl<'a, A: 'static, B: 'static> Iterator for Iter2RefUncheckedAlways<'a, A, B> {
+    type Item = (&'a A, &'a B);
+
+    #[inline(always)]
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            if self.row < self.len {
+                // SAFETY: `self.len` is set to `entities.len().min(a_col.len())
+                // .min(b_col.len())` on every archetype advance below and
+                // never grown afterward, so `self.row < self.len` already
+                // proves `self.row` is in bounds for both `a_col` and
+                // `b_col` — same invariant `Iter2Unchecked`/
+                // `Iter2UncheckedAlways` already rely on.
+                let item = unsafe {
+                    (
+                        self.a_col.get_unchecked(self.row),
+                        self.b_col.get_unchecked(self.row),
+                    )
+                };
+                self.row += 1;
+                return Some(item);
+            }
+            let (a_id, b_id) = self.ids?;
+            let archetype_id = self.matched.next()?;
+            let archetype = self.archetypes.archetypes.get(archetype_id).expect(
+                "iter2's precomputed matched list only ever contains real, currently-existing archetype ids",
+            );
+            let entities: &[Entity] = &archetype.table.entities;
+            let a_col: &[A] = match archetype.table.columns.get(a_id) {
+                Some(column) => column
+                    .as_any()
+                    .downcast_ref::<Vec<A>>()
+                    .expect("column type must match component_id's T")
+                    .as_slice(),
+                None => &[],
+            };
+            let b_col: &[B] = match archetype.table.columns.get(b_id) {
+                Some(column) => column
+                    .as_any()
+                    .downcast_ref::<Vec<B>>()
+                    .expect("column type must match component_id's T")
+                    .as_slice(),
+                None => &[],
+            };
+            self.len = entities.len().min(a_col.len()).min(b_col.len());
+            self.entities = entities;
+            self.a_col = a_col;
+            self.b_col = b_col;
+            self.row = 0;
+        }
+    }
+}
+
 /// Verbatim copies of [`Archetypes::iter`]/[`Archetypes::iter2`]'s own
 /// matched-archetype-list logic -- see those methods' doc comments in
 /// `archetype.rs` for the real explanation. Duplicated here rather than
@@ -498,5 +594,25 @@ impl Archetypes {
             None => Vec::new(),
         };
         Iter2Ref::new(self, ids, matched)
+    }
+
+    pub(crate) fn iter2_ref_unchecked_always<A: 'static, B: 'static>(
+        &self,
+    ) -> Iter2RefUncheckedAlways<'_, A, B> {
+        let ids = self
+            .existing_component_id::<A>()
+            .zip(self.existing_component_id::<B>());
+        let matched: Vec<ArchetypeId> = match ids {
+            Some((a_id, b_id)) => self
+                .archetypes_with(a_id)
+                .filter(|&archetype_id| {
+                    self.archetypes
+                        .get(archetype_id)
+                        .is_some_and(|archetype| archetype.component_ids.contains(&b_id))
+                })
+                .collect(),
+            None => Vec::new(),
+        };
+        Iter2RefUncheckedAlways::new(self, ids, matched)
     }
 }

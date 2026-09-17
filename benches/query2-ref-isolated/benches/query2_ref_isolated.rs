@@ -73,6 +73,30 @@ fn bench_query2_static_ref(c: &mut Criterion) {
     group.finish();
 }
 
+/// `get_unchecked` + `#[inline(always)]`, the one combination never
+/// tested in true isolation -- see `archetype/iter.rs`'s own doc
+/// comment on `Iter2RefUncheckedAlways` for why this is the actual
+/// point of this crate's second workflow run. Same body as
+/// `query2_static_ref` above in every other respect.
+fn bench_query2_static_ref_unchecked_always(c: &mut Criterion) {
+    let mut group = c.benchmark_group("query2_static_ref_two_components");
+    for &n in &SIZES {
+        group.throughput(Throughput::Elements(n as u64));
+        let world = populated_world(n);
+        group.bench_with_input(BenchmarkId::new("unchecked_always", n), &n, |b, _| {
+            b.iter(|| {
+                let mut sum = 0.0f32;
+                for (pos, vel) in world.query2_static_ref_unchecked_always::<Position, Velocity>()
+                {
+                    sum += pos.x + vel.dx;
+                }
+                black_box(sum);
+            });
+        });
+    }
+    group.finish();
+}
+
 /// Floor: zero ECS abstraction, both fields, same shape as
 /// `archetype_core.rs`'s own `raw_slice_ceiling — two_field_sum`.
 fn bench_raw_slice_ceiling(c: &mut Criterion) {
@@ -106,5 +130,10 @@ fn bench_raw_slice_ceiling(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_query2_static_ref, bench_raw_slice_ceiling);
+criterion_group!(
+    benches,
+    bench_query2_static_ref,
+    bench_query2_static_ref_unchecked_always,
+    bench_raw_slice_ceiling
+);
 criterion_main!(benches);
