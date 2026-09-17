@@ -1,0 +1,156 @@
+# .github/workflows/bench-query2-ref-isolated.yml
+#
+# Runs benches/query2-ref-isolated -- see that crate's own Cargo.toml
+# for the one question it exists to answer: does the real, unmodified
+# `query2_static_ref` (2 columns, no `Entity`, 16-byte item) come back
+# close to `raw_slice_ceiling`'s floor under LTO, the way the real
+# `query_static` (1 column, also 16 bytes, but WITH `Entity`) does in
+# `benches/iter1-isolated` -- or does it stay at the same ~4x
+# `query2_static` (24-byte item) has always shown, isolated or not?
+#
+# Modeled directly on bench-iter1-isolated.yml -- same structure, same
+# profile choice, same step-summary size-limit handling (matching the
+# `` `bench `` prefix, not an exact `` `bench` `` match, so
+# `bench-nolto` doesn't fall through to the "compilation never
+# finished" branch the way build #20 originally did before that was
+# fixed there -- see docs/mid-ecs.md's "Builds #19 and #20" section).
+#
+# Run: Actions -> "mid-ecs — bench Query2-Ref Isolated" -> Run workflow
+# DO NOT add push/pull_request triggers.
+
+name: mid-ecs — bench Query2-Ref Isolated
+
+on:
+  workflow_dispatch:
+    inputs:
+      baseline_note:
+        description: 'Context for this run (e.g. "checking isolation alone")'
+        required: false
+        default: 'manual query2-ref-isolated benchmark run'
+      profile:
+        description: 'Cargo profile: bench (default, matches Iter1 Isolated build #1''s own LTO-on condition) or bench-nolto'
+        required: false
+        type: choice
+        default: 'bench'
+        options:
+          - 'bench'
+          - 'bench-nolto'
+
+permissions:
+  contents: read
+  actions:  read
+
+jobs:
+  bench:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Get Rust version
+        id: rustver
+        run: echo "ver=$(rustc --version)" >> $GITHUB_OUTPUT
+
+      - name: Cache cargo registry + build artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-bench-query2-ref-isolated-${{ inputs.profile }}-${{ hashFiles('benches/query2-ref-isolated/Cargo.toml', 'crates/mid-ecs/**/Cargo.toml', 'Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-bench-query2-ref-isolated-${{ inputs.profile }}-
+
+      - name: Confirm environment
+        env:
+          RUST_VERSION: ${{ steps.rustver.outputs.ver }}
+        run: |
+          {
+            echo "## Query2-Ref Isolated Bench — Build #${{ github.run_number }}"
+            echo ""
+            echo "| | |"
+            echo "|---|---|"
+            echo "| Rust    | \`${RUST_VERSION}\` |"
+            echo "| Branch  | \`${{ github.ref_name }}\` |"
+            echo "| Commit  | \`${GITHUB_SHA:0:8}\` |"
+            echo "| Profile | \`${{ inputs.profile }}\` |"
+            echo "| Note    | ${{ inputs.baseline_note }} |"
+            echo ""
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Run Query2-Ref-isolated criterion benchmarks
+        run: |
+          # set -o pipefail: without it, `cargo bench | tee file`
+          # reports tee's exit code (always 0), not cargo bench's.
+          set -o pipefail
+          echo "Note: ${{ inputs.baseline_note }}"
+          echo "Profile: ${{ inputs.profile }}"
+          cargo bench -p query2-ref-isolated --profile ${{ inputs.profile }} -- --color never \
+            2>&1 | tee bench-query2-ref-isolated-raw.txt
+          echo "Bench exit code: $?" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Surface bench diagnostics
+        if: always()
+        run: |
+          {
+            echo "### Diagnostics"
+            echo '```'
+            grep -E 'took zero time|Unable to complete|Warning:|panicked|Completed [0-9]+ iterations' \
+              bench-query2-ref-isolated-raw.txt | head -60 || echo "(none found)"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Publish summary
+        if: always()
+        run: |
+          {
+            echo "### Results"
+            echo ""
+            echo "Lower is faster. \`query2_static_ref_two_components\` (the real,"
+            echo "unmodified, entity-free \`Iter2Ref\`) against \`raw_slice_ceiling\`"
+            echo "(zero ECS abstraction, both fields) -- with nothing else compiled"
+            echo "into this bench binary. Compare this run's \`query2_static_ref\`"
+            echo "number directly against Iter1 Isolated's own"
+            echo "\`query_static_single_component\` result (same profile) and against"
+            echo "Archetype Core's \`query2_static_two_components\` (same profile) --"
+            echo "no regression-guard script here, just three numbers to read side by"
+            echo "side across the three workflows."
+            echo ""
+            echo '```'
+            grep -B 1 "time:" bench-query2-ref-isolated-raw.txt | grep -v "^--$" || echo "(no results parsed -- see raw log)"
+            echo '```'
+            echo ""
+            echo "<details><summary>Full raw output</summary>"
+            echo ""
+            echo "_Build output (compiler warnings, \`Compiling\`/\`Finished\` lines) is_"
+            echo "_stripped below to stay clear of GitHub's 1024k step-summary limit --_"
+            echo "_the untouched log is in this run's uploaded artifact. Also hard-capped_"
+            echo "_at 900k here as a second guard, however that budget ends up used._"
+            echo ""
+            echo '```'
+            if grep -q 'Finished `bench' bench-query2-ref-isolated-raw.txt; then
+              awk '/Finished `bench/{f=1} f' bench-query2-ref-isolated-raw.txt | head -c 900000
+            else
+              echo "(Compilation never finished -- showing the full raw log, including build errors, since there's no benchmark output to isolate it from.)"
+              echo ""
+              head -c 900000 bench-query2-ref-isolated-raw.txt
+            fi
+            echo '```'
+            echo ""
+            echo "</details>"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bench-query2-ref-isolated-${{ github.run_number }}
+          path: |
+            bench-query2-ref-isolated-raw.txt
+            target/criterion
+          retention-days: 30
