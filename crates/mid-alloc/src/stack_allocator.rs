@@ -58,7 +58,7 @@
 //! toolchain that has it before this ships in anything that isn't
 //! itself still under active development.
 
-use crate::raw_alloc::RawAlloc;
+use crate::raw_alloc::{grow_via_alloc_copy_dealloc, RawAlloc};
 use alloc::vec::Vec;
 use core::cell::Cell;
 use core::mem;
@@ -157,6 +157,7 @@ impl StackAllocator {
     /// debug-asserted, not checked in release, matching `Layout`'s own
     /// contract. Exists for callers below [`alloc`](Self::alloc) who
     /// need to place a type with an unusual/runtime alignment.
+    #[inline]
     pub fn alloc_raw(&self, size_bytes: usize, align: usize) -> Option<NonNull<u8>> {
         debug_assert!(align.is_power_of_two(), "align must be a power of two");
 
@@ -198,6 +199,7 @@ impl StackAllocator {
     /// see this module's doc comment for why that's the point. Returns
     /// `value` back, unwritten, if there isn't enough remaining
     /// capacity, rather than losing it silently.
+    #[inline]
     pub fn alloc<T>(&self, value: T) -> Result<&mut T, T> {
         let ptr = match self.alloc_raw(mem::size_of::<T>(), mem::align_of::<T>()) {
             Some(ptr) => ptr,
@@ -277,6 +279,7 @@ impl RawAlloc for StackAllocator {
         self.alloc_raw(size, align)
     }
 
+    #[inline]
     unsafe fn try_dealloc_raw(&self, ptr: NonNull<u8>, _size: usize, _align: usize) -> bool {
         let start = self.buf.as_ptr() as usize;
         let end = start + self.buf.len();
@@ -287,6 +290,40 @@ impl RawAlloc for StackAllocator {
         // and this check only ever gates ownership routing, not an
         // actual memory access.
         addr >= start && addr <= end
+    }
+
+    /// Grows in place, for free, whenever `ptr` is genuinely the most
+    /// recent allocation -- the exact same `is_last_allocation` check
+    /// `resize_raw` already makes (see that method's own doc comment
+    /// for where it's ported from). Falls back to the trait's shared
+    /// alloc-copy-dealloc helper otherwise, since a real earlier
+    /// allocation may have live data sitting immediately after it.
+    #[inline]
+    unsafe fn try_grow_raw(
+        &self,
+        ptr: NonNull<u8>,
+        old_size: usize,
+        new_size: usize,
+        align: usize,
+    ) -> Option<NonNull<u8>> {
+        debug_assert!(new_size >= old_size, "try_grow_raw is for growing, not shrinking");
+
+        let base = self.buf.as_ptr() as usize;
+        let addr = ptr.as_ptr() as usize;
+        let is_last_allocation = addr + old_size == base + self.top.get();
+
+        if is_last_allocation {
+            let grow_by = new_size - old_size;
+            if self.top.get() + grow_by <= self.buf.len() {
+                self.top.set(self.top.get() + grow_by);
+                return Some(ptr);
+            }
+        }
+
+        // SAFETY: forwarding this call's own contract on
+        // `ptr`/`old_size`/`align`/`new_size >= old_size` straight
+        // through to the shared fallback.
+        unsafe { grow_via_alloc_copy_dealloc(self, ptr, old_size, new_size, align) }
     }
 }
 
@@ -500,5 +537,53 @@ mod tests {
         let ptr = a.alloc_raw(8, 1).unwrap();
         assert!(!a.resize_raw(ptr, 8, 32));
         assert_eq!(a.used(), 8, "a failed grow must not move the bump position");
+    }
+
+    #[test]
+    fn try_grow_raw_on_the_last_allocation_grows_in_place() {
+        use crate::raw_alloc::RawAlloc;
+        let a = StackAllocator::with_capacity(64);
+        let ptr = a.try_alloc_raw(8, 8).unwrap();
+        unsafe {
+            (ptr.as_ptr() as *mut u64).write(0x1122_3344_5566_7788);
+        }
+        let grown = unsafe { a.try_grow_raw(ptr, 8, 32, 8) }.expect("plenty of room to grow in place");
+        assert_eq!(
+            grown, ptr,
+            "growing the most recent allocation in place must return the same address"
+        );
+        assert_eq!(a.used(), 32);
+        assert_eq!(
+            unsafe { (grown.as_ptr() as *const u64).read() },
+            0x1122_3344_5566_7788,
+            "in-place growth must not disturb the existing bytes"
+        );
+    }
+
+    #[test]
+    fn try_grow_raw_on_a_non_last_allocation_falls_back_to_alloc_copy_dealloc() {
+        use crate::raw_alloc::RawAlloc;
+        let a = StackAllocator::with_capacity(64);
+        let first = a.try_alloc_raw(8, 8).unwrap();
+        unsafe {
+            (first.as_ptr() as *mut u64).write(0xAAAA_BBBB_CCCC_DDDD);
+        }
+        let _second = a.try_alloc_raw(8, 8).unwrap(); // now `first` is no longer last
+        let used_before = a.used();
+
+        let grown = unsafe { a.try_grow_raw(first, 8, 32, 8) }.expect("fallback path should still succeed");
+        assert_ne!(
+            grown, first,
+            "a non-last allocation cannot grow in place -- must land at a new address"
+        );
+        assert_eq!(
+            unsafe { (grown.as_ptr() as *const u64).read() },
+            0xAAAA_BBBB_CCCC_DDDD,
+            "the fallback path must still preserve the original bytes"
+        );
+        assert!(
+            a.used() > used_before,
+            "the fallback path allocates a real new block, using more of the buffer"
+        );
     }
 }

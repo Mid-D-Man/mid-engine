@@ -123,6 +123,7 @@ impl<'p, P: RawAlloc> BackedStack<'p, P> {
     /// arithmetic bump math as `StackAllocator::alloc_raw`, ported
     /// directly, just relative to this allocator's parent-provisioned
     /// `buf` instead of an owned `Vec<u8>`.
+    #[inline]
     pub fn alloc_raw(&self, size_bytes: usize, align: usize) -> Option<NonNull<u8>> {
         debug_assert!(align.is_power_of_two(), "align must be a power of two");
 
@@ -147,6 +148,7 @@ impl<'p, P: RawAlloc> BackedStack<'p, P> {
     /// Safe, typed convenience over [`alloc_raw`](Self::alloc_raw).
     /// Returns `value` back, unwritten, if there isn't enough
     /// remaining capacity.
+    #[inline]
     pub fn alloc<T>(&self, value: T) -> Result<&mut T, T> {
         let ptr = match self.alloc_raw(mem::size_of::<T>(), mem::align_of::<T>()) {
             Some(ptr) => ptr,

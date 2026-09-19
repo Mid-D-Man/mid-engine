@@ -145,10 +145,12 @@ impl<A> SyncAlloc<A> {
 }
 
 impl<A: RawAlloc> RawAlloc for SyncAlloc<A> {
+    #[inline]
     fn try_alloc_raw(&self, size: usize, align: usize) -> Option<NonNull<u8>> {
         self.inner.lock().try_alloc_raw(size, align)
     }
 
+    #[inline]
     unsafe fn try_dealloc_raw(&self, ptr: NonNull<u8>, size: usize, align: usize) -> bool {
         // SAFETY: forwarding the caller's own contract straight
         // through to `inner`, now serialized by the lock.

@@ -177,12 +177,14 @@ impl<A> Tracked<A> {
 }
 
 impl<A: RawAlloc> RawAlloc for Tracked<A> {
+    #[inline]
     fn try_alloc_raw(&self, size: usize, align: usize) -> Option<NonNull<u8>> {
         let ptr = self.inner.try_alloc_raw(size, align)?;
         self.record_alloc(size as u64);
         Some(ptr)
     }
 
+    #[inline]
     unsafe fn try_dealloc_raw(&self, ptr: NonNull<u8>, size: usize, align: usize) -> bool {
         // SAFETY: forwarding the caller's own contract straight
         // through to `inner`.

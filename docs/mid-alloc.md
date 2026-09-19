@@ -277,14 +277,41 @@ address range and reports that, doing nothing else, matching
 `memory_stack`'s real `owns(ptr)` check directly rather than the naive
 "always claim it" shortcut a first pass might reach for.
 
-**Tests:** 4 new (`heap_alloc_round_trips_a_value`,
+**`try_grow_raw` added later** (see "Fixes and Problems" below for the
+real bench numbers that motivated it): a third trait method, growing a
+previously-allocated block from `old_size` to `new_size` bytes. The
+default implementation is the always-correct-never-optimal strategy
+every `RawAlloc` gets for free: allocate a new block, copy the old
+bytes over, deallocate the old one -- shared as a free function
+(`grow_via_alloc_copy_dealloc`, `pub(crate)`) rather than duplicated in
+every override's own fallback path, since Rust has no way to call a
+trait's default method from inside an override of that same method.
+`HeapAlloc` overrides it to forward straight to the real global
+allocator's `realloc`, which can extend a block in place with no copy
+at all when there is free space immediately after it. `StackAllocator`
+overrides it too, reusing `resize_raw`'s own real `is_last_allocation`
+check: grows in place for free when the block being grown is genuinely
+the most recent allocation, falls through to the shared default
+otherwise.
+
+**Tests:** 7 new since the first pass (`heap_alloc_round_trips_a_value`,
 `heap_alloc_zero_sized_request_returns_a_dangling_aligned_pointer`,
-`heap_alloc_rejects_a_non_power_of_two_alignment` in `raw_alloc.rs`;
-`raw_alloc_try_dealloc_recognizes_only_its_own_pointers` in
-`stack_allocator.rs`, added to that module's existing suite). All run
-directly against this workspace's real `cargo test -p mid-alloc` on
-rustc 1.75 — no scratch crate needed, since (unlike `mid-arena`)
-`mid-alloc` carries no `criterion` dev-dependency to block it.
+`heap_alloc_rejects_a_non_power_of_two_alignment`,
+`heap_alloc_try_grow_raw_preserves_contents`,
+`heap_alloc_try_grow_raw_from_zero_behaves_like_a_fresh_alloc`, and
+`default_try_grow_raw_preserves_contents_across_alloc_copy_dealloc`
+(through a small test-local wrapper type that deliberately doesn't
+override `try_grow_raw`, so the trait's own default body is what
+actually runs -- `HeapAlloc` overrides it, so testing through `HeapAlloc`
+directly would never exercise the default) in `raw_alloc.rs`;
+`raw_alloc_try_dealloc_recognizes_only_its_own_pointers`,
+`try_grow_raw_on_the_last_allocation_grows_in_place`, and
+`try_grow_raw_on_a_non_last_allocation_falls_back_to_alloc_copy_dealloc`
+in `stack_allocator.rs`). All run directly against this workspace's
+real `cargo test -p mid-alloc` on rustc 1.75 up through `Tracked`'s own
+addition below; from `benches/allocators.rs` onward, `cargo test`
+itself needs the scratch-crate technique instead (see the "Benches"
+section for why).
 
 ## What's built: `FallbackAllocator`
 
@@ -618,12 +645,22 @@ try to drop it on the next reset or the arena's own `Drop`. `RawAlloc`
 has no such invariant -- `try_alloc_raw`/`try_dealloc_raw` deal in
 untyped bytes, not `T` -- the same real reason `bumpalo::Bump` can host
 one. `BumpVec` is a real, if smaller, fork of
-`bumpalo::collections::vec`'s own design: grow by allocating a new,
-bigger block, move the live elements into it, and give the old block
-back to the parent allocator -- a real, immediate reclaim when the
-parent actually supports it (`HeapAlloc`), a documented no-op when it
-doesn't (`StackAllocator`), same composition story as everywhere else
-in this crate.
+`bumpalo::collections::vec`'s own design.
+
+**Growth strategy revised after the first real bench run** (see
+"Fixes and Problems" below for the actual numbers): originally grew by
+always allocating a new block, copying every live element into it by
+hand, and deallocating the old block -- correct, but it meant every
+single growth step paid for a full copy even when the parent allocator
+could have extended the existing block in place for free. Rewritten to
+delegate to `RawAlloc::try_grow_raw` instead, which skips the copy
+entirely when the parent supports growing in place (`StackAllocator`,
+when the block is the most recent allocation) or hands the work to a
+real `realloc` (`HeapAlloc`), falling back to the same allocate-copy-
+deallocate sequence only when the parent supports neither. The old
+block still gets a real, immediate reclaim when the parent actually
+supports it, same as before -- this is a real optimization to how that
+reclaim happens, not a change to whether it does.
 
 **Tests:** 7: push/pop/deref behaving like a real `Vec` including
 reading back correct values, growing past an initial `with_capacity_in`
@@ -635,7 +672,11 @@ ownership without double-dropping (checked by dropping the popped value
 separately from the vec itself and counting both), `new_in` never
 touching the parent allocator at all until the first `push` (using
 `NullAlloc` as the parent specifically so any premature call would fail
-loudly), and zero-sized types not panicking or looping forever.
+loudly), and zero-sized types not panicking or looping forever. All
+still pass unchanged after the growth-strategy rewrite -- none of them
+had to change, since `try_grow_raw`'s contract (preserve contents up to
+`old_size`, hand back a valid block) is exactly what the hand-rolled
+version already guaranteed.
 
 ## Benches: `benches/allocators.rs`, `.github/workflows/bench-mid-alloc.yml`
 
@@ -721,6 +762,69 @@ Finished \`bench\` profile`, untouched raw log uploaded as a 30-day
 artifact -- every real requirement from `docs/benching-standards.md`'s
 "recommended shape."
 
+**Run #1 (first real trigger): three real findings, not just numbers
+copied in.** `raw_alloc_sequential` showed `StackAllocator` a stable
+~2x slower than `bumpalo::Bump` across all three sizes (100/1000/10000
+-- a constant-factor gap, not a growing one). `create_destroy_churn`
+showed something worse: `PoolAllocator`, built specifically to beat
+repeated heap churn, measured 2.2-2.8x *slower* than plain `Box`.
+Checked both against real source rather than accepted at face value:
+neither `StackAllocator::alloc_raw` nor `PoolAllocator::create`/
+`destroy` had a single `#[inline]` anywhere, while `bumpalo`'s own
+equivalent fast path carries `#[inline(always)]` throughout (55
+occurrences in one file) and `Box`'s path through the global allocator
+is inlined by the standard library the same way. Cross-crate inlining
+without LTO leans heavily on that hint, and the bench calls into
+`mid-alloc` from a separate crate -- real function-call overhead on an
+operation that should be a handful of instructions is exactly the
+scale of gap a missing hint like this produces. Added `#[inline]`
+across every hot path this bench actually exercises (`StackAllocator::
+alloc_raw`/`alloc`/`try_dealloc_raw`/`try_grow_raw`, `PoolAllocator::
+create`/`destroy`/`bump_fresh_slot`, every `RawAlloc` impl's
+`try_alloc_raw`/`try_dealloc_raw`/`try_grow_raw` across `HeapAlloc`/
+`NullAlloc`/`FallbackAllocator`/`Segregator`/`Tracked`/`SyncAlloc`,
+`BackedStack::alloc_raw`/`alloc`, `BumpVec::push`/`pop`). **Stated
+plainly, matching this project's own established standard from
+`mid-arena`'s prefill-growth investigation: this is a real, grounded
+hypothesis, not a confirmed fix.** It has not been measured before/
+after on real CI yet -- that's what run #2 is for.
+
+`push_sequential` showed the third, most significant finding:
+`BumpVec` started *faster* than `std::vec::Vec` at N=100 (132.81ns vs
+351.21ns) but ended up 5.4x *slower* at N=10000 (41.888µs vs
+7.7366µs) -- a real crossover, not just a gap. Root cause found by
+reading `BumpVec::grow`'s own first version: it always allocated a
+fresh block and copied every live element into it by hand, even
+though `HeapAlloc` sits on top of a real allocator whose own `realloc`
+can frequently extend a block in place with no copy at all. `std::Vec`
+gets that optimization automatically through the standard library's
+own `Allocator::grow`; `BumpVec` had no equivalent path to it. Fixed
+by adding `RawAlloc::try_grow_raw` (default: the same always-correct
+alloc-copy-dealloc `BumpVec` used to do by hand, so every existing
+`RawAlloc` implementor keeps working with no change required),
+overriding it for `HeapAlloc` (forwards to the real global allocator's
+`realloc`) and `StackAllocator` (reuses `resize_raw`'s own real
+`is_last_allocation` check to grow in place for free when possible),
+and rewriting `BumpVec::grow` to call it instead of copying by hand.
+Also unverified against real CI yet, same honest caveat as the inline
+hints above -- verified only that it stays *correct* (all 68 tests,
+including every `bump_vec.rs` test that forces a real growth cycle,
+still pass via the scratch-crate technique after the rewrite).
+
+Also caught in this same run, a real bug in the bench file itself, not
+in any of the code it measures: `combinator_dispatch_overhead` showed
+`HeapAlloc (baseline)` and `Segregator<Heap, Heap>` both at exactly
+`0.0000 ps` -- not a real measurement, dead-code elimination. Neither
+entry's loop wrapped its allocated pointer in `black_box` before
+deallocating it (every other group in this file already did), so LLVM
+could see the whole loop body had no observable effect and removed it
+entirely; `FallbackAllocator`/`Tracked`/`SyncAlloc`'s entries happened
+to survive only because their extra indirection (generic dispatch, an
+atomic op, a lock) was enough to block that specific optimization, not
+because the bench protected them correctly. Fixed by wrapping the
+allocated pointer in `black_box` in every entry of that group,
+matching the pattern already used everywhere else in the file.
+
 ## Module plan (catalogued, not built)
 
 Every module from the original foonathan/memory survey has shipped
@@ -777,6 +881,13 @@ guess, not a confirmed one.
   payloads are all `Copy`/`Debug` primitives). Both fixed same pass;
   all 22 tests in the crate (13 new, 9 existing `StackAllocator`)
   pass clean, with and without the `pool` feature enabled.
+- Added `#[inline]` to `create`/`destroy`/`bump_fresh_slot` after the
+  first real bench run measured this type 2.2-2.8x slower than plain
+  `Box` at the exact churn pattern it exists to beat -- see
+  `docs/mid-alloc.md`'s "Benches" section above for the full finding
+  and why the missing hint is the grounded suspect, not a confirmed
+  fix. Verified only that nothing broke (68/68 tests, scratch-crate
+  technique); the actual speed claim waits on a real re-run.
 
 ### `raw_alloc.rs`
 
@@ -809,6 +920,29 @@ guess, not a confirmed one.
   test (`null_alloc_always_fails`) added to this file's existing
   suite.
 
+- Added `try_grow_raw` (plus the shared `pub(crate)` helper
+  `grow_via_alloc_copy_dealloc`) after the first real bench run showed
+  `BumpVec` regressing 5.4x against `std::vec::Vec` at N=10000 -- see
+  `docs/mid-alloc.md`'s "Benches" section above for the full root-cause
+  finding. The default implementation is deliberately the exact same
+  alloc-copy-dealloc sequence `BumpVec::grow` used to do by hand, moved
+  here so every other `RawAlloc` implementor (and any future one) gets
+  correct growth automatically, with no override required and no
+  behavior change for types that don't specialize it. `HeapAlloc`'s
+  override reuses the exact same zero-size special case
+  `try_alloc_raw` already has (`old_size == 0` routes to `try_alloc_raw`
+  directly, since there is nothing real to reallocate). Six new tests
+  across this file and `stack_allocator.rs`'s own override, all
+  checking the one property that actually matters here -- that
+  contents genuinely survive the grow, not just that a pointer comes
+  back (`heap_alloc_try_grow_raw_preserves_contents` and its
+  `stack_allocator.rs` counterparts write a real, checkable value
+  before growing and read it back after). The default's own test
+  (`default_try_grow_raw_preserves_contents_across_alloc_copy_dealloc`)
+  needed a small test-local wrapper type rather than reaching for
+  `FallbackAllocator`, specifically so `raw_alloc.rs`'s own tests stay
+  unconditional and don't start depending on the `fallback` feature.
+
 ### `stack_allocator.rs`
 
 - Added a `RawAlloc` impl in the same pass as `raw_alloc.rs` and
@@ -838,6 +972,25 @@ guess, not a confirmed one.
   shrink-only on a non-last allocation, grow-past-capacity failing
   cleanly) bring this file to 13; all 38 in the crate re-ran clean
   across every feature combination.
+
+- Added a `try_grow_raw` override and `#[inline]` on every hot path
+  the first real bench run actually exercised (`alloc_raw`, `alloc`,
+  `try_dealloc_raw`, `try_grow_raw`), both from the same run's findings
+  (`docs/mid-alloc.md`'s "Benches" section above has the numbers).
+  `try_grow_raw` reuses `resize_raw`'s exact `is_last_allocation` check
+  rather than re-deriving it -- the two methods now share the one real
+  condition that makes in-place growth sound, checked once, in one
+  place conceptually, even though Rust's trait-override rules meant
+  writing the check twice rather than calling one from the other. Two
+  new tests confirm the property that actually matters: growing the
+  last allocation in place returns the *same* address and preserves a
+  real written value; growing a non-last allocation returns a
+  *different* address (the fallback path) while still preserving that
+  same value. All 68 tests in the crate pass after this and the
+  `#[inline]` pass, via the scratch-crate technique -- `cargo test
+  -p mid-alloc` itself stopped being available directly once
+  `benches/allocators.rs`'s own dev-dependencies landed (see that
+  file's own entry below).
 
 ### `fallback.rs`
 
@@ -969,6 +1122,24 @@ guess, not a confirmed one.
   All 7 tests pass on this sandbox's rustc 1.75, alongside the rest of
   the crate's 63 total.
 
+- Rewrote `grow` to delegate to the new `RawAlloc::try_grow_raw`
+  instead of hand-rolling alloc-copy-dealloc, after the first real
+  bench run showed this exact hand-rolled version regressing 5.4x
+  against `std::vec::Vec` at N=10000 (`docs/mid-alloc.md`'s "Benches"
+  section above has the full root-cause finding: `std::Vec` gets
+  in-place `realloc` growth for free from the standard library,
+  `BumpVec` had no equivalent path to it). The rewrite removed code
+  rather than adding it -- the manual `ptr::copy_nonoverlapping` call
+  is gone, since `try_grow_raw` now owns that decision entirely (skip
+  the copy, do a real `realloc`, or fall back to copying, depending on
+  what the parent allocator actually supports). None of this file's
+  own 7 tests needed to change: `try_grow_raw`'s contract (preserve
+  contents up to `old_size`, hand back a valid block) is exactly what
+  the old hand-rolled version already guaranteed, so the tests were
+  already checking the right thing. Re-ran all 7 through the
+  scratch-crate technique after the rewrite to confirm that directly
+  rather than assuming it from the contract match alone.
+
 ### `benches/allocators.rs`
 
 - First pass, new file. Real bug caught before it ever reached CI, by
@@ -984,3 +1155,18 @@ guess, not a confirmed one.
   version actually compiles and runs (not just re-reading it) via the
   scratch-crate replication described in this file's own "Benches"
   section above.
+- Run #1 (this file's first real trigger) found a second real bug,
+  this time in the bench code itself rather than caught before it
+  shipped: `combinator_dispatch_overhead`'s `HeapAlloc (baseline)` and
+  `Segregator<Heap, Heap>` entries both reported `0.0000 ps` -- dead
+  code, not a real measurement. Neither entry wrapped its allocated
+  pointer in `black_box` before deallocating it, unlike every other
+  group in this file, so LLVM saw the whole loop had no observable
+  effect and removed it. Fixed by wrapping the pointer in `black_box`
+  in every entry of that group. A real lesson worth stating rather
+  than only fixing: `FallbackAllocator`/`Tracked`/`SyncAlloc`'s entries
+  in the same, equally unprotected group happened to survive with
+  real-looking numbers anyway, purely because their own extra
+  indirection was enough to block that specific optimization -- a
+  result "surviving" is not the same as a bench being correct, and the
+  ones that looked fine were exactly as buggy as the ones that didn't.

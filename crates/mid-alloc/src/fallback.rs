@@ -47,6 +47,7 @@ impl<Primary, Secondary> FallbackAllocator<Primary, Secondary> {
 }
 
 impl<Primary: RawAlloc, Secondary: RawAlloc> RawAlloc for FallbackAllocator<Primary, Secondary> {
+    #[inline]
     fn try_alloc_raw(&self, size: usize, align: usize) -> Option<NonNull<u8>> {
         self.primary
             .try_alloc_raw(size, align)
@@ -62,6 +63,7 @@ impl<Primary: RawAlloc, Secondary: RawAlloc> RawAlloc for FallbackAllocator<Prim
     /// unconditionally claiming every call -- a combinator built on an
     /// allocator that couldn't tell would have no sound way to route
     /// this at all.
+    #[inline]
     unsafe fn try_dealloc_raw(&self, ptr: NonNull<u8>, size: usize, align: usize) -> bool {
         self.primary.try_dealloc_raw(ptr, size, align)
             || self.secondary.try_dealloc_raw(ptr, size, align)

@@ -79,6 +79,7 @@ impl<Small, Large> Segregator<Small, Large> {
 }
 
 impl<Small: RawAlloc, Large: RawAlloc> RawAlloc for Segregator<Small, Large> {
+    #[inline]
     fn try_alloc_raw(&self, size: usize, align: usize) -> Option<NonNull<u8>> {
         if self.use_small(size) {
             self.small.try_alloc_raw(size, align)
@@ -87,6 +88,7 @@ impl<Small: RawAlloc, Large: RawAlloc> RawAlloc for Segregator<Small, Large> {
         }
     }
 
+    #[inline]
     unsafe fn try_dealloc_raw(&self, ptr: NonNull<u8>, size: usize, align: usize) -> bool {
         if self.use_small(size) {
             self.small.try_dealloc_raw(ptr, size, align)

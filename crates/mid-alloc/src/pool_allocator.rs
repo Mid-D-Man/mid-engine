@@ -251,6 +251,7 @@ impl<T> PoolAllocator<T> {
     /// pool [`is_growable`](Self::is_growable). Returns `value` back,
     /// unwritten, if a fixed-capacity pool is full and the free list
     /// is empty.
+    #[inline]
     pub fn create(&self, value: T) -> Result<&mut T, T> {
         let slot_ptr = match self.free_list.get() {
             Some(slot_ptr) => {
@@ -289,6 +290,7 @@ impl<T> PoolAllocator<T> {
         Ok(unsafe { &mut *typed.as_ptr() })
     }
 
+    #[inline]
     fn bump_fresh_slot(&self) -> Option<NonNull<Slot<T>>> {
         // SAFETY: `current` always points at a region allocated by
         // `new_with` or `grow` below via `Box::into_raw`, never freed
@@ -336,6 +338,7 @@ impl<T> PoolAllocator<T> {
     /// undefined behavior. Same class of contract
     /// [`StackMarker`](crate::StackMarker)'s doc comment already
     /// documents for `rewind`.
+    #[inline]
     pub unsafe fn destroy(&self, item: &mut T) {
         let slot_ptr: NonNull<Slot<T>> = NonNull::from(item).cast();
         // SAFETY: caller guarantees `item` came from this pool's

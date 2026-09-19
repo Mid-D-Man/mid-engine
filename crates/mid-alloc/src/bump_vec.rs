@@ -27,12 +27,15 @@
 //! untyped by design (`try_alloc_raw`/`try_dealloc_raw` deal in bytes,
 //! not `T`), so it has no such invariant to violate -- the exact same
 //! reason `bumpalo::Bump` can host one. `BumpVec` is a real, if
-//! smaller, fork of `bumpalo::collections::vec`'s own design: grow by
-//! allocating a new, bigger block, move the live elements into it, and
-//! give the old block back to the parent allocator (a real, immediate
-//! reclaim when the parent actually supports it, such as `HeapAlloc`;
-//! a documented no-op when it doesn't, such as `StackAllocator`, same
-//! as everywhere else in this crate that composes with it).
+//! smaller, fork of `bumpalo::collections::vec`'s own design: grow via
+//! [`RawAlloc::try_grow_raw`], which can skip copying entirely when
+//! the parent supports growing in place (`StackAllocator`, when the
+//! block being grown is genuinely the most recent allocation) or hand
+//! the work to a real `realloc` (`HeapAlloc`), falling back to a
+//! plain allocate-copy-deallocate sequence only when the parent
+//! supports neither. See this file's own "Fixes and Problems" entry
+//! for why the first version of this file did that copy by hand
+//! instead, and what it cost at scale on real CI.
 
 use crate::raw_alloc::RawAlloc;
 use core::mem;
@@ -101,42 +104,54 @@ impl<'p, T, P: RawAlloc> BumpVec<'p, T, P> {
     }
 
     /// Grows to a new, bigger block (double, or 4 elements from empty,
-    /// matching `bumpalo::RawVec`'s own real growth factor for the
-    /// non-in-place path), moves every live element into it, and gives
-    /// the old block back to `parent`. Returns `false`, leaving `self`
-    /// completely unchanged, if `parent` cannot provide the new block.
+    /// matching `bumpalo::RawVec`'s own real growth factor). Delegates
+    /// the actual growth to `parent.try_grow_raw` rather than always
+    /// allocating a fresh block and copying by hand -- see this
+    /// module's own "Fixes and Problems" entry for why that hand-
+    /// rolled version measured badly at scale on real CI, and why
+    /// `try_grow_raw` (which can skip the copy entirely when the
+    /// parent supports in-place growth, or hand it to a real
+    /// `realloc`) fixes it. Returns `false`, leaving `self` completely
+    /// unchanged, if `parent` cannot provide the new block.
     fn grow(&mut self) -> bool {
         let new_cap = if self.cap == 0 {
             4
         } else {
             self.cap.saturating_mul(2)
         };
-        let new_ptr = match Self::alloc_block(self.parent, new_cap) {
-            Some(p) => p,
-            None => return false,
-        };
 
-        // SAFETY: `self.ptr` holds `self.len` live, initialized `T`
-        // values in a block at least that large (or `self.len == 0`,
-        // nothing to copy); `new_ptr` is a fresh block from the same
-        // parent, sized for at least `new_cap >= self.len` elements of
-        // `T`, so the ranges cannot overlap.
-        unsafe {
-            ptr::copy_nonoverlapping(self.ptr.as_ptr(), new_ptr.as_ptr(), self.len);
-        }
-
-        if self.cap > 0 {
-            let old_size = mem::size_of::<T>() * self.cap;
-            // SAFETY: `self.ptr`/`old_size`/`align_of::<T>()` are
-            // exactly what `alloc_block` requested for this block, and
-            // every live value it held was just moved (byte-copied,
-            // not dropped) into `new_ptr` above -- freeing it here
-            // neither double-frees nor drops anything still needed.
-            unsafe {
-                self.parent
-                    .try_dealloc_raw(self.ptr.cast(), old_size, mem::align_of::<T>());
+        let new_ptr = if self.cap == 0 {
+            match Self::alloc_block(self.parent, new_cap) {
+                Some(p) => p,
+                None => return false,
             }
-        }
+        } else {
+            let old_size = mem::size_of::<T>() * self.cap;
+            let new_size = match mem::size_of::<T>().checked_mul(new_cap) {
+                Some(s) => s,
+                None => return false,
+            };
+            // SAFETY: `self.ptr` came from a live `try_alloc_raw`/
+            // `try_grow_raw` call on `self.parent` for exactly
+            // `old_size` bytes at `align_of::<T>()` -- `alloc_block`
+            // and every previous `grow` call both go through
+            // `self.parent` with exactly these size/align values --
+            // and `new_size >= old_size` since `new_cap > self.cap`
+            // whenever this branch runs (`saturating_mul(2)` on a
+            // nonzero `cap`).
+            let grown = unsafe {
+                self.parent.try_grow_raw(
+                    self.ptr.cast(),
+                    old_size,
+                    new_size,
+                    mem::align_of::<T>(),
+                )
+            };
+            match grown {
+                Some(p) => p.cast(),
+                None => return false,
+            }
+        };
 
         self.ptr = new_ptr;
         self.cap = new_cap;
@@ -148,6 +163,7 @@ impl<'p, T, P: RawAlloc> BumpVec<'p, T, P> {
     /// immediately popped, only if growth itself fails (`parent` is
     /// out of room) -- real, exhausted-allocator failure, not
     /// something ordinary use is expected to hit.
+    #[inline]
     pub fn push(&mut self, value: T) -> bool {
         if self.len == self.cap && !self.grow() {
             return false;
@@ -162,6 +178,7 @@ impl<'p, T, P: RawAlloc> BumpVec<'p, T, P> {
     }
 
     /// Removes and returns the last element, or `None` if empty.
+    #[inline]
     pub fn pop(&mut self) -> Option<T> {
         if self.len == 0 {
             return None;

@@ -166,7 +166,7 @@ fn bench_combinator_overhead(c: &mut Criterion) {
         let a = HeapAlloc;
         b.iter(|| {
             for _ in 0..n {
-                let p = a.try_alloc_raw(16, 8).unwrap();
+                let p = black_box(a.try_alloc_raw(16, 8).unwrap());
                 // SAFETY: `p` came from `a.try_alloc_raw` with these
                 // exact size/align, immediately above.
                 unsafe {
@@ -181,7 +181,7 @@ fn bench_combinator_overhead(c: &mut Criterion) {
         let a = FallbackAllocator::new(HeapAlloc, HeapAlloc);
         b.iter(|| {
             for _ in 0..n {
-                let p = a.try_alloc_raw(16, 8).unwrap();
+                let p = black_box(a.try_alloc_raw(16, 8).unwrap());
                 unsafe {
                     a.try_dealloc_raw(p, 16, 8);
                 }
@@ -194,7 +194,7 @@ fn bench_combinator_overhead(c: &mut Criterion) {
         let a = Segregator::new(64, HeapAlloc, HeapAlloc);
         b.iter(|| {
             for _ in 0..n {
-                let p = a.try_alloc_raw(16, 8).unwrap();
+                let p = black_box(a.try_alloc_raw(16, 8).unwrap());
                 unsafe {
                     a.try_dealloc_raw(p, 16, 8);
                 }
@@ -207,7 +207,7 @@ fn bench_combinator_overhead(c: &mut Criterion) {
         let a = Tracked::new(HeapAlloc);
         b.iter(|| {
             for _ in 0..n {
-                let p = a.try_alloc_raw(16, 8).unwrap();
+                let p = black_box(a.try_alloc_raw(16, 8).unwrap());
                 unsafe {
                     a.try_dealloc_raw(p, 16, 8);
                 }
@@ -220,7 +220,7 @@ fn bench_combinator_overhead(c: &mut Criterion) {
         let a = SyncAlloc::new(HeapAlloc);
         b.iter(|| {
             for _ in 0..n {
-                let p = a.try_alloc_raw(16, 8).unwrap();
+                let p = black_box(a.try_alloc_raw(16, 8).unwrap());
                 unsafe {
                     a.try_dealloc_raw(p, 16, 8);
                 }
