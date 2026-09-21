@@ -1776,10 +1776,64 @@ they suggest** (Ir per op, same method):
   invariant (the `ComponentId` was derived from the same `T`) holds by
   construction; that is a policy decision, not made here.
 
-**Not yet run on real CI.** Expected outcome to read against, not a
-prediction of the ratios: `get_component_random_access` and the three
-structural groups should each move toward 1x; if the timing does not
-follow the instruction drop, that itself is the finding.
+**Real CI result (`ecs-vs-bevy-ecs` build #25 and Archetype Core build
+#32, rustc 1.98.1, commit `ce6ce32`).** Ratios are mid-ecs over
+bevy_ecs in the same run. "Before" is the last figure on record (build
+#20 for `remove_bundle`, the previous handover for the rest), not
+re-measured in this run.
+
+| group | before | build #25 |
+|---|---|---|
+| `insert_bundle_on_existing_entity` | ~1.6x | 0.99x (696.44µs vs 702.50µs) |
+| `remove_bundle_two_components` | 1.48x | 0.97x (714.21µs vs 739.36µs) |
+| `spawn_n_entities_two_components` | ~2x | 1.72x (892.10µs vs 519.27µs) |
+| `get_component_random_access` | ~2.7x | **4.79x** (362.16µs vs 75.638µs) |
+| `spawn_single_component` | n/a | 1.87x |
+| `insert_single_component` | n/a | 1.45x |
+| `structural_churn_insert_remove` | n/a | 1.49x |
+| `remove_single_component` | n/a | 0.87x |
+
+Controls did not move, as they should not: `query_static_single_component`
+1.00x, `raw_slice_ceiling` 1.00x, `dense_query_iteration` 3.93x, and in
+Archetype Core #32 `query_static` 94.3µs against the raw one-field floor
+at 93.8µs (N=100,000) with the two-column ratio at 3.99x. No
+compilation-unit shift showed up in them.
+
+Two structural groups reached parity, and `spawn_n_entities_two_components`
+moved from ~2x to 1.72x: the prediction held there, and the drop in
+`remove_bundle`'s own time (1.0674ms in build #20, 714µs here) is close
+to the sandbox's ~30% instruction reduction, with the usual caveat that
+absolute time across builds carries runner drift.
+
+**The miss: `get_component_random_access`.** Per lookup, mid-ecs took
+36.2ns against bevy_ecs's 7.6ns in the same run. The sandbox predicted
+the opposite direction: instructions per lookup 218 -> 113, and isolated
+wall-clock `get_static` 17.3ns -> 7.1ns (rustc 1.91.1, `bench`-style fat
+LTO with 1 CGU, 2.1GHz Xeon, 10,000 sequential lookups, best of several
+runs). So CI's mid-ecs number is roughly 5x the sandbox's after-number
+for the same source, while bevy_ecs measures 7.6ns on that same runner,
+and, if the ~2.7x on record was right, it is slower than before the
+change rather than faster. Not explained. Ruled out from source: the
+`TypeIdHasher` byte fallback (rustc 1.98's `TypeId::hash` calls
+`write_u64` on one half of the id, read directly from
+`library/core/src/any.rs` at CI's compiler commit). The structural
+groups go through the same `TypeId` map (`existing_component_ids`) and
+improved, so the hasher itself is not the problem.
+
+Diagnostic built for it (see `diag_ir_ops.rs` below):
+`scripts/diag_ir_ops_ab.py`, driven by
+`.github/workflows/diag-ir-ops.yml`. It builds the example twice on one
+CI machine and toolchain, once from the current tree and once with
+`archetype.rs`/`lib.rs` reverted to the last pre-fix commit, then
+reports callgrind instructions per operation (deterministic, on
+rustc 1.98.1) and isolated wall-clock ns per lookup for both. The
+outcomes it separates: instructions high on 1.98.1 means codegen
+differs from the sandbox and the callgrind function list shows where;
+instructions ~113 with isolated time near the sandbox's means the
+36ns comes from the full bench binary (compilation-unit effect, the
+same shape as the `Iter1` story); instructions ~113 with isolated
+time also slow means the machine, not the instruction count, is the
+cost.
 
 ### `diag_ir_ops.rs`
 
@@ -1791,7 +1845,21 @@ second argument `0` runs setup only, `1` runs setup plus the measured
 op, and the op's cost is the difference between the two runs' totals.
 Usage is in the file's own header. Deterministic for a given binary,
 so it can rank changes without a CI round trip; it does not replace
-CI timing. Its numbers depend on the build profile: the table above
+CI timing. Extra mode `time-get` prints isolated wall-clock ns per
+`get_static` lookup (best of 7 repetitions of 300 passes over 10,000
+entities), with nothing but `mid-ecs` in the binary.
+
+`scripts/diag_ir_ops_ab.py` builds the example for the current tree
+and for a tree with `archetype.rs`/`lib.rs` reverted to `--prefix-sha`
+(restoring the working tree afterwards), then runs callgrind on the four
+modes and `time-get` on both, on one machine, and prints a markdown
+report with per-function self cost for `get` and `insert`.
+`strip = false` is forced through
+`CARGO_PROFILE_<NAME>_STRIP`, because the workspace's `bench` profile
+inherits `release`'s `strip = true` and callgrind would otherwise
+report raw addresses. `.github/workflows/diag-ir-ops.yml`
+(`workflow_dispatch` only, like every workflow here) runs it on CI with
+valgrind installed and uploads the callgrind outputs. Its numbers depend on the build profile: the table above
 was taken with lto off and 16 CGUs, the workspace `[profile.release]`
 (fat LTO, 1 CGU) gives different absolute counts, so only compare
 runs taken with the same profile.

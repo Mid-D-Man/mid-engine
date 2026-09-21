@@ -28,8 +28,18 @@
 //! setup only, `1` runs setup plus the measured operation. Workloads
 //! mirror `vs_bevy_ecs.rs` (same N, component shapes and call
 //! sequence).
+//!
+//! Extra mode `time-get` (no second argument): wall-clock
+//! `get_static` cost, best of 7 repetitions of 300 passes over the
+//! same 10,000 entities, printed as ns per lookup. Isolated: nothing
+//! but `mid-ecs` in the binary, unlike `vs_bevy_ecs.rs`. Added to
+//! separate "instructions changed" from "CI timing changed" for
+//! `get_component_random_access` (see `docs/mid-ecs.md`, `hash.rs`
+//! section); driven by `scripts/diag_ir_ops_ab.py` /
+//! `.github/workflows/diag-ir-ops.yml`.
 
 use std::hint::black_box;
+use std::time::Instant;
 
 use mid_ecs::world::{Entity, World};
 
@@ -96,11 +106,11 @@ fn op_spawn(world: &mut World) {
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-    let (Some(mode), Some(run)) = (args.get(1), args.get(2)) else {
-        eprintln!("usage: diag_ir_ops <get|insert|remove|spawn> <0|1>");
+    let Some(mode) = args.get(1) else {
+        eprintln!("usage: diag_ir_ops <get|insert|remove|spawn> <0|1> | time-get");
         std::process::exit(2);
     };
-    let run_op = run == "1";
+    let run_op = args.get(2).is_some_and(|r| r == "1");
     let mut world = World::new();
     match mode.as_str() {
         "get" => {
@@ -146,6 +156,25 @@ fn main() {
             if run_op {
                 op_spawn(&mut world);
             }
+        }
+        "time-get" => {
+            let entities: Vec<_> = (0..N)
+                .map(|_| {
+                    let e = world.spawn();
+                    world.insert_bundle(e, bundle());
+                    e
+                })
+                .collect();
+            let mut best = f64::MAX;
+            for _ in 0..7 {
+                let start = Instant::now();
+                for _ in 0..300 {
+                    black_box(op_get(black_box(&world), black_box(&entities)));
+                }
+                let ns = start.elapsed().as_nanos() as f64 / (300.0 * N as f64);
+                best = best.min(ns);
+            }
+            println!("time-get best_ns_per_lookup={best:.3}");
         }
         other => {
             eprintln!("unknown mode `{other}`");
