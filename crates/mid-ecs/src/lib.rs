@@ -9,6 +9,7 @@
 pub mod archetype;
 pub mod component;
 pub mod ffi;
+mod hash;
 pub mod query;
 mod scratch;
 pub mod sync;

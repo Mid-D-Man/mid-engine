@@ -1666,16 +1666,132 @@ the real, safe `query2_static_ref` output the same way every unsafe
 diagnostic in this crate's history has been. 185/185 tests
 (`scratch-arena`), nothing broken.
 
-**Not yet run on real CI.** If it reaches the floor, that's a real,
-actionable result — the two-column cost really was about inlining
-after all, just never tested with isolation as a precondition before.
-If it doesn't, that closes off the last variant in this specific
-family (attribute alone, unsafe alone, both together — each now tested
-both inside `archetype_core.rs` and in true isolation), and the honest
-next move is the one already named twice in this document: stop
-adding local-code variants to this specific question and either look
-somewhere structurally different (why bevy's *generic, tuple-composed*
-fetch doesn't pay whatever cost two independent hand-written slice
-accesses do — not yet actually checked) or accept the gap as a real,
-documented, currently-unsolved limitation and move on to other engine
-work.
+**Real CI result (Query2-Ref Isolated builds #3 and #4, rustc 1.98.1,
+commit `33003bc`): clean negative.** `unchecked_always` is
+indistinguishable from the real `query2_static_ref` in both profiles.
+`bench` (LTO), N=100,000: 423.40µs (real) vs 423.27µs
+(`unchecked_always`) vs 105.99µs raw-slice floor, 3.99x. `bench-nolto`,
+N=100,000: 328.67µs vs 328.04µs vs 82.09µs, 4.00x. The ratio is flat at
+~4.0x from N=10,000 up (~4.2x at N=1,000, ~7x at N=100 where fixed
+per-call cost is still a visible share). Absolute numbers drifted ~13%
+between the two builds' baselines on mid-ecs *and* the floor together,
+which is runner variance, not a code effect; only within-run ratios are
+usable.
+
+That closes the attribute / unsafe / isolation family: each variant
+(attribute alone, unsafe alone, both together) has now been tested both
+inside `archetype_core.rs` and in true isolation, none reaches the
+floor. **Decision: accept the two-column gap as documented and
+currently unsolved, and move on to other engine work** (next entry,
+`hash.rs`). Two axes were never touched and stay available if this
+reopens: the emitted assembly of the isolated inner loop taken on CI's
+toolchain (sandbox rustc 1.91 has never reproduced this regression, so
+assembly from it is not evidence), and the structure of bevy's
+tuple-composed fetch (only its inline/unsafe attributes have been
+read, not its composition).
+
+### `hash.rs`: fast hashers for the Archetype Core's hot-path maps
+
+Built after the `Iter2` investigation was parked (see the result above),
+aimed at the compute-shaped `ecs-vs-bevy-ecs` gaps that the allocation
+pass could not explain: `get_component_random_access`,
+`insert_bundle_on_existing_entity`, `spawn_n_entities_two_components`,
+and the `remove_bundle_two_components` residual. Allocation counts for
+the last three were already ~0 (see `diag_alloc_count.rs` above), so
+what was left had to be instructions, not allocations.
+
+**Finding, measured with callgrind (deterministic instruction counts,
+see `diag_ir_ops.rs` below).** One `World::get_static` cost ~242
+instructions. ~132 of those were `Archetypes::existing_component_id`:
+a `std::collections::HashMap<TypeId, ComponentId>` lookup, ~100 of
+them SipHash and ~32 the hashbrown probe. Structural changes pay the
+same tax on every call: `component_ids` plus the per-archetype
+`add_edges`/`remove_edges` maps (`HashMap<ComponentId, ArchetypeId>`),
+~228 instructions of SipHash per `insert_bundle`/`remove_bundle`/spawn.
+
+**What bevy does instead** (bevy_ecs 0.19.1 and bevy_utils 0.19.1
+source, the versions `ecs-vs-bevy-ecs` actually depends on):
+`Components::indices` is a `TypeIdMap<ComponentId>`, which is
+`IndexMap<TypeId, V, NoOpHash>` — no hashing work at all, since
+`TypeId` is already a fingerprint. Not the whole gap by itself; it is
+the largest single piece of the per-lookup difference that could be
+checked without a bevy build.
+
+**Change.** New `crates/mid-ecs/src/hash.rs`, `pub(crate)`, zero
+dependencies:
+
+- `TypeIdHasher`: passes the value `TypeId`'s own `Hash` impl writes
+  straight through (`write_u64`; `write_u128` xor-folds). Correctness
+  never depends on which `write_*` method a toolchain's `TypeId` calls
+  (equal keys always produce the same write sequence); the byte
+  fallback only keeps quality acceptable if that impl changes shape.
+- `DenseIdHasher`: Fibonacci multiplicative hash for small dense ids.
+  Multiplying by an odd constant is a bijection on the low bits, so
+  consecutive `ComponentId`s never share a bucket index (a test proves
+  it for 1,024 ids), while the high bits hashbrown uses for control
+  bytes come out well mixed.
+
+`archetype.rs`: `Archetypes::component_ids` becomes `TypeIdMap`, and
+`Archetype::add_edges`/`remove_edges` become `DenseIdMap`. Nothing else
+changed. HashDoS resistance is irrelevant here: every key is
+`TypeId::of::<T>()` or a locally-issued counter, never external input.
+
+**Sandbox result (rustc 1.91.1, callgrind Ir per operation, N=10,000,
+op-run minus setup-only run, profile: opt-level 3, lto off, 16 CGUs):**
+
+| operation | before | after | change |
+|---|---|---|---|
+| `get_static` (random access) | 235.0 | 118.0 | -50% |
+| `insert_bundle`, entity already has `Marker` | 1236.8 | 826.8 | -33% |
+| `remove_bundle`, 2 components | 1336.7 | 939.7 | -30% |
+| spawn + `insert_bundle` | 1338.4 | 928.4 | -31% |
+
+Instruction counts, not timing, and not from CI's toolchain: fewer
+instructions is necessary evidence, not sufficient. Real CI timing is
+the authority.
+
+**Not changed, deliberately.** The Sparse Shell's own
+`SparseShell::component_ids` (`component.rs`) has the same
+`HashMap<TypeId, ComponentId>` shape and would take the same fix, but
+it is not on any path `ecs-vs-bevy-ecs` measures and has not been
+measured itself. `signature_to_id` (`HashMap<Vec<ComponentId>, _>`) is
+only hit on an edge-cache miss; the FFI maps are cold.
+
+**Remaining cost centres after this change, and the two candidates
+they suggest** (Ir per op, same method):
+
+- Structural ops: `insert_bundle` 228 self, `edge_for_insert` 132,
+  `push_into` 104, `Bundle::component_ids` 87. Bevy caches transitions
+  per *bundle* (`Edges::insert_bundle: SparseArray<BundleId, _>`, and
+  `Bundles::bundle_ids` is a `TypeIdMap`), one lookup per whole bundle.
+  mid-ecs chains one `edge_for_insert` per component and creates
+  intermediate archetypes on the way (see the doc comment on
+  `Archetypes::iter` in `archetype.rs`, which hit exactly this). A whole-bundle edge cache is the
+  obvious next candidate.
+- `Archetypes::get`: 71 of `get_static`'s remaining 118. It looks the
+  entity up twice (`World::is_alive`, then `locations.get`; the second
+  is index-only, which is why the first is required) and makes two
+  virtual calls per lookup (`Column::as_any`, then the `downcast_ref`'s
+  `type_id`). Removing the downcast would need an `unsafe` cast whose
+  invariant (the `ComponentId` was derived from the same `T`) holds by
+  construction; that is a policy decision, not made here.
+
+**Not yet run on real CI.** Expected outcome to read against, not a
+prediction of the ratios: `get_component_random_access` and the three
+structural groups should each move toward 1x; if the timing does not
+follow the instruction drop, that itself is the finding.
+
+### `diag_ir_ops.rs`
+
+`examples/diag_ir_ops.rs`, kept for reference like `diag_alloc_count.rs`.
+Counts *instructions* per operation under callgrind, for gaps that
+allocation counts cannot see. Modes `get`, `insert`, `remove`, `spawn`
+mirror `vs_bevy_ecs.rs`'s workloads (same N, shapes, call sequence);
+second argument `0` runs setup only, `1` runs setup plus the measured
+op, and the op's cost is the difference between the two runs' totals.
+Usage is in the file's own header. Deterministic for a given binary,
+so it can rank changes without a CI round trip; it does not replace
+CI timing. Its numbers depend on the build profile: the table above
+was taken with lto off and 16 CGUs, the workspace `[profile.release]`
+(fat LTO, 1 CGU) gives different absolute counts, so only compare
+runs taken with the same profile.

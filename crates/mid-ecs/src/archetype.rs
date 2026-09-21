@@ -86,6 +86,7 @@ use mid_collections::{FfiSpan, SparseSet, SparseSetIndex};
 use zerocopy::{Immutable, IntoBytes, KnownLayout};
 
 use crate::component::ComponentId;
+use crate::hash::{DenseIdMap, TypeIdMap};
 use crate::world::Entity;
 
 /// Type-erased accessor for reading one archetype's column as a raw
@@ -245,8 +246,8 @@ impl Table {
 struct Archetype {
     component_ids: Vec<ComponentId>,
     table: Table,
-    add_edges: HashMap<ComponentId, ArchetypeId>,
-    remove_edges: HashMap<ComponentId, ArchetypeId>,
+    add_edges: DenseIdMap<ComponentId, ArchetypeId>,
+    remove_edges: DenseIdMap<ComponentId, ArchetypeId>,
 }
 
 impl Archetype {
@@ -254,8 +255,8 @@ impl Archetype {
         Self {
             component_ids: Vec::new(),
             table: Table::new(),
-            add_edges: HashMap::new(),
-            remove_edges: HashMap::new(),
+            add_edges: DenseIdMap::default(),
+            remove_edges: DenseIdMap::default(),
         }
     }
 
@@ -263,8 +264,8 @@ impl Archetype {
         Self {
             component_ids,
             table: Table::new(),
-            add_edges: HashMap::new(),
-            remove_edges: HashMap::new(),
+            add_edges: DenseIdMap::default(),
+            remove_edges: DenseIdMap::default(),
         }
     }
 }
@@ -490,7 +491,7 @@ pub(crate) struct Archetypes {
     /// avoid the duplication; the numbering spaces themselves are kept
     /// hard-separated on purpose, matching this whole module's
     /// Sparse-Shell-vs-Archetype-Core architectural split.
-    component_ids: HashMap<TypeId, ComponentId>,
+    component_ids: TypeIdMap<ComponentId>,
     next_component_id: u32,
     /// Populated only for component types opted into FFI exposure via
     /// [`Self::register_ffi`] — mirrors `SparseShell`'s own field of the
@@ -519,7 +520,7 @@ impl Archetypes {
             signature_to_id,
             locations: SparseSet::new(),
             next_id: 1,
-            component_ids: HashMap::new(),
+            component_ids: TypeIdMap::default(),
             next_component_id: 0,
             ffi_accessors: HashMap::new(),
             ffi_names: HashMap::new(),
