@@ -1,0 +1,107 @@
+# .github/workflows/diag-get-bisect.yml
+#
+# Bisect for `get_component_random_access`. The `diag Ir/op A/B` runs
+# (builds #1/#2) showed the hash.rs fix works on CI's own toolchain in
+# isolation: get_static 16.3ns -> 7.5ns, instructions 213 -> 109. But
+# the full `ecs-vs-bevy-ecs` bench (build #25) still measured mid-ecs at
+# 36.2ns per lookup (bevy_ecs 7.6ns, same run). Something about the real
+# bench binary or run, not the lookup code, costs ~4.8x.
+#
+# This builds benches/ecs-vs-bevy-ecs/examples/get_bisect.rs (mid-ecs AND
+# bevy_ecs linked, both worlds built, NO criterion) and reports, on ONE
+# machine and toolchain:
+#
+#   - mid-ecs ns per lookup with the bevy world absent, then alive, and
+#     bevy_ecs's own;
+#   - callgrind instructions per lookup for both engines in that binary
+#     (the isolated mid-ecs binary gives 109);
+#   - the real vs_bevy_ecs criterion bench filtered to that one group,
+#     so no other group has run first in the process.
+#
+# See docs/mid-ecs.md, section "get_bisect.rs", for how to read it.
+#
+# Run: Actions -> "mid-ecs — diag get_component_random_access bisect" -> Run workflow
+# DO NOT add push/pull_request triggers.
+
+name: mid-ecs — diag get_component_random_access bisect
+
+on:
+  workflow_dispatch:
+    inputs:
+      profile:
+        description: 'Cargo profile: bench (fat LTO, matches the real bench) or bench-nolto'
+        required: false
+        type: choice
+        default: 'bench'
+        options:
+          - 'bench'
+          - 'bench-nolto'
+
+permissions:
+  contents: read
+  actions:  read
+
+jobs:
+  diag:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install valgrind
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq valgrind
+
+      - name: Confirm environment
+        env:
+          PROFILE: ${{ inputs.profile }}
+        run: |
+          {
+            echo "## get_component_random_access bisect — Build #${{ github.run_number }}"
+            echo ""
+            echo "| | |"
+            echo "|---|---|"
+            echo "| Rust    | \`$(rustc --version)\` |"
+            echo "| Commit  | \`${GITHUB_SHA:0:8}\` |"
+            echo "| Profile | \`${PROFILE}\` |"
+            echo ""
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Run bisect driver
+        env:
+          PROFILE: ${{ inputs.profile }}
+        run: |
+          set -o pipefail
+          python3 scripts/diag_get_bisect.py \
+            --profile "$PROFILE" \
+            --out diag-get-bisect-out \
+            --reps 3 \
+            2> diag-get-bisect-stderr.txt \
+            | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Surface driver stderr on failure
+        if: failure()
+        run: |
+          {
+            echo "### Driver stderr (tail)"
+            echo '```'
+            tail -n 80 diag-get-bisect-stderr.txt || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: diag-get-bisect-${{ github.run_number }}
+          path: |
+            diag-get-bisect-out/summary.md
+            diag-get-bisect-out/criterion-get-only.txt
+            diag-get-bisect-out/cg.*.out
+            diag-get-bisect-stderr.txt
+          retention-days: 30
