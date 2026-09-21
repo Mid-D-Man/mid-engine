@@ -1,0 +1,121 @@
+# .github/workflows/diag-ir-ops.yml
+#
+# A/B diagnostic for `get_component_random_access`, on CI's own
+# toolchain. `ecs-vs-bevy-ecs` build #25 (after the hash.rs fix) showed
+# the sandbox and CI disagreeing: the sandbox says instructions per
+# `get_static` halved and isolated wall-clock fell 17.3ns -> 7.1ns, CI
+# says mid-ecs takes 36.2ns per lookup against bevy_ecs's 7.6ns.
+#
+# This builds crates/mid-ecs/examples/diag_ir_ops.rs twice on ONE
+# machine -- once from the checked-out tree, once with archetype.rs and
+# lib.rs reverted to `prefix_sha` -- and reports, per variant:
+#
+#   - callgrind instructions per operation (deterministic; on CI's
+#     rustc, not the sandbox's), and per-function self cost for get and
+#     insert;
+#   - isolated wall-clock ns per `get_static` lookup (nothing but
+#     mid-ecs in the binary, unlike vs_bevy_ecs.rs).
+#
+# See docs/mid-ecs.md, section "hash.rs: fast hashers for the Archetype
+# Core's hot-path maps" for how to read the three possible outcomes.
+#
+# `prefix_sha` defaults to the last commit before the hash fix.
+# Reverting only archetype.rs and lib.rs is a valid "before" ONLY while
+# nothing else has changed those two files since -- true at ce6ce32;
+# re-check before reusing this later.
+#
+# Run: Actions -> "mid-ecs — diag Ir/op and get_static timing (A/B)" -> Run workflow
+# DO NOT add push/pull_request triggers.
+
+name: mid-ecs — diag Ir/op and get_static timing (A/B)
+
+on:
+  workflow_dispatch:
+    inputs:
+      prefix_sha:
+        description: 'Commit whose archetype.rs + lib.rs define the "before" variant (full SHA)'
+        required: false
+        default: '68500e6074237d80659516951a864d99056c2908'
+      profile:
+        description: 'Cargo profile: bench (fat LTO, matches the real bench) or bench-nolto'
+        required: false
+        type: choice
+        default: 'bench'
+        options:
+          - 'bench'
+          - 'bench-nolto'
+
+permissions:
+  contents: read
+  actions:  read
+
+jobs:
+  diag:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout (full history, the prefix commit must be reachable)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install valgrind
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq valgrind
+
+      - name: Confirm environment
+        env:
+          PROFILE: ${{ inputs.profile }}
+          PREFIX_SHA: ${{ inputs.prefix_sha }}
+        run: |
+          {
+            echo "## diag Ir/op A/B — Build #${{ github.run_number }}"
+            echo ""
+            echo "| | |"
+            echo "|---|---|"
+            echo "| Rust    | \`$(rustc --version)\` |"
+            echo "| Commit  | \`${GITHUB_SHA:0:8}\` |"
+            echo "| Prefix  | \`${PREFIX_SHA:0:8}\` |"
+            echo "| Profile | \`${PROFILE}\` |"
+            echo "| CPU     | \`$(grep -m1 'model name' /proc/cpuinfo | cut -d: -f2 | xargs)\` |"
+            echo ""
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Run A/B driver
+        env:
+          PROFILE: ${{ inputs.profile }}
+          PREFIX_SHA: ${{ inputs.prefix_sha }}
+        run: |
+          set -o pipefail
+          python3 scripts/diag_ir_ops_ab.py \
+            --profile "$PROFILE" \
+            --prefix-sha "$PREFIX_SHA" \
+            --out diag-ir-ops-out \
+            --reps 3 \
+            2> diag-ir-ops-stderr.txt \
+            | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Surface driver stderr on failure
+        if: failure()
+        run: |
+          {
+            echo "### Driver stderr (tail)"
+            echo '```'
+            tail -n 80 diag-ir-ops-stderr.txt || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: diag-ir-ops-${{ github.run_number }}
+          path: |
+            diag-ir-ops-out/summary.md
+            diag-ir-ops-out/cg.*.out
+            diag-ir-ops-stderr.txt
+          retention-days: 30
