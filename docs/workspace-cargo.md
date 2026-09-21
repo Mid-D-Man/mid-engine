@@ -14,17 +14,29 @@ reformatted from `#`-prefixed comments into prose.
 
 ### `[workspace] members`
 
-mid-engine is a real Cargo workspace: `[workspace]`, `resolver = "2"`, 24
+mid-engine is a real Cargo workspace: `[workspace]`, `resolver = "2"`, 28
 members under `crates/`, `benches/`, and `examples/` (recounted directly
-against the member list — see `docs/RUST_AND_CRATE_GUIDELINES.md` §1),
-already wired together with `path = "../.."`-style dependencies (`mid-anim`
-on `mid-math`, `mid-app` on `mid-ecs`, `mid-ecs` on `mid-collections` and
-`mid-math`, `mid-physics` on `mid-math` and `mid-geom`, and more).
+against the member list this pass — up from 24 as of this doc's own last
+count, itself already one behind reality: `benches/query2-ref-isolated`
+had been added without updating this line), already wired together with
+`path = "../.."`-style dependencies (`mid-anim` on `mid-math`, `mid-app` on
+`mid-ecs`, `mid-ecs` on `mid-collections` and `mid-math`, `mid-physics` on
+`mid-math` and `mid-geom`, and more).
 
 New in a later pass (`docs/roadmap.md`, "What can be built in parallel"):
 `mid-time`, `mid-physics`, `mid-anim`, `mid-app` were added as v0 stubs, not
 yet compiled/verified in this sandbox (no rustc available here at all — see
 that roadmap section's own honesty note).
+
+New this pass: `crates/mid-platform` (`docs/roadmap.md` Decision 3 reopened
+— see that section and `docs/mid-platform.md`). Unlike every other crate in
+this workspace, it has real, non-default-off Cargo features (`std`, on by
+default, and `alloc`) rather than being unconditionally `no_std` — its whole
+purpose is switching between a `std` passthrough and a hand-rolled fallback,
+so the feature gate is structural, not incidental. `cargo test -p
+mid-platform` alone only exercises the default (`std`) path; CI also runs
+`--no-default-features` to exercise the fallback path, since it's a
+genuinely different code path default features would never even compile.
 
 **Fixed:** `tools/mdix-compiler` and `examples/headless-server` were each
 listed twice in the members array. `docs/RUST_AND_CRATE_GUIDELINES.md` §1

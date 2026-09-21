@@ -144,6 +144,20 @@ hash map, or a no_std-safe mutex — most likely `mid-time` (Decision
 to extract a shared crate instead of a second hand-rolled local
 solution. Until then, `mid-common` stays thin, correctly.
 
+**Reopened:** the named trigger fired, twice, unnoticed until checked
+directly. `mid-time` independently hand-rolled its own wasm32-safe
+`Instant`, and `mid-alloc` independently hand-rolled `SpinLock<T>` —
+exactly the first and third named conditions. `mid-platform` is now
+being built in phases; see `docs/mid-platform.md` for the full
+dependency-by-dependency breakdown (`bevy_platform` itself is not
+zero-dependency, unlike `mid-ptr` — that doc works out which of its
+real dependencies mid-engine's actual target matrix needs at all,
+which can be hand-rolled, and which are deferred the same way this
+decision itself was). Phase 1 (`sync::atomic`, `cell`, `sync::poison`,
+`sync::mutex`, `sync::{Arc, Weak}`) is built; the hash-map question in
+particular is explicitly not decided yet, same trigger-based
+discipline this entry always used.
+
 ---
 
 ### Decision 4 — `mid-math`'s scope (color/noise/camera): no action now, same trigger-based deferral

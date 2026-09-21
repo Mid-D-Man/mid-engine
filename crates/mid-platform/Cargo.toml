@@ -1,0 +1,18 @@
+[package]
+name        = "mid-platform"
+version     = "0.0.1"
+edition     = "2021"
+description = "Platform-agnostic primitives for mid-engine (Mutex/Arc/atomics/cells today), bevy_platform-shaped but hand-rolled and dependency-free -- see docs/mid-platform.md"
+
+[lib]
+name = "mid_platform"
+
+[features]
+default = ["std"]
+std     = ["alloc"]
+alloc   = []
+
+[dependencies]
+
+[lints]
+workspace = true
