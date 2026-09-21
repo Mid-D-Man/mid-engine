@@ -1,0 +1,98 @@
+# .github/workflows/mid-platform-test.yml
+name: mid-platform — Tests
+
+# Automatic, path-filtered triggers -- see docs/RUST_AND_CRATE_GUIDELINES.md
+# §7, "CI Triggering."
+on:
+  push:
+    branches: [main, master, develop]
+    paths:
+      - "crates/mid-platform/**"
+      - ".github/workflows/mid-platform-test.yml"
+  pull_request:
+    branches: [main, master]
+    paths:
+      - "crates/mid-platform/**"
+      - ".github/workflows/mid-platform-test.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions:  read
+
+jobs:
+
+  run-tests:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Get Rust version
+        run: rustc --version
+
+      # Cache key scoped to this crate + this runner's OS specifically --
+      # never a bare "cargo-registry-" prefix. See
+      # docs/RUST_AND_CRATE_GUIDELINES.md §7 for why: a generic prefix let
+      # mid-ptr-test.yml's own cache collide with a different, ARM-runner
+      # workflow's cache on its first real run.
+      - name: Cache cargo registry
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+          key: cargo-registry-mid-platform-${{ runner.os }}-${{ hashFiles('crates/mid-platform/Cargo.toml') }}
+          restore-keys: |
+            cargo-registry-mid-platform-${{ runner.os }}-
+
+      - name: Check formatting
+        run: cargo fmt -p mid-platform --check
+        continue-on-error: true
+
+      # Two separate feature configurations, deliberately: default (std)
+      # exercises the std::sync passthrough path; --no-default-features
+      # exercises the actual hand-rolled spin-based fallback in
+      # sync::mutex -- a genuinely different code path that default
+      # features alone would never compile, let alone test. See
+      # docs/mid-platform.md for why both exist.
+      - name: Clippy (default features -- std)
+        run: cargo clippy -p mid-platform -- -D warnings
+        continue-on-error: true
+
+      - name: Clippy (no default features -- no_std fallback path)
+        run: cargo clippy -p mid-platform --no-default-features -- -D warnings
+        continue-on-error: true
+
+      - name: Build (default features -- std)
+        run: cargo build -p mid-platform
+
+      - name: Build (no default features -- no_std fallback path)
+        run: cargo build -p mid-platform --no-default-features
+
+      - name: Test (default features -- std)
+        run: cargo test -p mid-platform --no-fail-fast -- --show-output
+
+      - name: Test (no default features -- no_std fallback path)
+        run: cargo test -p mid-platform --no-default-features --no-fail-fast -- --show-output
+
+  summary:
+    runs-on: ubuntu-latest
+    needs: [run-tests]
+    if: always()
+    steps:
+      - name: Print summary
+        run: |
+          echo "============================================="
+          echo "  mid-platform Test Summary"
+          echo "============================================="
+          echo "Build:  #${{ github.run_number }}"
+          echo "Branch: ${{ github.ref_name }}"
+          echo "Tests:  ${{ needs.run-tests.result || 'skipped' }}"
