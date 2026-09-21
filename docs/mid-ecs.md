@@ -1835,6 +1835,41 @@ same shape as the `Iter1` story); instructions ~113 with isolated
 time also slow means the machine, not the instruction count, is the
 cost.
 
+**A/B outcome (`diag Ir/op A/B` builds #1 and #2, rustc 1.98.1, commit
+`d395f26`): the second one.** On CI's own toolchain the fix does what
+the sandbox said. Build #1 is the `bench` profile (Intel Xeon Platinum
+8370C @ 2.80GHz), build #2 is `bench-nolto` (AMD EPYC 7763):
+
+| op | #1 prefix Ir | #1 current Ir | #1 ratio | #2 prefix Ir | #2 current Ir | #2 ratio |
+|---|---|---|---|---|---|---|
+| get | 213.0 | 109.0 | 0.51x | 218.0 | 116.0 | 0.53x |
+| insert | 1129.7 | 665.7 | 0.59x | 1213.3 | 803.3 | 0.66x |
+| remove | 1052.1 | 591.6 | 0.56x | 1313.7 | 903.7 | 0.69x |
+| spawn | 1197.1 | 734.1 | 0.61x | 1316.3 | 906.3 | 0.69x |
+
+Isolated `get_static` wall-clock, prefix -> current: 16.28ns -> 7.54ns
+per lookup (162.8µs -> 75.4µs per 10,000) in `bench`, 16.41ns ->
+8.79ns (164.1µs -> 87.8µs) in `bench-nolto`. The isolated "current"
+figure, 75.4µs, is what bevy_ecs measured in the full bench (75.6µs,
+build #25). So the code path is not the problem: the full
+`vs_bevy_ecs` binary, or the way it was run, makes mid-ecs's identical
+lookup take ~4.8x longer. Also of note, the isolated *prefix* time
+(~163µs) is close to the ~204µs the full bench showed before the fix
+(~2.7x on record), so the full-bench penalty was ~1.25x before and is
+~4.8x after; whatever it is, it grew with this change or with
+something else that changed alongside it (nothing else touched
+`get_static`'s path, per the diff between `68500e6` and `ce6ce32`).
+
+Heap-layout sensitivity was checked in the sandbox and is not it there:
+`get_static` stayed at 7.0-7.3ns across allocation padding from 0 to
+512KB and with heavy allocator churn before the world was built
+(CI's CPUs were not checked).
+
+Remaining candidates, none yet tested: criterion and the bench-file
+structure; the other groups having run first in the same process;
+bevy_ecs linked into the same fat-LTO unit; both worlds alive at once.
+`get_bisect.rs` (below) adds them back one at a time.
+
 ### `diag_ir_ops.rs`
 
 `examples/diag_ir_ops.rs`, kept for reference like `diag_alloc_count.rs`.
@@ -1863,3 +1898,37 @@ valgrind installed and uploads the callgrind outputs. Its numbers depend on the 
 was taken with lto off and 16 CGUs, the workspace `[profile.release]`
 (fat LTO, 1 CGU) gives different absolute counts, so only compare
 runs taken with the same profile.
+
+### `get_bisect.rs`
+
+`benches/ecs-vs-bevy-ecs/examples/get_bisect.rs`, driven by
+`scripts/diag_get_bisect.py` and
+`.github/workflows/diag-get-bisect.yml`. Built because the A/B above
+showed the fix works in isolation while the full bench still reports
+mid-ecs's `get_component_random_access` at 36.2ns per lookup. The
+isolated binary has nothing but mid-ecs in it; the real bench has
+criterion, every other group, and bevy_ecs in one fat-LTO unit. This
+binary contains mid-ecs AND bevy_ecs (both worlds built, same order and
+shapes as `bench_get_component_random_access`) and no criterion.
+
+The driver, on one machine and toolchain: (1) `get_bisect time`: mid
+lookup ns with the bevy world not yet built, then with it alive, and
+bevy's own lookup; (2) callgrind instructions per lookup for both
+engines in that binary, with per-function self cost for mid-ecs (the
+isolated binary gives 109); (3) the real `vs_bevy_ecs` bench filtered to
+that one group, so no other group runs first in the process.
+
+How to read it: example fast and filtered bench fast means earlier
+groups' history (or build #25 was a transient run); example fast and
+filtered bench slow means criterion or the bench file's structure;
+example slow with the "alone" figure fast means the bevy world's
+presence; example slow with "alone" slow and instructions above 109
+means bevy in the LTO unit changed mid-ecs's codegen (the function list
+says where); example slow with instructions near 109 means the machine,
+not the instruction count. Locally the driver was tested end to end
+against a stub package with a minimal stand-in for `bevy_ecs` (bevy 0.19
+needs rustc 1.95+, the sandbox has 1.91): the mid-ecs half, callgrind
+flow, timing and criterion parsing ran for real; the few lines of real
+`bevy_ecs` API in the example (the import, `#[derive(Component)]`,
+`World::new`, `spawn(..).id()`, `get`) mirror `vs_bevy_ecs.rs` and have
+not been compiled outside CI.
