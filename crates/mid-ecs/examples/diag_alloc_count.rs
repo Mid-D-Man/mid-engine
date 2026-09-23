@@ -20,12 +20,13 @@
 //! optimization level or which rustc built it — same code, same
 //! allocations, every time. This exists to get a real, sandbox-valid
 //! signal on one question: is `Column::swap_remove_and_forget`/
-//! `push_any`'s `Box<dyn Any>`-per-moved-component cost (`archetype.rs`'s
+//! `push_any`'s (since replaced by `Column::move_row_to`)
+//! `Box<dyn Any>`-per-moved-component cost (`archetype.rs`'s
 //! own doc comment, `scratch.rs`'s whole reason for existing) actually
 //! the dominant allocation source behind any of the real, measured
 //! mid-ecs-vs-bevy_ecs gaps — or something else entirely.
 //!
-//! Mirrors three of `vs_bevy_ecs.rs`'s real workloads exactly (same
+//! Mirrors seven of `vs_bevy_ecs.rs`'s real workloads exactly (same
 //! N=10,000, same component shapes, same call sequence), each split
 //! into an uncounted setup phase and a counted measured phase.
 
@@ -135,7 +136,7 @@ fn print_measurement(m: &Measurement) {
 // Mirror of vs_bevy_ecs.rs's real setup: each entity starts with
 // [Marker (sparse), Position, Velocity (both archetype-tracked)], then
 // loses the (Position, Velocity) bundle -- the one scenario that
-// actually exercises Column::swap_remove_and_forget/push_any's boxing,
+// actually exercised Column::swap_remove_and_forget/push_any's boxing (both since replaced by move_row_to),
 // per this file's own module doc comment reasoning.
 fn measure_remove_bundle_two_components() -> Measurement {
     let mut world = World::new();
@@ -214,6 +215,68 @@ fn measure_spawn_n_entities_two_components() -> Measurement {
     m
 }
 
+// ── Scenarios 4-7: the single-component (`insert_static`/`remove_static`)
+// groups: spawn_single_component, insert_single_component,
+// remove_single_component, structural_churn_insert_remove. Same call
+// sequences as vs_bevy_ecs.rs; added when those groups became the next
+// real gaps after the bundle paths reached parity.
+
+fn measure_spawn_single() -> Measurement {
+    let mut world = World::new();
+    reset_and_start_counting();
+    for _ in 0..N {
+        let e = world.spawn();
+        world.insert_static(e, Position { x: 1.0, y: 2.0, z: 3.0 });
+    }
+    std::hint::black_box(&world);
+    stop_counting_and_report("spawn_single_component")
+}
+
+fn measure_insert_single() -> Measurement {
+    let mut world = World::new();
+    let entities: Vec<_> = (0..N).map(|_| world.spawn()).collect();
+    reset_and_start_counting();
+    for &e in &entities {
+        world.insert_static(e, Position { x: 1.0, y: 2.0, z: 3.0 });
+    }
+    std::hint::black_box(&world);
+    stop_counting_and_report("insert_single_component")
+}
+
+fn measure_remove_single() -> Measurement {
+    let mut world = World::new();
+    let entities: Vec<_> = (0..N)
+        .map(|_| {
+            let e = world.spawn();
+            world.insert_static(e, Position { x: 1.0, y: 2.0, z: 3.0 });
+            e
+        })
+        .collect();
+    reset_and_start_counting();
+    for &e in &entities {
+        std::hint::black_box(world.remove_static::<Position>(e));
+    }
+    stop_counting_and_report("remove_single_component")
+}
+
+fn measure_structural_churn() -> Measurement {
+    let mut world = World::new();
+    let entities: Vec<_> = (0..N)
+        .map(|_| {
+            let e = world.spawn();
+            world.insert_static(e, Position { x: 0.0, y: 0.0, z: 0.0 });
+            e
+        })
+        .collect();
+    reset_and_start_counting();
+    for &e in &entities {
+        world.insert_static(e, Marker);
+        world.remove_static::<Marker>(e);
+    }
+    std::hint::black_box(&world);
+    stop_counting_and_report("structural_churn_insert_remove")
+}
+
 fn main() {
     println!("N = {N}, one measurement pass each (no criterion iterations --");
     println!("allocation counts don't need repeated sampling the way timing does).");
@@ -226,4 +289,9 @@ fn main() {
     print_measurement(&remove);
     print_measurement(&insert_existing);
     print_measurement(&spawn);
+
+    print_measurement(&measure_spawn_single());
+    print_measurement(&measure_insert_single());
+    print_measurement(&measure_remove_single());
+    print_measurement(&measure_structural_churn());
 }

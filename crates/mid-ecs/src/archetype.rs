@@ -44,12 +44,12 @@
 //! by choice, revisit only against a real profile). This module gets the
 //! same real capability — full dynamic migration, any entity, any
 //! component, at any time — through safe Rust instead: each migrated
-//! value is briefly boxed as `Box<dyn Any>` (`Column::
-//! swap_remove_and_forget` / `push_any`) rather than copied via a raw
-//! pointer. One heap allocation per *moved component* per *structural
-//! change* — not per frame, not per query, only on the comparatively
-//! rare path this whole Sparse-Shell-vs-Archetype-Core split exists
-//! specifically to keep off the hot path in the first place.
+//! value moves through `Column::move_row_to`, which swap-removes it from
+//! the source column and pushes it onto the destination, both typed
+//! inside the one generic impl, rather than being copied via a raw
+//! pointer. No `unsafe` and no heap allocation (an earlier version boxed
+//! every migrated value as `Box<dyn Any>`; `docs/mid-ecs.md` has why
+//! that was replaced and what it measured).
 //!
 //! Bevy also unifies sparse-set-stored and table-stored components under
 //! one `Archetype` concept, because component storage strategy is a
@@ -156,15 +156,14 @@ trait Column: Any {
     /// Removes the value at `row` (swap-remove: the last element takes
     /// its place) and drops it.
     fn swap_remove_and_drop(&mut self, row: usize);
-    /// Removes the value at `row` (swap-remove) and returns it,
-    /// type-erased, for the caller to move into another column rather
-    /// than drop it.
-    fn swap_remove_and_forget(&mut self, row: usize) -> Box<dyn Any>;
-    /// Appends a type-erased value. Panics (via `expect`, an internal
-    /// invariant violation, not user-facing misuse — see this module's
-    /// migration functions for why the type is always guaranteed to
-    /// match in practice) if it isn't actually this column's `T`.
-    fn push_any(&mut self, value: Box<dyn Any>);
+    /// Removes the value at `row` (swap-remove) and appends it to
+    /// `dest`, which must be a column of the same concrete type. No
+    /// boxing: both ends are typed inside the one generic impl. Panics
+    /// (via `expect`, an internal invariant violation, not user-facing
+    /// misuse — every caller obtains `dest` from `new_same_type` on this
+    /// very column, or from a column already registered under the same
+    /// `ComponentId`) if `dest` isn't actually a `Vec<T>` of this `T`.
+    fn move_row_to(&mut self, row: usize, dest: &mut dyn Column);
     /// Creates a new, empty column of the same concrete type as this
     /// one — this is what lets a brand-new archetype's table acquire
     /// correctly-typed columns lazily, purely by copying the type of
@@ -179,14 +178,12 @@ impl<T: 'static> Column for Vec<T> {
     fn swap_remove_and_drop(&mut self, row: usize) {
         Vec::swap_remove(self, row);
     }
-    fn swap_remove_and_forget(&mut self, row: usize) -> Box<dyn Any> {
-        Box::new(Vec::swap_remove(self, row))
-    }
-    fn push_any(&mut self, value: Box<dyn Any>) {
-        let value = value
-            .downcast::<T>()
-            .expect("Column<T>::push_any called with a value of the wrong concrete type");
-        self.push(*value);
+    fn move_row_to(&mut self, row: usize, dest: &mut dyn Column) {
+        let value = Vec::swap_remove(self, row);
+        dest.as_any_mut()
+            .downcast_mut::<Vec<T>>()
+            .expect("Column<T>::move_row_to called with a destination of the wrong concrete type")
+            .push(value);
     }
     fn new_same_type(&self) -> Box<dyn Column> {
         Box::<Vec<T>>::default()
@@ -317,9 +314,7 @@ struct EntityLocation {
 /// allocation on *every* `insert_bundle`/`remove_bundle` call, every
 /// arity — the single most universal allocation source these two
 /// methods had, since it fires on every structural change regardless
-/// of whether that change ends up needing to box anything (unlike
-/// `Column::swap_remove_and_forget`'s `Box<dyn Any>`, which only fires
-/// when the source archetype actually has columns to migrate).
+/// of what else that change needs to migrate.
 ///
 /// `ComponentId::from_u32(0)` as the unused-slot filler is deliberate,
 /// not arbitrary — its own doc comment already establishes that a
@@ -398,9 +393,9 @@ pub(crate) trait Bundle: Sized + 'static {
     /// correct regardless of what else survives on the source
     /// archetype — every type involved is already known statically
     /// through `B`, unlike the *other*, non-`B` columns `remove_bundle`
-    /// still has to migrate via `Column::swap_remove_and_forget`/
-    /// `push_any`'s type-erased path, since which components those are
-    /// is only knowable at runtime. `remove_bundle` calls this only
+    /// still has to migrate through the type-erased
+    /// `Column::move_row_to`, since which components those are is only
+    /// knowable at runtime. `remove_bundle` calls this only
     /// after every non-`B` column has already been migrated out of
     /// `columns` — never touches those, only the ids in `ids`.
     ///
@@ -869,16 +864,15 @@ impl Archetypes {
         let (from_archetype, to_archetype) = self.get_two_mut(from_id, to_id);
 
         for (comp, column) in from_archetype.table.columns.iter_mut() {
-            let moved = column.swap_remove_and_forget(from_location.row);
             ensure_column(&mut to_archetype.table.columns, comp, || {
                 column.new_same_type()
             });
-            to_archetype
+            let dest = to_archetype
                 .table
                 .columns
                 .get_mut(comp)
-                .expect("just ensured present")
-                .push_any(moved);
+                .expect("just ensured present");
+            column.move_row_to(from_location.row, &mut **dest);
         }
         let old_last = from_archetype.table.entities.len() - 1;
         from_archetype.table.entities.swap_remove(from_location.row);
@@ -969,22 +963,27 @@ impl Archetypes {
 
         let mut removed_value: Option<T> = None;
         for (comp, column) in from_archetype.table.columns.iter_mut() {
-            let moved = column.swap_remove_and_forget(from_location.row);
             if comp == component_id {
-                removed_value = Some(*moved.downcast::<T>().expect(
-                    "column for component_id must hold T for this T — component_id is T's own id",
-                ));
+                removed_value = Some(
+                    column
+                        .as_any_mut()
+                        .downcast_mut::<Vec<T>>()
+                        .expect(
+                            "column for component_id must hold Vec<T> for this T — component_id is T's own id",
+                        )
+                        .swap_remove(from_location.row),
+                );
                 continue;
             }
             ensure_column(&mut to_archetype.table.columns, comp, || {
                 column.new_same_type()
             });
-            to_archetype
+            let dest = to_archetype
                 .table
                 .columns
                 .get_mut(comp)
-                .expect("just ensured present")
-                .push_any(moved);
+                .expect("just ensured present");
+            column.move_row_to(from_location.row, &mut **dest);
         }
         let old_last = from_archetype.table.entities.len() - 1;
         from_archetype.table.entities.swap_remove(from_location.row);
@@ -1082,16 +1081,15 @@ impl Archetypes {
         let (from_archetype, to_archetype) = self.get_two_mut(from_id, to_id);
 
         for (comp, column) in from_archetype.table.columns.iter_mut() {
-            let moved = column.swap_remove_and_forget(from_location.row);
             ensure_column(&mut to_archetype.table.columns, comp, || {
                 column.new_same_type()
             });
-            to_archetype
+            let dest = to_archetype
                 .table
                 .columns
                 .get_mut(comp)
-                .expect("just ensured present")
-                .push_any(moved);
+                .expect("just ensured present");
+            column.move_row_to(from_location.row, &mut **dest);
         }
         let old_last = from_archetype.table.entities.len() - 1;
         from_archetype.table.entities.swap_remove(from_location.row);
@@ -1170,16 +1168,15 @@ impl Archetypes {
             if ids.contains(&comp) {
                 continue;
             }
-            let moved = column.swap_remove_and_forget(from_location.row);
             ensure_column(&mut to_archetype.table.columns, comp, || {
                 column.new_same_type()
             });
-            to_archetype
+            let dest = to_archetype
                 .table
                 .columns
                 .get_mut(comp)
-                .expect("just ensured present")
-                .push_any(moved);
+                .expect("just ensured present");
+            column.move_row_to(from_location.row, &mut **dest);
         }
         let result = B::take_direct(&mut from_archetype.table.columns, &ids, from_location.row);
 

@@ -32,7 +32,6 @@
 //! not here — a distinct concern from owning the storage itself.
 
 use std::any::TypeId;
-use std::collections::HashMap;
 use std::fmt;
 
 use mid_collections::{FfiSpan, GenerationalIndex, GenerationalIndexAllocator, SparseSetIndex};
@@ -40,6 +39,7 @@ use zerocopy::{Immutable, IntoBytes, KnownLayout};
 
 use crate::archetype::{ArchetypeId, Archetypes, Bundle};
 use crate::component::{ComponentId, SparseShell};
+use crate::hash::TypeIdMap;
 
 /// A handle to an entity. Detects its own staleness after despawn — a
 /// thin wrapper over `mid_collections::GenerationalIndex`, not a
@@ -174,7 +174,7 @@ impl fmt::Display for StorageKind {
 /// this pass to keep this specific change bounded.
 #[derive(Debug, Default)]
 struct StorageClaims {
-    claimed: HashMap<TypeId, StorageKind>,
+    claimed: TypeIdMap<StorageKind>,
 }
 
 impl StorageClaims {
@@ -188,7 +188,8 @@ impl StorageClaims {
                  against this type, with no error, rather than failing loudly like this instead)",
                 std::any::type_name::<T>()
             ),
-            _ => {
+            Some(_) => {}
+            None => {
                 self.claimed.insert(type_id, kind);
             }
         }
@@ -1450,5 +1451,126 @@ mod tests {
         let static_id = w.register_ffi_static_component::<FfiStamina>("Health");
         assert_eq!(w.lookup_ffi_component_id("Health"), Some(sparse_id));
         assert_eq!(w.lookup_ffi_static_component_id("Health"), Some(static_id));
+    }
+
+    // Migration tests for the archetype-tracked (`insert_static`) path.
+    // Every survivor here is a real, non-zero-sized, archetype-tracked
+    // column, which is what `Column::move_row_to` actually has to move;
+    // the older `remove_bundle` test above uses sparse-shell `insert`
+    // for its survivor and so never exercised that.
+
+    #[test]
+    fn insert_static_migration_preserves_every_entitys_values() {
+        let mut w = World::new();
+        let es: Vec<_> = (0..4u32)
+            .map(|i| {
+                let e = w.spawn();
+                w.insert_static(e, Health(i));
+                e
+            })
+            .collect();
+        // Migrating the first entity swap-removes it from a table whose
+        // last row belongs to a different entity.
+        assert!(w.insert_static(es[0], Mass(9.0)));
+        for (i, &e) in es.iter().enumerate() {
+            assert_eq!(w.get_static::<Health>(e), Some(&Health(i as u32)));
+        }
+        assert_eq!(w.get_static::<Mass>(es[0]), Some(&Mass(9.0)));
+        assert_eq!(w.get_static::<Mass>(es[1]), None);
+    }
+
+    #[test]
+    fn remove_static_returns_the_value_and_migrates_survivors() {
+        let mut w = World::new();
+        let es: Vec<_> = (0..3u32)
+            .map(|i| {
+                let e = w.spawn();
+                w.insert_static(e, Health(i));
+                w.insert_static(e, Mass(i as f32));
+                e
+            })
+            .collect();
+        assert_eq!(w.remove_static::<Mass>(es[0]), Some(Mass(0.0)));
+        assert_eq!(w.get_static::<Mass>(es[0]), None);
+        assert_eq!(w.get_static::<Health>(es[0]), Some(&Health(0)));
+        for (i, &e) in es.iter().enumerate().skip(1) {
+            assert_eq!(w.get_static::<Health>(e), Some(&Health(i as u32)));
+            assert_eq!(w.get_static::<Mass>(e), Some(&Mass(i as f32)));
+        }
+        assert_eq!(w.remove_static::<Mass>(es[0]), None);
+    }
+
+    #[test]
+    fn migration_moves_values_and_drops_each_exactly_once() {
+        use std::cell::Cell;
+        use std::rc::Rc;
+
+        struct Tracked(Rc<Cell<u32>>);
+        impl Drop for Tracked {
+            fn drop(&mut self) {
+                self.0.set(self.0.get() + 1);
+            }
+        }
+
+        let drops = Rc::new(Cell::new(0));
+        let mut w = World::new();
+        let e = w.spawn();
+        w.insert_static(e, Tracked(drops.clone()));
+        w.insert_static(e, Mass(1.0));
+        w.insert_static(e, Charge(2.0));
+        assert_eq!(drops.get(), 0, "migration must move values, never drop them");
+        assert_eq!(w.remove_static::<Mass>(e), Some(Mass(1.0)));
+        assert_eq!(drops.get(), 0, "removing a sibling must not drop the survivor");
+        assert!(w.despawn(e));
+        assert_eq!(drops.get(), 1, "dropped exactly once, when the entity is despawned");
+    }
+
+    #[test]
+    fn remove_static_hands_back_the_value_undropped() {
+        use std::cell::Cell;
+        use std::rc::Rc;
+
+        struct Tracked(Rc<Cell<u32>>);
+        impl Drop for Tracked {
+            fn drop(&mut self) {
+                self.0.set(self.0.get() + 1);
+            }
+        }
+
+        let drops = Rc::new(Cell::new(0));
+        let mut w = World::new();
+        let e = w.spawn();
+        w.insert_static(e, Tracked(drops.clone()));
+        w.insert_static(e, Mass(1.0));
+        let value = w.remove_static::<Tracked>(e);
+        assert!(value.is_some());
+        assert_eq!(drops.get(), 0, "the removed value belongs to the caller now");
+        drop(value);
+        assert_eq!(drops.get(), 1);
+    }
+
+    #[test]
+    fn insert_bundle_migrates_existing_archetype_components() {
+        let mut w = World::new();
+        let e = w.spawn();
+        w.insert_static(e, Health(5));
+        assert!(w.insert_bundle(e, (Mass(1.0), Charge(2.0))));
+        assert_eq!(w.get_static::<Health>(e), Some(&Health(5)));
+        assert_eq!(w.get_static::<Mass>(e), Some(&Mass(1.0)));
+        assert_eq!(w.get_static::<Charge>(e), Some(&Charge(2.0)));
+    }
+
+    #[test]
+    fn remove_bundle_migrates_a_surviving_archetype_component() {
+        let mut w = World::new();
+        let e = w.spawn();
+        w.insert_static(e, Health(7));
+        w.insert_bundle(e, (Mass(1.0), Charge(2.0)));
+        assert_eq!(
+            w.remove_bundle::<(Mass, Charge)>(e),
+            Some((Mass(1.0), Charge(2.0)))
+        );
+        assert_eq!(w.get_static::<Health>(e), Some(&Health(7)));
+        assert_eq!(w.get_static::<Mass>(e), None);
     }
 }

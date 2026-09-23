@@ -24,7 +24,11 @@
 //! # Ir/op = (total(b) - total(a)) / ops, ops = 10_000 (get: 200_000)
 //! ```
 //!
-//! Modes: `get`, `insert`, `remove`, `spawn`. Second argument `0` runs
+//! Modes: `get`, `insert`, `remove`, `spawn` (two-component bundles), and
+//! `spawn1`, `insert1`, `remove1`, `churn1` (the single-component
+//! `insert_static`/`remove_static` groups: `spawn_single_component`,
+//! `insert_single_component`, `remove_single_component`,
+//! `structural_churn_insert_remove`). Second argument `0` runs
 //! setup only, `1` runs setup plus the measured operation. Workloads
 //! mirror `vs_bevy_ecs.rs` (same N, component shapes and call
 //! sequence).
@@ -97,6 +101,36 @@ fn op_remove(world: &mut World, entities: &[Entity]) {
 }
 
 #[inline(never)]
+fn op_spawn1(world: &mut World) {
+    for _ in 0..N {
+        let e = world.spawn();
+        world.insert_static(e, Position { x: 1.0, y: 2.0, z: 3.0 });
+    }
+}
+
+#[inline(never)]
+fn op_insert1(world: &mut World, entities: &[Entity]) {
+    for &e in entities {
+        world.insert_static(e, Position { x: 1.0, y: 2.0, z: 3.0 });
+    }
+}
+
+#[inline(never)]
+fn op_remove1(world: &mut World, entities: &[Entity]) {
+    for &e in entities {
+        world.remove_static::<Position>(e);
+    }
+}
+
+#[inline(never)]
+fn op_churn1(world: &mut World, entities: &[Entity]) {
+    for &e in entities {
+        world.insert_static(e, Marker);
+        world.remove_static::<Marker>(e);
+    }
+}
+
+#[inline(never)]
 fn op_spawn(world: &mut World) {
     for _ in 0..N {
         let e = world.spawn();
@@ -107,7 +141,7 @@ fn op_spawn(world: &mut World) {
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     let Some(mode) = args.get(1) else {
-        eprintln!("usage: diag_ir_ops <get|insert|remove|spawn> <0|1> | time-get");
+        eprintln!("usage: diag_ir_ops <get|insert|remove|spawn|spawn1|insert1|remove1|churn1> <0|1> | time-get");
         std::process::exit(2);
     };
     let run_op = args.get(2).is_some_and(|r| r == "1");
@@ -155,6 +189,33 @@ fn main() {
         "spawn" => {
             if run_op {
                 op_spawn(&mut world);
+            }
+        }
+        "spawn1" => {
+            if run_op {
+                op_spawn1(&mut world);
+            }
+        }
+        "insert1" => {
+            let entities: Vec<_> = (0..N).map(|_| world.spawn()).collect();
+            if run_op {
+                op_insert1(&mut world, &entities);
+            }
+        }
+        "remove1" | "churn1" => {
+            let entities: Vec<_> = (0..N)
+                .map(|_| {
+                    let e = world.spawn();
+                    world.insert_static(e, Position { x: 1.0, y: 2.0, z: 3.0 });
+                    e
+                })
+                .collect();
+            if run_op {
+                if mode == "remove1" {
+                    op_remove1(&mut world, &entities);
+                } else {
+                    op_churn1(&mut world, &entities);
+                }
             }
         }
         "time-get" => {

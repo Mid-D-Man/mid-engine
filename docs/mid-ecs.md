@@ -1870,6 +1870,52 @@ structure; the other groups having run first in the same process;
 bevy_ecs linked into the same fat-LTO unit; both worlds alive at once.
 `get_bisect.rs` (below) adds them back one at a time.
 
+**Outcome of the bisect, and the re-run.** `ecs-vs-bevy-ecs` re-dispatched
+unchanged at `270cf72` (build #26) measured `get_component_random_access`
+at 85.0µs against bevy_ecs's 73.0µs, 1.16x, where build #25 had 362.2µs
+and 4.79x. So #25 was the runner, not the code. The bisect (`diag get_component_random_access bisect`
+builds #1 and #2, same commit) says what varied:
+
+| | #1 `bench`, AMD EPYC 9V74 | #2 `bench-nolto`, AMD EPYC 7763 |
+|---|---|---|
+| mid-ecs, bevy world not built yet | 255.9µs | 87.4µs |
+| mid-ecs, both worlds alive | 264.7µs | 87.5µs |
+| bevy_ecs, same binary | 50.5µs | 66.5µs |
+| real bench filtered to this group, mid-ecs | 255.5µs | 85.8µs |
+| real bench filtered to this group, bevy_ecs | 58.9µs | 73.4µs |
+| callgrind Ir per lookup, mid-ecs / bevy_ecs | 109 / 88 | 116 / 94 |
+
+Per 10,000 lookups. The bevy world's presence, criterion, and other
+groups having run first all make no difference on either machine
+(alone ~ alive ~ filtered bench). The CPU does: the same 109
+instructions take ~255µs on the EPYC 9V74 and ~85µs on the EPYC 7763
+(and ~75µs on the Xeon 8370C in `diag Ir/op A/B` build #1, ~84µs on the
+7763 in build #3), while bevy_ecs runs *faster* on the 9V74 than on the
+7763. So mid-ecs's `get_static` has a CPU-specific penalty of about 3x at
+equal instruction count on that machine, and bevy_ecs's lookup does not.
+Build #25's CPU was not recorded (the bench summary header carried no
+CPU field), so that it ran on such a machine is consistent with the data
+but unproven. The mechanism is unknown. One untested candidate: the two
+virtual calls per lookup (`Column::as_any`, then the `downcast_ref`'s
+`type_id`), which bevy_ecs does not make, interact badly with that
+core's indirect-branch handling; removing them is already a candidate on
+instruction count alone. Testing it needs the variant built and a
+runner on the affected CPU, which CI does not let us choose (run
+identical jobs in a matrix and read the CPU column).
+
+Consequence for reading any bench in this repo: compare ratios within a
+run, and note the CPU. `bench-vs-bevy-ecs.yml`'s summary header now
+prints it. Other runners seen so far: Intel Xeon Platinum 8370C @
+2.80GHz, AMD EPYC 7763, AMD EPYC 9V74.
+
+**State after build #26** (ratios vs bevy_ecs; before = last figure on
+record): `insert_bundle_on_existing_entity` ~1.6x -> 0.92x,
+`remove_bundle_two_components` 1.48x -> 0.84x, `get_component_random_access`
+~2.7x -> 1.16x, `spawn_n_entities_two_components` ~2x -> 1.24x,
+`remove_single_component` 0.84x, `structural_churn_insert_remove` 1.29x,
+`insert_single_component` 1.37x, `spawn_single_component` 1.71x,
+`dense_query_iteration` 3.98x (parked, see the `Iter2` entries above).
+
 ### `diag_ir_ops.rs`
 
 `examples/diag_ir_ops.rs`, kept for reference like `diag_alloc_count.rs`.
@@ -1932,3 +1978,99 @@ flow, timing and criterion parsing ran for real; the few lines of real
 `bevy_ecs` API in the example (the import, `#[derive(Component)]`,
 `World::new`, `spawn(..).id()`, `get`) mirror `vs_bevy_ecs.rs` and have
 not been compiled outside CI.
+
+### Single-component structural paths: `StorageClaims` hasher and boxing-free migration
+
+After the bundle groups reached parity (`ecs-vs-bevy-ecs` build #26),
+the single-component groups were the largest structural gaps
+(`spawn_single_component` 1.71x, `insert_single_component` 1.37x,
+`structural_churn_insert_remove` 1.29x, `remove_single_component` at
+parity). Allocation counts (`diag_alloc_count.rs`, scenarios 4-7 added
+for this) split them into two kinds: `spawn_single` and `insert_single`
+were already ~0 allocs/op, so their gap was compute; `remove_single`
+made 1.001 allocs/op and churn 2.001, so those were boxing.
+
+**Cause 1, compute: `StorageClaims::claim`.** Every `insert_static`
+(and the Sparse Shell `insert`) calls it. It was a
+`std::collections::HashMap<TypeId, StorageKind>` (SipHash) doing a `get`
+and then an unconditional `insert` (a second hash and a write) even
+when the claim was already recorded: ~265 of `insert_static`'s ~692
+instructions. `insert_bundle`/`remove_bundle` do not go through claims
+(the limitation `StorageClaims`'s own doc comment already names), which
+is why the bundle groups reached parity while the single-component ones
+did not. Fix: `TypeIdMap<StorageKind>` (the `hash.rs` hasher) and only
+insert when absent. Semantics are unchanged: the first system a type is
+used with is recorded, same-system repeats are no-ops, the other system
+panics.
+
+**Cause 2, allocation: boxed migration.** Every component value moved
+between archetypes went through `Column::swap_remove_and_forget`
+(returning `Box<dyn Any>`) and `Column::push_any`: one heap allocation
+per moved component per structural change. `remove_static` also boxed
+the removed value just to downcast it straight back. Fix:
+`Column::move_row_to(row, dest: &mut dyn Column)` swap-removes the value
+and pushes it onto `dest` with both ends typed inside the one generic
+impl (`dest.as_any_mut().downcast_mut::<Vec<T>>()`), still with no
+`unsafe`. `Archetypes::remove` takes the removed value out with a typed
+`swap_remove`. `swap_remove_and_forget` and `push_any` are deleted. All
+four migration sites (`insert`, `remove`, `insert_bundle`,
+`remove_bundle`'s survivors) use `move_row_to`. `scratch.rs` stays as
+standalone infrastructure, but the cost it was built for is gone; its
+doc comment now says so.
+
+**Sandbox result (rustc 1.91.1, callgrind Ir per operation, `bench`
+profile, N=10,000, before = `270cf72`):**
+
+| operation | before | claim fix only | both | change |
+|---|---|---|---|---|
+| `spawn_single` (spawn + `insert_static`) | 853.3 | 589.4 | 586.4 | -31% |
+| `insert_single` (`insert_static`) | 692.4 | 428.4 | 425.9 | -38% |
+| `remove_single` (`remove_static`) | 499.0 | 499.0 | 344.5 | -31% |
+| `churn_single` (insert + remove `Marker`) | 1499.6 | 1246.6 | 916.6 | -39% |
+| `get_static` | 113.0 | 113.0 | 113.0 | 0 (control) |
+| `insert_bundle` | 711.2 | n/a | 692.7 | -3% |
+| `remove_bundle` | 732.1 | n/a | 729.1 | 0% |
+| spawn + `insert_bundle` | 789.2 | n/a | 784.2 | -1% |
+
+Allocations per op (`diag_alloc_count.rs`): `remove_single_component`
+1.001 -> 0.001, `structural_churn_insert_remove` 2.001 -> 0.001; the
+others were already ~0 and stay there. The bundle groups barely move
+because they never used claims and their survivor in the benchmark is a
+zero-sized `Marker`; they and `get_static` are the controls.
+
+Tests: 192 default, 197 with `scratch-arena` (six new). The new tests
+use archetype-tracked (`insert_static`) survivors, which the older
+`remove_bundle` migration test does not: it inserts its survivor
+through the Sparse Shell's `insert`, so it never reached the archetype
+migration loop. They cover value preservation across swap-removes,
+`remove_static` returning the right value while survivors migrate, each
+value dropped exactly once (moved, never dropped, by migration; dropped
+once on despawn; handed back undropped by `remove_static`), and the
+bundle insert/remove survivor paths. They were also run against the
+pre-change code and pass there, so they check behaviour, not the new
+implementation.
+
+**What is left in `insert_single` (425.9 Ir):** `World::insert_static`
+self ~232 (inlines `is_alive`, the claim lookup, `component_id`, and the
+body of `Archetypes::insert`), `edge_for_insert` 65, the location
+`SparseSet::insert` 43, `get_two_mut` 40. Two structural candidates, not
+started: entity lookups happen twice (`World::is_alive`, then
+`locations.get`), and `spawn` followed by `insert_static` writes the
+entity's location twice and hops through the empty archetype, where
+bevy's `spawn(bundle)` writes it once. A direct spawn-with-components
+API would remove that hop for `spawn_single` and
+`spawn_n_entities_two_components`; the bench file's own note that
+`spawn` is not perfectly apples-to-apples is about exactly this.
+
+**Not yet run on real CI.** To read against: `spawn_single_component`,
+`insert_single_component`, `structural_churn_insert_remove` and
+`remove_single_component` should fall; the bundle groups, `get` and the
+query groups should not move (controls). Note the runner CPU in the
+summary header (added in `bench-vs-bevy-ecs.yml`) before comparing to
+build #26 (1.71x, 1.37x, 1.29x, 0.84x); ratios within one run are the
+comparison.
+
+`diag_ir_ops.rs` gained modes `spawn1`, `insert1`, `remove1`, `churn1`
+for these four groups, and `scripts/diag_ir_ops_ab.py` measures them
+and now reverts `world.rs` as well as `archetype.rs`/`lib.rs` for its
+"prefix" build (needed because this change touches `world.rs`).

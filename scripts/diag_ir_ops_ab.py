@@ -6,8 +6,8 @@
 """A/B driver for crates/mid-ecs/examples/diag_ir_ops.rs.
 
 Builds the example twice on the SAME machine and toolchain -- once from
-the working tree ("current"), once with `crates/mid-ecs/src/archetype.rs`
-and `lib.rs` reverted to `--prefix-sha` ("prefix") -- then reports, per
+the working tree ("current"), once with `crates/mid-ecs/src/archetype.rs`,
+`lib.rs` and `world.rs` reverted to `--prefix-sha` ("prefix") -- then reports, per
 variant: instructions per operation under callgrind (deterministic) and
 isolated wall-clock ns per `get_static` lookup. The working tree is
 restored afterwards.
@@ -34,6 +34,7 @@ EXAMPLE = "diag_ir_ops"
 REVERT_FILES = [
     "crates/mid-ecs/src/archetype.rs",
     "crates/mid-ecs/src/lib.rs",
+    "crates/mid-ecs/src/world.rs",
 ]
 # (mode, ops counted in the differential run)
 OPS = [
@@ -41,6 +42,10 @@ OPS = [
     ("insert", 10_000),
     ("remove", 10_000),
     ("spawn", 10_000),
+    ("spawn1", 10_000),
+    ("insert1", 10_000),
+    ("remove1", 10_000),
+    ("churn1", 10_000),
 ]
 
 
@@ -149,7 +154,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--profile", default="bench")
     ap.add_argument("--prefix-sha", required=True,
-                    help="commit whose archetype.rs/lib.rs define the 'prefix' variant")
+                    help="commit whose archetype.rs/lib.rs/world.rs define the 'prefix' variant")
     ap.add_argument("--out", default="diag-ir-ops-out")
     ap.add_argument("--reps", type=int, default=3)
     args = ap.parse_args()
@@ -176,7 +181,7 @@ def main():
     md.append(f"## diag_ir_ops A/B: `{args.profile}` profile")
     md.append("")
     md.append(f"`{rustc}`, prefix = `{args.prefix_sha[:8]}` "
-              f"(archetype.rs + lib.rs reverted), current = working tree.")
+              f"(archetype.rs, lib.rs, world.rs reverted), current = working tree.")
     md.append("")
     md.append("### Instructions per operation (callgrind, deterministic)")
     md.append("")

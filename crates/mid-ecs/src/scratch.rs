@@ -6,7 +6,8 @@
 //!
 //! `archetype.rs`'s own doc comment already names the cost this exists
 //! to address: each migrated component value is briefly boxed as
-//! `Box<dyn Any>` (`Column::swap_remove_and_forget` / `push_any`) —
+//! `Box<dyn Any>` (`Column::swap_remove_and_forget` / `push_any`, since
+//! replaced by `Column::move_row_to`, which needs no boxing) —
 //! "one heap allocation per moved component per structural change."
 //! `spawn_insert_bundle` and `structural_churn` are both flagged in
 //! `benches/archetype_core.rs` as real, measured gaps against
@@ -33,7 +34,9 @@
 //!   instead of one `free` per moved component.
 //!
 //! **Neither is wired into `Column::swap_remove_and_forget`/`push_any`
-//! yet.** That's the deliberate next step, not this one — this module
+//! yet** (those two methods no longer exist: `Column::move_row_to`
+//! moves migrated values with no boxing, so the cost this module was
+//! built for is gone; see `docs/mid-ecs.md`). That's the deliberate next step, not this one — this module
 //! is standalone and tested on its own, so the swap (bumpalo today, a
 //! future `mid-arena`-backed arena once that's been benched against
 //! bumpalo for this exact access pattern, not just `vs_arena_crates`'
