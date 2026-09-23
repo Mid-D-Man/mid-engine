@@ -424,6 +424,20 @@ impl World {
     /// own function generic over "any bundle" (a narrow capability;
     /// calling this method directly with a concrete tuple works fine
     /// either way).
+    /// Spawns a brand-new entity already holding every component in
+    /// `bundle`, in one step -- no separate `insert_bundle` call, and
+    /// no stop in the empty archetype in between. The direct
+    /// counterpart to bevy's own `World::spawn(bundle)`; prefer this
+    /// over `spawn()` + `insert_bundle()` whenever the bundle is known
+    /// up front (see `docs/mid-ecs.md`, "Direct bundle spawn", for what
+    /// the two-call path costs that this avoids).
+    #[allow(private_bounds)]
+    pub fn spawn_bundle<B: Bundle>(&mut self, bundle: B) -> Entity {
+        let entity = Entity(self.entities.allocate());
+        self.archetypes.spawn_bundle(entity, bundle);
+        entity
+    }
+
     #[allow(private_bounds)]
     pub fn insert_bundle<B: Bundle>(&mut self, entity: Entity, bundle: B) -> bool {
         if !self.is_alive(entity) {
@@ -1572,5 +1586,94 @@ mod tests {
         );
         assert_eq!(w.get_static::<Health>(e), Some(&Health(7)));
         assert_eq!(w.get_static::<Mass>(e), None);
+    }
+
+    // `World::spawn_bundle` -- direct one-step spawn.
+
+    #[test]
+    fn spawn_bundle_is_alive_and_holds_every_value() {
+        let mut w = World::new();
+        let e = w.spawn_bundle((Mass(1.0), Charge(2.0)));
+        assert!(w.is_alive(e));
+        assert_eq!(w.get_static::<Mass>(e), Some(&Mass(1.0)));
+        assert_eq!(w.get_static::<Charge>(e), Some(&Charge(2.0)));
+    }
+
+    #[test]
+    fn spawn_bundle_gives_distinct_entities_and_correct_count() {
+        let mut w = World::new();
+        let e1 = w.spawn_bundle((Mass(1.0), Charge(2.0)));
+        let e2 = w.spawn_bundle((Mass(3.0), Charge(4.0)));
+        assert_ne!(e1, e2);
+        assert_eq!(w.entity_count(), 2);
+        assert_eq!(w.get_static::<Mass>(e1), Some(&Mass(1.0)));
+        assert_eq!(w.get_static::<Mass>(e2), Some(&Mass(3.0)));
+    }
+
+    #[test]
+    fn spawn_bundle_repeated_calls_share_one_archetype_and_dont_corrupt_rows() {
+        // Every entity after the first lands in the *same*, already-
+        // created archetype -- this is what exercises the `to_id`
+        // lookup finding a real, existing archetype rather than only
+        // ever creating a fresh one.
+        let mut w = World::new();
+        let es: Vec<_> = (0..5u32)
+            .map(|i| w.spawn_bundle((Mass(i as f32), Charge(i as f32 * 10.0))))
+            .collect();
+        for (i, &e) in es.iter().enumerate() {
+            assert_eq!(w.get_static::<Mass>(e), Some(&Mass(i as f32)));
+            assert_eq!(w.get_static::<Charge>(e), Some(&Charge(i as f32 * 10.0)));
+        }
+    }
+
+    #[test]
+    fn spawn_bundle_then_remove_bundle_round_trips() {
+        let mut w = World::new();
+        let e = w.spawn_bundle((Mass(7.0), Charge(8.0)));
+        let removed = w.remove_bundle::<(Mass, Charge)>(e).unwrap();
+        assert_eq!(removed, (Mass(7.0), Charge(8.0)));
+        assert!(!w.has_static::<Mass>(e));
+        assert!(!w.has_static::<Charge>(e));
+    }
+
+    #[test]
+    fn spawn_bundle_and_spawn_then_insert_bundle_reach_the_same_archetype() {
+        // Mixing the two call paths for the same bundle type must land
+        // in one shared archetype, not two accidentally-distinct ones
+        // -- `spawn_bundle`'s own `edge_for_insert` chain has to agree
+        // with `insert_bundle`'s.
+        let mut w = World::new();
+        let via_direct = w.spawn_bundle((Mass(1.0), Charge(2.0)));
+        let via_two_step = w.spawn();
+        w.insert_bundle(via_two_step, (Mass(3.0), Charge(4.0)));
+        assert_eq!(w.get_static::<Mass>(via_direct), Some(&Mass(1.0)));
+        assert_eq!(w.get_static::<Mass>(via_two_step), Some(&Mass(3.0)));
+        // Query over the archetype-tracked storage must see both --
+        // only true if they share one archetype's table.
+        let seen: std::collections::HashSet<_> =
+            w.query2_static::<Mass, Charge>().map(|(e, _, _)| e).collect();
+        assert!(seen.contains(&via_direct));
+        assert!(seen.contains(&via_two_step));
+        assert_eq!(seen.len(), 2);
+    }
+
+    #[test]
+    fn spawn_bundle_drops_values_exactly_once() {
+        use std::cell::Cell;
+        use std::rc::Rc;
+
+        struct Tracked(Rc<Cell<u32>>);
+        impl Drop for Tracked {
+            fn drop(&mut self) {
+                self.0.set(self.0.get() + 1);
+            }
+        }
+
+        let drops = Rc::new(Cell::new(0));
+        let mut w = World::new();
+        let e = w.spawn_bundle((Tracked(drops.clone()), Mass(1.0)));
+        assert_eq!(drops.get(), 0, "spawning must move the value, never drop it");
+        assert!(w.despawn(e));
+        assert_eq!(drops.get(), 1, "dropped exactly once, when the entity is despawned");
     }
 }

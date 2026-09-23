@@ -2074,3 +2074,90 @@ comparison.
 for these four groups, and `scripts/diag_ir_ops_ab.py` measures them
 and now reverts `world.rs` as well as `archetype.rs`/`lib.rs` for its
 "prefix" build (needed because this change touches `world.rs`).
+
+### Direct bundle spawn: `World::spawn_bundle`
+
+Real CI (`ecs-vs-bevy-ecs` build #28, commit `55caf87`) confirmed the
+`StorageClaims`/`move_row_to` fix: `spawn_single_component` reached
+parity (1.71x -> 1.00x), `insert_single_component` and
+`remove_single_component` now measure *faster* than bevy_ecs (0.79x,
+0.57x), `structural_churn_insert_remove` too (0.82x). Controls held:
+`get_component_random_access` 1.17x, matching build #26's 1.16x, not
+the CPU-dependent ~4.8x outlier; bundle groups and queries flat. Full
+numbers in the "State after build #26" entry above, now superseded by
+build #28's.
+
+One real gap was left: `spawn_n_entities_two_components` at 1.30x,
+unmoved by that fix, because `insert_bundle` never goes through
+`StorageClaims` (`StorageClaims`'s own doc comment already names this
+as a known, deliberate limitation). The benchmark's own top doc
+comment already named the actual cause: bevy's `World::spawn(bundle)`
+places an entity directly into its final archetype in one call;
+mid-ecs's closest equivalent was `World::spawn()` (into the empty
+archetype) then `World::insert_bundle(e, bundle)` (one migration back
+out) — every call pays for a stop nothing ever reads. Concretely: the
+entity's row and location are written twice, `get_two_mut` fetches two
+archetypes when only one is ever touched, and the (trivially empty,
+but not free) column-migration loop runs once for no reason, since a
+fresh entity's "from" archetype never has columns.
+
+**Fix:** `Archetypes::spawn_bundle` walks the same `edge_for_insert`
+chain `insert_bundle` does, but starting cold from `EMPTY_ARCHETYPE`
+with no location or table row written until the real destination
+archetype is known — one row push, one `push_into`, one location
+insert. `World::spawn_bundle<B: Bundle>(&mut self, bundle: B) -> Entity`
+is the public entry point, the direct counterpart to bevy's
+`spawn(bundle)`. Infallible, unlike `insert_bundle`: a brand-new entity
+can never already hold one of `B`'s components, so there's no failure
+case. Bypasses `StorageClaims` — same as `insert_bundle`, an existing,
+already-documented decision, not something this pass changed.
+
+**Sandbox result** (rustc 1.91.1, callgrind Ir per op, `bench` profile,
+N=10,000, two-component bundle): the two-call path (`World::spawn` +
+`insert_bundle`) costs 833.2 Ir/op; `spawn_bundle` costs 614.6, a 26%
+drop. Self cost that disappears entirely: `World::insert_bundle`'s own
+162 Ir, `get_two_mut` 40, and roughly half of the location `SparseSet`
+insert (113 -> 69, one insert instead of two). `diag_ir_ops.rs` gained
+mode `spawnbundle` for this measurement, compared against the existing
+`spawn` mode (same two-component bundle, old two-call path).
+
+**New bench group, not a replacement for the old one.**
+`spawn_n_entities_two_components` (`World::spawn()` + `insert_bundle`)
+is left exactly as-is — the benchmark's own doc comment already treats
+that gap as real and worth measuring honestly, not something to hide
+by quietly swapping in the faster call. `spawn_bundle_direct`
+(`benches/ecs-vs-bevy-ecs/benches/vs_bevy_ecs.rs`) is the new, now-fair
+comparison: mid-ecs's `World::spawn_bundle` against bevy's
+`World::spawn(bundle)`, same shape as every other single-call
+`bench_*` group added earlier. Registered in the same
+`criterion_group!` list. The bench file's own top doc comment on
+`spawn` is updated to point at this new group as the apples-to-apples
+one instead of asserting there is no equivalent.
+
+**Tests:** 198 default (six new — value/count/archetype-sharing checks,
+a drop-once check via a `Drop`-tracking type, and one test that
+`spawn_bundle` and `spawn()`+`insert_bundle()` for the same bundle type
+land in one shared archetype, not two accidentally-distinct ones —
+`edge_for_insert` is shared code between both paths, but this is the
+only test that actually exercises them landing on the same archetype
+together, via a real `query2_static` scan across both). 203 with
+`scratch-arena`.
+
+**Not yet run on real CI.** Expected: `spawn_bundle_direct` should be
+close to or at parity with bevy_ecs (the earlier bundle-path fixes
+already closed `insert_bundle_on_existing_entity` and
+`remove_bundle_two_components` under the same `StorageClaims`-free,
+`move_row_to`-based machinery, and this removes the one remaining
+structural difference `spawn_bundle_direct` specifically measures).
+`spawn_n_entities_two_components` is not expected to move — it still
+exercises the two-call path on purpose. Note the runner CPU (once the
+still-unapplied `bench-vs-bevy-ecs.yml` CPU-header edit lands) before
+reading `get_component_random_access` on this run.
+
+**What's left in `spawn_bundle` (Ir breakdown):** `edge_for_insert` 130,
+`Bundle::push_into` 112, `__memcpy` (copying `Position`/`Velocity`
+into their columns) ~100, `Bundle::component_ids` 93 (still a `TypeId`
+lookup per component, per call — a per-`Bundle`-type cache, keyed once
+rather than once per component, is the next structural candidate here,
+mirroring bevy's own `bundle_ids: TypeIdMap<BundleId>` read from its
+0.19.1 source earlier in this doc), location `SparseSet::insert` 69.

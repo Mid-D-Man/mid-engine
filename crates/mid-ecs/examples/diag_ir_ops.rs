@@ -138,10 +138,17 @@ fn op_spawn(world: &mut World) {
     }
 }
 
+#[inline(never)]
+fn op_spawn_bundle_direct(world: &mut World) {
+    for _ in 0..N {
+        world.spawn_bundle(bundle());
+    }
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     let Some(mode) = args.get(1) else {
-        eprintln!("usage: diag_ir_ops <get|insert|remove|spawn|spawn1|insert1|remove1|churn1> <0|1> | time-get");
+        eprintln!("usage: diag_ir_ops <get|insert|remove|spawn|spawn1|insert1|remove1|churn1|spawnbundle> <0|1> | time-get");
         std::process::exit(2);
     };
     let run_op = args.get(2).is_some_and(|r| r == "1");
@@ -189,6 +196,11 @@ fn main() {
         "spawn" => {
             if run_op {
                 op_spawn(&mut world);
+            }
+        }
+        "spawnbundle" => {
+            if run_op {
+                op_spawn_bundle_direct(&mut world);
             }
         }
         "spawn1" => {

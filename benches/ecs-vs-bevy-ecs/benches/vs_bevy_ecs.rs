@@ -23,13 +23,15 @@
 //! own comment at its `fn bench_*` definition further down for what
 //! it isolates and why. The four original groups:
 //!
-//! - `spawn`: raw entity + two-component creation throughput. Note this
-//!   isn't perfectly apples-to-apples -- bevy's `World::spawn(bundle)`
-//!   places an entity directly into its final archetype in one step;
-//!   mid-ecs's closest equivalent is `World::spawn()` (into the empty
-//!   archetype) then `World::insert_bundle(e, bundle)` (one migration
-//!   into the final archetype) -- a real, honest architectural
-//!   difference this benchmark exists to actually measure, not hide.
+//! - `spawn`: raw entity + two-component creation throughput via
+//!   `World::spawn()` then `World::insert_bundle(e, bundle)` -- still
+//!   a real, legitimate call pattern (dynamic code that doesn't know
+//!   the bundle at spawn time), and still not apples-to-apples against
+//!   bevy's one-step `World::spawn(bundle)`; kept exactly as-is so this
+//!   benchmark keeps measuring that path's real cost rather than
+//!   hiding it. `spawn_bundle_direct` (below) is the apples-to-apples
+//!   comparison: mid-ecs's own `World::spawn_bundle`, added once this
+//!   gap was profiled (see `docs/mid-ecs.md`, "Direct bundle spawn").
 //! - `query_static_single_component`: one-component dense iteration,
 //!   added after `dense_query_iteration`'s own fix (below) turned up a
 //!   real, separate bug in the single-column path -- see
@@ -148,6 +150,69 @@ fn bench_spawn(c: &mut Criterion) {
                             },
                         ),
                     );
+                }
+                black_box(world);
+            },
+            BatchSize::LargeInput,
+        );
+    });
+
+    g.bench_function("bevy_ecs", |b| {
+        b.iter_batched(
+            BevyWorld::new,
+            |mut world| {
+                for _ in 0..N {
+                    world.spawn((
+                        BevyPosition {
+                            x: 1.0,
+                            y: 2.0,
+                            z: 3.0,
+                        },
+                        BevyVelocity {
+                            dx: 0.1,
+                            dy: 0.2,
+                            dz: 0.3,
+                        },
+                    ));
+                }
+                black_box(world);
+            },
+            BatchSize::LargeInput,
+        );
+    });
+
+    g.finish();
+}
+
+// Fair one-step comparison, added once `World::spawn_bundle` existed:
+// bevy's `World::spawn(bundle)` places an entity directly into its
+// final archetype in one call. `bench_spawn` above measures mid-ecs's
+// `spawn()` + `insert_bundle()` -- a real, still-legitimate call
+// pattern (dynamic code that doesn't know the bundle at spawn time),
+// deliberately left as-is rather than "fixed" to hide that path's real
+// cost. This group is the other, now-real comparison: mid-ecs's own
+// direct `World::spawn_bundle`, which the note on `bench_spawn` used to
+// say mid-ecs had no equivalent for.
+fn bench_spawn_bundle_direct(c: &mut Criterion) {
+    let mut g = c.benchmark_group("spawn_bundle_direct");
+
+    g.bench_function("mid-ecs", |b| {
+        b.iter_batched(
+            MidWorld::new,
+            |mut world| {
+                for _ in 0..N {
+                    world.spawn_bundle((
+                        Position {
+                            x: 1.0,
+                            y: 2.0,
+                            z: 3.0,
+                        },
+                        Velocity {
+                            dx: 0.1,
+                            dy: 0.2,
+                            dz: 0.3,
+                        },
+                    ));
                 }
                 black_box(world);
             },
@@ -818,6 +883,7 @@ fn bench_remove_bundle(c: &mut Criterion) {
 criterion_group!(
     benches,
     bench_spawn,
+    bench_spawn_bundle_direct,
     bench_spawn_single_component,
     bench_query_static_single_component,
     bench_dense_query_iteration,

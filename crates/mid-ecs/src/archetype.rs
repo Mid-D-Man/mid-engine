@@ -1049,6 +1049,49 @@ impl Archetypes {
     /// the same component set, the common real case a `Bundle` API
     /// exists for) hits a fully warm cache after the first call, same
     /// as repeated single-component inserts already do.
+    /// Spawns a brand-new entity directly into the archetype for `B`,
+    /// with no stop in the empty archetype. `World::spawn` followed by
+    /// `World::insert_bundle` pays for that stop twice -- once to write
+    /// the entity into the empty archetype's table and `locations`,
+    /// once to immediately migrate it back out through `get_two_mut`
+    /// and a (trivially empty, but not free) column-migration loop --
+    /// even though nothing ever reads that intermediate state for a
+    /// fresh entity. This walks the same `edge_for_insert` chain
+    /// `insert_bundle` does, starting from `EMPTY_ARCHETYPE`, and
+    /// writes the entity's row and location exactly once. Infallible
+    /// (unlike `insert_bundle`): a brand-new entity can never already
+    /// hold one of `B`'s components, so there is no failure case to
+    /// report.
+    pub(crate) fn spawn_bundle<B: Bundle>(&mut self, entity: Entity, bundle: B) {
+        let ids = B::component_ids(self);
+
+        debug_assert!(
+            {
+                let mut sorted = ids.clone();
+                sorted.sort_by_key(|id| id.as_u32());
+                sorted.windows(2).all(|pair| pair[0] != pair[1])
+            },
+            "Bundle must not repeat the same component type twice — every element needs its own column"
+        );
+
+        let mut to_id = EMPTY_ARCHETYPE;
+        for &id in ids.iter() {
+            to_id = self.edge_for_insert(to_id, id);
+        }
+
+        let to_archetype = self
+            .archetypes
+            .get_mut(to_id)
+            .expect("edge_for_insert/get_or_create must always yield a real archetype");
+
+        let row = to_archetype.table.entities.len();
+        to_archetype.table.entities.push(entity);
+        bundle.push_into(&mut to_archetype.table, &ids);
+
+        self.locations
+            .insert(entity, EntityLocation { archetype_id: to_id, row });
+    }
+
     pub(crate) fn insert_bundle<B: Bundle>(&mut self, entity: Entity, bundle: B) -> bool {
         let Some(&from_location) = self.locations.get(entity) else {
             return false;
