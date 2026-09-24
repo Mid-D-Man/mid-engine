@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/logo.svg" alt="Mid Engine logo" width="160">
+</p>
+
 # Mid Engine
 
 > The Middle Man — Modular Engine Toolkit
