@@ -79,6 +79,7 @@
 
 use super::{ArchetypeId, Archetypes, Column};
 use crate::component::ComponentId;
+use crate::filter::QueryFilter;
 use crate::world::Entity;
 
 // =====================================================================
@@ -614,5 +615,74 @@ impl Archetypes {
             None => Vec::new(),
         };
         Iter2RefUncheckedAlways::new(self, ids, matched)
+    }
+}
+
+// =====================================================================
+// Filtered constructors
+// =====================================================================
+
+/// Filtered counterparts to `iter`/`iter2`/`iter_ref`/`iter2_ref`. Each
+/// returns the same iterator type as its unfiltered counterpart: the
+/// filter only shapes the `matched` list, so `next()` is untouched. `()`
+/// as the filter visits exactly the unfiltered archetype set, in the same
+/// order (pinned by a test in `query.rs`).
+impl Archetypes {
+    /// Every archetype whose signature contains all of `required` *and*
+    /// satisfies filter `F`, in the same dense order `archetypes_with`
+    /// enumerates. One pass, one `Vec`; nothing here runs per row.
+    fn matched_filtered<F: QueryFilter>(&self, required: &[ComponentId]) -> Vec<ArchetypeId> {
+        let state = F::get_state(&|type_id| self.component_ids.get(&type_id).copied());
+        self.archetypes
+            .iter()
+            .filter_map(|(id, archetype)| {
+                let signature = &archetype.component_ids;
+                let keep = required.iter().all(|c| signature.contains(c))
+                    && F::matches_component_set(&state, &|c| signature.contains(&c));
+                keep.then_some(id)
+            })
+            .collect()
+    }
+
+    pub(crate) fn iter_filtered<T: 'static, F: QueryFilter>(&self) -> Iter1<'_, T> {
+        let id = self.existing_component_id::<T>();
+        let matched = match id {
+            Some(id) => self.matched_filtered::<F>(&[id]),
+            None => Vec::new(),
+        };
+        Iter1::new(self, id, matched)
+    }
+
+    pub(crate) fn iter2_filtered<A: 'static, B: 'static, F: QueryFilter>(&self) -> Iter2<'_, A, B> {
+        let ids = self
+            .existing_component_id::<A>()
+            .zip(self.existing_component_id::<B>());
+        let matched = match ids {
+            Some((a_id, b_id)) => self.matched_filtered::<F>(&[a_id, b_id]),
+            None => Vec::new(),
+        };
+        Iter2::new(self, ids, matched)
+    }
+
+    pub(crate) fn iter_ref_filtered<T: 'static, F: QueryFilter>(&self) -> Iter1Ref<'_, T> {
+        let id = self.existing_component_id::<T>();
+        let matched = match id {
+            Some(id) => self.matched_filtered::<F>(&[id]),
+            None => Vec::new(),
+        };
+        Iter1Ref::new(self, id, matched)
+    }
+
+    pub(crate) fn iter2_ref_filtered<A: 'static, B: 'static, F: QueryFilter>(
+        &self,
+    ) -> Iter2Ref<'_, A, B> {
+        let ids = self
+            .existing_component_id::<A>()
+            .zip(self.existing_component_id::<B>());
+        let matched = match ids {
+            Some((a_id, b_id)) => self.matched_filtered::<F>(&[a_id, b_id]),
+            None => Vec::new(),
+        };
+        Iter2Ref::new(self, ids, matched)
     }
 }

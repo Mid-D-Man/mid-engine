@@ -17,6 +17,7 @@
 //! later addition, once `archetype.rs`'s own `Archetypes::iter`/`iter2`
 //! existed to wrap.
 
+use crate::filter::QueryFilter;
 use crate::world::{Entity, World};
 
 impl World {
@@ -130,6 +131,67 @@ impl World {
         &self,
     ) -> impl Iterator<Item = (&A, &B)> + '_ {
         self.archetypes.iter2_ref::<A, B>()
+    }
+
+    // Filtered queries (`With` / `Without`, see `filter.rs`). One method
+    // per unfiltered Archetype Core query above, with the filter `F` as
+    // the last type parameter (`()` for none). Archetype Core only; see
+    // docs/mid-ecs.md, section "filter.rs", for why.
+
+    /// [`Self::query_static`] restricted to archetypes satisfying `F`.
+    ///
+    /// ```
+    /// use mid_ecs::{With, Without, World};
+    ///
+    /// struct Position { x: f32 }
+    /// struct Player;
+    /// struct Frozen;
+    ///
+    /// let mut world = World::new();
+    /// let walker = world.spawn_bundle((Position { x: 1.0 }, Player));
+    /// let _frozen = world.spawn_bundle((Position { x: 2.0 }, Player, Frozen));
+    /// let _npc = world.spawn_bundle((Position { x: 3.0 },));
+    ///
+    /// // Every (Entity, &Position) whose archetype holds `Player` and
+    /// // does not hold `Frozen`:
+    /// let found: Vec<_> = world
+    ///     .query_static_filtered::<Position, (With<Player>, Without<Frozen>)>()
+    ///     .map(|(e, p)| (e, p.x))
+    ///     .collect();
+    /// assert_eq!(found, vec![(walker, 1.0)]);
+    /// ```
+    ///
+    /// The filter is evaluated once per archetype when the query is
+    /// created, not per row, and the returned iterator is the same
+    /// type [`Self::query_static`] returns — see `filter.rs`.
+    pub fn query_static_filtered<T: 'static, F: QueryFilter>(
+        &self,
+    ) -> impl Iterator<Item = (Entity, &T)> + '_ {
+        self.archetypes.iter_filtered::<T, F>()
+    }
+
+    /// [`Self::query2_static`] restricted to archetypes satisfying `F`.
+    pub fn query2_static_filtered<A: 'static, B: 'static, F: QueryFilter>(
+        &self,
+    ) -> impl Iterator<Item = (Entity, &A, &B)> + '_ {
+        self.archetypes.iter2_filtered::<A, B, F>()
+    }
+
+    /// [`Self::query_static_ref`] restricted to archetypes satisfying
+    /// `F`.
+    pub fn query_static_ref_filtered<T: 'static, F: QueryFilter>(
+        &self,
+    ) -> impl Iterator<Item = &T> + '_ {
+        self.archetypes.iter_ref_filtered::<T, F>()
+    }
+
+    /// [`Self::query2_static_ref`] restricted to archetypes satisfying
+    /// `F` — the shape that lines up with bevy's
+    /// `Query<(&A, &B), F>`.
+    pub fn query2_static_ref_filtered<A: 'static, B: 'static, F: QueryFilter>(
+        &self,
+    ) -> impl Iterator<Item = (&A, &B)> + '_ {
+        self.archetypes.iter2_ref_filtered::<A, B, F>()
     }
 
     // ── TEMPORARY, real-CI-only: unsafe + forced inlining, in true
@@ -467,6 +529,350 @@ mod tests {
         assert!(w.insert_static(e, Position { x: 0.0, y: 0.0 }));
         assert_eq!(
             w.query2_static_ref_unchecked_always::<Position, Velocity>()
+                .count(),
+            0
+        );
+    }
+
+    // ── Filtered queries (`With` / `Without`) ───────────────────────
+
+    use crate::filter::{With, Without};
+
+    /// Zero-sized markers, archetype-tracked via `insert_static`.
+    struct Player;
+    struct Frozen;
+    /// Only ever inserted through the Sparse Shell's `insert`, never an
+    /// archetype-tracked component.
+    struct SparseOnly;
+    /// Never inserted anywhere.
+    struct NeverInserted;
+
+    /// Four entities, all with `Position` and `Velocity`, spread over
+    /// four distinct archetypes by which markers they carry:
+    /// `[plain, player, frozen, both]`.
+    fn filter_world() -> (World, [Entity; 4]) {
+        let mut w = World::new();
+        let mut make =
+            |x: f32| w.spawn_bundle((Position { x, y: 0.0 }, Velocity { dx: x, dy: 0.0 }));
+        let plain = make(1.0);
+        let player = make(2.0);
+        let frozen = make(3.0);
+        let both = make(4.0);
+        assert!(w.insert_static(player, Player));
+        assert!(w.insert_static(frozen, Frozen));
+        assert!(w.insert_static(both, Player));
+        assert!(w.insert_static(both, Frozen));
+        (w, [plain, player, frozen, both])
+    }
+
+    fn sorted(mut v: Vec<Entity>) -> Vec<Entity> {
+        v.sort_by_key(|e| e.index());
+        v
+    }
+
+    #[test]
+    fn query_static_filtered_with_keeps_only_archetypes_containing_the_component() {
+        let (w, [_plain, player, _frozen, both]) = filter_world();
+        let found = sorted(
+            w.query_static_filtered::<Position, With<Player>>()
+                .map(|(e, _)| e)
+                .collect(),
+        );
+        assert_eq!(found, sorted(vec![player, both]));
+    }
+
+    #[test]
+    fn query_static_filtered_without_drops_archetypes_containing_the_component() {
+        let (w, [plain, _player, frozen, _both]) = filter_world();
+        let found = sorted(
+            w.query_static_filtered::<Position, Without<Player>>()
+                .map(|(e, _)| e)
+                .collect(),
+        );
+        assert_eq!(found, sorted(vec![plain, frozen]));
+    }
+
+    #[test]
+    fn query_static_filtered_tuple_combines_with_and_without() {
+        let (w, [_plain, player, _frozen, _both]) = filter_world();
+        let found: Vec<Entity> = w
+            .query_static_filtered::<Position, (With<Player>, Without<Frozen>)>()
+            .map(|(e, _)| e)
+            .collect();
+        assert_eq!(found, vec![player]);
+    }
+
+    #[test]
+    fn query_static_filtered_yields_the_real_component_values() {
+        let (w, [_plain, player, _frozen, both]) = filter_world();
+        let mut found: Vec<(Entity, f32)> = w
+            .query_static_filtered::<Position, With<Player>>()
+            .map(|(e, p)| (e, p.x))
+            .collect();
+        found.sort_by_key(|(e, _)| e.index());
+        let mut expected = vec![(player, 2.0), (both, 4.0)];
+        expected.sort_by_key(|(e, _)| e.index());
+        assert_eq!(found, expected);
+    }
+
+    #[test]
+    fn query2_static_filtered_applies_the_filter_and_returns_both_components() {
+        let (w, [_plain, player, _frozen, both]) = filter_world();
+        let mut found: Vec<(Entity, f32, f32)> = w
+            .query2_static_filtered::<Position, Velocity, With<Player>>()
+            .map(|(e, p, v)| (e, p.x, v.dx))
+            .collect();
+        found.sort_by_key(|(e, _, _)| e.index());
+        let mut expected = vec![(player, 2.0, 2.0), (both, 4.0, 4.0)];
+        expected.sort_by_key(|(e, _, _)| e.index());
+        assert_eq!(found, expected);
+    }
+
+    #[test]
+    fn query_static_ref_filtered_matches_the_entity_carrying_variant() {
+        let (w, _) = filter_world();
+        let mut with_entity: Vec<f32> = w
+            .query_static_filtered::<Position, (With<Frozen>, Without<Player>)>()
+            .map(|(_, p)| p.x)
+            .collect();
+        let mut without_entity: Vec<f32> = w
+            .query_static_ref_filtered::<Position, (With<Frozen>, Without<Player>)>()
+            .map(|p| p.x)
+            .collect();
+        with_entity.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        without_entity.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        assert_eq!(with_entity, vec![3.0]);
+        assert_eq!(without_entity, with_entity);
+    }
+
+    #[test]
+    fn query2_static_ref_filtered_matches_the_entity_carrying_variant() {
+        let (w, _) = filter_world();
+        let mut with_entity: Vec<(f32, f32)> = w
+            .query2_static_filtered::<Position, Velocity, Without<Frozen>>()
+            .map(|(_, p, v)| (p.x, v.dx))
+            .collect();
+        let mut without_entity: Vec<(f32, f32)> = w
+            .query2_static_ref_filtered::<Position, Velocity, Without<Frozen>>()
+            .map(|(p, v)| (p.x, v.dx))
+            .collect();
+        with_entity.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+        without_entity.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+        assert_eq!(with_entity, vec![(1.0, 1.0), (2.0, 2.0)]);
+        assert_eq!(without_entity, with_entity);
+    }
+
+    #[test]
+    fn unit_filter_is_identical_to_the_unfiltered_query_including_order() {
+        // `()` must visit exactly the unfiltered constructors' archetype
+        // set in the same order -- `matched_filtered` is a separate
+        // code path from `iter`/`iter2`/`iter_ref`/`iter2_ref`, and
+        // this is what keeps the two from silently drifting.
+        let (w, _) = filter_world();
+
+        let a: Vec<Entity> = w.query_static::<Position>().map(|(e, _)| e).collect();
+        let b: Vec<Entity> = w
+            .query_static_filtered::<Position, ()>()
+            .map(|(e, _)| e)
+            .collect();
+        assert_eq!(a, b);
+        assert_eq!(a.len(), 4);
+
+        let a: Vec<Entity> = w
+            .query2_static::<Position, Velocity>()
+            .map(|(e, _, _)| e)
+            .collect();
+        let b: Vec<Entity> = w
+            .query2_static_filtered::<Position, Velocity, ()>()
+            .map(|(e, _, _)| e)
+            .collect();
+        assert_eq!(a, b);
+
+        let a: Vec<f32> = w.query_static_ref::<Position>().map(|p| p.x).collect();
+        let b: Vec<f32> = w
+            .query_static_ref_filtered::<Position, ()>()
+            .map(|p| p.x)
+            .collect();
+        assert_eq!(a, b);
+
+        let a: Vec<f32> = w
+            .query2_static_ref::<Position, Velocity>()
+            .map(|(p, _)| p.x)
+            .collect();
+        let b: Vec<f32> = w
+            .query2_static_ref_filtered::<Position, Velocity, ()>()
+            .map(|(p, _)| p.x)
+            .collect();
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn with_and_without_partition_the_unfiltered_result() {
+        // Every entity is in exactly one of the two, and together they
+        // are the whole unfiltered set.
+        let (w, _) = filter_world();
+        let all = sorted(w.query_static::<Position>().map(|(e, _)| e).collect());
+        let with = sorted(
+            w.query_static_filtered::<Position, With<Player>>()
+                .map(|(e, _)| e)
+                .collect(),
+        );
+        let without = sorted(
+            w.query_static_filtered::<Position, Without<Player>>()
+                .map(|(e, _)| e)
+                .collect(),
+        );
+        assert!(with.iter().all(|e| !without.contains(e)));
+        assert_eq!(sorted([with, without].concat()), all);
+    }
+
+    #[test]
+    fn with_on_a_never_registered_component_matches_nothing_without_matches_everything() {
+        let (w, _) = filter_world();
+        assert_eq!(
+            w.query_static_filtered::<Position, With<NeverInserted>>()
+                .count(),
+            0
+        );
+        assert_eq!(
+            w.query_static_filtered::<Position, Without<NeverInserted>>()
+                .count(),
+            4
+        );
+        // And asking must not have registered it: a later real insert
+        // still works and is found.
+        let mut w = w;
+        let e = w.spawn_bundle((Position { x: 9.0, y: 0.0 },));
+        assert!(w.insert_static(e, NeverInserted));
+        assert_eq!(
+            w.query_static_filtered::<Position, With<NeverInserted>>()
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn filter_on_a_sparse_shell_only_type_matches_nothing() {
+        let (mut w, [plain, ..]) = filter_world();
+        w.insert(plain, SparseOnly);
+        // The Sparse Shell has it...
+        assert_eq!(w.query::<SparseOnly>().count(), 1);
+        // ...but it's not an archetype-tracked component, so an
+        // Archetype Core filter has nothing to match against.
+        assert_eq!(
+            w.query_static_filtered::<Position, With<SparseOnly>>()
+                .count(),
+            0
+        );
+        assert_eq!(
+            w.query_static_filtered::<Position, Without<SparseOnly>>()
+                .count(),
+            4
+        );
+    }
+
+    #[test]
+    fn contradictory_filter_yields_nothing() {
+        let (w, _) = filter_world();
+        assert_eq!(
+            w.query_static_filtered::<Position, (With<Player>, Without<Player>)>()
+                .count(),
+            0
+        );
+    }
+
+    #[test]
+    fn filtering_on_a_component_the_query_already_fetches() {
+        let (w, _) = filter_world();
+        assert_eq!(
+            w.query_static_filtered::<Position, With<Position>>()
+                .count(),
+            4
+        );
+        assert_eq!(
+            w.query_static_filtered::<Position, Without<Position>>()
+                .count(),
+            0
+        );
+    }
+
+    #[test]
+    fn filtered_results_follow_structural_changes() {
+        let (mut w, [plain, player, _frozen, both]) = filter_world();
+
+        // Losing the marker moves the entity out of `With<Player>`...
+        assert!(w.remove_static::<Player>(player).is_some());
+        let found = sorted(
+            w.query_static_filtered::<Position, With<Player>>()
+                .map(|(e, _)| e)
+                .collect(),
+        );
+        assert_eq!(found, vec![both]);
+
+        // ...gaining it moves an entity in...
+        assert!(w.insert_static(plain, Player));
+        let found = sorted(
+            w.query_static_filtered::<Position, With<Player>>()
+                .map(|(e, _)| e)
+                .collect(),
+        );
+        assert_eq!(found, sorted(vec![plain, both]));
+
+        // ...and despawning removes it.
+        assert!(w.despawn(both));
+        let found = sorted(
+            w.query_static_filtered::<Position, With<Player>>()
+                .map(|(e, _)| e)
+                .collect(),
+        );
+        assert_eq!(found, vec![plain]);
+    }
+
+    #[test]
+    fn filters_tolerate_empty_intermediate_archetypes_left_by_insert_bundle() {
+        // `insert_bundle` walks `edge_for_insert` once per element and
+        // can leave zero-row intermediate archetypes behind (see
+        // `Archetypes::iter`'s doc comment). A `Without` filter matches
+        // those -- they lack the marker -- and must contribute nothing
+        // and not panic.
+        let mut w = World::new();
+        let e = w.spawn();
+        assert!(w.insert_bundle(
+            e,
+            (
+                Position { x: 1.0, y: 0.0 },
+                Velocity { dx: 1.0, dy: 0.0 },
+                Player
+            )
+        ));
+
+        assert_eq!(
+            w.query_static_filtered::<Position, Without<Player>>()
+                .count(),
+            0
+        );
+        assert_eq!(
+            w.query2_static_filtered::<Position, Velocity, Without<Player>>()
+                .count(),
+            0
+        );
+        let found: Vec<Entity> = w
+            .query2_static_filtered::<Position, Velocity, With<Player>>()
+            .map(|(e, _, _)| e)
+            .collect();
+        assert_eq!(found, vec![e]);
+    }
+
+    #[test]
+    fn filtered_query_on_an_unregistered_query_component_is_empty() {
+        let (w, _) = filter_world();
+        assert_eq!(
+            w.query_static_filtered::<NeverInserted, With<Player>>()
+                .count(),
+            0
+        );
+        assert_eq!(
+            w.query2_static_filtered::<Position, NeverInserted, ()>()
                 .count(),
             0
         );

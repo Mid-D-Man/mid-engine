@@ -9,6 +9,7 @@
 pub mod archetype;
 pub mod component;
 pub mod ffi;
+pub mod filter;
 mod hash;
 pub mod query;
 mod scratch;
@@ -26,5 +27,6 @@ pub mod world;
 // real.
 pub use archetype::ArchetypeId;
 pub use component::{ComponentId, SparseShell};
+pub use filter::{QueryFilter, With, Without};
 pub use transform::{GlobalTransform, GlobalTransformLWC};
 pub use world::{Entity, World};

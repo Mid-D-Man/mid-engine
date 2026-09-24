@@ -32,6 +32,9 @@
 //!   hiding it. `spawn_bundle_direct` (below) is the apples-to-apples
 //!   comparison: mid-ecs's own `World::spawn_bundle`, added once this
 //!   gap was profiled (see `docs/mid-ecs.md`, "Direct bundle spawn").
+//! - `filtered_query_iteration`: `With`/`Without` archetype filters,
+//!   added with `World::query2_static_ref_filtered` -- see that group's
+//!   own comment at `bench_filtered_query_iteration` below.
 //! - `query_static_single_component`: one-component dense iteration,
 //!   added after `dense_query_iteration`'s own fix (below) turned up a
 //!   real, separate bug in the single-column path -- see
@@ -81,8 +84,9 @@
 //!   have the same cause as the query-iteration gap did.
 
 use bevy_ecs::prelude::{Component, World as BevyWorld};
+use bevy_ecs::query::{With as BevyWith, Without as BevyWithout};
 use criterion::{black_box, criterion_group, criterion_main, BatchSize, Criterion};
-use mid_ecs::World as MidWorld;
+use mid_ecs::{With as MidWith, Without as MidWithout, World as MidWorld};
 
 const N: usize = 10_000;
 
@@ -103,6 +107,9 @@ struct Velocity {
 }
 
 struct Marker;
+
+/// Second marker, used only by `filtered_query_iteration`.
+struct Frozen;
 
 // ── bevy_ecs side (separate types -- bevy's `Component` derive adds
 // storage/registration machinery mid-ecs's plain structs don't carry,
@@ -125,6 +132,9 @@ struct BevyVelocity {
 
 #[derive(Component)]
 struct BevyMarker;
+
+#[derive(Component)]
+struct BevyFrozen;
 
 fn bench_spawn(c: &mut Criterion) {
     let mut g = c.benchmark_group("spawn_n_entities_two_components");
@@ -291,6 +301,116 @@ fn bench_dense_query_iteration(c: &mut Criterion) {
         b.iter(|| {
             let mut sum = 0.0f32;
             for (_, pos, vel) in mid_world.query2_static::<Position, Velocity>() {
+                sum += pos.x + vel.dx;
+            }
+            black_box(sum);
+        });
+    });
+
+    g.bench_function("bevy_ecs", |b| {
+        b.iter(|| {
+            let mut sum = 0.0f32;
+            for (pos, vel) in bevy_query.iter(&bevy_world) {
+                sum += pos.x + vel.dx;
+            }
+            black_box(sum);
+        });
+    });
+
+    g.finish();
+}
+
+/// `With`/`Without` archetype filters (`crates/mid-ecs/src/filter.rs`,
+/// `docs/mid-ecs.md` "Query filters"), against bevy's
+/// `Query<(&A, &B), (With<M>, Without<F>)>`.
+///
+/// Three populations, so *both* filter leaves do real work rather than
+/// one being a no-op: 5,000 entities with `(Position, Velocity,
+/// Marker)`, 2,500 with `(Position, Velocity)` (excluded by
+/// `With<Marker>`), and 2,500 with `(Position, Velocity, Marker,
+/// Frozen)` (excluded by `Without<Frozen>` even though `With<Marker>`
+/// alone would keep them). The query visits exactly the first 5,000.
+///
+/// Uses `query2_static_ref_filtered`, the entity-free `(&A, &B)` shape,
+/// because that is the item bevy's `Query<(&A, &B), _>` actually
+/// yields -- the fair pairing (see `World::query2_static_ref`'s doc
+/// comment). NOT directly comparable to `dense_query_iteration`'s
+/// numbers: that group iterates all 10,000 rows through the
+/// entity-carrying `query2_static`; this one visits 5,000 through the
+/// entity-free variant.
+///
+/// What this group is *for*: the sandbox measured filtered iteration at
+/// the same instruction count per row as unfiltered (~43 Ir/row either
+/// way, callgrind), because the filter is spent building the matched
+/// archetype list and the iterator never sees it. Real CI should show
+/// this group's mid-ecs/bevy ratio landing at the same ratio
+/// `dense_query_iteration` shows on each platform (~4x on x86_64, ~1.05-
+/// 1.1x on macOS and aarch64 at build #30). A materially different
+/// ratio would mean the filter is costing something the instruction
+/// count didn't predict.
+///
+/// Setup sanity-checks both engines' row count outside the timed
+/// closure, so a filter that silently matched the wrong set can't
+/// produce a plausible-looking number.
+fn bench_filtered_query_iteration(c: &mut Criterion) {
+    const MARKED: usize = N / 2;
+    const PLAIN: usize = N / 4;
+    const FROZEN: usize = N / 4;
+
+    let mut mid_world = MidWorld::new();
+    let pos = Position {
+        x: 1.0,
+        y: 2.0,
+        z: 3.0,
+    };
+    let vel = Velocity {
+        dx: 0.1,
+        dy: 0.2,
+        dz: 0.3,
+    };
+    for _ in 0..MARKED {
+        mid_world.spawn_bundle((pos, vel, Marker));
+    }
+    for _ in 0..PLAIN {
+        mid_world.spawn_bundle((pos, vel));
+    }
+    for _ in 0..FROZEN {
+        mid_world.spawn_bundle((pos, vel, Marker, Frozen));
+    }
+
+    let mut bevy_world = BevyWorld::new();
+    let bpos = BevyPosition {
+        x: 1.0,
+        y: 2.0,
+        z: 3.0,
+    };
+    let bvel = BevyVelocity {
+        dx: 0.1,
+        dy: 0.2,
+        dz: 0.3,
+    };
+    bevy_world.spawn_batch((0..MARKED).map(|_| (bpos, bvel, BevyMarker)));
+    bevy_world.spawn_batch((0..PLAIN).map(|_| (bpos, bvel)));
+    bevy_world.spawn_batch((0..FROZEN).map(|_| (bpos, bvel, BevyMarker, BevyFrozen)));
+    let mut bevy_query = bevy_world
+        .query_filtered::<(&BevyPosition, &BevyVelocity), (BevyWith<BevyMarker>, BevyWithout<BevyFrozen>)>();
+
+    assert_eq!(
+        mid_world
+            .query2_static_ref_filtered::<Position, Velocity, (MidWith<Marker>, MidWithout<Frozen>)>()
+            .count(),
+        MARKED
+    );
+    assert_eq!(bevy_query.iter(&bevy_world).count(), MARKED);
+
+    let mut g = c.benchmark_group("filtered_query_iteration");
+
+    g.bench_function("mid-ecs", |b| {
+        b.iter(|| {
+            let mut sum = 0.0f32;
+            for (pos, vel) in mid_world
+                .query2_static_ref_filtered::<Position, Velocity, (MidWith<Marker>, MidWithout<Frozen>)>()
+            {
                 sum += pos.x + vel.dx;
             }
             black_box(sum);
@@ -887,6 +1007,7 @@ criterion_group!(
     bench_spawn_single_component,
     bench_query_static_single_component,
     bench_dense_query_iteration,
+    bench_filtered_query_iteration,
     bench_raw_slice_ceiling,
     bench_structural_churn,
     bench_insert_single_component,

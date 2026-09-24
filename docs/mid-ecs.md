@@ -2161,3 +2161,137 @@ lookup per component, per call — a per-`Bundle`-type cache, keyed once
 rather than once per component, is the next structural candidate here,
 mirroring bevy's own `bundle_ids: TypeIdMap<BundleId>` read from its
 0.19.1 source earlier in this doc), location `SparseSet::insert` 69.
+
+### `filter.rs`: `With` / `Without` query filters
+
+**What it does:** Narrows which archetypes a query on the Archetype Core
+visits, without adding anything to the query's item. `With<T>` keeps an
+archetype only if `T` is in its signature, `Without<T>` only if it is not,
+and a tuple `(F1, F2, ...)` (up to eight members) only if every member
+does. `()` means no filter.
+
+```rust
+// Every (Entity, &Position) whose archetype holds `Player` and not `Frozen`.
+world.query_static_filtered::<Position, (With<Player>, Without<Frozen>)>()
+```
+
+Four new `World` methods, one per unfiltered Archetype Core query, with the
+filter as the last type parameter: `query_static_filtered`,
+`query2_static_filtered`, `query_static_ref_filtered`,
+`query2_static_ref_filtered`. They are separate methods and not a defaulted
+type parameter on the existing ones because Rust does not infer a
+function's type parameter from a default, so adding `F` to `query2_static`
+would break every existing `query2_static::<A, B>()` call site.
+`With`, `Without` and `QueryFilter` are re-exported from the crate root.
+
+**Where it plugs in.** Every query iterator (`Iter1`, `Iter2`, `Iter1Ref`,
+`Iter2Ref`) takes one input from outside: the `matched: Vec<ArchetypeId>`
+list built when the query is created. A filter only changes how that list
+is built (`Archetypes::matched_filtered` in `archetype/iter.rs`, one pass
+over every archetype's signature). The iterators themselves are untouched
+and are the same types the unfiltered queries return. That matters
+because the `next()` bodies in `iter.rs` are held byte-for-byte fixed (see
+that file's header and the LTO inline-budget findings above), and it is why
+a filtered query pays nothing per row.
+
+**Ported from bevy, read directly, not from memory.** `With`, `Without`
+and the tuple impl's `matches_component_set` in `query/filter.rs` and
+`query/world_query.rs` of `Mid-D-Man/bevy` (currently `0.20.0-dev`; the
+bench crate pins the published `0.19.1`, so this is a source-reading
+reference only). Same shape: filter state resolved once per query, a
+`matches_component_set` check per candidate archetype, tuples combine with
+AND.
+
+**Where it differs from bevy, and why:**
+
+- *No registration on a read path.* Bevy's `init_state` registers the
+  filter's component if it is new. `Archetypes` does not spend a
+  `ComponentId` on a type just because something asked about it (see
+  `existing_component_id`), so a leaf filter's state is
+  `Option<ComponentId>`. `None` has a defined meaning: `With<T>` on a type
+  nothing archetype-tracked has ever held matches nothing, and
+  `Without<T>` on it matches everything. No archetype can contain a type
+  that has no id, so both are correct by construction. A test checks that
+  asking does not register the type: a later real insert of it is still
+  found.
+- *Sealed, no `unsafe`.* Bevy's `QueryFilter` is an `unsafe trait` because
+  implementors make access-soundness claims. Nothing here touches
+  component data, so there is no `unsafe`. The trait is sealed instead,
+  which leaves room to change its shape later without breaking anyone.
+- *Archetype half only.* Bevy's trait splits filters into archetypal ones
+  (`IS_ARCHETYPAL`, resolved per archetype) and per-row ones (`Changed`,
+  `Added`, which call `filter_fetch` per entity and need change-detection
+  ticks on columns). This trait has only the archetypal half.
+  `Or`, `Changed` and `Added` are not implemented. `Or` fits the existing
+  state design with no rework. `Changed`/`Added` need column tick storage
+  and a per-row path, which is a separate, larger piece of work and will
+  change this trait.
+
+**Scope limits, on purpose:**
+
+- *Archetype Core only.* The Sparse Shell has no archetype signature to
+  test. A `With`/`Without` there would be a per-entity lookup, a different
+  cost model, and `query2` already works that way (drive off one storage,
+  check the other per entity).
+- *Archetype-tracked components only.* A type that only ever lived in the
+  Sparse Shell has no `ComponentId` in the Archetype Core's numbering, so
+  `With` of it matches nothing. The two storage systems stay independent.
+  This is tested (`filter_on_a_sparse_shell_only_type_matches_nothing`)
+  and is a silent footgun if forgotten, so it is stated in the module doc
+  comment too.
+
+**Measured (sandbox, rustc 1.91.1, callgrind Ir, `bench` profile).**
+`query2_static_ref` and its filtered forms over 10,000 entities (5,000
+with a `Marker`, 5,000 without, two archetypes with rows plus zero-row
+intermediates from `spawn_bundle`), 200 passes per run, setup subtracted:
+
+| Query | Ir per row |
+|---|---|
+| `query2_static_ref` (unfiltered) | 43.07 |
+| `query2_static_ref_filtered::<_, _, ()>` | 43.07 |
+| `..._filtered::<_, _, With<Marker>>` (5,000 rows/pass) | 43.11 |
+| `..._filtered::<_, _, Without<Marker>>` (5,000 rows/pass) | 43.11 |
+
+Creating a query (2,000 creations, `.take(0)`): 402 Ir unfiltered, 410 Ir
+with `With<Marker>`. Both are timing-independent instruction counts, not a
+CI timing result, and the sandbox has never reproduced the x86_64 iteration
+gap seen on CI (`dense_query_iteration`, ~4x), so this shows the filter adds
+no per-row work, not what the absolute per-row cost is on CI hardware. One
+caveat on the bench: `bevy_query` is built once outside the timed loop,
+while mid-ecs builds its matched list inside it on every iteration
+(~400 Ir per query, about 0.2% of a 5,000-row pass). Bevy caches matched
+archetypes in `QueryState`; mid-ecs does not, and would only need to if
+query creation ever shows up in a profile.
+
+**Tests:** 225 default (27 new), 230 with `scratch-arena`, plus one
+compiled doctest on `query_static_filtered`. 11 new tests in `filter.rs`
+cover the leaf and tuple logic without a `World` (unregistered types, empty
+signatures, contradictory tuples, nested tuples, the eight-member arity).
+16 new tests in `query.rs` cover all four `World` methods across four
+distinct archetypes, `()` matching the unfiltered query exactly including
+order, `With` and `Without` partitioning the unfiltered result, results
+following `remove_static`/`insert_static`/`despawn`, and zero-row
+intermediate archetypes left behind by `insert_bundle` (a `Without` filter
+matches those and must contribute nothing and not panic).
+
+**Bench:** new group `filtered_query_iteration` in
+`benches/ecs-vs-bevy-ecs/benches/vs_bevy_ecs.rs`, mid-ecs's
+`query2_static_ref_filtered::<Position, Velocity, (With<Marker>,
+Without<Frozen>)>` against bevy's `Query<(&A, &B), (With<M>, Without<F>)>`.
+Three populations (5,000 `Marker`, 2,500 plain, 2,500 `Marker` + `Frozen`)
+so both leaves exclude something; the query visits the first 5,000. Setup
+asserts both engines return exactly 5,000 rows before timing. Uses the
+entity-free `(&A, &B)` shape, the one bevy's own query yields, so it is not
+comparable to `dense_query_iteration`'s numbers (10,000 rows, entity
+carrying).
+
+**Not yet run on real CI.** The mid-ecs half of the new group compiles and
+runs in the sandbox. The bevy half could not be compiled here (`bevy_ecs`
+0.19.1 needs rustc 1.95, the sandbox has 1.91) and was checked only by
+reading `query_filtered`, `With`, `Without` and `QueryState::iter` in the
+bevy source, so its first real compile is CI's. Expected result: this
+group's mid-ecs/bevy ratio lands where `dense_query_iteration`'s does on
+each platform (~4x on x86_64, ~1.05 to 1.1x on macOS and aarch64 at
+build #30), because the per-row work is identical. A materially different
+ratio would mean the filter costs something the instruction count did not
+predict.
