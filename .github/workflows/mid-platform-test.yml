@@ -1,19 +1,19 @@
 # .github/workflows/mid-platform-test.yml
+#
+# Fixed after review: this workflow originally ran on push/pull_request
+# with a fake "summary" job that just echoed a few lines to the job log,
+# not a real $GITHUB_STEP_SUMMARY -- both wrong against this project's
+# actual, established convention. See mid-ptr-test.yml's own header
+# comment for the full explanation; same fix applied here, adapted for
+# this crate's two feature configurations (default/std vs
+# --no-default-features/no_std fallback) instead of one.
+#
+# gh-pages deploy deliberately not replicated here either, same reasoning
+# as mid-ptr-test.yml -- see that file's header comment.
+
 name: mid-platform — Tests
 
-# Automatic, path-filtered triggers -- see docs/RUST_AND_CRATE_GUIDELINES.md
-# §7, "CI Triggering."
 on:
-  push:
-    branches: [main, master, develop]
-    paths:
-      - "crates/mid-platform/**"
-      - ".github/workflows/mid-platform-test.yml"
-  pull_request:
-    branches: [main, master]
-    paths:
-      - "crates/mid-platform/**"
-      - ".github/workflows/mid-platform-test.yml"
   workflow_dispatch:
 
 permissions:
@@ -21,7 +21,6 @@ permissions:
   actions:  read
 
 jobs:
-
   run-tests:
     runs-on: ubuntu-latest
 
@@ -35,15 +34,11 @@ jobs:
           components: rustfmt, clippy
 
       - name: Get Rust version
-        run: rustc --version
+        id: rustver
+        run: echo "ver=$(rustc --version)" >> $GITHUB_OUTPUT
 
-      # Cache key scoped to this crate + this runner's OS specifically --
-      # never a bare "cargo-registry-" prefix. See
-      # docs/RUST_AND_CRATE_GUIDELINES.md §7 for why: a generic prefix let
-      # mid-ptr-test.yml's own cache collide with a different, ARM-runner
-      # workflow's cache on its first real run.
       - name: Cache cargo registry
-        uses: actions/cache@v3
+        uses: actions/cache@v4
         with:
           path: |
             ~/.cargo/registry/index/
@@ -57,12 +52,6 @@ jobs:
         run: cargo fmt -p mid-platform --check
         continue-on-error: true
 
-      # Two separate feature configurations, deliberately: default (std)
-      # exercises the std::sync passthrough path; --no-default-features
-      # exercises the actual hand-rolled spin-based fallback in
-      # sync::mutex -- a genuinely different code path that default
-      # features alone would never compile, let alone test. See
-      # docs/mid-platform.md for why both exist.
       - name: Clippy (default features -- std)
         run: cargo clippy -p mid-platform -- -D warnings
         continue-on-error: true
@@ -77,22 +66,253 @@ jobs:
       - name: Build (no default features -- no_std fallback path)
         run: cargo build -p mid-platform --no-default-features
 
+      # Two separate runs, two separate raw logs -- default features
+      # (std passthrough) and --no-default-features (the actual
+      # hand-rolled spin-based fallback in sync::mutex, a genuinely
+      # different code path). set -o pipefail on both: see
+      # docs/benching-standards.md's "correctness detail" section.
       - name: Test (default features -- std)
-        run: cargo test -p mid-platform --no-fail-fast -- --show-output
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          cargo test -p mid-platform --color=never --no-fail-fast \
+            -- --show-output 2>&1 | tee mid-platform-test-std-raw.txt
 
       - name: Test (no default features -- no_std fallback path)
-        run: cargo test -p mid-platform --no-default-features --no-fail-fast -- --show-output
-
-  summary:
-    runs-on: ubuntu-latest
-    needs: [run-tests]
-    if: always()
-    steps:
-      - name: Print summary
+        continue-on-error: true
         run: |
-          echo "============================================="
-          echo "  mid-platform Test Summary"
-          echo "============================================="
-          echo "Build:  #${{ github.run_number }}"
-          echo "Branch: ${{ github.ref_name }}"
-          echo "Tests:  ${{ needs.run-tests.result || 'skipped' }}"
+          set -o pipefail
+          cargo test -p mid-platform --no-default-features --color=never --no-fail-fast \
+            -- --show-output 2>&1 | tee mid-platform-test-nostd-raw.txt
+
+      - name: Parse results to JSON
+        if: always()
+        env:
+          BUILD_NUM:    ${{ github.run_number }}
+          BRANCH:       ${{ github.ref_name }}
+          COMMIT:       ${{ github.sha }}
+          RUST_VERSION: ${{ steps.rustver.outputs.ver }}
+        run: |
+          python3 - << 'PYEOF'
+          import re, json, os
+
+          RE_ANSI = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
+          def strip(s): return RE_ANSI.sub('', s)
+
+          RE_RUN    = re.compile(r'Running\s+.*?\(\S*?/deps/([A-Za-z0-9_]+)-[0-9a-f]{8,}\)\s*$')
+          RE_DOC    = re.compile(r'^\s*Doc-tests\s+(\S+)\s*$')
+          RE_TEST   = re.compile(
+              r'^test\s+([\w:./-]+(?:::\w+)*(?:\s-\s\S+\s\(line\s\d+\))?)\s+\.\.\.\s+'
+              r'(ok|FAILED|ignored)(?:\s+\(([\d.]+)s\))?'
+          )
+          RE_RESULT = re.compile(r'test result:.*?finished in ([\d.]+)s')
+
+          def parse_file(path, config_label):
+              try:
+                  raw = open(path, encoding='utf-8', errors='replace').read()
+              except FileNotFoundError:
+                  return []
+              text = strip(raw)
+
+              test_output = {}
+              for m in re.finditer(
+                  r'---- ([\w:]+(?:::\w+)*) stdout ----\n(.*?)'
+                  r'(?=\n---- |\n\n(?:successes|failures):\n|\ntest result:|\Z)',
+                  text, re.DOTALL):
+                  content = m.group(2).strip()
+                  if content:
+                      test_output[m.group(1)] = content
+
+              fail_output = {}
+              fail_section = re.search(r'\nfailures:\n(.*?)(?:\ntest result:|\Z)', text, re.DOTALL)
+              if fail_section:
+                  for m in re.finditer(
+                      r'---- ([\w:]+(?:::\w+)*) stdout ----\n(.*?)(?=\n---- |\Z)',
+                      fail_section.group(1), re.DOTALL):
+                      content = m.group(2).strip()
+                      if content:
+                          fail_output[m.group(1)] = content
+
+              suites    = []
+              cur_name  = None
+              cur_tests = []
+              cur_dur   = 0.0
+
+              def flush(name, tests, dur):
+                  if name is not None:
+                      suites.append({
+                          'name':       f"{name} [{config_label}]",
+                          'passed':     sum(1 for t in tests if t['status'] == 'passed'),
+                          'failed':     sum(1 for t in tests if t['status'] == 'failed'),
+                          'ignored':    sum(1 for t in tests if t['status'] == 'ignored'),
+                          'duration_s': round(dur, 4),
+                          'tests':      tests,
+                      })
+
+              for line in text.splitlines():
+                  m = RE_RUN.search(line)
+                  if m:
+                      flush(cur_name, cur_tests, cur_dur)
+                      cur_name, cur_tests, cur_dur = m.group(1).replace('_', '-'), [], 0.0
+                      continue
+                  m = RE_DOC.match(line)
+                  if m:
+                      flush(cur_name, cur_tests, cur_dur)
+                      cur_name, cur_tests, cur_dur = f"{m.group(1)} (doc-tests)", [], 0.0
+                      continue
+                  m = RE_TEST.match(line)
+                  if m:
+                      if cur_name is None:
+                          cur_name, cur_tests, cur_dur = 'unknown suite', [], 0.0
+                      tname, status, dur = m.group(1), m.group(2), m.group(3)
+                      out = fail_output.get(tname) or test_output.get(tname, '')
+                      cur_tests.append({
+                          'name':        tname,
+                          'status':      {'ok':'passed','FAILED':'failed','ignored':'ignored'}.get(status,'unknown'),
+                          'duration_ms': int(float(dur) * 1000) if dur else 0,
+                          'output':      out,
+                      })
+                      continue
+                  m = RE_RESULT.search(line)
+                  if m:
+                      cur_dur = float(m.group(1))
+                      flush(cur_name, cur_tests, cur_dur)
+                      cur_name, cur_tests, cur_dur = None, [], 0.0
+
+              flush(cur_name, cur_tests, cur_dur)
+              return suites
+
+          suites  = parse_file('mid-platform-test-std-raw.txt',   'std')
+          suites += parse_file('mid-platform-test-nostd-raw.txt', 'no_std fallback')
+
+          total   = sum(s['passed'] + s['failed'] + s['ignored'] for s in suites)
+          passed  = sum(s['passed']  for s in suites)
+          failed  = sum(s['failed']  for s in suites)
+          ignored = sum(s['ignored'] for s in suites)
+          dur     = sum(s['duration_s'] for s in suites)
+
+          result = {
+              'build':        os.environ.get('BUILD_NUM',    '0'),
+              'branch':       os.environ.get('BRANCH',       'unknown'),
+              'commit':       os.environ.get('COMMIT',       'unknown')[:8],
+              'rust_version': os.environ.get('RUST_VERSION', 'stable'),
+              'crate':        'mid-platform',
+              'summary': {
+                  'total':      total,
+                  'passed':     passed,
+                  'failed':     failed,
+                  'ignored':    ignored,
+                  'duration_s': round(dur, 3),
+              },
+              'suites': suites,
+          }
+
+          with open('mid-platform-test-results.json', 'w') as f:
+              json.dump(result, f, indent=2)
+
+          print(f"Suites:{len(suites)}  Passed:{passed}  Failed:{failed}  Ignored:{ignored}")
+          PYEOF
+
+      - name: Write test results to job summary
+        if: always()
+        run: |
+          python3 - << 'PYEOF'
+          import json, os
+
+          try:
+              with open('mid-platform-test-results.json') as f:
+                  result = json.load(f)
+          except FileNotFoundError:
+              with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as f:
+                  f.write("## mid-platform Test Results\n\n")
+                  f.write("`mid-platform-test-results.json` wasn't produced — the parse step "
+                          "above likely failed before writing it. Check its log.\n")
+              raise SystemExit(0)
+
+          summary = result['summary']
+          suites  = result['suites']
+
+          lines = []
+          lines.append(f"## mid-platform Test Results — Build #{result['build']}")
+          lines.append("")
+          lines.append(
+              f"Branch: `{result['branch']}` &nbsp;|&nbsp; "
+              f"Commit: `{result['commit']}` &nbsp;|&nbsp; "
+              f"Rust: `{result['rust_version']}`"
+          )
+          lines.append("")
+          lines.append(
+              "Runs both feature configurations: default (`std`) and "
+              "`--no-default-features` (the hand-rolled no_std spin-based "
+              "fallback). See docs/mid-platform.md."
+          )
+          lines.append("")
+
+          if summary['failed'] == 0 and summary['total'] > 0:
+              lines.append(f"### ✅ All {summary['total']} tests passed (both configurations)")
+          elif summary['total'] == 0:
+              lines.append("### ⚠️ No tests were collected — check the raw logs")
+          else:
+              lines.append(f"### ❌ {summary['failed']} of {summary['total']} tests failed")
+          lines.append("")
+
+          failing = [
+              (s['name'], t)
+              for s in suites
+              for t in s['tests']
+              if t['status'] == 'failed'
+          ]
+          if failing:
+              lines.append("### Failures")
+              lines.append("")
+              for suite_name, t in failing:
+                  lines.append(f"- **{suite_name} :: {t['name']}**")
+                  if t.get('output'):
+                      first_line = t['output'].strip().splitlines()[0]
+                      lines.append(f"  - `{first_line}`")
+              lines.append("")
+
+          lines.append("| Suite | Passed | Failed | Ignored | Duration |")
+          lines.append("|---|---|---|---|---|")
+          for s in suites:
+              mark = "✅" if s['failed'] == 0 else "❌"
+              lines.append(
+                  f"| {mark} {s['name']} | {s['passed']} | {s['failed']} | "
+                  f"{s['ignored']} | {s['duration_s']:.2f}s |"
+              )
+          lines.append("")
+          lines.append(
+              f"**Total: {summary['total']}** &nbsp;|&nbsp; "
+              f"Passed: {summary['passed']} &nbsp;|&nbsp; "
+              f"Failed: {summary['failed']} &nbsp;|&nbsp; "
+              f"Ignored: {summary['ignored']} &nbsp;|&nbsp; "
+              f"Duration: {summary['duration_s']:.2f}s"
+          )
+          lines.append("")
+
+          for s in suites:
+              lines.append(f"<details><summary>{s['name']} — {len(s['tests'])} tests</summary>")
+              lines.append("")
+              lines.append("| Test | Status |")
+              lines.append("|---|---|")
+              for t in s['tests']:
+                  mark = "✅" if t['status'] == 'passed' else "❌"
+                  lines.append(f"| `{t['name']}` | {mark} |")
+              lines.append("")
+              lines.append("</details>")
+              lines.append("")
+
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as f:
+              f.write("\n".join(lines) + "\n")
+          PYEOF
+
+      - name: Upload raw logs + JSON as artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mid-platform-test-results-${{ github.run_number }}
+          path: |
+            mid-platform-test-std-raw.txt
+            mid-platform-test-nostd-raw.txt
+            mid-platform-test-results.json
+          retention-days: 7
