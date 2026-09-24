@@ -2183,6 +2183,8 @@ type parameter on the existing ones because Rust does not infer a
 function's type parameter from a default, so adding `F` to `query2_static`
 would break every existing `query2_static::<A, B>()` call site.
 `With`, `Without` and `QueryFilter` are re-exported from the crate root.
+The runtime, id-based form for callers without Rust types is
+`World::archetypes_matching_static`, exposed over C; see the next section.
 
 **Where it plugs in.** Every query iterator (`Iter1`, `Iter2`, `Iter1Ref`,
 `Iter2Ref`) takes one input from outside: the `matched: Vec<ArchetypeId>`
@@ -2295,3 +2297,95 @@ each platform (~4x on x86_64, ~1.05 to 1.1x on macOS and aarch64 at
 build #30), because the per-row work is identical. A materially different
 ratio would mean the filter costs something the instruction count did not
 predict.
+
+### FFI: filtered archetype enumeration, and a `raw_span` fix
+
+**Scope rule for FFI on new ECS features.** Each new ECS feature ships
+with its C counterpart in the same pass, scoped the way the existing
+surface already is:
+
+- Component types are registered from Rust (`register_ffi_*`, generic, so
+  it cannot be `extern "C"`) and C refers to them by name, then by the
+  `uint32_t` id the lookup returns.
+- Read-only. C walks archetypes and reads spans, and there are no
+  iterator handles and no write access from C. Nothing here changes the
+  existing safety story: a span is valid only until the next structural
+  change to the world.
+- Same structural semantics as the Rust side, with a test that runs both
+  and compares them.
+
+**What was added.** `Archetypes::archetypes_matching(with, without)` and
+`World::archetypes_matching_static(with, without)` list every archetype
+whose signature contains all of `with` and none of `without`. Over C:
+
+```c
+int32_t mid_ecs_world_archetypes_matching_static(
+    const MidEcsWorld *world,
+    const uint32_t *with_ids, size_t with_len,
+    const uint32_t *without_ids, size_t without_len,
+    uint32_t *out_buf, size_t out_buf_capacity);
+```
+
+It follows the conventions of `mid_ecs_world_archetypes_with_static_component`:
+a NULL `out_buf` returns the count, a too-small buffer returns
+`MID_ECS_BUFFER_TOO_SMALL` with nothing written, and it never returns
+`MID_ECS_NOT_FOUND`. An id list may be NULL only when its length is 0. The
+semantics are structural: archetypes with zero rows are included, an id
+that names no registered component matches nothing in `with_ids` and is
+ignored in `without_ids`, an id in both lists matches nothing, and two
+empty lists match every archetype (the empty archetype included). Include
+the component to be read in `with_ids`, since an archetype that lacks it
+answers `raw_span` and `entity_ids` with `MID_ECS_NOT_FOUND`.
+
+This is the same set of archetypes the typed `*_static_filtered` queries
+visit. A test builds one world, runs eight filter combinations through both
+the typed queries and the C entry point, and requires identical entity
+sets.
+
+`mid_ecs_test_filter_fixture_world_new` (with `MidEcsTestFlagA` and
+`MidEcsTestFlagB`) is a second test-only fixture, like the existing one,
+because a pure C program cannot register types or insert components. Three
+entities in three archetypes, one of them built with a bundle in an order
+that leaves zero-row intermediate archetypes behind.
+
+**Bug found while building this, and fixed: `raw_span` on a column-less
+archetype.** `Archetypes::raw_span` returned `None` (`MID_ECS_NOT_FOUND`
+over C) for an archetype whose signature contains the component but has no
+column for it yet. Such archetypes exist: `insert_bundle` and
+`spawn_bundle` walk `edge_for_insert` once per bundle element, so a bundle
+`(A, B)` creates `{A}` on the way to `{A, B}`, and no entity is ever moved
+into `{A}`, so it never gets a column. `archetypes_with` (and so
+`mid_ecs_world_archetypes_with_static_component`) lists `{A}` because the
+signature matches. A C caller walking that list therefore got
+`MID_ECS_NOT_FOUND` from `raw_span` for an id the library had just handed
+out, while `entity_ids` on the same archetype returned an empty list, so
+the two per-archetype calls disagreed. This contradicts the contract
+`raw_span`'s own doc comment already stated (a signature that includes the
+component is `Some` with `count == 0` when empty). The typed query
+iterators already tolerated the column-less case (`Iter1::next` treats a
+missing column as an empty slice), so only the FFI path was affected.
+
+The fix is in `raw_span`: when the column is missing but the signature
+contains the component, return the empty span. A signature that does not
+contain the component still returns `None`, unchanged. Reproduced first
+with a probe (two archetypes listed for `A`, `raw_span` `None` on the
+first), then covered by three tests that fail without the fix (checked by
+reverting it): one at the `Archetypes` level, and two through the C
+surface, one of which walks every enumerated archetype and requires `OK`
+from `raw_span`.
+
+**Tests:** 237 default (12 new: 6 at the `Archetypes` level covering
+`archetypes_matching` and the `raw_span` cases, 6 through the C surface
+covering the expected archetype counts, `raw_span` on every enumerated
+archetype, typed-versus-FFI parity, the buffer idiom, the NULL cases, and
+bogus and contradictory ids). The C smoke test gained 13 checks and
+compiles clean under `-Wall -Wextra`; it ran against a debug
+`libmid_ecs.so` in the sandbox and all checks passed. In CI that step is
+`continue-on-error`, so read `mid-ecs-ffi-smoke-raw.txt` and do not rely
+on a green job.
+
+**Not covered, on purpose.** `Or` and any-of lists (`Or` is not built on
+the Rust side yet; the C form would be a third list, `any_of_ids`, added
+with it), the Sparse Shell (no archetypes to enumerate), and change
+detection.
+

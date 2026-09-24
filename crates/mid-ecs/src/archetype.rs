@@ -685,7 +685,10 @@ impl Archetypes {
     /// migrated away) is a genuinely different case and does return
     /// `Some` with `count == 0` — proven by a real test, not assumed,
     /// since `ensure_column` only ever adds columns, never removes them
-    /// once an archetype has been created with that signature.
+    /// once an archetype has been created with that signature. A
+    /// signature that includes the component but has no column yet
+    /// (a zero-row intermediate left behind by `insert_bundle` or
+    /// `spawn_bundle`) answers the same way, `Some` with `count == 0`.
     ///
     /// This is the real, unavoidable difference from `SparseShell`'s
     /// side of the FFI-span mechanism: a component type here isn't one
@@ -700,8 +703,15 @@ impl Archetypes {
     ) -> Option<FfiSpan> {
         let accessor = self.ffi_accessors.get(&component_id)?;
         let archetype = self.archetypes.get(archetype_id)?;
-        let column = archetype.table.columns.get(component_id)?;
-        Some(accessor(column.as_any()))
+        match archetype.table.columns.get(component_id) {
+            Some(column) => Some(accessor(column.as_any())),
+            // The signature includes the component but no entity has
+            // ever migrated in, so no column exists yet (the zero-row
+            // intermediates `insert_bundle`/`spawn_bundle` leave
+            // behind). Same answer as an emptied column.
+            None if archetype.component_ids.contains(&component_id) => Some(FfiSpan::empty()),
+            None => None,
+        }
     }
 
     /// Entity-correlation counterpart to [`Self::raw_span`], for the
@@ -757,6 +767,29 @@ impl Archetypes {
                 .component_ids
                 .contains(&component_id)
                 .then_some(id)
+        })
+    }
+
+    /// Enumerates every currently-existing archetype whose signature
+    /// contains *all* of `with` and *none* of `without`. The runtime,
+    /// id-based counterpart to the typed `With`/`Without` filters
+    /// (`filter.rs`), for callers that only have `ComponentId`s (the FFI
+    /// surface). Same structural semantics as
+    /// [`Self::archetypes_with`]: zero-row archetypes are included, an
+    /// id that names no archetype-tracked component simply matches
+    /// nothing in `with` and is ignored in `without`, and both lists
+    /// empty means every archetype. Duplicate ids are harmless, and an
+    /// id in both lists matches nothing.
+    pub(crate) fn archetypes_matching<'a>(
+        &'a self,
+        with: &'a [ComponentId],
+        without: &'a [ComponentId],
+    ) -> impl Iterator<Item = ArchetypeId> + 'a {
+        self.archetypes.iter().filter_map(move |(id, archetype)| {
+            let signature = &archetype.component_ids;
+            (with.iter().all(|c| signature.contains(c))
+                && !without.iter().any(|c| signature.contains(c)))
+            .then_some(id)
         })
     }
 
@@ -1789,6 +1822,149 @@ mod tests {
             span.count, 0,
             "empty-but-present must be Some(count=0), not None"
         );
+    }
+
+    #[derive(Debug, Clone, Copy, PartialEq, IntoBytes, KnownLayout, Immutable)]
+    #[repr(C)]
+    struct FfiMana {
+        mp: u32,
+    }
+
+    #[test]
+    fn raw_span_and_entity_ids_are_empty_not_none_for_a_column_less_intermediate_archetype() {
+        // A bundle walks `edge_for_insert` once per element, so
+        // `(FfiHealth, FfiMana)` creates a `{FfiHealth}` archetype on the
+        // way to `{FfiHealth, FfiMana}` that no entity is ever moved
+        // into, and so never gets a column.
+        let mut spawn = entity_factory();
+        let mut ar = Archetypes::new();
+        let health = ar.register_ffi::<FfiHealth>("FfiHealth");
+        ar.register_ffi::<FfiMana>("FfiMana");
+        let e = spawn();
+        ar.spawn(e);
+        assert!(ar.insert_bundle(e, (FfiHealth { hp: 1 }, FfiMana { mp: 2 })));
+
+        let mut counts = Vec::new();
+        for archetype_id in ar.archetypes_with(health) {
+            let span = ar
+                .raw_span(archetype_id, health)
+                .expect("every archetype archetypes_with hands out must resolve, column or not");
+            let ids = ar
+                .entity_ids(archetype_id, health)
+                .expect("entity_ids agrees with raw_span");
+            assert_eq!(span.count, ids.len());
+            counts.push(span.count);
+        }
+        counts.sort_unstable();
+        assert_eq!(counts, vec![0, 1], "one empty intermediate, one real row");
+    }
+
+    #[test]
+    fn raw_span_is_still_none_for_a_signature_without_the_component() {
+        let mut spawn = entity_factory();
+        let mut ar = Archetypes::new();
+        let health = ar.register_ffi::<FfiHealth>("FfiHealth");
+        let mana = ar.register_ffi::<FfiMana>("FfiMana");
+        let e = spawn();
+        ar.spawn(e);
+        assert!(ar.insert(e, health, FfiHealth { hp: 1 }));
+        let health_only = ar.archetypes_with(health).next().unwrap();
+        assert_eq!(ar.raw_span(health_only, mana), None);
+    }
+
+    /// `[e1: A] [e2: A+B] [e3: B] [e4: A+B+C]`, one archetype each.
+    fn matching_fixture() -> (Archetypes, [ComponentId; 3], [ArchetypeId; 4]) {
+        let mut spawn = entity_factory();
+        let mut ar = Archetypes::new();
+        let a = ar.component_id::<A>();
+        let b = ar.component_id::<B>();
+        let c = ar.component_id::<C>();
+        let e1 = spawn();
+        let e2 = spawn();
+        let e3 = spawn();
+        let e4 = spawn();
+        for e in [e1, e2, e3, e4] {
+            ar.spawn(e);
+        }
+        assert!(ar.insert(e1, a, A(1)));
+        assert!(ar.insert(e2, a, A(2)));
+        assert!(ar.insert(e2, b, B(2)));
+        assert!(ar.insert(e3, b, B(3)));
+        assert!(ar.insert(e4, a, A(4)));
+        assert!(ar.insert(e4, b, B(4)));
+        assert!(ar.insert(e4, c, C(4)));
+        let at = |e| ar.locations.get(e).unwrap().archetype_id;
+        let archetypes = [at(e1), at(e2), at(e3), at(e4)];
+        (ar, [a, b, c], archetypes)
+    }
+
+    fn matching(
+        ar: &Archetypes,
+        with: &[ComponentId],
+        without: &[ComponentId],
+    ) -> Vec<ArchetypeId> {
+        let mut v: Vec<ArchetypeId> = ar.archetypes_matching(with, without).collect();
+        v.sort_by_key(|id| id.as_u32());
+        v
+    }
+
+    fn sorted_ids(mut v: Vec<ArchetypeId>) -> Vec<ArchetypeId> {
+        v.sort_by_key(|id| id.as_u32());
+        v
+    }
+
+    #[test]
+    fn archetypes_matching_with_only_equals_archetypes_with() {
+        let (ar, [a, ..], _) = matching_fixture();
+        let expected: Vec<ArchetypeId> = ar.archetypes_with(a).collect();
+        let actual: Vec<ArchetypeId> = ar.archetypes_matching(&[a], &[]).collect();
+        assert_eq!(actual, expected, "same set, same dense order");
+    }
+
+    #[test]
+    fn archetypes_matching_requires_all_of_with_and_none_of_without() {
+        let (ar, [a, b, c], [only_a, a_b, only_b, a_b_c]) = matching_fixture();
+        assert_eq!(matching(&ar, &[a], &[b]), sorted_ids(vec![only_a]));
+        assert_eq!(matching(&ar, &[a, b], &[]), sorted_ids(vec![a_b, a_b_c]));
+        assert_eq!(matching(&ar, &[a, b], &[c]), sorted_ids(vec![a_b]));
+        assert_eq!(matching(&ar, &[b], &[a]), sorted_ids(vec![only_b]));
+        assert_eq!(matching(&ar, &[], &[a]), {
+            // Everything without A, which includes the empty archetype
+            // (id 0) and the never-populated intermediates, not just
+            // e3's.
+            let mut all_without_a: Vec<ArchetypeId> = ar
+                .archetypes
+                .iter()
+                .filter(|(_, arch)| !arch.component_ids.contains(&a))
+                .map(|(id, _)| id)
+                .collect();
+            all_without_a.sort_by_key(|id| id.as_u32());
+            all_without_a
+        });
+    }
+
+    #[test]
+    fn archetypes_matching_with_both_lists_empty_is_every_archetype() {
+        let (ar, _, _) = matching_fixture();
+        let all: Vec<ArchetypeId> = ar.archetypes.iter().map(|(id, _)| id).collect();
+        let matched: Vec<ArchetypeId> = ar.archetypes_matching(&[], &[]).collect();
+        assert_eq!(matched, all);
+        assert!(matched.contains(&EMPTY_ARCHETYPE));
+    }
+
+    #[test]
+    fn archetypes_matching_edge_cases() {
+        let (ar, [a, b, ..], _) = matching_fixture();
+        let unknown = ComponentId(9999);
+
+        // Contradiction matches nothing.
+        assert!(matching(&ar, &[a], &[a]).is_empty());
+        // An id no archetype contains: `with` matches nothing,
+        // `without` changes nothing.
+        assert!(matching(&ar, &[unknown], &[]).is_empty());
+        assert_eq!(matching(&ar, &[a], &[unknown]), matching(&ar, &[a], &[]));
+        // Duplicates are harmless.
+        assert_eq!(matching(&ar, &[a, a], &[b, b]), matching(&ar, &[a], &[b]));
     }
 
     #[test]

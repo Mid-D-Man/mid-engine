@@ -148,6 +148,21 @@ int32_t mid_ecs_world_static_component_entity_ids(const MidEcsWorld *world, uint
 // error) -- this never returns MID_ECS_NOT_FOUND.
 int32_t mid_ecs_world_archetypes_with_static_component(const MidEcsWorld *world, uint32_t component_id, uint32_t *out_buf, size_t out_buf_capacity);
 
+// Filtered counterpart of mid_ecs_world_archetypes_with_static_component:
+// enumerates every currently-existing archetype whose signature contains
+// ALL of with_ids and NONE of without_ids (the runtime equivalent of the
+// Rust side's With/Without query filters). Include the component you
+// mean to read in with_ids -- an archetype without it answers
+// mid_ecs_world_static_component_raw_span/_entity_ids with
+// MID_ECS_NOT_FOUND. Structural, like its sibling: archetypes with zero
+// rows are included (their spans come back MID_ECS_OK with count == 0),
+// an id that names no registered component matches nothing in with_ids
+// and is ignored in without_ids, an id in both lists matches nothing, and
+// two empty lists match every archetype. with_ids/without_ids may be NULL
+// only when their length is 0 (MID_ECS_NULL_POINTER otherwise). Same
+// NULL-buffer-queries-count idiom; never returns MID_ECS_NOT_FOUND.
+int32_t mid_ecs_world_archetypes_matching_static(const MidEcsWorld *world, const uint32_t *with_ids, size_t with_len, const uint32_t *without_ids, size_t without_len, uint32_t *out_buf, size_t out_buf_capacity);
+
 // --- Test fixture (see ffi.rs's own doc comment on this function) ---
 
 // NOT a real part of this library's intended public API -- exists only
@@ -163,6 +178,16 @@ int32_t mid_ecs_world_archetypes_with_static_component(const MidEcsWorld *world,
 // Shell, hp 100/200 in Archetype Core) -- exactly the fixed values
 // test.c checks against. Never returns NULL.
 MidEcsWorld *mid_ecs_test_fixture_world_new(void);
+
+// NOT a real part of the public API, like the fixture above. A world for
+// exercising mid_ecs_world_archetypes_matching_static: "FfiHealthStatic",
+// "FfiFlagA" and "FfiFlagB" registered in the Archetype Core (each
+// `{ uint32_t <field>; }`), and three entities in distinct archetypes:
+// e1 {Health hp=1}, e2 {Health hp=2, FlagA}, e3 {FlagB, Health hp=3,
+// FlagA}. e3 is built as one bundle in that order, which leaves zero-row
+// intermediate archetypes {FlagB} and {FlagB, Health} behind. Never
+// returns NULL.
+MidEcsWorld *mid_ecs_test_filter_fixture_world_new(void);
 
 #ifdef __cplusplus
 }

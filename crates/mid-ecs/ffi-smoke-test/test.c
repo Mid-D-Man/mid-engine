@@ -143,6 +143,70 @@ int main(void) {
 
     mid_ecs_world_free(fixture);
 
+    // --- Filtered archetype enumeration (with/without id lists) ---
+    MidEcsWorld *fw = mid_ecs_test_filter_fixture_world_new();
+    uint32_t h = mid_ecs_world_lookup_ffi_static_component_id(fw, "FfiHealthStatic");
+    uint32_t fa = mid_ecs_world_lookup_ffi_static_component_id(fw, "FfiFlagA");
+    uint32_t fb = mid_ecs_world_lookup_ffi_static_component_id(fw, "FfiFlagB");
+    CHECK(h != MID_ECS_INVALID_ID && fa != MID_ECS_INVALID_ID && fb != MID_ECS_INVALID_ID,
+          "the filter fixture's three component names all resolve");
+
+    // Sum Health.hp and count rows across every archetype matching the
+    // filter, exactly as a C caller would. Every enumerated archetype must
+    // resolve through raw_span with MID_ECS_OK, including the zero-row
+    // intermediates.
+    uint32_t sum_hp = 0, rows = 0, archetypes_seen = 0;
+    bool all_ok = true;
+#define WALK(with_arr, nwith, without_arr, nwithout) do { \
+        sum_hp = 0; rows = 0; archetypes_seen = 0; all_ok = true; \
+        uint32_t ids[16]; \
+        int32_t n = mid_ecs_world_archetypes_matching_static(fw, (with_arr), (nwith), (without_arr), (nwithout), ids, 16); \
+        if (n < 0) { all_ok = false; n = 0; } \
+        archetypes_seen = (uint32_t)n; \
+        for (int32_t i = 0; i < n; i++) { \
+            MidEcsFfiSpan sp; \
+            if (mid_ecs_world_static_component_raw_span(fw, ids[i], h, &sp) != MID_ECS_OK) { all_ok = false; continue; } \
+            const FfiHealthC *hp = (const FfiHealthC *)sp.ptr; \
+            for (size_t r = 0; r < sp.count; r++) { sum_hp += hp[r].hp; rows++; } \
+        } \
+    } while (0)
+
+    uint32_t w_h[] = { h };
+    uint32_t w_ha[] = { h, fa };
+    uint32_t wo_a[] = { fa };
+    uint32_t wo_b[] = { fb };
+    uint32_t wo_ab[] = { fa, fb };
+
+    WALK(w_h, 1, NULL, 0);
+    CHECK(all_ok && archetypes_seen == 4 && rows == 3 && sum_hp == 6,
+          "with {Health}: 4 archetypes (one zero-row), 3 rows, hp 1+2+3, every raw_span OK");
+    WALK(w_h, 1, wo_a, 1);
+    CHECK(all_ok && archetypes_seen == 2 && rows == 1 && sum_hp == 1,
+          "with {Health} without {FlagA}: only e1's row, plus the zero-row {FlagB, Health}");
+    WALK(w_ha, 2, NULL, 0);
+    CHECK(all_ok && archetypes_seen == 2 && rows == 2 && sum_hp == 5,
+          "with {Health, FlagA}: e2 and e3, hp 2+3");
+    WALK(w_ha, 2, wo_b, 1);
+    CHECK(all_ok && archetypes_seen == 1 && rows == 1 && sum_hp == 2,
+          "with {Health, FlagA} without {FlagB}: e2 only");
+    WALK(w_h, 1, wo_ab, 2);
+    CHECK(all_ok && archetypes_seen == 1 && rows == 1 && sum_hp == 1,
+          "with {Health} without {FlagA, FlagB}: e1 only");
+
+    CHECK(mid_ecs_world_archetypes_matching_static(fw, NULL, 0, NULL, 0, NULL, 0) == 6,
+          "two empty lists (NULL, 0) match every archetype, the empty one included");
+    CHECK(mid_ecs_world_archetypes_matching_static(fw, NULL, 1, NULL, 0, NULL, 0) == MID_ECS_NULL_POINTER,
+          "a NULL id list with a non-zero length is MID_ECS_NULL_POINTER");
+    CHECK(mid_ecs_world_archetypes_matching_static(NULL, w_h, 1, NULL, 0, NULL, 0) == MID_ECS_NULL_POINTER,
+          "a NULL world is MID_ECS_NULL_POINTER");
+    uint32_t bogus_ids[] = { MID_ECS_INVALID_ID };
+    CHECK(mid_ecs_world_archetypes_matching_static(fw, bogus_ids, 1, NULL, 0, NULL, 0) == 0,
+          "a never-registered id in with_ids matches nothing, and is not an error");
+    uint32_t small_buf[1];
+    CHECK(mid_ecs_world_archetypes_matching_static(fw, w_h, 1, NULL, 0, small_buf, 1) == MID_ECS_BUFFER_TOO_SMALL,
+          "a too-small buffer is MID_ECS_BUFFER_TOO_SMALL, not a partial fill");
+    mid_ecs_world_free(fw);
+
     printf("\n=== %d check(s) failed ===\n", failures);
     return failures == 0 ? 0 : 1;
 }

@@ -560,6 +560,21 @@ impl World {
         self.archetypes.archetypes_with(component_id)
     }
 
+    /// Enumerates every currently-existing archetype whose signature
+    /// contains all of `with` and none of `without` — thin wrapper over
+    /// `Archetypes::archetypes_matching`, the id-based counterpart to
+    /// the typed `*_static_filtered` queries in `query.rs`. Include the
+    /// component you intend to read in `with`; pair the ids this yields
+    /// with [`Self::static_component_raw_span`] and
+    /// [`Self::static_component_entity_ids`].
+    pub fn archetypes_matching_static<'a>(
+        &'a self,
+        with: &'a [ComponentId],
+        without: &'a [ComponentId],
+    ) -> impl Iterator<Item = ArchetypeId> + 'a {
+        self.archetypes.archetypes_matching(with, without)
+    }
+
     /// Looks up the `ComponentId` an Archetype-Core type was registered
     /// under via [`Self::register_ffi_static_component`], by name —
     /// thin wrapper over `Archetypes::lookup_ffi_id`.

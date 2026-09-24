@@ -282,6 +282,61 @@ pub extern "C" fn mid_ecs_test_fixture_world_new() -> *mut MidEcsWorld {
     Box::into_raw(Box::new(MidEcsWorld(world)))
 }
 
+/// Extra Archetype Core fixture types, used only by
+/// [`mid_ecs_test_filter_fixture_world_new`].
+#[derive(zerocopy::IntoBytes, zerocopy::Immutable, zerocopy::KnownLayout)]
+#[repr(C)]
+pub struct MidEcsTestFlagA {
+    pub v: u32,
+}
+
+/// See [`MidEcsTestFlagA`].
+#[derive(zerocopy::IntoBytes, zerocopy::Immutable, zerocopy::KnownLayout)]
+#[repr(C)]
+pub struct MidEcsTestFlagB {
+    pub v: u32,
+}
+
+/// **Test-fixture only, like [`mid_ecs_test_fixture_world_new`].**
+/// Builds a world for exercising
+/// [`mid_ecs_world_archetypes_matching_static`] from a pure C program:
+/// `"FfiHealthStatic"`, `"FfiFlagA"` and `"FfiFlagB"` registered with the
+/// Archetype Core, and three entities spread over distinct archetypes
+/// (`hp` in parentheses):
+///
+/// - `e1`: `{Health}` (1)
+/// - `e2`: `{Health, FlagA}` (2), built with `insert_bundle`
+/// - `e3`: `{FlagB, Health, FlagA}` (3), built with `insert_bundle`
+///
+/// Building `e3` in that order deliberately leaves zero-row intermediate
+/// archetypes `{FlagB}` and `{FlagB, Health}` behind, so every
+/// enumeration a C caller runs also has to cope with archetypes that hold
+/// the component in their signature but no rows. Never returns NULL.
+#[no_mangle]
+pub extern "C" fn mid_ecs_test_filter_fixture_world_new() -> *mut MidEcsWorld {
+    let mut world = World::new();
+    world.register_ffi_static_component::<MidEcsTestHealthStatic>("FfiHealthStatic");
+    world.register_ffi_static_component::<MidEcsTestFlagA>("FfiFlagA");
+    world.register_ffi_static_component::<MidEcsTestFlagB>("FfiFlagB");
+    let e1 = world.spawn();
+    let e2 = world.spawn();
+    let e3 = world.spawn();
+    world.insert_static(e1, MidEcsTestHealthStatic { hp: 1 });
+    world.insert_bundle(
+        e2,
+        (MidEcsTestHealthStatic { hp: 2 }, MidEcsTestFlagA { v: 20 }),
+    );
+    world.insert_bundle(
+        e3,
+        (
+            MidEcsTestFlagB { v: 300 },
+            MidEcsTestHealthStatic { hp: 3 },
+            MidEcsTestFlagA { v: 30 },
+        ),
+    );
+    Box::into_raw(Box::new(MidEcsWorld(world)))
+}
+
 /// A sentinel `component_id`/`archetype_id` value meaning "not found" —
 /// returned by the `lookup_ffi_*` functions below on a null pointer,
 /// invalid UTF-8, or a name that was never registered. Not `0`: `0` is
@@ -586,6 +641,75 @@ pub unsafe extern "C" fn mid_ecs_world_archetypes_with_static_component(
         }
         let out = unsafe { slice::from_raw_parts_mut(out_buf, out_buf_capacity) };
         out[..ids.len()].copy_from_slice(&ids);
+        ids.len() as i32
+    })
+}
+
+/// Enumerates every currently-existing archetype whose signature
+/// contains *all* of `with_ids` and *none* of `without_ids`, writing each
+/// as a plain `u32` — the runtime counterpart to the typed
+/// `With`/`Without` query filters on the Rust side. Pass the ids back
+/// into [`mid_ecs_world_static_component_raw_span`]/
+/// [`mid_ecs_world_static_component_entity_ids`] as-is. Include the
+/// component you intend to read in `with_ids`: an archetype that doesn't
+/// hold it answers those two calls with `NotFound`.
+///
+/// Structural, like [`mid_ecs_world_archetypes_with_static_component`]:
+/// archetypes with zero rows are included (their spans come back `Ok`
+/// with `count == 0`), an id that names no registered component matches
+/// nothing in `with_ids` and is ignored in `without_ids`, an id in both
+/// lists matches nothing, and two empty lists match every archetype.
+/// Never returns `NotFound`. Same NULL-buffer-queries-count idiom as the
+/// other enumerations.
+///
+/// # Safety
+/// `world` must be a valid, non-null handle from `mid_ecs_world_new`.
+/// `with_ids` must be NULL only if `with_len` is 0, otherwise valid for
+/// `with_len` `uint32_t` elements; likewise `without_ids`/`without_len`.
+/// If `out_buf` is non-null, it must be valid for `out_buf_capacity`
+/// `uint32_t` elements.
+#[no_mangle]
+pub unsafe extern "C" fn mid_ecs_world_archetypes_matching_static(
+    world: *const MidEcsWorld,
+    with_ids: *const u32,
+    with_len: usize,
+    without_ids: *const u32,
+    without_len: usize,
+    out_buf: *mut u32,
+    out_buf_capacity: usize,
+) -> i32 {
+    ffi_guard(|| {
+        if world.is_null()
+            || (with_ids.is_null() && with_len > 0)
+            || (without_ids.is_null() && without_len > 0)
+        {
+            return MidEcsStatus::NullPointer as i32;
+        }
+        let world = unsafe { &*world };
+        let read_ids = |ptr: *const u32, len: usize| -> Vec<ComponentId> {
+            if len == 0 {
+                return Vec::new();
+            }
+            unsafe { slice::from_raw_parts(ptr, len) }
+                .iter()
+                .map(|&id| ComponentId::from_u32(id))
+                .collect()
+        };
+        let with = read_ids(with_ids, with_len);
+        let without = read_ids(without_ids, without_len);
+        let ids: Vec<u32> = world
+            .0
+            .archetypes_matching_static(&with, &without)
+            .map(|id| id.as_u32())
+            .collect();
+        if out_buf.is_null() {
+            return ids.len() as i32;
+        }
+        if ids.len() > out_buf_capacity {
+            return MidEcsStatus::BufferTooSmall as i32;
+        }
+        let out = unsafe { slice::from_raw_parts_mut(out_buf, ids.len()) };
+        out.copy_from_slice(&ids);
         ids.len() as i32
     })
 }
@@ -1061,5 +1185,348 @@ mod tests {
             );
             mid_ecs_world_free(world_ptr);
         }
+    }
+
+    // ── archetypes_matching_static ──────────────────────────────────
+
+    use crate::filter::{QueryFilter, With, Without};
+
+    fn empty_span() -> FfiSpan {
+        FfiSpan {
+            ptr: std::ptr::null(),
+            stride: 0,
+            count: 0,
+        }
+    }
+
+    fn static_id(world: *const MidEcsWorld, name: &str) -> u32 {
+        let name = std::ffi::CString::new(name).unwrap();
+        // SAFETY: `world` is a live handle and `name` a valid C string.
+        let id = unsafe { mid_ecs_world_lookup_ffi_static_component_id(world, name.as_ptr()) };
+        assert_ne!(id, MID_ECS_INVALID_ID);
+        id
+    }
+
+    /// Runs the count-then-fill idiom the C header documents.
+    fn matching_ids(world: *const MidEcsWorld, with: &[u32], without: &[u32]) -> Vec<u32> {
+        // SAFETY: `world` is a live handle; the id slices outlive the call.
+        let count = unsafe {
+            mid_ecs_world_archetypes_matching_static(
+                world,
+                with.as_ptr(),
+                with.len(),
+                without.as_ptr(),
+                without.len(),
+                std::ptr::null_mut(),
+                0,
+            )
+        };
+        assert!(count >= 0, "count query failed with status {count}");
+        let mut buf = vec![0u32; count as usize];
+        // SAFETY: as above; `buf` is valid for `buf.len()` elements.
+        let written = unsafe {
+            mid_ecs_world_archetypes_matching_static(
+                world,
+                with.as_ptr(),
+                with.len(),
+                without.as_ptr(),
+                without.len(),
+                buf.as_mut_ptr(),
+                buf.len(),
+            )
+        };
+        assert_eq!(written, count);
+        buf
+    }
+
+    /// Every entity found by walking the matching archetypes the way a C
+    /// caller would. Asserts that each archetype the enumeration hands
+    /// out resolves through both per-archetype calls.
+    fn entities_via_ffi(
+        world: *const MidEcsWorld,
+        read: u32,
+        with: &[u32],
+        without: &[u32],
+    ) -> Vec<u64> {
+        let mut out = Vec::new();
+        for archetype in matching_ids(world, with, without) {
+            let mut span = empty_span();
+            // SAFETY: `world` is a live handle, `span` is valid.
+            let status = unsafe {
+                mid_ecs_world_static_component_raw_span(world, archetype, read, &mut span)
+            };
+            assert_eq!(
+                status,
+                MidEcsStatus::Ok as i32,
+                "archetype {archetype} was enumerated, so raw_span must resolve it"
+            );
+            // SAFETY: as above; NULL buffer asks for the count.
+            let n = unsafe {
+                mid_ecs_world_static_component_entity_ids(
+                    world,
+                    archetype,
+                    read,
+                    std::ptr::null_mut(),
+                    0,
+                )
+            };
+            assert_eq!(n as usize, span.count);
+            let mut ids = vec![0u64; n as usize];
+            // SAFETY: `ids` is valid for `ids.len()` elements.
+            let written = unsafe {
+                mid_ecs_world_static_component_entity_ids(
+                    world,
+                    archetype,
+                    read,
+                    ids.as_mut_ptr(),
+                    ids.len(),
+                )
+            };
+            assert_eq!(written, n);
+            out.extend(ids);
+        }
+        out.sort_unstable();
+        out
+    }
+
+    fn typed_entities<F: QueryFilter>(world: &World) -> Vec<u64> {
+        let mut v: Vec<u64> = world
+            .query_static_filtered::<MidEcsTestHealthStatic, F>()
+            .map(|(e, _)| e.as_ffi())
+            .collect();
+        v.sort_unstable();
+        v
+    }
+
+    #[test]
+    fn matching_static_enumerates_the_expected_archetypes() {
+        let world = mid_ecs_test_filter_fixture_world_new();
+        let h = static_id(world, "FfiHealthStatic");
+        let a = static_id(world, "FfiFlagA");
+        let b = static_id(world, "FfiFlagB");
+
+        // Health: {H}, {H,A}, the zero-row {B,H}, and {B,H,A}.
+        assert_eq!(matching_ids(world, &[h], &[]).len(), 4);
+        assert_eq!(matching_ids(world, &[h], &[a]).len(), 2); // {H}, {B,H}
+        assert_eq!(matching_ids(world, &[h, a], &[]).len(), 2);
+        assert_eq!(matching_ids(world, &[h], &[a, b]).len(), 1);
+        assert_eq!(matching_ids(world, &[h, a, b], &[]).len(), 1);
+        // Two empty lists: every archetype, the empty one and the
+        // zero-row intermediates included.
+        assert_eq!(matching_ids(world, &[], &[]).len(), 6);
+
+        // SAFETY: `world` is a live handle, freed exactly once.
+        unsafe { mid_ecs_world_free(world) };
+    }
+
+    #[test]
+    fn every_enumerated_archetype_resolves_including_zero_row_intermediates() {
+        let world = mid_ecs_test_filter_fixture_world_new();
+        let h = static_id(world, "FfiHealthStatic");
+
+        // `entities_via_ffi` asserts `Ok` from raw_span on all four
+        // archetypes, one of which never held a row.
+        let found = entities_via_ffi(world, h, &[h], &[]);
+        assert_eq!(found.len(), 3);
+
+        // SAFETY: as above.
+        unsafe { mid_ecs_world_free(world) };
+    }
+
+    #[test]
+    fn ffi_enumeration_matches_the_typed_filtered_queries() {
+        let world_ptr = mid_ecs_test_filter_fixture_world_new();
+        let h = static_id(world_ptr, "FfiHealthStatic");
+        let a = static_id(world_ptr, "FfiFlagA");
+        let b = static_id(world_ptr, "FfiFlagB");
+        // SAFETY: `world_ptr` is a live handle for this whole test.
+        let world = unsafe { &(*world_ptr).0 };
+
+        let check = |typed: Vec<u64>, with: &[u32], without: &[u32], expected_len: usize| {
+            let via_ffi = entities_via_ffi(world_ptr, h, with, without);
+            assert_eq!(via_ffi, typed, "with {with:?} without {without:?}");
+            assert_eq!(
+                typed.len(),
+                expected_len,
+                "with {with:?} without {without:?}"
+            );
+        };
+
+        check(typed_entities::<()>(world), &[h], &[], 3);
+        check(
+            typed_entities::<With<MidEcsTestFlagA>>(world),
+            &[h, a],
+            &[],
+            2,
+        );
+        check(
+            typed_entities::<Without<MidEcsTestFlagA>>(world),
+            &[h],
+            &[a],
+            1,
+        );
+        check(
+            typed_entities::<With<MidEcsTestFlagB>>(world),
+            &[h, b],
+            &[],
+            1,
+        );
+        check(
+            typed_entities::<Without<MidEcsTestFlagB>>(world),
+            &[h],
+            &[b],
+            2,
+        );
+        check(
+            typed_entities::<(With<MidEcsTestFlagA>, Without<MidEcsTestFlagB>)>(world),
+            &[h, a],
+            &[b],
+            1,
+        );
+        check(
+            typed_entities::<(With<MidEcsTestFlagA>, With<MidEcsTestFlagB>)>(world),
+            &[h, a, b],
+            &[],
+            1,
+        );
+        check(
+            typed_entities::<(Without<MidEcsTestFlagA>, Without<MidEcsTestFlagB>)>(world),
+            &[h],
+            &[a, b],
+            1,
+        );
+
+        // SAFETY: freed exactly once.
+        unsafe { mid_ecs_world_free(world_ptr) };
+    }
+
+    #[test]
+    fn matching_static_buffer_idiom() {
+        let world = mid_ecs_test_filter_fixture_world_new();
+        let h = static_id(world, "FfiHealthStatic");
+        let with = [h];
+        let call = |buf: *mut u32, cap: usize| unsafe {
+            // SAFETY: `world` is live; `with` outlives the call; callers
+            // pass a buffer valid for `cap` elements (or NULL).
+            mid_ecs_world_archetypes_matching_static(
+                world,
+                with.as_ptr(),
+                with.len(),
+                std::ptr::null(),
+                0,
+                buf,
+                cap,
+            )
+        };
+
+        assert_eq!(
+            call(std::ptr::null_mut(), 0),
+            4,
+            "NULL buffer asks for the count"
+        );
+
+        let mut small = [0u32; 3];
+        assert_eq!(
+            call(small.as_mut_ptr(), small.len()),
+            MidEcsStatus::BufferTooSmall as i32,
+            "too small is an error, not a partial fill"
+        );
+        assert_eq!(small, [0, 0, 0], "and nothing was written");
+
+        let mut exact = [0u32; 4];
+        assert_eq!(call(exact.as_mut_ptr(), exact.len()), 4);
+        let mut roomy = [u32::MAX; 8];
+        assert_eq!(call(roomy.as_mut_ptr(), roomy.len()), 4);
+        assert_eq!(&roomy[..4], &exact[..]);
+        assert!(
+            roomy[4..].iter().all(|&x| x == u32::MAX),
+            "spare capacity untouched"
+        );
+
+        // SAFETY: freed exactly once.
+        unsafe { mid_ecs_world_free(world) };
+    }
+
+    #[test]
+    fn matching_static_null_pointer_cases() {
+        let world = mid_ecs_test_filter_fixture_world_new();
+        let h = static_id(world, "FfiHealthStatic");
+        let ids = [h];
+        let np = MidEcsStatus::NullPointer as i32;
+
+        // SAFETY: every pointer passed is either NULL (the case under
+        // test) or valid for the stated length.
+        unsafe {
+            assert_eq!(
+                mid_ecs_world_archetypes_matching_static(
+                    std::ptr::null(),
+                    ids.as_ptr(),
+                    1,
+                    std::ptr::null(),
+                    0,
+                    std::ptr::null_mut(),
+                    0
+                ),
+                np,
+                "NULL world"
+            );
+            assert_eq!(
+                mid_ecs_world_archetypes_matching_static(
+                    world,
+                    std::ptr::null(),
+                    1,
+                    std::ptr::null(),
+                    0,
+                    std::ptr::null_mut(),
+                    0
+                ),
+                np,
+                "NULL with_ids with a non-zero length"
+            );
+            assert_eq!(
+                mid_ecs_world_archetypes_matching_static(
+                    world,
+                    ids.as_ptr(),
+                    1,
+                    std::ptr::null(),
+                    2,
+                    std::ptr::null_mut(),
+                    0
+                ),
+                np,
+                "NULL without_ids with a non-zero length"
+            );
+            assert_eq!(
+                mid_ecs_world_archetypes_matching_static(
+                    world,
+                    std::ptr::null(),
+                    0,
+                    std::ptr::null(),
+                    0,
+                    std::ptr::null_mut(),
+                    0
+                ),
+                6,
+                "(NULL, 0) is a valid empty list: every archetype matches"
+            );
+            mid_ecs_world_free(world);
+        }
+    }
+
+    #[test]
+    fn matching_static_bogus_and_contradictory_ids_are_empty_not_errors() {
+        let world = mid_ecs_test_filter_fixture_world_new();
+        let h = static_id(world, "FfiHealthStatic");
+
+        assert!(matching_ids(world, &[MID_ECS_INVALID_ID], &[]).is_empty());
+        assert!(matching_ids(world, &[h], &[h]).is_empty());
+        assert_eq!(
+            matching_ids(world, &[h], &[MID_ECS_INVALID_ID]),
+            matching_ids(world, &[h], &[]),
+            "an id nothing has registered excludes nothing"
+        );
+
+        // SAFETY: freed exactly once.
+        unsafe { mid_ecs_world_free(world) };
     }
 }
