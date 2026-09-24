@@ -25,5 +25,5 @@
   // keyed on `ROOT_Cargo.toml` and not on `Cargo.toml`.
   overrides::
     target("ROOT_Cargo.toml", "Cargo.toml")
-target("README", "README.md")
+target("README.md", "README.md")
 )
