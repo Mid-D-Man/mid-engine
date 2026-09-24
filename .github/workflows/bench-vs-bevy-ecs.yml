@@ -88,6 +88,22 @@ jobs:
         id: rustver
         run: echo "ver=$(rustc --version)" >> $GITHUB_OUTPUT
 
+      - name: Get CPU model
+        id: cpu
+        # ubuntu-latest lands on different AMD EPYC tiers run to run, and
+        # get_component_random_access has measured ~3x slower for mid-ecs
+        # on one of them (docs/mid-ecs.md, `get_bisect.rs`). Recording the
+        # model here makes such a run identifiable from its own summary.
+        run: |
+          if [ "$(uname)" = "Darwin" ]; then
+            model="$(sysctl -n machdep.cpu.brand_string 2>/dev/null || echo unknown)"
+          else
+            model="$(lscpu 2>/dev/null | sed -n 's/^Model name:[[:space:]]*//p' | head -n 1)"
+            [ -n "$model" ] || model="unknown"
+          fi
+          echo "model=$model" >> "$GITHUB_OUTPUT"
+          echo "CPU: $model"
+
       - name: Confirm rustc clears bevy_ecs's MSRV
         run: |
           echo "bevy_ecs 0.19.1 requires rustc 1.95.0 -- confirming this runner's toolchain clears it:"
@@ -134,13 +150,12 @@ jobs:
           {
             echo "## mid-ecs vs bevy_ecs — ${{ matrix.os }}"
             echo ""
-            echo "**Build:** #${{ github.run_number }} &nbsp; **Rust:** \`${{ steps.rustver.outputs.ver }}\` &nbsp; **Runner:** \`${{ matrix.os }}\`"
+            echo "**Build:** #${{ github.run_number }} &nbsp; **Rust:** \`${{ steps.rustver.outputs.ver }}\` &nbsp; **Runner:** \`${{ matrix.os }}\` &nbsp; **CPU:** \`${{ steps.cpu.outputs.model }}\`"
             echo ""
             echo "**Note:** ${{ inputs.baseline_note }}"
             echo ""
-            echo "Eleven groups, each mid-ecs vs bevy_ecs on an equivalent"
-            echo "workload (N=10,000 entities): four broad workloads plus six"
-            echo "single-op/multi-op comparisons added this pass. See"
+            echo "Each group is mid-ecs vs bevy_ecs on an equivalent"
+            echo "workload (N=10,000 entities unless the group says otherwise). See"
             echo "\`benches/ecs-vs-bevy-ecs/benches/vs_bevy_ecs.rs\` for exactly what"
             echo "each one does and why, including the one workload"
             echo "(\`spawn\`) that isn't perfectly apples-to-apples between the two"
