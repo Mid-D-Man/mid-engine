@@ -1,0 +1,193 @@
+# .github/workflows/deploy-site.yml
+#
+# Publishes web/ to Cloudflare Pages. Manual dispatch only -- deliberately,
+# per direct instruction (twice): every other test/bench workflow in this
+# project is workflow_dispatch-only (docs/RUST_AND_CRATE_GUIDELINES.md §7),
+# and this workflow gets no exception just because it produces a deployable
+# artifact rather than a pass/fail gate. Run a crate's own test workflow
+# first to refresh its results, then run this to actually publish them.
+#
+# Structure informed directly by MidManStudio/ubel_stratum's own
+# .github/workflows/pipeline-dashboard.yml (real source, read directly) --
+# build job assembles a dist/ directory, deploy job ships it via
+# cloudflare/wrangler-action. Adapted, not copied: that workflow triggers on
+# push to main (its own comment explains why -- a deploy workflow, not a
+# gate); this one is dispatch-only per the instruction above instead.
+
+name: Deploy Site
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_tests_first:
+        description: "Re-run mid-ptr/mid-platform tests before building the site (off = reuse whatever JSON already exists in the repo from a prior manual run, if any)"
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+  actions:  read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        if: inputs.run_tests_first
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Get Rust version
+        id: rustver
+        run: echo "ver=$(rustc --version 2>/dev/null || echo unknown)" >> $GITHUB_OUTPUT
+
+      - name: Cache cargo registry
+        if: inputs.run_tests_first
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+          key: cargo-registry-deploy-site-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            cargo-registry-deploy-site-${{ runner.os }}-
+
+      # ── Refresh results (optional) ──────────────────────────────────────
+      # Same crates web/tests/index.html already knows how to render.
+      # Add a new crate to BOTH this list and that file's `crates` array
+      # when it gets its own workflow_dispatch test workflow.
+      - name: Test mid-ptr
+        if: inputs.run_tests_first
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          cargo test -p mid-ptr --color=never --no-fail-fast \
+            -- --show-output 2>&1 | tee mid-ptr-raw.txt
+
+      - name: Test mid-platform (std)
+        if: inputs.run_tests_first
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          cargo test -p mid-platform --color=never --no-fail-fast \
+            -- --show-output 2>&1 | tee mid-platform-std-raw.txt
+
+      - name: Test mid-platform (no_std fallback)
+        if: inputs.run_tests_first
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          cargo test -p mid-platform --no-default-features --color=never --no-fail-fast \
+            -- --show-output 2>&1 | tee mid-platform-nostd-raw.txt
+
+      - name: Parse results to JSON
+        if: inputs.run_tests_first
+        env:
+          BUILD_NUM:    ${{ github.run_number }}
+          BRANCH:       ${{ github.ref_name }}
+          COMMIT:       ${{ github.sha }}
+          RUST_VERSION: ${{ steps.rustver.outputs.ver }}
+        run: |
+          python3 scripts/parse_test_results.py \
+            --crate mid-ptr --build "$BUILD_NUM" --branch "$BRANCH" \
+            --commit "$COMMIT" --rust-version "$RUST_VERSION" \
+            --out mid-ptr-test-results.json \
+            mid-ptr-raw.txt
+
+          python3 scripts/parse_test_results.py \
+            --crate mid-platform --build "$BUILD_NUM" --branch "$BRANCH" \
+            --commit "$COMMIT" --rust-version "$RUST_VERSION" \
+            --out mid-platform-test-results.json \
+            "mid-platform-std-raw.txt:std" "mid-platform-nostd-raw.txt:no_std fallback"
+
+      # ── Install mdBook ───────────────────────────────────────────────────
+      - name: Install mdBook
+        run: |
+          mkdir -p "$HOME/.mdbook-bin"
+          curl -sSL https://github.com/rust-lang/mdBook/releases/download/v0.4.40/mdbook-v0.4.40-x86_64-unknown-linux-gnu.tar.gz \
+            | tar -xz -C "$HOME/.mdbook-bin"
+          echo "$HOME/.mdbook-bin" >> "$GITHUB_PATH"
+
+      - name: Build docs (mdBook)
+        run: |
+          cd web/site
+          "$HOME/.mdbook-bin/mdbook" build
+
+      # ── Assemble dist/ ───────────────────────────────────────────────────
+      - name: Assemble dist/
+        run: |
+          set -e
+          rm -rf dist
+          mkdir -p dist/docs dist/tests/mid-ptr dist/tests/mid-platform \
+                   dist/benchmarks dist/shared
+
+          cp web/home/index.html dist/index.html
+          cp -r web/site/book/.  dist/docs/
+          cp web/tests/index.html dist/tests/index.html
+          cp web/benchmarks/index.html dist/benchmarks/index.html
+          cp -r web/shared/.     dist/shared/
+
+          # Per-crate JSON, if this run produced any -- a card on
+          # web/tests/index.html just shows "No results yet" when its file
+          # is missing, so a skipped test step (run_tests_first: false, or
+          # continue-on-error above catching a genuine test failure that
+          # still produced no JSON) degrades gracefully, not fatally.
+          [ -f mid-ptr-test-results.json ] && \
+            cp mid-ptr-test-results.json dist/tests/mid-ptr/ || true
+          [ -f mid-platform-test-results.json ] && \
+            cp mid-platform-test-results.json dist/tests/mid-platform/ || true
+
+          find dist -maxdepth 2 -type d | sort
+
+      - name: Upload dist as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: mid-engine-site-${{ github.run_number }}
+          path: dist
+          retention-days: 14
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download dist artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: mid-engine-site-${{ github.run_number }}
+          path: dist
+
+      # Idempotent -- fine if the project already exists from a previous
+      # run. `continue-on-error` matches ubel_stratum's own pattern: this
+      # command's only job is "exist or don't error," not to be the source
+      # of deploy-step failure.
+      - name: Ensure Cloudflare Pages project exists
+        continue-on-error: true
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken:  ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: pages project create mid-engine-docs --production-branch=main
+
+      - name: Deploy to Cloudflare Pages
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken:  ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: pages deploy dist --project-name=mid-engine-docs --branch=main
+
+      - name: Write deploy summary
+        if: always()
+        run: |
+          {
+            echo "## Deploy Site — Build #${{ github.run_number }}"
+            echo ""
+            echo "Branch: \`${{ github.ref_name }}\`  |  Commit: \`${{ github.sha }}\`"
+            echo ""
+            echo "Deployed \`dist/\` to Cloudflare Pages project \`mid-engine-docs\`."
+          } >> "$GITHUB_STEP_SUMMARY"
