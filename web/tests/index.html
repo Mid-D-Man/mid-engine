@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Mid Engine — Tests</title>
+<link rel="icon" type="image/svg+xml" href="/shared/logo.svg">
+<link rel="stylesheet" href="/shared/theme.css">
+<style>
+  .page-head { padding: 2.5rem 0 0; }
+  .page-head h1 { font-size: 1.9rem; margin: 0; }
+  .page-head p { color: var(--text-muted); font-size: 0.9rem; margin-top: 0.4rem; }
+</style>
+</head>
+<body>
+
+<div class="topnav">
+  <a class="brand" href="/">
+    <img src="/shared/logo.svg" alt="Mid Engine">
+    <span>Mid Engine</span>
+  </a>
+  <nav>
+    <a href="/">Home</a>
+    <a href="/docs/">Docs</a>
+    <a href="/tests/" class="current">Tests</a>
+    <a href="/benchmarks/">Benchmarks</a>
+    <a href="https://github.com/Mid-D-Man/mid-engine">GitHub</a>
+  </nav>
+</div>
+
+<div class="container">
+
+  <div class="page-head">
+    <h1>🧪 Test Results</h1>
+    <p>Per-crate results from each crate's own <code>workflow_dispatch</code>-only test
+       workflow, as of that workflow's last manual run. This page doesn't run
+       anything itself — it just reads the JSON each workflow already writes.</p>
+  </div>
+
+  <div class="section-label">Crates</div>
+  <div class="grid" id="crate-grid">
+
+    <a class="card" href="mid-ptr/mid-ptr-test-results.json" id="card-mid-ptr">
+      <div class="card-icon">👉</div>
+      <div class="card-title">mid-ptr</div>
+      <div class="card-desc">Type-erased raw pointer wrappers — Ptr/PtrMut/OwningPtr/MovingPtr.</div>
+      <div class="card-status" id="status-mid-ptr"><div class="dot dot-grey"></div><span>Loading…</span></div>
+      <span class="badge badge-rust">no_std · zero deps</span>
+    </a>
+
+    <a class="card" href="mid-platform/mid-platform-test-results.json" id="card-mid-platform">
+      <div class="card-icon">🧱</div>
+      <div class="card-title">mid-platform</div>
+      <div class="card-desc">Mutex/Arc/atomics/cells — bevy_platform-shaped, hand-rolled, dependency-free.</div>
+      <div class="card-status" id="status-mid-platform"><div class="dot dot-grey"></div><span>Loading…</span></div>
+      <span class="badge badge-rust">std + no_std fallback</span>
+    </a>
+
+    <a class="card" href="mid-log/mid-log-test-results.json" id="card-mid-log">
+      <div class="card-icon">🪵</div>
+      <div class="card-title">mid-log</div>
+      <div class="card-desc">Non-blocking tiered logger, lock-free ring buffer.</div>
+      <div class="card-status" id="status-mid-log"><div class="dot dot-grey"></div><span>Loading…</span></div>
+      <span class="badge badge-wip">Rust</span>
+    </a>
+
+    <a class="card" href="mid-math/mid-math-test-results.json" id="card-mid-math">
+      <div class="card-icon">📐</div>
+      <div class="card-title">mid-math</div>
+      <div class="card-desc">SIMD-dispatched vector/matrix types, 16-byte aligned.</div>
+      <div class="card-status" id="status-mid-math"><div class="dot dot-grey"></div><span>Loading…</span></div>
+      <span class="badge badge-wip">Rust</span>
+    </a>
+
+    <a class="card" href="mid-net/mid-net-test-results.json" id="card-mid-net">
+      <div class="card-icon">📡</div>
+      <div class="card-title">mid-net</div>
+      <div class="card-desc">Reliable UDP + DixScript transport core.</div>
+      <div class="card-status" id="status-mid-net"><div class="dot dot-grey"></div><span>Loading…</span></div>
+      <span class="badge badge-wip">Rust</span>
+    </a>
+
+    <a class="card" href="mid-ecs/mid-ecs-test-results.json" id="card-mid-ecs">
+      <div class="card-icon">🧩</div>
+      <div class="card-title">mid-ecs</div>
+      <div class="card-desc">Archetype + sparse-set ECS.</div>
+      <div class="card-status" id="status-mid-ecs"><div class="dot dot-grey"></div><span>Loading…</span></div>
+      <span class="badge badge-wip">Rust</span>
+    </a>
+
+  </div>
+
+  <div class="section-label">How Results Get Here</div>
+  <div class="note-box">
+    Every workflow above is <code>workflow_dispatch</code> only — nothing runs on
+    push or on a schedule. Run a crate's own test workflow from the Actions
+    tab, then run <code>Deploy Site</code> (also manual) to publish its latest
+    JSON here. A card reading "No results yet" means that crate's workflow
+    either hasn't run yet or hasn't been included in a site deploy since.
+  </div>
+
+  <footer>Mid Engine · The Middle Man · Modular Anti-Engine</footer>
+</div>
+
+<script>
+const crates = [
+  { name: 'mid-ptr',      jsonFile: 'mid-ptr/mid-ptr-test-results.json' },
+  { name: 'mid-platform', jsonFile: 'mid-platform/mid-platform-test-results.json' },
+  { name: 'mid-log',      jsonFile: 'mid-log/mid-log-test-results.json' },
+  { name: 'mid-math',     jsonFile: 'mid-math/mid-math-test-results.json' },
+  { name: 'mid-net',      jsonFile: 'mid-net/mid-net-test-results.json' },
+  { name: 'mid-ecs',      jsonFile: 'mid-ecs/mid-ecs-test-results.json' },
+];
+
+crates.forEach(({ name, jsonFile }) => {
+  fetch(jsonFile)
+    .then(r => { if (!r.ok) throw new Error(); return r.json(); })
+    .then(data => {
+      const el = document.getElementById(`status-${name}`);
+      if (!el) return;
+      const s = data.summary;
+      const allOk = s.failed === 0;
+      const dot = allOk ? 'dot-green' : 'dot-red';
+      const label = allOk
+        ? `${s.passed} passed — Build #${data.build}`
+        : `${s.failed} failed · ${s.passed} passed — Build #${data.build}`;
+      el.innerHTML = `<div class="dot ${dot}"></div><span>${label}</span>`;
+    })
+    .catch(() => {
+      const el = document.getElementById(`status-${name}`);
+      if (el) el.innerHTML = `<div class="dot dot-grey"></div><span style="color:var(--text-dim)">No results yet</span>`;
+    });
+});
+</script>
+</body>
+</html>

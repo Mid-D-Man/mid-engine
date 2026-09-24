@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Mid Engine — Benchmarks</title>
+<link rel="icon" type="image/svg+xml" href="/shared/logo.svg">
+<link rel="stylesheet" href="/shared/theme.css">
+<style>
+  .page-head { padding: 2.5rem 0 0; }
+  .page-head h1 { font-size: 1.9rem; margin: 0; }
+  .page-head p { color: var(--text-muted); font-size: 0.9rem; margin-top: 0.4rem; }
+</style>
+</head>
+<body>
+
+<div class="topnav">
+  <a class="brand" href="/">
+    <img src="/shared/logo.svg" alt="Mid Engine">
+    <span>Mid Engine</span>
+  </a>
+  <nav>
+    <a href="/">Home</a>
+    <a href="/docs/">Docs</a>
+    <a href="/tests/">Tests</a>
+    <a href="/benchmarks/" class="current">Benchmarks</a>
+    <a href="https://github.com/Mid-D-Man/mid-engine">GitHub</a>
+  </nav>
+</div>
+
+<div class="container">
+
+  <div class="page-head">
+    <h1>📊 Benchmarks</h1>
+    <p>Per-benchmark timings against baselines and comparable crates
+       (<code>wide</code>, <code>bevy_ecs</code>, and others — see
+       <code>docs/benching-standards.md</code>).</p>
+  </div>
+
+  <div class="section-label">Suites</div>
+  <div class="grid" id="bench-grid">
+    <a class="card" href="ecs-vs-bevy-ecs/ecs-vs-bevy-ecs-bench-results.json">
+      <div class="card-icon">🧩</div>
+      <div class="card-title">mid-ecs vs bevy_ecs</div>
+      <div class="card-desc">Archetype iteration, sparse-set access, query throughput.</div>
+      <div class="card-status" id="status-ecs-vs-bevy-ecs"><div class="dot dot-grey"></div><span>Loading…</span></div>
+    </a>
+    <a class="card" href="mid-math/mid-math-bench-results.json">
+      <div class="card-icon">📐</div>
+      <div class="card-title">mid-math vs wide</div>
+      <div class="card-desc">SIMD vector/matrix ops against the <code>wide</code> crate.</div>
+      <div class="card-status" id="status-mid-math"><div class="dot dot-grey"></div><span>Loading…</span></div>
+    </a>
+    <a class="card" href="mid-arena/mid-arena-bench-results.json">
+      <div class="card-icon">🗄️</div>
+      <div class="card-title">mid-arena vs arena crates</div>
+      <div class="card-desc">Bump/slot/compact arena allocation throughput.</div>
+      <div class="card-status" id="status-mid-arena"><div class="dot dot-grey"></div><span>Loading…</span></div>
+    </a>
+  </div>
+
+  <div class="section-label">No Data Yet? Read This</div>
+  <div class="note-box">
+    This page fetches <code>&lt;suite&gt;/&lt;suite&gt;-bench-results.json</code>
+    per suite, same convention as the Tests page's
+    <code>&lt;crate&gt;-test-results.json</code>. None of the existing
+    <code>bench-vs-*.yml</code> workflows emit that shape yet — they currently
+    write an HTML report directly (see <code>docs/benching-standards.md</code>).
+    A card here reads "No results yet" until its own bench workflow is updated
+    to also write that JSON alongside its existing HTML report, and
+    <code>Deploy Site</code> is run afterward to publish it. Wiring one
+    workflow at a time is deliberate — same trigger-based discipline as
+    everything else in this project.
+  </div>
+
+  <footer>Mid Engine · The Middle Man · Modular Anti-Engine</footer>
+</div>
+
+<script>
+const suites = [
+  { name: 'ecs-vs-bevy-ecs', jsonFile: 'ecs-vs-bevy-ecs/ecs-vs-bevy-ecs-bench-results.json' },
+  { name: 'mid-math',        jsonFile: 'mid-math/mid-math-bench-results.json' },
+  { name: 'mid-arena',       jsonFile: 'mid-arena/mid-arena-bench-results.json' },
+];
+
+// Expected shape (proposed, not yet produced by any workflow):
+// { build, branch, commit, rust_version, suite,
+//   benchmarks: [ { name, mean_ns, baseline_name, baseline_mean_ns } ] }
+suites.forEach(({ name, jsonFile }) => {
+  fetch(jsonFile)
+    .then(r => { if (!r.ok) throw new Error(); return r.json(); })
+    .then(data => {
+      const el = document.getElementById(`status-${name}`);
+      if (!el) return;
+      const n = (data.benchmarks || []).length;
+      el.innerHTML = `<div class="dot dot-green"></div><span>${n} benchmarks — Build #${data.build}</span>`;
+    })
+    .catch(() => {
+      const el = document.getElementById(`status-${name}`);
+      if (el) el.innerHTML = `<div class="dot dot-grey"></div><span style="color:var(--text-dim)">No results yet</span>`;
+    });
+});
+</script>
+</body>
+</html>

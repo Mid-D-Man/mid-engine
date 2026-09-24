@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Mid Engine — The Middle Man</title>
+<link rel="icon" type="image/svg+xml" href="/shared/logo.svg">
+<link rel="stylesheet" href="/shared/theme.css">
+<style>
+  .hero {
+    padding: 4.5rem 0 2rem; text-align: center;
+  }
+  .hero img { width: 96px; height: 96px; margin-bottom: 1.25rem; }
+  .hero h1 { font-size: 2.4rem; font-weight: 800; margin: 0; color: var(--text); }
+  .hero h1 span { color: var(--accent-purple); }
+  .hero p.tagline {
+    color: var(--text-muted); font-size: 1.05rem; margin: 0.75rem auto 0;
+    max-width: 640px; line-height: 1.6;
+  }
+  .hero .ghlink {
+    display: inline-block; margin-top: 1.5rem; font-size: 0.85rem;
+    color: var(--text-muted); text-decoration: none; border: 1px solid var(--border);
+    border-radius: 6px; padding: 6px 14px;
+  }
+  .hero .ghlink:hover { border-color: var(--accent-green); color: var(--accent-green); }
+
+  .nav-cards { margin-top: 3rem; }
+  .nav-cards .grid { grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); }
+  .nav-cards .card-icon { font-size: 2rem; }
+  .nav-cards .card-title { font-size: 1.05rem; }
+  .nav-cards .card-desc { font-size: 0.8rem; }
+
+  .mandate-grid {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 10px;
+  }
+  .mandate-card {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
+    padding: 12px 14px;
+  }
+  .mandate-card .m-icon  { font-size: 1.2rem; margin-bottom: 6px; }
+  .mandate-card .m-title { font-size: 0.82rem; font-weight: 700; color: var(--text); margin-bottom: 3px; }
+  .mandate-card .m-desc  { font-size: 0.72rem; color: var(--text-muted); }
+
+  .perf-wrap {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
+    overflow: hidden;
+  }
+</style>
+</head>
+<body>
+
+<div class="topnav">
+  <a class="brand" href="/">
+    <img src="/shared/logo.svg" alt="Mid Engine">
+    <span>Mid Engine</span>
+  </a>
+  <nav>
+    <a href="/" class="current">Home</a>
+    <a href="/docs/">Docs</a>
+    <a href="/tests/">Tests</a>
+    <a href="/benchmarks/">Benchmarks</a>
+    <a href="https://github.com/Mid-D-Man/mid-engine">GitHub</a>
+  </nav>
+</div>
+
+<div class="container">
+
+  <div class="hero">
+    <img src="/shared/logo.svg" alt="Mid Engine logo">
+    <h1>Mid <span>Engine</span></h1>
+    <p class="tagline">
+      The Middle Man — a modular, high-speed Rust engine toolkit for developers
+      who want complete control over their hardware. Every crate is FFI-ready
+      and built with as few external dependencies as possible.
+    </p>
+    <a class="ghlink" href="https://github.com/Mid-D-Man/mid-engine">View on GitHub →</a>
+  </div>
+
+  <div class="nav-cards">
+    <div class="section-label">Explore</div>
+    <div class="grid">
+      <a class="card" href="/docs/">
+        <div class="card-icon">📖</div>
+        <div class="card-title">Docs</div>
+        <div class="card-desc">Architecture, crate guides, and getting started — the mdBook site.</div>
+      </a>
+      <a class="card" href="/tests/">
+        <div class="card-icon">🧪</div>
+        <div class="card-title">Tests</div>
+        <div class="card-desc">Live per-crate test results from the latest manual CI run.</div>
+      </a>
+      <a class="card" href="/benchmarks/">
+        <div class="card-icon">📊</div>
+        <div class="card-title">Benchmarks</div>
+        <div class="card-desc">Performance numbers against baselines and comparable crates.</div>
+      </a>
+      <a class="card" href="https://github.com/Mid-D-Man/mid-engine">
+        <div class="card-icon">🐙</div>
+        <div class="card-title">GitHub</div>
+        <div class="card-desc">Source, issues, and the full crate list.</div>
+      </a>
+    </div>
+  </div>
+
+  <div class="section-label">Design Mandates</div>
+  <div class="mandate-grid">
+    <div class="mandate-card">
+      <div class="m-icon">🌐</div>
+      <div class="m-title">Multiplayer-First</div>
+      <div class="m-desc">Network sync is baked into the ECS from day one, not bolted on later.</div>
+    </div>
+    <div class="mandate-card">
+      <div class="m-icon">🔗</div>
+      <div class="m-title">FFI-Ready</div>
+      <div class="m-desc">Every crate exposes a strict #[repr(C)] boundary — a true cross-language Middle Man.</div>
+    </div>
+    <div class="mandate-card">
+      <div class="m-icon">🔍</div>
+      <div class="m-title">Zero Hidden Abstractions</div>
+      <div class="m-desc">If you need to understand the memory layout, you can read the code directly.</div>
+    </div>
+    <div class="mandate-card">
+      <div class="m-icon">📈</div>
+      <div class="m-title">Profile Before Optimize</div>
+      <div class="m-desc">Every performance claim cites a real, benchmarked build number.</div>
+    </div>
+  </div>
+
+  <div class="section-label">Performance Targets</div>
+  <div class="perf-wrap">
+    <table class="report-table">
+      <thead><tr><th>System</th><th>Frequency</th><th>Budget</th></tr></thead>
+      <tbody>
+        <tr><td>Network tick</td><td>128 Hz</td><td>7.8 ms</td></tr>
+        <tr><td>Physics</td><td>60 Hz</td><td>16.6 ms</td></tr>
+        <tr><td>Max entities</td><td>100,000+ per core</td><td>—</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <footer>Mid Engine · The Middle Man · Modular Anti-Engine</footer>
+</div>
+
+</body>
+</html>

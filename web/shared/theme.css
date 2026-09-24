@@ -1,0 +1,133 @@
+/* web/shared/theme.css
+   Shared across web/home, web/tests, web/benchmarks. Not used by web/site
+   (mdBook) directly -- that gets its own theme/ubel-nav.js-equivalent
+   variables inside web/site/theme/mid-book.css, kept in sync with these by
+   hand (same reasoning ubel_stratum's own web/dashboard/index.html gives for
+   carrying its own copy of shared variables: a broken shared import would
+   silently wreck three pages instead of one).
+
+   Base palette carried over from the existing .github/mid-engine-landing-
+   index.html dashboard (dark, GitHub-adjacent) rather than replaced outright
+   -- extended with the logo's own accent colors (purple/red/green) for
+   branding touches, not a from-scratch redesign. */
+
+:root {
+  --bg:         #0d1117;
+  --panel:      #161b22;
+  --panel-alt:  #1c2128;
+  --border:     #30363d;
+  --border-alt: #21262d;
+  --text:       #e6edf3;
+  --text-muted: #8b949e;
+  --text-dim:   #484f58;
+
+  /* Logo accents */
+  --accent-purple: #857FFF;
+  --accent-red:    #FF7F7F;
+  --accent-green:  #A8FF7F;
+
+  --ok:     #3fb950;
+  --fail:   #f85149;
+  --warn:   #e3b341;
+  --info:   #79c0ff;
+
+  --font-body: 'Segoe UI', system-ui, -apple-system, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-body);
+  -webkit-font-smoothing: antialiased;
+}
+
+a { color: var(--accent-purple); }
+a:hover { color: var(--accent-green); }
+
+.container { max-width: 1080px; margin: 0 auto; padding: 0 24px; }
+
+/* ── Shared top nav, all three pages ─────────────────────────────────── */
+.topnav {
+  display: flex; align-items: center; gap: 1.25rem;
+  padding: 0.9rem 2rem;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel);
+}
+.topnav .brand { display: flex; align-items: center; gap: 0.6rem; text-decoration: none; }
+.topnav .brand img { width: 22px; height: 22px; display: block; }
+.topnav .brand span { font-weight: 700; color: var(--text); font-size: 1rem; }
+.topnav nav { display: flex; gap: 1.1rem; font-size: 0.85rem; margin-left: auto; }
+.topnav nav a { color: var(--text-muted); text-decoration: none; }
+.topnav nav a:hover, .topnav nav a.current { color: var(--accent-green); }
+@media (max-width: 640px) {
+  .topnav { flex-wrap: wrap; row-gap: 0.6rem; padding: 0.75rem 1rem; }
+  .topnav nav { margin-left: 0; flex: 1 1 100%; gap: 0.9rem; }
+}
+
+.section-label {
+  font-size: 0.70rem; text-transform: uppercase; letter-spacing: 0.8px;
+  color: var(--text-dim); margin-bottom: 12px; margin-top: 32px;
+  padding-bottom: 6px; border-bottom: 1px solid var(--border-alt);
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 14px;
+}
+
+.card {
+  background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+  padding: 20px 18px; text-decoration: none; color: inherit;
+  transition: border-color .15s, background .15s;
+  display: flex; flex-direction: column; gap: 8px;
+  position: relative;
+}
+.card:hover { border-color: var(--accent-green); background: var(--panel-alt); }
+.card-icon  { font-size: 1.6rem; line-height: 1; }
+.card-title { font-size: 0.95rem; font-weight: 700; color: var(--text); }
+.card-desc  { font-size: 0.72rem; color: var(--text-muted); flex: 1; }
+
+.card-status { display: flex; align-items: center; gap: 8px; margin-top: 6px; font-size: 0.72rem; }
+.dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
+.dot-green  { background: var(--ok);   box-shadow: 0 0 5px var(--ok); }
+.dot-red    { background: var(--fail); box-shadow: 0 0 5px var(--fail); }
+.dot-yellow { background: var(--warn); }
+.dot-grey   { background: var(--text-dim); }
+
+.badge {
+  display: inline-block; font-size: 0.63rem; font-weight: 700;
+  text-transform: uppercase; letter-spacing: 0.4px;
+  padding: 2px 7px; border-radius: 4px; margin-top: auto;
+}
+.badge-rust { background: #2a1500; color: #e05d20; border: 1px solid #7d3800; }
+.badge-ffi  { background: #0f1e3a; color: var(--info); border: 1px solid #1f4080; }
+.badge-soon { background: var(--panel-alt); color: var(--text-dim); border: 1px solid var(--border); }
+.badge-wip  { background: #1a1500; color: var(--warn); border: 1px solid #5a4500; }
+
+.note-box {
+  background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
+  padding: 14px 18px; font-size: 0.82rem; color: var(--text-muted);
+}
+.note-box code {
+  background: var(--border-alt); border: 1px solid var(--border); border-radius: 4px;
+  padding: 2px 6px; font-family: var(--font-mono); color: var(--text); font-size: 0.80rem;
+}
+
+table.report-table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+table.report-table th {
+  padding: 8px 14px; text-align: left; color: var(--text-dim);
+  font-size: 0.70rem; text-transform: uppercase; letter-spacing: 0.5px;
+  border-bottom: 1px solid var(--border); background: var(--bg);
+}
+table.report-table td { padding: 9px 14px; border-bottom: 1px solid var(--border-alt); }
+table.report-table tr:last-child td { border-bottom: none; }
+
+footer {
+  margin-top: 48px; font-size: 0.72rem; color: var(--text-dim);
+  text-align: center; padding: 14px 0 32px; border-top: 1px solid var(--border-alt);
+}

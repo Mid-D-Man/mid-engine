@@ -1,0 +1,18 @@
+[book]
+title = "Mid Engine"
+description = "The Middle Man — a modular, high-speed Rust engine toolkit. FFI-ready, dependency-light, multiplayer-first."
+authors = ["MidManStudio"]
+language = "en"
+src = "src"
+
+[output.html]
+default-theme = "ayu"
+preferred-dark-theme = "ayu"
+git-repository-url = "https://github.com/Mid-D-Man/mid-engine"
+site-url = "/docs/"
+additional-css = ["theme/mid-book.css"]
+favicon = "../shared/logo.svg"
+
+[output.html.fold]
+enable = true
+level = 1

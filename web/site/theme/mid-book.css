@@ -1,0 +1,32 @@
+/* web/site/theme/mid-book.css
+   mdBook's "ayu" built-in theme is the base (book.toml); this file only
+   layers Mid Engine's own accent colors on top of it. Kept as its own file
+   rather than importing web/shared/theme.css directly -- mdBook serves this
+   book from /docs/ and the shared CSS uses root-relative /shared/... asset
+   paths that would need rewriting per output location; simpler to keep a
+   small, hand-synced copy of just the accent values than fight that. */
+
+:root {
+  --mid-purple: #857FFF;
+  --mid-red:    #FF7F7F;
+  --mid-green:  #A8FF7F;
+}
+
+.chapter li.chapter-item a.active,
+.chapter li.chapter-item a:hover {
+  color: var(--mid-green) !important;
+}
+
+a { color: var(--mid-purple); }
+a:hover { color: var(--mid-green); }
+
+h1, h2, h3, h4 { scroll-margin-top: 1rem; }
+
+/* Top-level "Crates" / "Reference" part-title separators, so the SUMMARY.md
+   part breaks read as intentional sections, not stray headers. */
+.chapter .part-title {
+  color: var(--mid-red);
+  text-transform: uppercase;
+  font-size: 0.75rem;
+  letter-spacing: 0.06em;
+}
