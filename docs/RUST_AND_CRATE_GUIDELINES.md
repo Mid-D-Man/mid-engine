@@ -252,36 +252,52 @@ between.
 
 ## 7. CI Triggering
 
-Established this pass, on `mid-ptr`'s own workflow (the first to use it):
-path-filter the `on: push`/`on: pull_request` triggers to that crate's own
-directory and its own workflow file, so the workflow runs automatically the
-moment something relevant changes. No manual step, no magic string to
-remember.
+**Corrected — this section originally documented the wrong policy.** Its
+first version said to path-filter `on: push`/`on: pull_request` so a
+workflow runs automatically the moment something relevant changes. That was
+never checked against what this project actually already does, and it's
+wrong: confirmed directly against `mid-ecs-test.yml` (already
+`workflow_dispatch`-only, already writing a real, structured
+`$GITHUB_STEP_SUMMARY`) and `docs/benching-standards.md`'s own "recommended
+shape," point 1 — "`workflow_dispatch` only... **Never** `push`/
+`pull_request` — [tests and] benchmarks take real time and shouldn't run on
+every commit." The real, established, cross-project convention is:
 
-```yaml
-on:
-  push:
-    branches: [main, master, develop]
-    paths:
-      - "crates/mid-ptr/**"
-      - ".github/workflows/mid-ptr-test.yml"
-  pull_request:
-    branches: [main, master]
-    paths:
-      - "crates/mid-ptr/**"
-      - ".github/workflows/mid-ptr-test.yml"
-  workflow_dispatch:
-```
+- **`workflow_dispatch` only.** No `push`, no `pull_request`, no path
+  filters standing in for a manual trigger. Applies to every CI workflow in
+  this project, not just benchmarks — `mid-ecs-test.yml` is a plain test
+  workflow (no `cargo bench` involved) and already followed this before
+  `mid-ptr-test.yml`/`mid-platform-test.yml` existed.
+- **A real summary, not a log echo.** A parsing step turns the raw
+  `cargo test`/`cargo bench` output into structured JSON, then a second
+  step writes an actual markdown report to `$GITHUB_STEP_SUMMARY` (pass/fail
+  counts, a per-suite table, failure details, collapsible per-test
+  breakdowns) — not a handful of `echo` lines into the job log, which is
+  what `mid-ptr-test.yml`'s and `mid-platform-test.yml`'s own first versions
+  did. `set -o pipefail` before any `cargo ... | tee file` — otherwise a
+  real test failure is masked by `tee`'s own always-zero exit code (see
+  `docs/benching-standards.md`'s "correctness detail" section, the same
+  underlying mistake either workflow could otherwise make).
+- **Raw log + JSON uploaded as a build artifact** (`actions/upload-artifact`,
+  short retention), so the full untruncated output is still one click away
+  from the summary, not lost.
 
-Older workflows (`mid-log-test.yml`, and others copied from it) use a
-different convention instead: every push runs a `parse-trigger` job that
-greps the commit message for `--<crate-name>` or `--mid-all` before deciding
-whether to actually run tests. That convention was never written down
-anywhere before this section — it only ever existed as a copy-pasted `.yml`
-pattern. Not retrofitted onto the older workflows in this pass: a separate,
-disclosed follow-up, the same way section 3's unsafe_code opt-in and section
-6's ffi-feature question are both handled — found and named, not silently
-changed underneath a crate nobody is actively working on.
+`mid-ptr-test.yml` and `mid-platform-test.yml` are both fixed to this shape
+now. The old `mid-log-test.yml`-style `parse-trigger` job (grepping the
+commit message for `--<crate-name>`/`--mid-all`) is a third, different,
+even-older convention, also never written down before this section existed
+— not retrofitted onto `mid-log-test.yml` itself in this pass, same
+disclosed-not-silently-changed discipline section 3's unsafe_code opt-in and
+section 6's ffi-feature question both use.
+
+**Deliberately not done, for now:** the HTML-report-plus-`gh-pages`-deploy
+half of `mid-ecs-test.yml`'s own pattern was not added to `mid-ptr-test.yml`
+or `mid-platform-test.yml`. The whole `gh-pages` reporting pipeline this
+project uses is being migrated to Cloudflare Pages — building more
+`gh-pages`-specific tooling onto two more workflows right before that move
+would likely be thrown away almost immediately. The structured-summary half
+above is kept regardless of where the dashboard ends up living; the deploy
+half is a deliberate, disclosed gap until the migration lands.
 
 **Real regression found and fixed the same pass, worth its own note:**
 `mid-ptr-test.yml`'s cache step originally cached `~/.cargo/bin/` under a

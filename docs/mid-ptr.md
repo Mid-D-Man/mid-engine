@@ -184,18 +184,21 @@ returning a copy without disturbing it.
 ## CI and Workflows
 
 - `.github/workflows/mid-ptr-test.yml` — build, clippy, fmt check, unit +
-  doc-tests. Runs **automatically** on any push/PR touching `crates/mid-ptr/**`
-  or the workflow file itself (path-filtered `on:` triggers), plus manual
-  `workflow_dispatch`. This is the first workflow in the repo to use that
-  convention instead of `mid-log-test.yml`'s commit-message-grep gate
-  (`--mid-log`/`--mid-all`) — see `docs/RUST_AND_CRATE_GUIDELINES.md` §7 for
-  the full writeup, including why the older convention was never documented
-  anywhere until now.
-  **Scoped down from `mid-log-test.yml`'s pattern**: no JSON-parsing step, no
-  HTML report, no `gh-pages` deploy — this crate doesn't have benchmarks or a
-  results dashboard yet, so that machinery would be dead weight. If mid-ptr
-  later wants parity with mid-log's reporting, that's a separate, disclosed
-  follow-up (would also need its own `.github/mid-ptr-test-template.html`).
+  doc-tests, `workflow_dispatch` only. **Corrected**: this workflow originally
+  ran on push/pull_request with a fake "summary" job that only echoed a few
+  lines to the job log. Both were wrong, never checked against
+  `mid-ecs-test.yml`'s own already-established pattern (dispatch-only +
+  a real, parsed `$GITHUB_STEP_SUMMARY`) before this workflow was first
+  written — see `docs/RUST_AND_CRATE_GUIDELINES.md` §7 for the full
+  writeup. Now matches that pattern: a Python step parses the raw
+  `cargo test` output into JSON, a second step writes a real markdown
+  report to the job summary (pass/fail table, failure details, collapsible
+  per-suite breakdowns), and the raw log + JSON upload as a build artifact.
+  **Still not replicated**: the HTML-report-plus-`gh-pages`-deploy half of
+  `mid-ecs-test.yml`'s pattern — the whole `gh-pages` reporting pipeline is
+  being migrated to Cloudflare Pages, so building more `gh-pages`-specific
+  tooling onto this workflow right now would likely be thrown away almost
+  immediately.
 - **First real run failed on a cache bug, fixed same pass**: the cache step
   originally cached `~/.cargo/bin/` under a bare `cargo-registry-` key prefix
   (copied from `mid-log-test.yml`), which matched a different, ARM-runner
@@ -220,3 +223,18 @@ returning a copy without disturbing it.
   from the cached paths and scoping the cache key to `${{ runner.os }}` plus
   `mid-ptr` specifically — see `docs/RUST_AND_CRATE_GUIDELINES.md` §7 for the
   full writeup.
+- **Fixed:** the workflow ran on push/pull_request with a log-echo "summary"
+  job — wrong on both counts, against a convention (`workflow_dispatch` only,
+  real `$GITHUB_STEP_SUMMARY`) already established in `mid-ecs-test.yml`
+  before this workflow existed, not checked at the time. See
+  `docs/RUST_AND_CRATE_GUIDELINES.md` §7.
+
+### FFI — open gap, not yet fixed
+- The root `README.md`'s own Design Mandates state "every crate exposes a
+  strict `#[repr(C)]` FFI boundary" — confirmed directly, not assumed. This
+  crate currently has neither an FFI module nor a `cdylib`/`staticlib`
+  `crate-type` in its `Cargo.toml` (only the default `rlib`). `mid-ecs` and
+  `mid-net` both have the real pattern to follow (an `ffi.rs` module + a C
+  smoke test under a `ffi-smoke-test/` directory, wired into their own test
+  workflow). Not done in the pass that built this crate; flagged here rather
+  than left silently missing.

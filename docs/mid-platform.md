@@ -97,6 +97,27 @@ Not decided in this doc.
 the table above, named here so, like Decision 3 itself, they aren't silently
 forgotten later.
 
+## CI and Workflows
+
+- `.github/workflows/mid-platform-test.yml` — build, clippy, fmt check, unit
+  + doc-tests, run twice (default `std` features, then
+  `--no-default-features` for the actual hand-rolled no_std fallback path).
+  `workflow_dispatch` only, with a real parsed `$GITHUB_STEP_SUMMARY` (one
+  combined table covering both feature configurations) — matches
+  `mid-ecs-test.yml`'s established pattern; see
+  `docs/RUST_AND_CRATE_GUIDELINES.md` §7. This workflow's first version
+  wrongly ran on push/pull_request with a log-echo summary instead — fixed
+  before it ever shipped with that mistake live, once `mid-ptr-test.yml`'s
+  own identical mistake was caught and corrected.
+  **Not replicated**: the HTML-report-plus-`gh-pages`-deploy half of
+  `mid-ecs-test.yml`'s pattern — same reasoning as `mid-ptr-test.yml`, the
+  whole `gh-pages` pipeline is being migrated to Cloudflare Pages.
+
 ## Fixes and Problems
 
-*(none yet — Phase 1 is the initial build)*
+### FFI — open gap, not yet fixed
+- The root `README.md`'s own Design Mandates state "every crate exposes a
+  strict `#[repr(C)]` FFI boundary." This crate currently has neither an FFI
+  module nor a `cdylib`/`staticlib` `crate-type`. Same gap as `mid-ptr`
+  (see `docs/mid-ptr.md`'s own Fixes and Problems) — flagged here rather
+  than left silently missing, not fixed in the pass that built Phase 1.
