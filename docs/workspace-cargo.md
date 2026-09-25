@@ -124,6 +124,21 @@ dependency was added (16/16, see `docs/mid-arena.md`) — same sequencing
 `mid-collections` used, same reason: verify everything the current toolchain
 still can, before adding the thing that closes that window.
 
+**`mid-platform`'s bench** (criterion dev-dependency, added when
+`sync_bench.rs` was written to cover Phase 2's `RwLock`/`Once`/`OnceLock`/
+`LazyLock`/`Barrier`): same edition2024-via-clap_builder wall as
+`mid-collections`'s and `mid-arena`'s own bench dev-dependencies above — the
+third crate in this workspace to hit specifically this wall via a criterion
+dev-dependency (confirmed by checking each entry above directly, not
+assumed). Same real regression those two took, same reason: `cargo test -p
+mid-platform` with no other flags is affected too, not just `--bench` —
+Cargo resolves a package's full manifest, dev-dependencies included, before
+building any target from it. Unlike the crates above, `mid-platform` also
+has real `std`/`no_std` cargo features of its own (`docs/mid-platform.md`),
+independent of this wall — `--no-default-features` still needs the same
+newer toolchain once this dependency is in the manifest, the two concerns
+don't cancel each other out.
+
 **`mid-ptr`** (`docs/roadmap.md` Decision 6 reopened — see that section): a
 ported crate, not an upstream-dependency wall like every entry above it.
 `crates/mid-ptr/src/moving_macros.rs`'s `deconstruct_moving_ptr!`

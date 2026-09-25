@@ -76,12 +76,20 @@ straight port of an already-proven algorithm:
 - `sync::mutex::Mutex` — `std::sync::Mutex` when available, otherwise mid-platform's own spin-based fallback (see above)
 - `sync::{Arc, Weak}` — pure re-export of `alloc::sync::{Arc, Weak}`
 
-**Phase 2 (not started):** real new concurrency-primitive design work each
-one deserves its own careful pass, not a rushed inclusion here:
-- `sync::rwlock::RwLock` — needs a hand-rolled spin-based reader/writer lock (reader count + writer flag, fairness questions a plain mutex doesn't have)
-- `sync::once::{Once, OnceLock}` — needs a hand-rolled spin-based once-cell (a 3-state atomic state machine; can build on `sync::mutex` rather than needing its own primitive, but still new design)
-- `sync::lazy_lock::LazyLock` — builds directly on `OnceLock` once that exists
-- `sync::barrier::Barrier` — lowest priority of this group, rarely used
+**Phase 2 (done):** real new concurrency-primitive design work, each piece
+grounded in real upstream source read fresh rather than from memory —
+`Mid-D-Man/bevy`'s own `crates/bevy_platform/src/sync/` (confirms the real
+API shape each type needs to match) and `spin` 0.10.0's real source from
+crates.io (the actual algorithm each one's `no_std` fallback is grounded
+in, since `bevy_platform` itself just re-exports `spin`'s types rather than
+implementing anything — reading its files alone would not have been enough).
+See "Modules" below for what each file actually does and why:
+- `sync::rwlock::RwLock` — hand-rolled spin-based reader/writer lock, a simplified cut of `spin::RwLock`'s real algorithm (no upgradeable-guard mechanism — out of scope for this crate's `read`/`write`/`try_read`/`try_write` API surface)
+- `sync::once::{Once, OnceLock, OnceState}` — double-checked locking built on top of `sync::mutex::Mutex`, not a from-scratch atomic state machine
+- `sync::lazy_lock::LazyLock` — builds directly on `OnceLock`, plus `cell::SyncUnsafeCell` for the initializer slot
+- `sync::barrier::Barrier` — ported from `spin::Barrier`'s real algorithm onto this crate's own `Mutex`
+
+**Phase 2, explicitly deferred (not part of this pass):**
 - `thread::sleep` — std path trivial; no_std fallback busy-spins on `Instant`, needs the `mid-time`-consolidation decision below settled first
 - `future::block_on` — the busy-spin fallback itself is simple and zero-dep; mainly blocked on deciding whether `mid-platform` re-exports `mid-time`'s `Instant` or grows its own
 
@@ -97,8 +105,149 @@ Not decided in this doc.
 the table above, named here so, like Decision 3 itself, they aren't silently
 forgotten later.
 
+## Modules
+
+Phase 1's files (`sync/atomic.rs`, `cell.rs`, `sync/poison.rs`,
+`sync/mutex.rs`, the `sync::{Arc, Weak}` re-exports) don't have their own
+sections here yet — a disclosed gap from when this doc was first written
+phase-by-phase rather than file-by-file, not fixed retroactively in this
+pass; each Phase 2 file below gets one, matching
+`docs/DOCUMENTATION_AND_COMMENTING_GUIDELINES.md`'s per-file convention
+going forward.
+
+### `sync/rwlock.rs`
+
+**What it does:** `RwLock`/`RwLockReadGuard`/`RwLockWriteGuard`. `std`
+passthrough when the `std` feature is on; otherwise a hand-rolled spin-based
+reader/writer lock.
+
+**Decisions:**
+- Single `AtomicUsize` state (bit 0 = `WRITER`, each reader adds `2`) —
+  `spin::RwLock`'s own real shape (source read directly, not from memory),
+  minus its `UPGRADED` bit and `RwLockUpgradableGuard`/upgrade-downgrade
+  methods. Left out deliberately: this crate's Phase 2 scope is
+  `read`/`write`/`try_read`/`try_write` only, and a simpler correct design
+  was prioritized over a more feature-complete port.
+- `RwLockWriteGuard::drop` uses `fetch_and(!WRITER, ..)`, never a blind
+  `store(0, ..)` — a real correctness requirement, not a style pick. See the
+  file's own top doc comment for the exact race a blind store would open
+  (a losing `try_read`'s speculative `fetch_add`/compensating `fetch_sub`
+  pair can straddle a writer's unlock).
+- Unfair to writers under continuous read pressure — same disclosed
+  trade-off `spin::RwLock`'s own doc comment states for itself. No fairness
+  mechanism exists to alleviate it (that's exactly what the omitted
+  `UPGRADED`/upgradeable-guard machinery would have provided). Worth a real
+  pass if a workload ever actually hits this; not built speculatively.
+
+**Tests:** in-file `#[cfg(test)]` module — exclusive/shared access,
+try-fails-while-held for both read and write, `Send`/`Sync` bounds, poison
+no-ops, and one real-multi-thread stress test (4 writers × 1,000 increments
+racing 4 readers, asserts the final count is exact).
+
+### `sync/once.rs`
+
+**What it does:** `Once`/`OnceLock`/`OnceState`. `std` passthrough when
+available; otherwise a hand-rolled fallback.
+
+**Decisions:**
+- Built on top of `sync::mutex::Mutex`, not a from-scratch CAS state
+  machine — real `spin::Once` (source read directly) hand-rolls its own
+  four-state (`Incomplete`/`Running`/`Complete`/`Panicked`) atomic protocol;
+  this type deliberately doesn't port that. With no compiler in this
+  project's working environment to catch a subtle state-machine bug,
+  reusing the crate's own already-tested `Mutex` for the actual mutual
+  exclusion was judged more trustworthy than a new hand-rolled primitive —
+  and since this crate's `Mutex` never poisons, there's one fewer state
+  (`Panicked`) to model in the first place.
+- Not a bare `Mutex<Option<T>>` either, despite that being simpler still: a
+  separate `completed: AtomicBool`, checked with `Acquire` before ever
+  touching the lock, keeps `get()` fully lock-free once initialized,
+  matching `std::sync::OnceLock`'s real performance characteristic — routing
+  every `get()` through the mutex would regress that for what's expected to
+  be the hot path.
+- `Once` is a thin `OnceLock<()>` wrapper — same composition real `spin`/
+  `bevy_platform` both use.
+
+**Tests:** in-file — closure-runs-exactly-once (both `get_or_init` directly
+and via `Once::call_once`), `get`/`set`/`take` state transitions, poison
+no-ops, `Send`/`Sync` bounds, and a real-multi-thread test (8 threads racing
+`get_or_init`, asserts the initializer ran exactly once and every thread
+observed the same result).
+
+### `sync/lazy_lock.rs`
+
+**What it does:** `LazyLock<T, F>`. `std` passthrough when available;
+otherwise built directly on `OnceLock`.
+
+**Decisions:**
+- Does not replicate `std::sync::LazyLock`'s real internal layout (a
+  hand-rolled union storing either the initializer or the result in the
+  same memory, swapped via raw pointer writes) — that complexity exists in
+  std purely for a memory-layout optimization, not for correctness. Instead:
+  an `OnceLock<T>` plus this crate's own `cell::SyncUnsafeCell<Option<F>>`
+  (Phase 1, already built and tested) to hold the initializer until
+  consumed. No new unsafe algorithm gets invented for this type at all —
+  every bit of synchronization it needs, `OnceLock::get_or_init` already
+  provides; `force`'s own `unsafe` block is a single-line proof that
+  `OnceLock`'s own exclusivity guarantee covers the `.take()` on `init` too.
+
+**Tests:** in-file — initializer-runs-once (via both `Deref` and the
+explicit `force` function), and a real-multi-thread test (8 threads racing
+a `Deref`, asserts the initializer ran exactly once and every thread got
+the same value).
+
+### `sync/barrier.rs`
+
+**What it does:** `Barrier`/`BarrierWaitResult`. `std` passthrough when
+available; otherwise ported from `spin::Barrier`'s real algorithm.
+
+**Decisions:**
+- Lowest priority of Phase 2's four primitives (rarely used) and the
+  simplest to get right: real `spin::Barrier` (source read directly) is
+  itself built on top of `spin::Mutex<BarrierState>`, not a bespoke atomic
+  protocol — a generation counter plus a thread count, guarded by a plain
+  lock. Ported onto this crate's own `Mutex` instead of `spin::Mutex`, same
+  "reuse an already-proven primitive from this crate" reasoning
+  `sync/once.rs` already applied.
+
+**Tests:** in-file — single-thread (`n = 1`) immediate-leader case, and a
+real-multi-thread test (10 threads, barrier reused across two generations,
+confirms exactly one leader per round and that the generation counter
+actually unblocks the next round).
+
+## Benchmarks
+
+`benches/sync_bench.rs` — `sync::Mutex` and `sync::RwLock` against `spin`
+(the real crate their `no_std` fallback algorithms were grounded in) and
+`std::sync`'s own equivalents. Single-threaded uncontended `lock`/
+`try_lock`/`read`/`write` throughput only — real multi-threaded correctness
+is the test suite's job (see "Modules" above), not this bench's; see the
+bench file's own doc comment for the full reasoning, including why
+`cell::{SyncCell, SyncUnsafeCell}` and Once/OnceLock/LazyLock/Barrier aren't
+separately benched. Comparison crates (`spin`) are `[dev-dependencies]`
+only, never promoted to a real dependency — same pattern
+`mid-arena`/`mid-alloc`'s own comparison benches already use.
+
+Meant to run twice, matching `mid-platform-test.yml`'s own two-configuration
+pattern: default features (std passthrough — mostly a sanity check that the
+passthrough really is zero-cost) and `--no-default-features` (this crate's
+own hand-rolled fallback — the run that actually answers something new).
+
+**Not yet run** — `.github/workflows/mid-platform-bench.yml`'s first real
+dispatch is what actually produces numbers; nothing here is a real result
+yet, same honesty `bench-mid-alloc.yml`'s own header keeps for itself until
+its own first run.
+
 ## CI and Workflows
 
+- `.github/workflows/mid-platform-bench.yml` — `benches/sync_bench.rs`,
+  run twice (default features, then `--no-default-features`), bash-grep
+  summary pattern (see `docs/benching-standards.md`). `workflow_dispatch`
+  only. Adding `criterion` as a dev-dependency gives this crate the same
+  edition2024-via-`clap_builder` MSRV wall `mid-collections`'s and
+  `mid-arena`'s own bench dev-dependencies already carry — see
+  `docs/workspace-cargo.md`, "MSRV / toolchain walls" — so `cargo test -p
+  mid-platform` now needs the newer toolchain too, not just `--bench`.
 - `.github/workflows/mid-platform-test.yml` — build, clippy, fmt check, unit
   + doc-tests, run twice (default `std` features, then
   `--no-default-features` for the actual hand-rolled no_std fallback path).

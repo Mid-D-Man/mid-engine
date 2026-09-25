@@ -6,18 +6,29 @@
 //! Synchronization alternatives to language/`std` primitives that work the
 //! same way whether or not `std` is available.
 //!
-//! Phase 1 only: `Mutex`/`MutexGuard`, `Arc`/`Weak`, `atomic::*`, and the
-//! `poison` error types they share. `RwLock`, `Once`/`OnceLock`, `LazyLock`,
-//! and `Barrier` are Phase 2 — see `docs/mid-platform.md`, "Build order,"
-//! before adding any of them here.
+//! Phase 1 and Phase 2 both done — `Mutex`/`MutexGuard`, `RwLock`/
+//! `RwLockReadGuard`/`RwLockWriteGuard`, `Once`/`OnceLock`/`OnceState`,
+//! `LazyLock`, `Barrier`/`BarrierWaitResult`, `Arc`/`Weak`, `atomic::*`, and
+//! the `poison` error types they all share. See `docs/mid-platform.md`,
+//! "Build order," for Phase 3 (fast hasher, `HashMap`/`HashSet`) — not
+//! decided yet, don't add either here without that decision being made
+//! first.
 
 pub use mutex::{Mutex, MutexGuard};
 pub use poison::{LockResult, PoisonError, TryLockError, TryLockResult};
+pub use rwlock::{RwLock, RwLockReadGuard, RwLockWriteGuard};
+pub use once::{Once, OnceLock, OnceState};
+pub use lazy_lock::LazyLock;
+pub use barrier::{Barrier, BarrierWaitResult};
 
 pub mod atomic;
 
+mod barrier;
+mod lazy_lock;
 mod mutex;
+mod once;
 mod poison;
+mod rwlock;
 
 #[cfg(feature = "alloc")]
 pub use arc::{Arc, Weak};

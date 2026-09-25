@@ -2,7 +2,7 @@
 name        = "mid-platform"
 version     = "0.0.1"
 edition     = "2021"
-description = "Platform-agnostic primitives for mid-engine (Mutex/Arc/atomics/cells today), bevy_platform-shaped but hand-rolled and dependency-free -- see docs/mid-platform.md"
+description = "Platform-agnostic primitives for mid-engine (Mutex/RwLock/Once/OnceLock/LazyLock/Barrier/Arc/atomics/cells), bevy_platform-shaped but hand-rolled and dependency-free -- see docs/mid-platform.md"
 
 [lib]
 name = "mid_platform"
@@ -13,6 +13,33 @@ std     = ["alloc"]
 alloc   = []
 
 [dependencies]
+
+[dev-dependencies]
+# Bench-only -- NOT a real dependency of this crate (see docs/mid-platform.md,
+# "Why not just depend on mid-alloc for SpinLock," the same "no in-workspace/
+# external dependency" premise applies here). Comparison baselines for
+# benches/sync_bench.rs: `spin` is the real crate this crate's own no_std
+# fallback algorithms were grounded in (Mutex, RwLock, Once, Barrier all read
+# fresh from its real 0.10.0 source -- see each module's own doc comment), so
+# it's the honest thing to bench against to confirm the hand-rolled versions
+# aren't leaving obvious performance on the table. Same pattern mid-arena's
+# `benches/vs_arena_crates.rs` and mid-alloc's `benches/allocators.rs` already
+# use: real comparison crates as dev-dependencies only, never promoted to
+# [dependencies].
+#
+# Adding criterion here pulls in clap_builder, which needs edition2024 --
+# the third crate in this workspace to hit exactly this wall after
+# mid-collections and mid-arena (see docs/workspace-cargo.md, "MSRV /
+# toolchain walls"). `cargo test -p mid-platform` is affected too, not just
+# `--bench` -- same real regression those two crates already took, same
+# reason (Cargo resolves a package's full manifest, dev-dependencies
+# included, before building ANY target from it).
+criterion = { workspace = true }
+spin = "0.10.0"
+
+[[bench]]
+name    = "sync_bench"
+harness = false
 
 [lints]
 workspace = true

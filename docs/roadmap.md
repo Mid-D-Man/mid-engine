@@ -154,9 +154,10 @@ zero-dependency, unlike `mid-ptr` — that doc works out which of its
 real dependencies mid-engine's actual target matrix needs at all,
 which can be hand-rolled, and which are deferred the same way this
 decision itself was). Phase 1 (`sync::atomic`, `cell`, `sync::poison`,
-`sync::mutex`, `sync::{Arc, Weak}`) is built; the hash-map question in
-particular is explicitly not decided yet, same trigger-based
-discipline this entry always used.
+`sync::mutex`, `sync::{Arc, Weak}`) and Phase 2 (`sync::rwlock`,
+`sync::once`, `sync::lazy_lock`, `sync::barrier`) are both built now;
+the hash-map question in particular is explicitly not decided yet,
+same trigger-based discipline this entry always used.
 
 ---
 
