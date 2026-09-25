@@ -7,15 +7,19 @@
 # MSRV/toolchain walls exist on: mid-net-transport-quinn, headless-server,
 # mid-net-transport-wasm (only with --target wasm32-unknown-unknown),
 # mid-net-transport-wasm-test-server, mid-ecs, mid-collections (bench),
-# mid-arena (bench), mid-ptr, benches/ecs-vs-bevy-ecs. A bare `cargo
-# build`/`test` with no `-p` flag pulls all of them in. See
+# mid-arena (bench), mid-platform (bench), mid-ptr, benches/ecs-vs-bevy-ecs.
+# A bare `cargo build`/`test` with no `-p` flag pulls all of them in. See
 # docs/workspace-cargo.md, "MSRV / toolchain walls," for which crate needs
 # what and why.
 #
-# mid-platform has no MSRV wall, but does have real `std`/`alloc` cargo
+# mid-platform's own MSRV wall is bench-only (criterion -> clap_builder ->
+# edition2024, same class as mid-collections'/mid-arena's own bench walls --
+# see docs/workspace-cargo.md). It also has real `std`/`alloc` cargo
 # features (default = std) -- see docs/mid-platform.md. `cargo test -p
-# mid-platform` alone only exercises the default (std) path; CI also runs
-# it with --no-default-features to exercise the no_std fallback path.
+# mid-platform` with no other flags now needs the newer toolchain too (same
+# real regression mid-collections/mid-arena already took, same reason);
+# CI runs it with --no-default-features to exercise the no_std fallback path
+# on top of that.
 members = [
     "crates/mid-log",
     "crates/mid-net",
