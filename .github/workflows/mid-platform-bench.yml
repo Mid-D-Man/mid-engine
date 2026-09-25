@@ -1,0 +1,197 @@
+# .github/workflows/mid-platform-bench.yml
+#
+# sync::Mutex and sync::RwLock against spin (the real crate their no_std
+# fallback algorithms were grounded in) and std::sync. See
+# crates/mid-platform/benches/sync_bench.rs's own doc comment for exactly
+# what's measured and why (uncontended single-thread throughput only; real
+# multi-threaded correctness is the test suite's job, not this bench's).
+#
+# Modeled on bench-mid-alloc.yml's structure (bash-grep pattern, not the
+# Python parser -- several independent groups, no single natural "vs X"
+# baseline throughout every group the way bench-vs-bevy-ecs.yml has, matching
+# docs/benching-standards.md's own guidance for when to use which). No SIMD
+# target-cpu matrix: none of this crate's code is vectorized or has a
+# dispatched backend to sweep, same real reasoning bench-mid-alloc.yml and
+# bench-mid-collections-sparse-set.yml both give for themselves.
+#
+# Runs TWICE, matching mid-platform-test.yml's own established two-
+# configuration pattern -- default features (std passthrough, mostly a
+# sanity check) and --no-default-features (the actual hand-rolled spin-based
+# fallback, the run that answers something new). Two separate raw logs, two
+# separate summary sections, one artifact upload covering both.
+#
+# HONEST VERIFICATION NOTE, same class bench-mid-alloc.yml's own header
+# already states for itself: adding criterion as a dev-dependency here pulls
+# in clap_builder, which needs edition2024, past this sandbox's rustc 1.75
+# floor (see crates/mid-platform/Cargo.toml's own comment on this). No rustc
+# reachable in this sandbox to compile-check any of this bench file or this
+# workflow's grep patterns against real output -- the grep patterns are
+# grounded in criterion 0.5.1's real report.rs source (not memory), same as
+# bench-mid-alloc.yml's own note, but this workflow's first real dispatch is
+# what actually proves it.
+#
+# Run: Actions -> "mid-platform — bench sync primitives" -> Run workflow
+# DO NOT add push/pull_request triggers.
+
+name: mid-platform — bench sync primitives
+
+on:
+  workflow_dispatch:
+    inputs:
+      baseline_note:
+        description: 'Context for this run (e.g. "after RwLock MAX_READERS change")'
+        required: false
+        default: 'manual mid-platform sync_bench run'
+
+permissions:
+  contents: read
+  actions:  read
+
+jobs:
+  bench:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Get Rust version
+        id: rustver
+        run: echo "ver=$(rustc --version)" >> $GITHUB_OUTPUT
+
+      - name: Cache cargo registry + build artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-bench-mid-platform-${{ hashFiles('crates/mid-platform/**/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-bench-mid-platform-
+
+      - name: Confirm environment
+        env:
+          RUST_VERSION: ${{ steps.rustver.outputs.ver }}
+        run: |
+          {
+            echo "## mid-platform sync Bench — Build #${{ github.run_number }}"
+            echo ""
+            echo "| | |"
+            echo "|---|---|"
+            echo "| Rust   | \`${RUST_VERSION}\` |"
+            echo "| Branch | \`${{ github.ref_name }}\` |"
+            echo "| Commit | \`${GITHUB_SHA:0:8}\` |"
+            echo "| Note   | ${{ inputs.baseline_note }} |"
+            echo ""
+            echo "Runs both feature configurations: default (\`std\` passthrough,"
+            echo "mostly a sanity check) and \`--no-default-features\` (the actual"
+            echo "hand-rolled spin-based fallback). See"
+            echo "crates/mid-platform/benches/sync_bench.rs."
+            echo ""
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Run benchmarks (default features -- std passthrough)
+        run: |
+          # set -o pipefail: see Abench-vs-all-f64.yml's own "Run f64
+          # criterion benchmarks" step comment for the exact incident this
+          # guards against -- without it, `cargo bench | tee file` reports
+          # tee's exit code (always 0), not cargo bench's.
+          set -o pipefail
+          cargo bench -p mid-platform --bench sync_bench -- --color never \
+            2>&1 | tee bench-mid-platform-std-raw.txt
+          echo "Bench exit code (std): $?" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Run benchmarks (no default features -- hand-rolled fallback)
+        run: |
+          set -o pipefail
+          cargo bench -p mid-platform --no-default-features --bench sync_bench -- --color never \
+            2>&1 | tee bench-mid-platform-nostd-raw.txt
+          echo "Bench exit code (no_std fallback): $?" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Surface bench diagnostics
+        if: always()
+        run: |
+          {
+            echo "### Diagnostics"
+            echo ""
+            echo "**std passthrough run:**"
+            echo '```'
+            grep -E 'took zero time|Unable to complete|Warning:|panicked|Completed [0-9]+ iterations' \
+              bench-mid-platform-std-raw.txt | head -60 || echo "(none found)"
+            echo '```'
+            echo ""
+            echo "**no_std fallback run:**"
+            echo '```'
+            grep -E 'took zero time|Unable to complete|Warning:|panicked|Completed [0-9]+ iterations' \
+              bench-mid-platform-nostd-raw.txt | head -60 || echo "(none found)"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Publish summary
+        if: always()
+        run: |
+          {
+            echo "### Results"
+            echo ""
+            echo "Lower is faster. Groups: mutex_lock_unlock, mutex_try_lock"
+            echo "(mid-platform::sync::Mutex vs spin::Mutex vs std::sync::Mutex),"
+            echo "rwlock_read, rwlock_write (mid-platform::sync::RwLock vs"
+            echo "spin::RwLock vs std::sync::RwLock). See the raw logs below for"
+            echo "full confidence intervals."
+            echo ""
+            echo "#### std passthrough (default features)"
+            echo '```'
+            grep -B 1 "time:" bench-mid-platform-std-raw.txt | grep -v "^--$" || echo "(no results parsed -- see raw log)"
+            echo '```'
+            echo ""
+            echo "#### no_std fallback (--no-default-features)"
+            echo '```'
+            grep -B 1 "time:" bench-mid-platform-nostd-raw.txt | grep -v "^--$" || echo "(no results parsed -- see raw log)"
+            echo '```'
+            echo ""
+            echo "<details><summary>Full raw output (both runs)</summary>"
+            echo ""
+            echo "_Build output (compiler warnings, \`Compiling\`/\`Finished\` lines) is_"
+            echo "_stripped below to stay clear of GitHub's 1024k step-summary limit --_"
+            echo "_the untouched logs, warnings included, are in this run's uploaded_"
+            echo "_artifact. Also hard-capped at 900k here per log as a second guard._"
+            echo ""
+            echo "**std passthrough:**"
+            echo '```'
+            if grep -q 'Finished `bench` profile' bench-mid-platform-std-raw.txt; then
+              awk '/Finished `bench` profile/{f=1} f' bench-mid-platform-std-raw.txt | head -c 900000
+            else
+              echo "(Compilation never finished -- showing the full raw log, including build errors.)"
+              echo ""
+              head -c 900000 bench-mid-platform-std-raw.txt
+            fi
+            echo '```'
+            echo ""
+            echo "**no_std fallback:**"
+            echo '```'
+            if grep -q 'Finished `bench` profile' bench-mid-platform-nostd-raw.txt; then
+              awk '/Finished `bench` profile/{f=1} f' bench-mid-platform-nostd-raw.txt | head -c 900000
+            else
+              echo "(Compilation never finished -- showing the full raw log, including build errors.)"
+              echo ""
+              head -c 900000 bench-mid-platform-nostd-raw.txt
+            fi
+            echo '```'
+            echo ""
+            echo "</details>"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bench-mid-platform-${{ github.run_number }}
+          path: |
+            bench-mid-platform-std-raw.txt
+            bench-mid-platform-nostd-raw.txt
+            target/criterion
+          retention-days: 30
