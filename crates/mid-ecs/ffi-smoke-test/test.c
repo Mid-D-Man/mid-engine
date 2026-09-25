@@ -207,6 +207,60 @@ int main(void) {
           "a too-small buffer is MID_ECS_BUFFER_TOO_SMALL, not a partial fill");
     mid_ecs_world_free(fw);
 
+    // --- Resources: lookup / read / write / remove ---
+    typedef struct { float delta; uint32_t frame; } FfiTimeC;
+    MidEcsWorld *rw = mid_ecs_test_resource_fixture_world_new();
+    uint32_t time_id = mid_ecs_world_lookup_ffi_resource_id(rw, "FfiTime");
+    uint32_t gravity_id = mid_ecs_world_lookup_ffi_resource_id(rw, "FfiGravity");
+    CHECK(time_id != MID_ECS_INVALID_ID && gravity_id != MID_ECS_INVALID_ID && time_id != gravity_id,
+          "both resource names resolve to distinct resource ids");
+    CHECK(mid_ecs_world_lookup_ffi_resource_id(rw, "Nope") == MID_ECS_INVALID_ID,
+          "an unregistered resource name is MID_ECS_INVALID_ID");
+
+    MidEcsFfiSpan time_span;
+    CHECK(mid_ecs_world_resource_raw_span(rw, time_id, &time_span) == MID_ECS_OK, "resource_raw_span on FfiTime is MID_ECS_OK");
+    CHECK(time_span.count == 1 && time_span.stride == sizeof(FfiTimeC), "the span is one element of the registered size");
+    const FfiTimeC *time_view = (const FfiTimeC *)time_span.ptr;
+    CHECK(time_view->delta == 0.016f && time_view->frame == 7, "the fixture's inserted value reads back through C memory");
+
+    MidEcsFfiSpan gravity_span;
+    CHECK(mid_ecs_world_resource_raw_span(rw, gravity_id, &gravity_span) == MID_ECS_OK && gravity_span.count == 0,
+          "a registered but not inserted resource is MID_ECS_OK with count 0");
+    CHECK(mid_ecs_world_resource_raw_span(rw, 999, &gravity_span) == MID_ECS_NOT_FOUND,
+          "a resource_id that was never issued is MID_ECS_NOT_FOUND");
+
+    FfiTimeC next_time = { 0.033f, 8 };
+    CHECK(mid_ecs_world_resource_write(rw, time_id, (const uint8_t *)&next_time, sizeof next_time) == MID_ECS_OK,
+          "resource_write of a correctly sized value is MID_ECS_OK");
+    MidEcsFfiSpan time_span_after;
+    mid_ecs_world_resource_raw_span(rw, time_id, &time_span_after);
+    CHECK(time_span_after.ptr == time_span.ptr, "the write updated the value in place (same address)");
+    CHECK(time_view->delta == 0.033f && time_view->frame == 8, "the span taken before the write sees the new value");
+
+    uint8_t too_short[4] = { 0 };
+    CHECK(mid_ecs_world_resource_write(rw, time_id, too_short, sizeof too_short) == MID_ECS_SIZE_MISMATCH,
+          "a wrong-sized write is MID_ECS_SIZE_MISMATCH");
+    CHECK(time_view->delta == 0.033f && time_view->frame == 8, "and it changed nothing");
+
+    float g = 9.8f;
+    CHECK(mid_ecs_world_resource_write(rw, gravity_id, (const uint8_t *)&g, sizeof g) == MID_ECS_OK,
+          "writing a registered but not inserted resource inserts it");
+    mid_ecs_world_resource_raw_span(rw, gravity_id, &gravity_span);
+    CHECK(gravity_span.count == 1 && *(const float *)gravity_span.ptr == 9.8f, "the inserted resource reads back");
+
+    CHECK(mid_ecs_world_resource_write(rw, 999, (const uint8_t *)&g, sizeof g) == MID_ECS_NOT_FOUND,
+          "writing an id that was never issued is MID_ECS_NOT_FOUND");
+    CHECK(mid_ecs_world_resource_write(rw, time_id, NULL, sizeof next_time) == MID_ECS_NULL_POINTER,
+          "NULL bytes with a non-zero length is MID_ECS_NULL_POINTER");
+    CHECK(mid_ecs_world_resource_write(NULL, time_id, (const uint8_t *)&next_time, sizeof next_time) == MID_ECS_NULL_POINTER,
+          "a NULL world is MID_ECS_NULL_POINTER");
+
+    CHECK(mid_ecs_world_resource_remove(rw, time_id) == MID_ECS_OK, "resource_remove of an inserted resource is MID_ECS_OK");
+    mid_ecs_world_resource_raw_span(rw, time_id, &time_span_after);
+    CHECK(time_span_after.count == 0, "after remove the span is empty");
+    CHECK(mid_ecs_world_resource_remove(rw, time_id) == MID_ECS_NOT_FOUND, "removing it again is MID_ECS_NOT_FOUND");
+    mid_ecs_world_free(rw);
+
     printf("\n=== %d check(s) failed ===\n", failures);
     return failures == 0 ? 0 : 1;
 }

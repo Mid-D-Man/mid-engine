@@ -35,11 +35,12 @@ use std::any::TypeId;
 use std::fmt;
 
 use mid_collections::{FfiSpan, GenerationalIndex, GenerationalIndexAllocator, SparseSetIndex};
-use zerocopy::{Immutable, IntoBytes, KnownLayout};
+use zerocopy::{FromBytes, Immutable, IntoBytes, KnownLayout};
 
 use crate::archetype::{ArchetypeId, Archetypes, Bundle};
 use crate::component::{ComponentId, SparseShell};
 use crate::hash::TypeIdMap;
+use crate::resource::{ResourceFfiError, ResourceId, Resources};
 
 /// A handle to an entity. Detects its own staleness after despawn — a
 /// thin wrapper over `mid_collections::GenerationalIndex`, not a
@@ -203,6 +204,7 @@ pub struct World {
     pub(crate) components: SparseShell,
     pub(crate) archetypes: Archetypes,
     pub(crate) sync: crate::sync::SyncRegistry,
+    resources: Resources,
     storage_claims: StorageClaims,
 }
 
@@ -214,6 +216,7 @@ impl World {
             components: SparseShell::new(),
             archetypes: Archetypes::new(),
             sync: crate::sync::SyncRegistry::new(),
+            resources: Resources::new(),
             storage_claims: StorageClaims::default(),
         }
     }
@@ -226,6 +229,7 @@ impl World {
             components: SparseShell::new(),
             archetypes: Archetypes::new(),
             sync: crate::sync::SyncRegistry::new(),
+            resources: Resources::new(),
             storage_claims: StorageClaims::default(),
         }
     }
@@ -586,6 +590,81 @@ impl World {
 impl Default for World {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// Resources: at most one value per Rust type, owned by the world but
+/// attached to no entity (see `resource.rs`).
+impl World {
+    /// Stores `value` as the world's resource of type `T`, returning the
+    /// previous one if there was one. A type can be a resource and a
+    /// component at the same time; the two are separate.
+    pub fn insert_resource<T: 'static>(&mut self, value: T) -> Option<T> {
+        self.resources.insert(value)
+    }
+
+    /// The world's resource of type `T`, if one has been inserted.
+    pub fn get_resource<T: 'static>(&self) -> Option<&T> {
+        self.resources.get::<T>()
+    }
+
+    /// Mutable access to the world's resource of type `T`, if any.
+    pub fn get_resource_mut<T: 'static>(&mut self) -> Option<&mut T> {
+        self.resources.get_mut::<T>()
+    }
+
+    /// Removes and returns the world's resource of type `T`, if any.
+    pub fn remove_resource<T: 'static>(&mut self) -> Option<T> {
+        self.resources.remove::<T>()
+    }
+
+    /// Whether a resource of type `T` is currently inserted.
+    pub fn contains_resource<T: 'static>(&self) -> bool {
+        self.resources.contains::<T>()
+    }
+
+    /// Opts resource type `T` into FFI access under `name`, returning the
+    /// id C callers will use. `T` must accept any bit pattern
+    /// (`FromBytes`), because C writes it as raw bytes. Must be called
+    /// from Rust; idempotent for the same `T`.
+    ///
+    /// # Panics
+    /// If `name` was already registered for a different resource type.
+    pub fn register_ffi_resource<T>(&mut self, name: &'static str) -> ResourceId
+    where
+        T: 'static + FromBytes + IntoBytes + Immutable + KnownLayout,
+    {
+        self.resources.register_ffi::<T>(name)
+    }
+
+    /// Looks up the id a resource type was registered under, by name.
+    pub fn lookup_ffi_resource_id(&self, name: &str) -> Option<ResourceId> {
+        self.resources.lookup_ffi_id(name)
+    }
+
+    /// The registered resource's value as a one-element span, or an empty
+    /// span if it is registered but not inserted. `None` for an id that
+    /// was never issued. Valid until the resource is removed or replaced;
+    /// [`Self::write_resource_bytes`] on an existing resource updates it
+    /// in place and does not invalidate the span.
+    pub fn resource_raw_span(&self, id: ResourceId) -> Option<FfiSpan> {
+        self.resources.ffi_span(id)
+    }
+
+    /// Copies `bytes` in as the registered resource's value, inserting it
+    /// if absent. `bytes` must be exactly the registered type's size.
+    pub fn write_resource_bytes(
+        &mut self,
+        id: ResourceId,
+        bytes: &[u8],
+    ) -> Result<(), ResourceFfiError> {
+        self.resources.ffi_write(id, bytes)
+    }
+
+    /// Removes the registered resource's value. `Absent` if the type is
+    /// registered but nothing is inserted.
+    pub fn remove_ffi_resource(&mut self, id: ResourceId) -> Result<(), ResourceFfiError> {
+        self.resources.ffi_remove(id)
     }
 }
 
@@ -1690,5 +1769,78 @@ mod tests {
         assert_eq!(drops.get(), 0, "spawning must move the value, never drop it");
         assert!(w.despawn(e));
         assert_eq!(drops.get(), 1, "dropped exactly once, when the entity is despawned");
+    }
+
+    // ── Resources ───────────────────────────────────────────────────
+
+    #[derive(Debug, Clone, Copy, PartialEq)]
+    struct Clock {
+        secs: f64,
+    }
+
+    #[test]
+    fn resources_insert_get_mutate_remove_through_the_world() {
+        let mut w = World::new();
+        assert!(!w.contains_resource::<Clock>());
+        assert_eq!(w.get_resource::<Clock>(), None);
+
+        assert_eq!(w.insert_resource(Clock { secs: 1.0 }), None);
+        assert!(w.contains_resource::<Clock>());
+        w.get_resource_mut::<Clock>().unwrap().secs += 0.5;
+        assert_eq!(w.get_resource::<Clock>(), Some(&Clock { secs: 1.5 }));
+
+        assert_eq!(
+            w.insert_resource(Clock { secs: 9.0 }),
+            Some(Clock { secs: 1.5 })
+        );
+        assert_eq!(w.remove_resource::<Clock>(), Some(Clock { secs: 9.0 }));
+        assert!(!w.contains_resource::<Clock>());
+    }
+
+    #[test]
+    fn a_type_can_be_a_resource_and_a_component_at_once() {
+        let mut w = World::new();
+        let e = w.spawn();
+        assert!(w.insert_static(e, Clock { secs: 1.0 }));
+        w.insert_resource(Clock { secs: 2.0 });
+        assert_eq!(w.get_static::<Clock>(e), Some(&Clock { secs: 1.0 }));
+        assert_eq!(w.get_resource::<Clock>(), Some(&Clock { secs: 2.0 }));
+    }
+
+    #[test]
+    fn resources_are_untouched_by_entity_lifecycle() {
+        let mut w = World::new();
+        w.insert_resource(Clock { secs: 3.0 });
+        let e = w.spawn();
+        assert!(w.despawn(e));
+        assert_eq!(w.get_resource::<Clock>(), Some(&Clock { secs: 3.0 }));
+        assert_eq!(w.entity_count(), 0);
+    }
+
+    #[test]
+    fn ffi_resource_write_and_read_round_trip_through_the_world() {
+        #[derive(Debug, Clone, Copy, PartialEq, FromBytes, IntoBytes, KnownLayout, Immutable)]
+        #[repr(C)]
+        struct Wind {
+            x: f32,
+            y: f32,
+        }
+        let mut w = World::new();
+        let id = w.register_ffi_resource::<Wind>("Wind");
+        assert_eq!(w.lookup_ffi_resource_id("Wind"), Some(id));
+        assert_eq!(w.resource_raw_span(id).unwrap().count, 0);
+
+        let bytes = Wind { x: 1.0, y: -2.0 }.as_bytes().to_vec();
+        w.write_resource_bytes(id, &bytes).unwrap();
+        assert_eq!(w.get_resource::<Wind>(), Some(&Wind { x: 1.0, y: -2.0 }));
+        assert_eq!(w.resource_raw_span(id).unwrap().count, 1);
+
+        assert_eq!(
+            w.write_resource_bytes(id, &bytes[..4]),
+            Err(ResourceFfiError::SizeMismatch)
+        );
+        assert_eq!(w.remove_ffi_resource(id), Ok(()));
+        assert_eq!(w.remove_ffi_resource(id), Err(ResourceFfiError::Absent));
+        assert_eq!(w.get_resource::<Wind>(), None);
     }
 }

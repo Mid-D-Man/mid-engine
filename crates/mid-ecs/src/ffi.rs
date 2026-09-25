@@ -62,6 +62,7 @@ use std::slice;
 
 use crate::archetype::ArchetypeId;
 use crate::component::ComponentId;
+use crate::resource::{ResourceFfiError, ResourceId};
 use crate::world::{Entity, World};
 use mid_collections::FfiSpan;
 
@@ -99,6 +100,9 @@ pub enum MidEcsStatus {
     /// count via this function's own return value, then call again
     /// with a buffer sized to hold at least that many elements.
     BufferTooSmall = -5,
+    /// A write's byte length isn't exactly the size of the registered
+    /// resource type. Nothing was written.
+    SizeMismatch = -6,
 }
 
 fn ffi_guard(f: impl FnOnce() -> i32) -> i32 {
@@ -334,6 +338,40 @@ pub extern "C" fn mid_ecs_test_filter_fixture_world_new() -> *mut MidEcsWorld {
             MidEcsTestFlagA { v: 30 },
         ),
     );
+    Box::into_raw(Box::new(MidEcsWorld(world)))
+}
+
+/// Resource fixture types, used only by
+/// [`mid_ecs_test_resource_fixture_world_new`]. Resources must accept any
+/// bit pattern (`FromBytes`), since C writes them as raw bytes.
+#[derive(zerocopy::FromBytes, zerocopy::IntoBytes, zerocopy::Immutable, zerocopy::KnownLayout)]
+#[repr(C)]
+pub struct MidEcsTestTime {
+    pub delta: f32,
+    pub frame: u32,
+}
+
+/// See [`MidEcsTestTime`].
+#[derive(zerocopy::FromBytes, zerocopy::IntoBytes, zerocopy::Immutable, zerocopy::KnownLayout)]
+#[repr(C)]
+pub struct MidEcsTestGravity {
+    pub g: f32,
+}
+
+/// **Test-fixture only, like [`mid_ecs_test_fixture_world_new`].** A world
+/// for exercising the resource functions from a pure C program (C cannot
+/// call the generic `register_ffi_resource`/`insert_resource`):
+/// `"FfiTime"` registered and inserted as `{ delta: 0.016, frame: 7 }`,
+/// and `"FfiGravity"` registered but not inserted. Never returns NULL.
+#[no_mangle]
+pub extern "C" fn mid_ecs_test_resource_fixture_world_new() -> *mut MidEcsWorld {
+    let mut world = World::new();
+    world.register_ffi_resource::<MidEcsTestTime>("FfiTime");
+    world.register_ffi_resource::<MidEcsTestGravity>("FfiGravity");
+    world.insert_resource(MidEcsTestTime {
+        delta: 0.016,
+        frame: 7,
+    });
     Box::into_raw(Box::new(MidEcsWorld(world)))
 }
 
@@ -711,6 +749,144 @@ pub unsafe extern "C" fn mid_ecs_world_archetypes_matching_static(
         let out = unsafe { slice::from_raw_parts_mut(out_buf, ids.len()) };
         out.copy_from_slice(&ids);
         ids.len() as i32
+    })
+}
+
+fn resource_status(error: ResourceFfiError) -> i32 {
+    match error {
+        ResourceFfiError::UnknownId | ResourceFfiError::Absent => MidEcsStatus::NotFound as i32,
+        ResourceFfiError::SizeMismatch => MidEcsStatus::SizeMismatch as i32,
+    }
+}
+
+/// Looks up the `resource_id` a resource type was registered under via
+/// `World::register_ffi_resource`, by name. Returns [`MID_ECS_INVALID_ID`]
+/// on a null `world`/`name`, invalid UTF-8, an internal panic, or a name
+/// that was never registered, the same collapse to one sentinel as
+/// [`mid_ecs_world_lookup_ffi_component_id`]. Resource ids are their own
+/// namespace, separate from component ids.
+///
+/// # Safety
+/// `world` must either be NULL or a valid handle from `mid_ecs_world_new`.
+/// If non-null, `name` must be a valid, null-terminated C string.
+#[no_mangle]
+pub unsafe extern "C" fn mid_ecs_world_lookup_ffi_resource_id(
+    world: *const MidEcsWorld,
+    name: *const c_char,
+) -> u32 {
+    if world.is_null() || name.is_null() {
+        return MID_ECS_INVALID_ID;
+    }
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        let world = unsafe { &*world };
+        let name = unsafe { CStr::from_ptr(name) }.to_str().ok()?;
+        world.0.lookup_ffi_resource_id(name)
+    }));
+    match result {
+        Ok(Some(id)) => id.as_u32(),
+        _ => MID_ECS_INVALID_ID,
+    }
+}
+
+/// A view of the registered resource's current value, written into
+/// `*out_span`: one element (`count == 1`, `stride` the type's size), or
+/// the empty span (`count == 0`) if the resource is registered but not
+/// currently inserted. Returns `MidEcsStatus::NotFound` if `resource_id`
+/// was never issued.
+///
+/// The span points into the live value. It stays valid across
+/// [`mid_ecs_world_resource_write`] (which updates an existing value in
+/// place) and is invalidated by [`mid_ecs_world_resource_remove`], by a
+/// Rust-side `insert_resource`/`remove_resource` of the same type, and by
+/// freeing the world.
+///
+/// # Safety
+/// `world` must be a valid, non-null handle from `mid_ecs_world_new`.
+/// `out_span` must be valid for writing one `MidEcsFfiSpan`.
+#[no_mangle]
+pub unsafe extern "C" fn mid_ecs_world_resource_raw_span(
+    world: *const MidEcsWorld,
+    resource_id: u32,
+    out_span: *mut FfiSpan,
+) -> i32 {
+    ffi_guard(|| {
+        if world.is_null() || out_span.is_null() {
+            return MidEcsStatus::NullPointer as i32;
+        }
+        let world = unsafe { &*world };
+        match world.0.resource_raw_span(ResourceId::from_u32(resource_id)) {
+            Some(span) => {
+                unsafe { ptr::write(out_span, span) };
+                MidEcsStatus::Ok as i32
+            }
+            None => MidEcsStatus::NotFound as i32,
+        }
+    })
+}
+
+/// Copies `len` bytes from `bytes` in as the registered resource's new
+/// value, inserting it if it isn't currently inserted. `len` must be
+/// exactly the registered type's size (`stride` in the span), otherwise
+/// nothing is written and the result is `MidEcsStatus::SizeMismatch`.
+/// `MidEcsStatus::NotFound` if `resource_id` was never issued. Bytes are
+/// copied, so `bytes` needs no particular alignment and is not retained;
+/// registration requires the type to accept any bit pattern.
+///
+/// # Safety
+/// `world` must be a valid, non-null handle from `mid_ecs_world_new`.
+/// `bytes` must be NULL only if `len` is 0, otherwise valid for reading
+/// `len` bytes.
+#[no_mangle]
+pub unsafe extern "C" fn mid_ecs_world_resource_write(
+    world: *mut MidEcsWorld,
+    resource_id: u32,
+    bytes: *const u8,
+    len: usize,
+) -> i32 {
+    ffi_guard(|| {
+        if world.is_null() || (bytes.is_null() && len > 0) {
+            return MidEcsStatus::NullPointer as i32;
+        }
+        let world = unsafe { &mut *world };
+        let bytes: &[u8] = if len == 0 {
+            &[]
+        } else {
+            unsafe { slice::from_raw_parts(bytes, len) }
+        };
+        match world
+            .0
+            .write_resource_bytes(ResourceId::from_u32(resource_id), bytes)
+        {
+            Ok(()) => MidEcsStatus::Ok as i32,
+            Err(error) => resource_status(error),
+        }
+    })
+}
+
+/// Removes the registered resource's value. `MidEcsStatus::NotFound` if
+/// `resource_id` was never issued or the resource isn't currently
+/// inserted (nothing was removed either way). Invalidates any span
+/// previously obtained for it.
+///
+/// # Safety
+/// `world` must be a valid, non-null handle from `mid_ecs_world_new`.
+#[no_mangle]
+pub unsafe extern "C" fn mid_ecs_world_resource_remove(
+    world: *mut MidEcsWorld,
+    resource_id: u32,
+) -> i32 {
+    ffi_guard(|| {
+        if world.is_null() {
+            return MidEcsStatus::NullPointer as i32;
+        }
+        let world = unsafe { &mut *world };
+        match world
+            .0
+            .remove_ffi_resource(ResourceId::from_u32(resource_id))
+        {
+            Ok(()) => MidEcsStatus::Ok as i32,
+            Err(error) => resource_status(error),
+        }
     })
 }
 
@@ -1528,5 +1704,204 @@ mod tests {
 
         // SAFETY: freed exactly once.
         unsafe { mid_ecs_world_free(world) };
+    }
+
+    // ── Resources through the C surface ─────────────────────────────
+
+    fn resource_id(world: *const MidEcsWorld, name: &str) -> u32 {
+        let name = std::ffi::CString::new(name).unwrap();
+        // SAFETY: `world` is a live handle and `name` a valid C string.
+        unsafe { mid_ecs_world_lookup_ffi_resource_id(world, name.as_ptr()) }
+    }
+
+    fn resource_span(world: *const MidEcsWorld, id: u32) -> (i32, FfiSpan) {
+        let mut span = empty_span();
+        // SAFETY: `world` is a live handle and `span` is valid.
+        let status = unsafe { mid_ecs_world_resource_raw_span(world, id, &mut span) };
+        (status, span)
+    }
+
+    fn write_time(world: *mut MidEcsWorld, id: u32, delta: f32, frame: u32) -> i32 {
+        let value = MidEcsTestTime { delta, frame };
+        let bytes = zerocopy::IntoBytes::as_bytes(&value);
+        // SAFETY: `world` is a live handle; `bytes` is valid for its length.
+        unsafe { mid_ecs_world_resource_write(world, id, bytes.as_ptr(), bytes.len()) }
+    }
+
+    #[test]
+    fn resource_lookup_resolves_registered_names_and_rejects_the_rest() {
+        let world = mid_ecs_test_resource_fixture_world_new();
+        assert_ne!(resource_id(world, "FfiTime"), MID_ECS_INVALID_ID);
+        assert_ne!(resource_id(world, "FfiGravity"), MID_ECS_INVALID_ID);
+        assert_ne!(
+            resource_id(world, "FfiTime"),
+            resource_id(world, "FfiGravity")
+        );
+        assert_eq!(resource_id(world, "Nope"), MID_ECS_INVALID_ID);
+        assert_eq!(resource_id(std::ptr::null(), "FfiTime"), MID_ECS_INVALID_ID);
+        // SAFETY: freed exactly once; NULL name is the case under test.
+        unsafe {
+            assert_eq!(
+                mid_ecs_world_lookup_ffi_resource_id(world, std::ptr::null()),
+                MID_ECS_INVALID_ID
+            );
+            mid_ecs_world_free(world);
+        }
+    }
+
+    #[test]
+    fn resource_span_reads_the_inserted_value_and_is_empty_for_an_absent_one() {
+        let world = mid_ecs_test_resource_fixture_world_new();
+        let time = resource_id(world, "FfiTime");
+        let gravity = resource_id(world, "FfiGravity");
+
+        let (status, span) = resource_span(world, time);
+        assert_eq!(status, MidEcsStatus::Ok as i32);
+        assert_eq!(
+            (span.count, span.stride),
+            (1, std::mem::size_of::<MidEcsTestTime>())
+        );
+        // SAFETY: the span points at the live value; nothing has changed it.
+        let seen = unsafe { &*(span.ptr as *const MidEcsTestTime) };
+        assert_eq!((seen.delta, seen.frame), (0.016, 7));
+
+        let (status, span) = resource_span(world, gravity);
+        assert_eq!(status, MidEcsStatus::Ok as i32, "registered, not inserted");
+        assert_eq!(span.count, 0);
+
+        assert_eq!(
+            resource_span(world, 999).0,
+            MidEcsStatus::NotFound as i32,
+            "an id that was never issued"
+        );
+        // SAFETY: freed exactly once.
+        unsafe { mid_ecs_world_free(world) };
+    }
+
+    #[test]
+    fn resource_write_updates_in_place_and_the_old_span_sees_it() {
+        let world = mid_ecs_test_resource_fixture_world_new();
+        let time = resource_id(world, "FfiTime");
+        let (_, before) = resource_span(world, time);
+
+        assert_eq!(write_time(world, time, 0.033, 8), MidEcsStatus::Ok as i32);
+
+        let (_, after) = resource_span(world, time);
+        assert_eq!(before.ptr, after.ptr, "written in place, same address");
+        // SAFETY: `before.ptr` is the live value's address.
+        let seen = unsafe { &*(before.ptr as *const MidEcsTestTime) };
+        assert_eq!((seen.delta, seen.frame), (0.033, 8));
+        // SAFETY: `world` is live; the typed API agrees.
+        let typed = unsafe { (*world).0.get_resource::<MidEcsTestTime>().unwrap() };
+        assert_eq!((typed.delta, typed.frame), (0.033, 8));
+
+        // SAFETY: freed exactly once.
+        unsafe { mid_ecs_world_free(world) };
+    }
+
+    #[test]
+    fn resource_write_inserts_an_absent_resource() {
+        let world = mid_ecs_test_resource_fixture_world_new();
+        let gravity = resource_id(world, "FfiGravity");
+        let bytes = 9.8f32.to_ne_bytes();
+        // SAFETY: `world` is live; `bytes` is valid for 4 bytes.
+        let status =
+            unsafe { mid_ecs_world_resource_write(world, gravity, bytes.as_ptr(), bytes.len()) };
+        assert_eq!(status, MidEcsStatus::Ok as i32);
+
+        let (_, span) = resource_span(world, gravity);
+        assert_eq!(span.count, 1);
+        // SAFETY: `world` is live.
+        let typed = unsafe { (*world).0.get_resource::<MidEcsTestGravity>().unwrap() };
+        assert_eq!(typed.g, 9.8);
+        // SAFETY: freed exactly once.
+        unsafe { mid_ecs_world_free(world) };
+    }
+
+    #[test]
+    fn resource_write_size_mismatch_changes_nothing() {
+        let world = mid_ecs_test_resource_fixture_world_new();
+        let time = resource_id(world, "FfiTime");
+        let bytes = [0u8; 12];
+        // SAFETY: `world` is live; `bytes` is valid for the lengths passed.
+        unsafe {
+            for len in [0usize, 4, 7, 9, 12] {
+                assert_eq!(
+                    mid_ecs_world_resource_write(world, time, bytes.as_ptr(), len),
+                    MidEcsStatus::SizeMismatch as i32,
+                    "len {len}"
+                );
+            }
+            assert_eq!(MidEcsStatus::SizeMismatch as i32, -6);
+            let typed = (*world).0.get_resource::<MidEcsTestTime>().unwrap();
+            assert_eq!((typed.delta, typed.frame), (0.016, 7));
+            mid_ecs_world_free(world);
+        }
+    }
+
+    #[test]
+    fn resource_remove_then_span_and_second_remove() {
+        let world = mid_ecs_test_resource_fixture_world_new();
+        let time = resource_id(world, "FfiTime");
+
+        // SAFETY: `world` is live.
+        unsafe {
+            assert_eq!(
+                mid_ecs_world_resource_remove(world, time),
+                MidEcsStatus::Ok as i32
+            );
+            assert_eq!(resource_span(world, time).1.count, 0);
+            assert!((*world).0.get_resource::<MidEcsTestTime>().is_none());
+            assert_eq!(
+                mid_ecs_world_resource_remove(world, time),
+                MidEcsStatus::NotFound as i32,
+                "already absent"
+            );
+            assert_eq!(
+                mid_ecs_world_resource_remove(world, 999),
+                MidEcsStatus::NotFound as i32,
+                "never issued"
+            );
+            // Writing again brings it back.
+            assert_eq!(write_time(world, time, 1.0, 1), MidEcsStatus::Ok as i32);
+            assert_eq!(resource_span(world, time).1.count, 1);
+            mid_ecs_world_free(world);
+        }
+    }
+
+    #[test]
+    fn resource_functions_null_and_unknown_id_cases() {
+        let world = mid_ecs_test_resource_fixture_world_new();
+        let time = resource_id(world, "FfiTime");
+        let np = MidEcsStatus::NullPointer as i32;
+        let byte = [0u8; 8];
+
+        // SAFETY: every pointer is valid for what the callee may do with
+        // it, or NULL where that's the case under test.
+        unsafe {
+            assert_eq!(resource_span(std::ptr::null(), time).0, np);
+            assert_eq!(
+                mid_ecs_world_resource_raw_span(world, time, std::ptr::null_mut()),
+                np
+            );
+            assert_eq!(
+                mid_ecs_world_resource_write(std::ptr::null_mut(), time, byte.as_ptr(), 8),
+                np
+            );
+            assert_eq!(
+                mid_ecs_world_resource_write(world, time, std::ptr::null(), 8),
+                np,
+                "NULL bytes with a non-zero length"
+            );
+            assert_eq!(
+                mid_ecs_world_resource_remove(std::ptr::null_mut(), time),
+                np
+            );
+            assert_eq!(
+                mid_ecs_world_resource_write(world, 999, byte.as_ptr(), 8),
+                MidEcsStatus::NotFound as i32
+            );
+            mid_ecs_world_free(world);
+        }
     }
 }

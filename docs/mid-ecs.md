@@ -2287,16 +2287,49 @@ entity-free `(&A, &B)` shape, the one bevy's own query yields, so it is not
 comparable to `dense_query_iteration`'s numbers (10,000 rows, entity
 carrying).
 
-**Not yet run on real CI.** The mid-ecs half of the new group compiles and
-runs in the sandbox. The bevy half could not be compiled here (`bevy_ecs`
-0.19.1 needs rustc 1.95, the sandbox has 1.91) and was checked only by
-reading `query_filtered`, `With`, `Without` and `QueryState::iter` in the
-bevy source, so its first real compile is CI's. Expected result: this
-group's mid-ecs/bevy ratio lands where `dense_query_iteration`'s does on
-each platform (~4x on x86_64, ~1.05 to 1.1x on macOS and aarch64 at
-build #30), because the per-row work is identical. A materially different
-ratio would mean the filter costs something the instruction count did not
-predict.
+**CI result (build #31, commit `06bef2c`, the first run with the CPU line in
+the header).** The bevy half compiled on the first try. Ratio and per-row
+cost of `filtered_query_iteration` (mid-ecs, `Iter2Ref`, 5,000 rows) next to
+`dense_query_iteration` (mid-ecs, `Iter2`, 10,000 rows):
+
+| Platform (CPU) | filtered ratio | dense ratio | mid-ecs ns/row, filtered | mid-ecs ns/row, dense |
+|---|---|---|---|---|
+| x86_64 (AMD EPYC 9V45) | 6.1x | 6.0x | 2.75 | 2.70 |
+| macOS (Apple M1, virtual) | 3.06x | 0.94x | 3.15 | 1.15 |
+| aarch64 (Neoverse-N2) | 4.12x | 1.25x | 2.93 | 0.89 |
+
+The prediction above (same ratio as `dense_query_iteration` on each platform)
+held on x86_64 and did not hold on macOS or aarch64. The filter is not the
+cause. Evidence, all sandbox instruction counts (callgrind, `bench` profile,
+rustc 1.91.1):
+
+- In one binary, `query2_static_ref`, the `()` filter, `With<Marker>` and
+  `Without<Marker>` cost 43.07, 43.07, 43.11 and 43.11 Ir per row. The
+  filter adds nothing per row.
+- The identical `With`/`Without` loop as the only query in its binary costs
+  15.13 Ir per row. Adding one unrelated `assert_eq!(query.count(), 5000)`
+  to `main` moves the same loop to 43.15 Ir per row. Built with symbols
+  (`CARGO_PROFILE_BENCH_STRIP=none`), the slow binary shows
+  `Iter2Ref::next` as an out-of-line function taking 32 Ir per row, plus 10
+  Ir per row in the loop; the fast one inlines it.
+- Keeping `matched_filtered` out of line (`#[inline(never)]`) changed
+  nothing, so it is not the filter's own code being inlined or not.
+
+That is the mechanism this file's own history already records (the whole
+program inliner declines to resolve `next()` once the surrounding
+compilation unit is large or crowded enough, see the `iter.rs` header), now
+reproduced on demand in the sandbox with instruction counts, which the
+earlier x86 investigation could not do. Two consequences worth keeping:
+per-row cost of the same iterator varies about 3x with unrelated code in
+the same binary, so a criterion group's ratio here says as much about the
+bench binary's layout as about the iterator; and on the same Neoverse-N2
+hardware class `dense_query_iteration` mid-ecs went from 7.49 us (build #30)
+to 8.91 us (build #31) while bevy stayed at 7.11 us, after only code was
+added (this group, the filter API). No iterator was changed. The x86_64 gap
+also depends on the CPU tier: on the EPYC 9V45 the raw-slice floor and bevy
+run about 2.1x faster than on the earlier EPYC 7763 (9.4 us to 4.5 us for
+dense), while mid-ecs runs about 1.4x faster (37.4 us to 27.0 us), which
+turns the ~4x gap into 6x.
 
 ### FFI: filtered archetype enumeration, and a `raw_span` fix
 
@@ -2388,4 +2421,89 @@ on a green job.
 the Rust side yet; the C form would be a third list, `any_of_ids`, added
 with it), the Sparse Shell (no archetypes to enumerate), and change
 detection.
+
+### `resource.rs`: resources and their C write path
+
+**What it does.** A resource is at most one value of a Rust type, owned by the
+`World` and attached to no entity (a clock, a configuration, an input
+snapshot). Typed Rust API on `World`:
+
+```rust
+world.insert_resource(Clock { secs: 0.0 });          // -> Option<Clock>, the previous value
+world.get_resource::<Clock>();                        // -> Option<&Clock>
+world.get_resource_mut::<Clock>();                    // -> Option<&mut Clock>
+world.remove_resource::<Clock>();                     // -> Option<Clock>
+world.contains_resource::<Clock>();                   // -> bool
+```
+
+Names follow bevy (`insert_resource`, `get_resource`, `get_resource_mut`,
+`remove_resource`, `contains_resource`); the getters return `Option` and never
+panic, which is this crate's convention (`get`, `has`). Storage is a
+`TypeIdMap<Box<dyn Any>>` using the hasher from `hash.rs`, with no `unsafe`.
+A type can be both a resource and a component at once; the two are separate
+namespaces and the storage-claim guard does not involve resources.
+
+**Left out on purpose:** the `Send`/non-`Send` split (`World` is already not
+`Send`, its columns are `Box<dyn Column>`), change detection (needs the same
+tick storage as `Changed`/`Added`), and bevy's resources-as-components
+representation. A resource here is a plain map entry, not an entity.
+
+**FFI scope, including writes.** Writing from C is required, so resources have a
+write path, not just spans. The shape:
+
+- Rust registers each C-visible resource type once, by name
+  (`World::register_ffi_resource::<T>(name)`, generic, so not callable from C),
+  and C looks the name up: `mid_ecs_world_lookup_ffi_resource_id`. Resource
+  ids are their own dense namespace from 0, separate from component ids.
+  Idempotent for the same type; registering one name for two types panics, like
+  the component registrations.
+- `T` must be `FromBytes + IntoBytes + Immutable + KnownLayout`. `FromBytes`
+  is the new requirement (component registration needs only the read side): C
+  writes raw bytes, so every bit pattern has to be a valid value.
+- Read: `mid_ecs_world_resource_raw_span` gives a one-element span, or
+  `count == 0` if the resource is registered but not inserted.
+- Write: `mid_ecs_world_resource_write(world, id, bytes, len)` copies `len`
+  bytes in. `len` must equal the type's size exactly, else the new status
+  `MID_ECS_SIZE_MISMATCH` (-6) and nothing changes. If the resource is absent
+  the write inserts it. Bytes are copied and need no alignment.
+- Remove: `mid_ecs_world_resource_remove`. `MID_ECS_NOT_FOUND` covers both an id
+  that was never issued and a resource that is not currently inserted.
+
+**Why a copy-in write and not a mutable span.** No mutable pointer into Rust
+memory ever crosses the boundary. A write validates the length, builds a value
+with `FromBytes::read_from_bytes`, and stores it, so C cannot scribble past the
+value or hold a writable alias while Rust also holds a reference. The cost is
+one copy of a value that is normally a few words.
+
+**Span validity.** A write to an existing resource replaces the value inside
+its existing `Box`, so the address does not change and a span taken earlier
+stays valid and sees the new bytes. A span is invalidated by
+`mid_ecs_world_resource_remove`, by a Rust-side `insert_resource` or
+`remove_resource` of the same type (which replace or free the box), and by
+freeing the world. Both directions are tested: the pointer is compared before
+and after a write, and the old pointer is read.
+
+**Writes to components from C are not covered here.** The existing component
+spans stay read-only; a component write path is a separate decision (rows
+move on structural change, so it needs its own safety story).
+
+**Tests:** 260 default (23 new): 12 in `resource.rs` (typed API, replace and
+remove return values, distinct types, exactly-once drops including through
+replace and remove, idempotent registration, name reuse panic, span contents,
+write inserts when absent, in-place write keeping the address, wrong size and
+unknown id changing nothing, remove reporting unknown and absent distinctly), 4
+in `world.rs` (through the `World` API, resource and component of one type,
+entity lifecycle not touching resources, a full register/write/read/remove
+round trip), and 7 through the C surface (lookup, span contents and the empty
+registered case, in-place write, write-inserts, size mismatch for several
+lengths, remove then span then second remove, NULL and unknown-id cases). The C
+smoke test gained 20 checks, compiles clean under `-Wall -Wextra`, and passed
+against a debug `libmid_ecs.so` in the sandbox. As before, that CI step is
+`continue-on-error`, so read `mid-ecs-ffi-smoke-raw.txt`.
+
+**Not measured.** There is no resource bench group yet. A lookup here is a
+hash probe plus a `downcast_ref`; bevy's is an id-indexed lookup. A
+`resource_access` group against `world.resource::<T>()` is the natural next
+measurement, and given the inlining behaviour recorded in the filters section,
+read its ratio with the bench binary's layout in mind.
 

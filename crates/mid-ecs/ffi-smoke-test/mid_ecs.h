@@ -35,6 +35,7 @@ extern "C" {
 #define MID_ECS_INTERNAL_PANIC  -3
 #define MID_ECS_NOT_FOUND       -4
 #define MID_ECS_BUFFER_TOO_SMALL -5
+#define MID_ECS_SIZE_MISMATCH  -6
 
 // Sentinel component_id/archetype_id meaning "not found" -- returned by
 // the lookup_ffi_* functions below. Not 0: 0 is a real, valid id for
@@ -163,6 +164,40 @@ int32_t mid_ecs_world_archetypes_with_static_component(const MidEcsWorld *world,
 // NULL-buffer-queries-count idiom; never returns MID_ECS_NOT_FOUND.
 int32_t mid_ecs_world_archetypes_matching_static(const MidEcsWorld *world, const uint32_t *with_ids, size_t with_len, const uint32_t *without_ids, size_t without_len, uint32_t *out_buf, size_t out_buf_capacity);
 
+// --- Resources ---
+//
+// A resource is at most one value of a Rust type, owned by the world and
+// attached to no entity. Rust registers each C-visible resource type once
+// (register_ffi_resource, generic, so not callable from C) under a name;
+// C looks the name up and then reads, writes and removes by resource_id.
+// Resource ids are their own namespace, separate from component ids.
+
+// Resolves a registered resource name to its resource_id, or
+// MID_ECS_INVALID_ID on a null world/name, invalid UTF-8, or an unknown
+// name.
+uint32_t mid_ecs_world_lookup_ffi_resource_id(const MidEcsWorld *world, const char *name);
+
+// Writes a view of the resource's current value into *out_span: one
+// element (count == 1, stride == sizeof the type), or count == 0 if the
+// resource is registered but not currently inserted. MID_ECS_NOT_FOUND if
+// resource_id was never issued. The span stays valid across
+// mid_ecs_world_resource_write (which updates an existing value in place)
+// and is invalidated by mid_ecs_world_resource_remove, by a Rust-side
+// insert/remove of the same resource, and by mid_ecs_world_free.
+int32_t mid_ecs_world_resource_raw_span(const MidEcsWorld *world, uint32_t resource_id, MidEcsFfiSpan *out_span);
+
+// Copies len bytes from bytes in as the resource's new value, inserting it
+// if it isn't currently inserted. len must equal the type's size exactly
+// (the span's stride), else MID_ECS_SIZE_MISMATCH and nothing is written.
+// MID_ECS_NOT_FOUND if resource_id was never issued. bytes is copied, so it
+// needs no particular alignment; it may be NULL only when len is 0.
+int32_t mid_ecs_world_resource_write(MidEcsWorld *world, uint32_t resource_id, const uint8_t *bytes, size_t len);
+
+// Removes the resource's value. MID_ECS_NOT_FOUND if resource_id was never
+// issued or the resource isn't currently inserted. Invalidates any span
+// previously obtained for it.
+int32_t mid_ecs_world_resource_remove(MidEcsWorld *world, uint32_t resource_id);
+
 // --- Test fixture (see ffi.rs's own doc comment on this function) ---
 
 // NOT a real part of this library's intended public API -- exists only
@@ -188,6 +223,12 @@ MidEcsWorld *mid_ecs_test_fixture_world_new(void);
 // intermediate archetypes {FlagB} and {FlagB, Health} behind. Never
 // returns NULL.
 MidEcsWorld *mid_ecs_test_filter_fixture_world_new(void);
+
+// NOT a real part of the public API, like the fixtures above. A world for
+// exercising the resource functions: "FfiTime" (`{ float delta; uint32_t
+// frame; }`) registered and inserted as { 0.016f, 7 }, and "FfiGravity"
+// (`{ float g; }`) registered but not inserted. Never returns NULL.
+MidEcsWorld *mid_ecs_test_resource_fixture_world_new(void);
 
 #ifdef __cplusplus
 }
