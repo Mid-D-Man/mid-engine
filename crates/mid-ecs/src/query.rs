@@ -17,7 +17,9 @@
 //! later addition, once `archetype.rs`'s own `Archetypes::iter`/`iter2`
 //! existed to wrap.
 
+use crate::archetype::ArchetypeId;
 use crate::filter::QueryFilter;
+use crate::tick::{ChangeTracker, Tick};
 use crate::world::{Entity, World};
 
 impl World {
@@ -127,9 +129,7 @@ impl World {
     /// question, not a closed one; see `Iter2RefUncheckedAlways`
     /// (`archetype/iter.rs`) for the next thing actually being tried,
     /// not this comment, for the current state.
-    pub fn query2_static_ref<A: 'static, B: 'static>(
-        &self,
-    ) -> impl Iterator<Item = (&A, &B)> + '_ {
+    pub fn query2_static_ref<A: 'static, B: 'static>(&self) -> impl Iterator<Item = (&A, &B)> + '_ {
         self.archetypes.iter2_ref::<A, B>()
     }
 
@@ -192,6 +192,76 @@ impl World {
         &self,
     ) -> impl Iterator<Item = (&A, &B)> + '_ {
         self.archetypes.iter2_ref_filtered::<A, B, F>()
+    }
+
+    // ── Change-detection queries: `Added`/`Changed` ─────────────────
+    //
+    // Deliberately their own methods, not `With`/`Without`-style
+    // `QueryFilter` types composed into `*_filtered`: those are
+    // archetype-level (resolved once, building `matched`), but
+    // added/changed are per-row facts, and checking them inside
+    // `Iter1`/`Iter2`/`Iter1Ref`/`Iter2Ref`'s `next()` is exactly the
+    // kind of change `archetype/iter.rs`'s own header already warns
+    // off — those bodies are held byte-for-byte fixed for the LTO
+    // inline budget. So these walk `Archetypes::rows_with_ticks`
+    // directly (see `tick.rs`) instead, a separate path from every
+    // other query on this `impl World`, and never touch the tuned
+    // iterators. Single-component only, and not combinable with
+    // `With`/`Without` yet — see `docs/mid-ecs.md`, "tick.rs", for the
+    // scope this pass stopped at and why.
+
+    /// Iterates every `(Entity, &T)` whose `T` was inserted after
+    /// `tracker`'s own last-checked tick — including every one that
+    /// currently exists, the first time a given [`ChangeTracker`] is
+    /// used. Archetype Core only, like every other `_static` query.
+    pub fn query_added<T: 'static>(
+        &self,
+        tracker: &ChangeTracker,
+    ) -> impl Iterator<Item = (Entity, &T)> + '_ {
+        self.change_rows::<T>(tracker.last_run(), true)
+    }
+
+    /// Iterates every `(Entity, &T)` whose `T` was inserted or last
+    /// mutated through [`Self::get_static_mut`] after `tracker`'s own
+    /// last-checked tick.
+    pub fn query_changed<T: 'static>(
+        &self,
+        tracker: &ChangeTracker,
+    ) -> impl Iterator<Item = (Entity, &T)> + '_ {
+        self.change_rows::<T>(tracker.last_run(), false)
+    }
+
+    fn change_rows<T: 'static>(
+        &self,
+        last_run: Tick,
+        added_only: bool,
+    ) -> impl Iterator<Item = (Entity, &T)> + '_ {
+        let this_run = self.change_tick();
+        let id = self.archetypes.existing_component_id::<T>();
+        let matched: Vec<ArchetypeId> = match id {
+            Some(id) => self.archetypes.archetypes_with(id).collect(),
+            None => Vec::new(),
+        };
+        matched.into_iter().flat_map(move |archetype_id| {
+            let id = id.expect("matched is only ever populated when id is Some");
+            let (entities, values, ticks) = self
+                .archetypes
+                .rows_with_ticks::<T>(archetype_id, id)
+                .expect("every archetype in matched was just confirmed to hold this component");
+            entities
+                .iter()
+                .copied()
+                .zip(values.iter())
+                .zip(ticks.iter())
+                .filter_map(move |((entity, value), row_ticks)| {
+                    let keep = if added_only {
+                        row_ticks.is_added(last_run, this_run)
+                    } else {
+                        row_ticks.is_changed(last_run, this_run)
+                    };
+                    keep.then_some((entity, value))
+                })
+        })
     }
 
     // ── TEMPORARY, real-CI-only: unsafe + forced inlining, in true
@@ -724,6 +794,21 @@ mod tests {
         );
         assert!(with.iter().all(|e| !without.contains(e)));
         assert_eq!(sorted([with, without].concat()), all);
+    }
+
+    #[test]
+    fn or_filter_works_end_to_end_through_query_static_filtered() {
+        // `Or<(...)>` is itself a `QueryFilter` -- no separate `_or`
+        // query method was needed on `World` to wire it up.
+        use crate::filter::Or;
+        let (w, [plain, player, frozen, both]) = filter_world();
+        let found = sorted(
+            w.query_static_filtered::<Position, Or<(With<Player>, With<Frozen>)>>()
+                .map(|(e, _)| e)
+                .collect(),
+        );
+        assert_eq!(found, sorted(vec![player, frozen, both]));
+        assert!(!found.contains(&plain));
     }
 
     #[test]

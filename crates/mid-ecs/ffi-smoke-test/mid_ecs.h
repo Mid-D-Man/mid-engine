@@ -151,18 +151,25 @@ int32_t mid_ecs_world_archetypes_with_static_component(const MidEcsWorld *world,
 
 // Filtered counterpart of mid_ecs_world_archetypes_with_static_component:
 // enumerates every currently-existing archetype whose signature contains
-// ALL of with_ids and NONE of without_ids (the runtime equivalent of the
-// Rust side's With/Without query filters). Include the component you
-// mean to read in with_ids -- an archetype without it answers
+// ALL of with_ids, NONE of without_ids, and -- if any_of_ids is non-empty
+// -- AT LEAST ONE of any_of_ids (the runtime equivalent of the Rust side's
+// With/Without/Or query filters). Include the component you mean to read
+// in with_ids -- an archetype without it answers
 // mid_ecs_world_static_component_raw_span/_entity_ids with
 // MID_ECS_NOT_FOUND. Structural, like its sibling: archetypes with zero
 // rows are included (their spans come back MID_ECS_OK with count == 0),
-// an id that names no registered component matches nothing in with_ids
-// and is ignored in without_ids, an id in both lists matches nothing, and
-// two empty lists match every archetype. with_ids/without_ids may be NULL
-// only when their length is 0 (MID_ECS_NULL_POINTER otherwise). Same
-// NULL-buffer-queries-count idiom; never returns MID_ECS_NOT_FOUND.
-int32_t mid_ecs_world_archetypes_matching_static(const MidEcsWorld *world, const uint32_t *with_ids, size_t with_len, const uint32_t *without_ids, size_t without_len, uint32_t *out_buf, size_t out_buf_capacity);
+// an id that names no registered component matches nothing in
+// with_ids/any_of_ids and is ignored in without_ids, an id in both
+// with_ids and without_ids matches nothing, and with_ids/without_ids both
+// empty with any_of_ids also empty matches every archetype. Each id list
+// may be NULL only when its own length is 0 (MID_ECS_NULL_POINTER
+// otherwise). Same NULL-buffer-queries-count idiom; never returns
+// MID_ECS_NOT_FOUND.
+// Signature changed when Or was added on the Rust side: any_of_ids/any_of_len
+// were inserted before out_buf. Every existing call site needs those two
+// extra arguments now -- NULL, 0 if unused (an empty any_of is "no Or
+// constraint", matching every archetype on that axis, not "match nothing").
+int32_t mid_ecs_world_archetypes_matching_static(const MidEcsWorld *world, const uint32_t *with_ids, size_t with_len, const uint32_t *without_ids, size_t without_len, const uint32_t *any_of_ids, size_t any_of_len, uint32_t *out_buf, size_t out_buf_capacity);
 
 // --- Resources ---
 //

@@ -157,10 +157,10 @@ int main(void) {
     // intermediates.
     uint32_t sum_hp = 0, rows = 0, archetypes_seen = 0;
     bool all_ok = true;
-#define WALK(with_arr, nwith, without_arr, nwithout) do { \
+#define WALK(with_arr, nwith, without_arr, nwithout, anyof_arr, nanyof) do { \
         sum_hp = 0; rows = 0; archetypes_seen = 0; all_ok = true; \
         uint32_t ids[16]; \
-        int32_t n = mid_ecs_world_archetypes_matching_static(fw, (with_arr), (nwith), (without_arr), (nwithout), ids, 16); \
+        int32_t n = mid_ecs_world_archetypes_matching_static(fw, (with_arr), (nwith), (without_arr), (nwithout), (anyof_arr), (nanyof), ids, 16); \
         if (n < 0) { all_ok = false; n = 0; } \
         archetypes_seen = (uint32_t)n; \
         for (int32_t i = 0; i < n; i++) { \
@@ -176,34 +176,51 @@ int main(void) {
     uint32_t wo_a[] = { fa };
     uint32_t wo_b[] = { fb };
     uint32_t wo_ab[] = { fa, fb };
+    uint32_t ao_ab[] = { fa, fb };
 
-    WALK(w_h, 1, NULL, 0);
+    WALK(w_h, 1, NULL, 0, NULL, 0);
     CHECK(all_ok && archetypes_seen == 4 && rows == 3 && sum_hp == 6,
           "with {Health}: 4 archetypes (one zero-row), 3 rows, hp 1+2+3, every raw_span OK");
-    WALK(w_h, 1, wo_a, 1);
+    WALK(w_h, 1, wo_a, 1, NULL, 0);
     CHECK(all_ok && archetypes_seen == 2 && rows == 1 && sum_hp == 1,
           "with {Health} without {FlagA}: only e1's row, plus the zero-row {FlagB, Health}");
-    WALK(w_ha, 2, NULL, 0);
+    WALK(w_ha, 2, NULL, 0, NULL, 0);
     CHECK(all_ok && archetypes_seen == 2 && rows == 2 && sum_hp == 5,
           "with {Health, FlagA}: e2 and e3, hp 2+3");
-    WALK(w_ha, 2, wo_b, 1);
+    WALK(w_ha, 2, wo_b, 1, NULL, 0);
     CHECK(all_ok && archetypes_seen == 1 && rows == 1 && sum_hp == 2,
           "with {Health, FlagA} without {FlagB}: e2 only");
-    WALK(w_h, 1, wo_ab, 2);
+    WALK(w_h, 1, wo_ab, 2, NULL, 0);
     CHECK(all_ok && archetypes_seen == 1 && rows == 1 && sum_hp == 1,
           "with {Health} without {FlagA, FlagB}: e1 only");
+    // any_of {FlagA, FlagB}: e2 (FlagA) and e3 (FlagA and FlagB), not e1.
+    WALK(w_h, 1, NULL, 0, ao_ab, 2);
+    CHECK(all_ok && archetypes_seen == 3 && rows == 2 && sum_hp == 5,
+          "with {Health} any_of {FlagA, FlagB}: 3 archetypes (the zero-row"
+          " {FlagB, Health} has FlagB in its signature too), e2 and e3's rows, hp 2+3");
+    // Empty any_of is "no constraint", identical to the plain with/without
+    // case above.
+    WALK(w_h, 1, NULL, 0, NULL, 0);
+    int32_t no_any_of_seen = (int32_t)archetypes_seen;
+    WALK(w_h, 1, NULL, 0, ao_ab, 0);
+    CHECK(all_ok && (int32_t)archetypes_seen == no_any_of_seen,
+          "an empty any_of list (non-NULL pointer, zero length) is still 'no constraint'");
 
-    CHECK(mid_ecs_world_archetypes_matching_static(fw, NULL, 0, NULL, 0, NULL, 0) == 6,
-          "two empty lists (NULL, 0) match every archetype, the empty one included");
-    CHECK(mid_ecs_world_archetypes_matching_static(fw, NULL, 1, NULL, 0, NULL, 0) == MID_ECS_NULL_POINTER,
+    CHECK(mid_ecs_world_archetypes_matching_static(fw, NULL, 0, NULL, 0, NULL, 0, NULL, 0) == 6,
+          "three empty lists (NULL, 0) match every archetype, the empty one included");
+    CHECK(mid_ecs_world_archetypes_matching_static(fw, NULL, 1, NULL, 0, NULL, 0, NULL, 0) == MID_ECS_NULL_POINTER,
           "a NULL id list with a non-zero length is MID_ECS_NULL_POINTER");
-    CHECK(mid_ecs_world_archetypes_matching_static(NULL, w_h, 1, NULL, 0, NULL, 0) == MID_ECS_NULL_POINTER,
+    CHECK(mid_ecs_world_archetypes_matching_static(NULL, w_h, 1, NULL, 0, NULL, 0, NULL, 0) == MID_ECS_NULL_POINTER,
           "a NULL world is MID_ECS_NULL_POINTER");
+    CHECK(mid_ecs_world_archetypes_matching_static(fw, w_h, 1, NULL, 0, NULL, 1, NULL, 0) == MID_ECS_NULL_POINTER,
+          "a NULL any_of_ids with a non-zero length is MID_ECS_NULL_POINTER");
     uint32_t bogus_ids[] = { MID_ECS_INVALID_ID };
-    CHECK(mid_ecs_world_archetypes_matching_static(fw, bogus_ids, 1, NULL, 0, NULL, 0) == 0,
+    CHECK(mid_ecs_world_archetypes_matching_static(fw, bogus_ids, 1, NULL, 0, NULL, 0, NULL, 0) == 0,
           "a never-registered id in with_ids matches nothing, and is not an error");
+    CHECK(mid_ecs_world_archetypes_matching_static(fw, w_h, 1, NULL, 0, bogus_ids, 1, NULL, 0) == 0,
+          "any_of naming only a never-registered id matches nothing, even though with_ids alone would");
     uint32_t small_buf[1];
-    CHECK(mid_ecs_world_archetypes_matching_static(fw, w_h, 1, NULL, 0, small_buf, 1) == MID_ECS_BUFFER_TOO_SMALL,
+    CHECK(mid_ecs_world_archetypes_matching_static(fw, w_h, 1, NULL, 0, NULL, 0, small_buf, 1) == MID_ECS_BUFFER_TOO_SMALL,
           "a too-small buffer is MID_ECS_BUFFER_TOO_SMALL, not a partial fill");
     mid_ecs_world_free(fw);
 

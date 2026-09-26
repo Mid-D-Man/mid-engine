@@ -29,10 +29,12 @@ idea":
 2. **Internal-prerequisite gate** — does it require some *other*
    mid-ecs concept that doesn't exist yet (a `System`/`Schedule`
    concept, an `Observer` concept, `Relationship`/hierarchy, an
-   event/message bus, query filter machinery beyond `With`/`Without` on
-   the Archetype Core and two-tuple `query2`: no `Or`, `Changed` or
-   `Added` yet)? This is the gate that actually blocks most of the
-   codebase right now, not gate 1 — see the real numbers below.
+   event/message bus, query filter machinery beyond `With`/`Without`/`Or`
+   on the Archetype Core and two-tuple `query2`: `Changed`/`Added` exist
+   but only as their own single-component `World` methods
+   (`query_added`/`query_changed`), not composable with `With`/`Without`/
+   `Or` or with `query2` yet)? This is the gate that actually blocks most
+   of the codebase right now, not gate 1 — see the real numbers below.
 
 A file can clear gate 1 (touches none of the six) and still be
 completely unusable today because of gate 2. `traversal.rs` and

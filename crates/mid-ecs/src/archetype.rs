@@ -87,6 +87,7 @@ use zerocopy::{Immutable, IntoBytes, KnownLayout};
 
 use crate::component::ComponentId;
 use crate::hash::{DenseIdMap, TypeIdMap};
+use crate::tick::{ComponentTicks, Tick};
 use crate::world::Entity;
 
 /// Type-erased accessor for reading one archetype's column as a raw
@@ -201,6 +202,12 @@ impl<T: 'static> Column for Vec<T> {
 /// lockstep. See this module's doc comment for the full design.
 pub(crate) struct Table {
     columns: SparseSet<ComponentId, Box<dyn Column>>,
+    /// Per-component, row-aligned with `columns`' own `Vec<T>` at the
+    /// same `ComponentId` key -- always the same key set and the same
+    /// length as that column, maintained by `ensure_ticks` alongside
+    /// every `ensure_column` call and updated everywhere a row is
+    /// pushed, migrated, or swap-removed. See `tick.rs`.
+    ticks: SparseSet<ComponentId, Vec<ComponentTicks>>,
     entities: Vec<Entity>,
 }
 
@@ -208,6 +215,7 @@ impl Table {
     fn new() -> Self {
         Self {
             columns: SparseSet::new(),
+            ticks: SparseSet::new(),
             entities: Vec::new(),
         }
     }
@@ -225,6 +233,9 @@ impl Table {
         let last = self.entities.len() - 1;
         for (_, column) in self.columns.iter_mut() {
             column.swap_remove_and_drop(row);
+        }
+        for (_, ticks) in self.ticks.iter_mut() {
+            ticks.swap_remove(row);
         }
         self.entities.swap_remove(row);
         if row == last {
@@ -385,7 +396,7 @@ pub(crate) trait Bundle: Sized + 'static {
     /// time `insert_bundle` calls this, the target archetype (and
     /// therefore its columns) already exists, so this only ever
     /// appends, never creates a table.
-    fn push_into(self, table: &mut Table, ids: &[ComponentId]);
+    fn push_into(self, table: &mut Table, ids: &[ComponentId], tick: Tick);
 
     /// `remove_bundle`'s allocation-free extraction for `B`'s own
     /// elements: pulls `Self` straight out of `columns` via typed
@@ -410,7 +421,7 @@ pub(crate) trait Bundle: Sized + 'static {
     /// archetype-tracked column, not a sparse one. `B`'s own elements
     /// never needing boxing at all, independent of what survives, is
     /// the version of this idea that's actually true unconditionally.
-    fn take_direct(columns: &mut SparseSet<ComponentId, Box<dyn Column>>, ids: &[ComponentId], row: usize) -> Self;
+    fn take_direct(table: &mut Table, ids: &[ComponentId], row: usize) -> Self;
 }
 
 macro_rules! impl_bundle_for_tuple {
@@ -428,7 +439,7 @@ macro_rules! impl_bundle_for_tuple {
                 Some(list)
             }
 
-            fn push_into(self, table: &mut Table, ids: &[ComponentId]) {
+            fn push_into(self, table: &mut Table, ids: &[ComponentId], tick: Tick) {
                 $(
                     ensure_column(&mut table.columns, ids[$idx], || Box::<Vec<$t>>::default());
                     table
@@ -439,19 +450,39 @@ macro_rules! impl_bundle_for_tuple {
                         .downcast_mut::<Vec<$t>>()
                         .expect("column type must match component_id's T — component_ids and push_into share one fixed tuple-position order")
                         .push(self.$idx);
+                    ensure_ticks(&mut table.ticks, ids[$idx]);
+                    table
+                        .ticks
+                        .get_mut(ids[$idx])
+                        .expect("just ensured present")
+                        .push(ComponentTicks::new(tick));
                 )+
             }
 
-            fn take_direct(columns: &mut SparseSet<ComponentId, Box<dyn Column>>, ids: &[ComponentId], row: usize) -> Self {
+            fn take_direct(table: &mut Table, ids: &[ComponentId], row: usize) -> Self {
                 (
                     $(
-                        columns
-                            .get_mut(ids[$idx])
-                            .expect("remove_bundle's fast path only runs when every id in `ids` has a real column")
-                            .as_any_mut()
-                            .downcast_mut::<Vec<$t>>()
-                            .expect("column type must match component_id's T — existing_component_ids and take_direct share one fixed tuple-position order")
-                            .swap_remove(row),
+                        {
+                            // Ticks first: both are swap-removed at the
+                            // same `row`, from the row count each had
+                            // before either removal, so the order
+                            // between the two doesn't change which
+                            // element is removed from either -- they're
+                            // disjoint `Table` fields.
+                            table
+                                .ticks
+                                .get_mut(ids[$idx])
+                                .expect("remove_bundle's fast path only runs when every id in `ids` has a real column, and ensure_ticks always keeps ticks alongside it")
+                                .swap_remove(row);
+                            table
+                                .columns
+                                .get_mut(ids[$idx])
+                                .expect("remove_bundle's fast path only runs when every id in `ids` has a real column")
+                                .as_any_mut()
+                                .downcast_mut::<Vec<$t>>()
+                                .expect("column type must match component_id's T — existing_component_ids and take_direct share one fixed tuple-position order")
+                                .swap_remove(row)
+                        },
                     )+
                 )
             }
@@ -752,6 +783,40 @@ impl Archetypes {
         )
     }
 
+    /// Per-archetype, row-aligned view for change-detection queries:
+    /// entity ids, `T` values, and their [`ComponentTicks`], all indexed
+    /// the same way. `None` if `archetype_id` doesn't exist or its
+    /// signature doesn't include `component_id` — same permanent-fact
+    /// `None` as [`Self::raw_span`], including the same "signature has
+    /// it, no column yet" case reading back as `Some` with empty
+    /// slices. `T`-generic and typed (unlike `raw_span`), so only
+    /// reachable from Rust, not FFI. Used only by
+    /// `World::query_added`/`World::query_changed` — a dedicated path,
+    /// not layered onto `Iter1`/`Iter2` (see `tick.rs`'s doc comment).
+    pub(crate) fn rows_with_ticks<T: 'static>(
+        &self,
+        archetype_id: ArchetypeId,
+        component_id: ComponentId,
+    ) -> Option<(&[Entity], &[T], &[ComponentTicks])> {
+        let archetype = self.archetypes.get(archetype_id)?;
+        if !archetype.component_ids.contains(&component_id) {
+            return None;
+        }
+        let values: &[T] = match archetype.table.columns.get(component_id) {
+            Some(column) => column
+                .as_any()
+                .downcast_ref::<Vec<T>>()
+                .expect("column type must match component_id's T")
+                .as_slice(),
+            None => &[],
+        };
+        let ticks: &[ComponentTicks] = match archetype.table.ticks.get(component_id) {
+            Some(ticks) => ticks.as_slice(),
+            None => &[],
+        };
+        Some((&archetype.table.entities, values, ticks))
+    }
+
     /// Enumerates every currently-existing archetype whose signature
     /// includes `component_id` — the real fragmentation
     /// [`Self::raw_span`]'s own doc comment describes. Not gated by
@@ -771,24 +836,33 @@ impl Archetypes {
     }
 
     /// Enumerates every currently-existing archetype whose signature
-    /// contains *all* of `with` and *none* of `without`. The runtime,
-    /// id-based counterpart to the typed `With`/`Without` filters
+    /// contains *all* of `with`, *none* of `without`, and — if `any_of`
+    /// is non-empty — *at least one* of `any_of`. The runtime, id-based
+    /// counterpart to the typed `With`/`Without`/`Or` filters
     /// (`filter.rs`), for callers that only have `ComponentId`s (the FFI
-    /// surface). Same structural semantics as
-    /// [`Self::archetypes_with`]: zero-row archetypes are included, an
-    /// id that names no archetype-tracked component simply matches
-    /// nothing in `with` and is ignored in `without`, and both lists
-    /// empty means every archetype. Duplicate ids are harmless, and an
-    /// id in both lists matches nothing.
+    /// surface). Same structural semantics as [`Self::archetypes_with`]:
+    /// zero-row archetypes are included, an id that names no
+    /// archetype-tracked component simply matches nothing in `with` or
+    /// `any_of` and is ignored in `without`, and `with`/`without` both
+    /// empty with `any_of` also empty means every archetype. An empty
+    /// `any_of` is "no `Or` constraint", not "match nothing" — matching
+    /// `Or`'s own empty-tuple case has no typed spelling (`Or<()>`
+    /// doesn't implement `QueryFilter`), so there is nothing for this to
+    /// stay consistent with either way; this is the more useful of the
+    /// two readings for a caller who simply isn't using `any_of`.
+    /// Duplicate ids are harmless, and an id in both `with` and
+    /// `without` matches nothing regardless of `any_of`.
     pub(crate) fn archetypes_matching<'a>(
         &'a self,
         with: &'a [ComponentId],
         without: &'a [ComponentId],
+        any_of: &'a [ComponentId],
     ) -> impl Iterator<Item = ArchetypeId> + 'a {
         self.archetypes.iter().filter_map(move |(id, archetype)| {
             let signature = &archetype.component_ids;
             (with.iter().all(|c| signature.contains(c))
-                && !without.iter().any(|c| signature.contains(c)))
+                && !without.iter().any(|c| signature.contains(c))
+                && (any_of.is_empty() || any_of.iter().any(|c| signature.contains(c))))
             .then_some(id)
         })
     }
@@ -878,6 +952,7 @@ impl Archetypes {
         entity: Entity,
         component_id: ComponentId,
         value: T,
+        tick: Tick,
     ) -> bool {
         let Some(&from_location) = self.locations.get(entity) else {
             return false;
@@ -900,12 +975,25 @@ impl Archetypes {
             ensure_column(&mut to_archetype.table.columns, comp, || {
                 column.new_same_type()
             });
+            ensure_ticks(&mut to_archetype.table.ticks, comp);
             let dest = to_archetype
                 .table
                 .columns
                 .get_mut(comp)
                 .expect("just ensured present");
             column.move_row_to(from_location.row, &mut **dest);
+            let moved_ticks = from_archetype
+                .table
+                .ticks
+                .get_mut(comp)
+                .expect("ensure_ticks always keeps ticks alongside its column")
+                .swap_remove(from_location.row);
+            to_archetype
+                .table
+                .ticks
+                .get_mut(comp)
+                .expect("just ensured present")
+                .push(moved_ticks);
         }
         let old_last = from_archetype.table.entities.len() - 1;
         from_archetype.table.entities.swap_remove(from_location.row);
@@ -928,6 +1016,13 @@ impl Archetypes {
                 "column for component_id must hold Vec<T> for this T — component_id is T's own id",
             )
             .push(value);
+        ensure_ticks(&mut to_archetype.table.ticks, component_id);
+        to_archetype
+            .table
+            .ticks
+            .get_mut(component_id)
+            .expect("just ensured present")
+            .push(ComponentTicks::new(tick));
 
         self.locations.insert(
             entity,
@@ -1006,17 +1101,36 @@ impl Archetypes {
                         )
                         .swap_remove(from_location.row),
                 );
+                from_archetype
+                    .table
+                    .ticks
+                    .get_mut(comp)
+                    .expect("ensure_ticks always keeps ticks alongside its column")
+                    .swap_remove(from_location.row);
                 continue;
             }
             ensure_column(&mut to_archetype.table.columns, comp, || {
                 column.new_same_type()
             });
+            ensure_ticks(&mut to_archetype.table.ticks, comp);
             let dest = to_archetype
                 .table
                 .columns
                 .get_mut(comp)
                 .expect("just ensured present");
             column.move_row_to(from_location.row, &mut **dest);
+            let moved_ticks = from_archetype
+                .table
+                .ticks
+                .get_mut(comp)
+                .expect("ensure_ticks always keeps ticks alongside its column")
+                .swap_remove(from_location.row);
+            to_archetype
+                .table
+                .ticks
+                .get_mut(comp)
+                .expect("just ensured present")
+                .push(moved_ticks);
         }
         let old_last = from_archetype.table.entities.len() - 1;
         from_archetype.table.entities.swap_remove(from_location.row);
@@ -1095,7 +1209,7 @@ impl Archetypes {
     /// (unlike `insert_bundle`): a brand-new entity can never already
     /// hold one of `B`'s components, so there is no failure case to
     /// report.
-    pub(crate) fn spawn_bundle<B: Bundle>(&mut self, entity: Entity, bundle: B) {
+    pub(crate) fn spawn_bundle<B: Bundle>(&mut self, entity: Entity, bundle: B, tick: Tick) {
         let ids = B::component_ids(self);
 
         debug_assert!(
@@ -1119,13 +1233,23 @@ impl Archetypes {
 
         let row = to_archetype.table.entities.len();
         to_archetype.table.entities.push(entity);
-        bundle.push_into(&mut to_archetype.table, &ids);
+        bundle.push_into(&mut to_archetype.table, &ids, tick);
 
-        self.locations
-            .insert(entity, EntityLocation { archetype_id: to_id, row });
+        self.locations.insert(
+            entity,
+            EntityLocation {
+                archetype_id: to_id,
+                row,
+            },
+        );
     }
 
-    pub(crate) fn insert_bundle<B: Bundle>(&mut self, entity: Entity, bundle: B) -> bool {
+    pub(crate) fn insert_bundle<B: Bundle>(
+        &mut self,
+        entity: Entity,
+        bundle: B,
+        tick: Tick,
+    ) -> bool {
         let Some(&from_location) = self.locations.get(entity) else {
             return false;
         };
@@ -1160,12 +1284,25 @@ impl Archetypes {
             ensure_column(&mut to_archetype.table.columns, comp, || {
                 column.new_same_type()
             });
+            ensure_ticks(&mut to_archetype.table.ticks, comp);
             let dest = to_archetype
                 .table
                 .columns
                 .get_mut(comp)
                 .expect("just ensured present");
             column.move_row_to(from_location.row, &mut **dest);
+            let moved_ticks = from_archetype
+                .table
+                .ticks
+                .get_mut(comp)
+                .expect("ensure_ticks always keeps ticks alongside its column")
+                .swap_remove(from_location.row);
+            to_archetype
+                .table
+                .ticks
+                .get_mut(comp)
+                .expect("just ensured present")
+                .push(moved_ticks);
         }
         let old_last = from_archetype.table.entities.len() - 1;
         from_archetype.table.entities.swap_remove(from_location.row);
@@ -1174,7 +1311,7 @@ impl Archetypes {
 
         let new_row = to_archetype.table.entities.len();
         to_archetype.table.entities.push(entity);
-        bundle.push_into(&mut to_archetype.table, &ids);
+        bundle.push_into(&mut to_archetype.table, &ids, tick);
 
         self.locations.insert(
             entity,
@@ -1247,14 +1384,27 @@ impl Archetypes {
             ensure_column(&mut to_archetype.table.columns, comp, || {
                 column.new_same_type()
             });
+            ensure_ticks(&mut to_archetype.table.ticks, comp);
             let dest = to_archetype
                 .table
                 .columns
                 .get_mut(comp)
                 .expect("just ensured present");
             column.move_row_to(from_location.row, &mut **dest);
+            let moved_ticks = from_archetype
+                .table
+                .ticks
+                .get_mut(comp)
+                .expect("ensure_ticks always keeps ticks alongside its column")
+                .swap_remove(from_location.row);
+            to_archetype
+                .table
+                .ticks
+                .get_mut(comp)
+                .expect("just ensured present")
+                .push(moved_ticks);
         }
-        let result = B::take_direct(&mut from_archetype.table.columns, &ids, from_location.row);
+        let result = B::take_direct(&mut from_archetype.table, &ids, from_location.row);
 
         let old_last = from_archetype.table.entities.len() - 1;
         from_archetype.table.entities.swap_remove(from_location.row);
@@ -1305,9 +1455,15 @@ impl Archetypes {
         &mut self,
         entity: Entity,
         component_id: ComponentId,
+        tick: Tick,
     ) -> Option<&mut T> {
         let location = *self.locations.get(entity)?;
         let archetype = self.archetypes.get_mut(location.archetype_id)?;
+        if let Some(ticks) = archetype.table.ticks.get_mut(component_id) {
+            if let Some(row_ticks) = ticks.get_mut(location.row) {
+                row_ticks.changed = tick;
+            }
+        }
         let column = archetype.table.columns.get_mut(component_id)?;
         column
             .as_any_mut()
@@ -1382,6 +1538,14 @@ fn ensure_column(
     }
 }
 
+/// `ensure_column`'s counterpart for `Table::ticks` -- called alongside
+/// every `ensure_column` so the two stay at the same key set.
+fn ensure_ticks(ticks: &mut SparseSet<ComponentId, Vec<ComponentTicks>>, id: ComponentId) {
+    if !ticks.contains(id) {
+        ticks.insert(id, Vec::new());
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1419,7 +1583,7 @@ mod tests {
         ar.spawn(e);
 
         let id_a = ar.component_id::<A>();
-        assert!(ar.insert(e, id_a, A(42)));
+        assert!(ar.insert(e, id_a, A(42), Tick::new(1)));
         assert_eq!(ar.get::<A>(e, id_a), Some(&A(42)));
         assert!(ar.has(e, id_a));
     }
@@ -1432,9 +1596,9 @@ mod tests {
         ar.spawn(e);
         let id_a = ar.component_id::<A>();
 
-        assert!(ar.insert(e, id_a, A(1)));
+        assert!(ar.insert(e, id_a, A(1), Tick::new(1)));
         assert!(
-            !ar.insert(e, id_a, A(999)),
+            !ar.insert(e, id_a, A(999), Tick::new(1)),
             "second insert of the same component must be a no-op"
         );
         assert_eq!(
@@ -1454,8 +1618,8 @@ mod tests {
         let id_a = ar.component_id::<A>();
         let id_b = ar.component_id::<B>();
 
-        assert!(ar.insert(e, id_a, A(10)));
-        assert!(ar.insert(e, id_b, B(20)));
+        assert!(ar.insert(e, id_a, A(10), Tick::new(1)));
+        assert!(ar.insert(e, id_b, B(20), Tick::new(1)));
 
         assert_eq!(
             ar.get::<A>(e, id_a),
@@ -1475,9 +1639,9 @@ mod tests {
         let id_b = ar.component_id::<B>();
         let id_c = ar.component_id::<C>();
 
-        ar.insert(e, id_a, A(1));
-        ar.insert(e, id_b, B(2));
-        ar.insert(e, id_c, C(3));
+        ar.insert(e, id_a, A(1), Tick::new(1));
+        ar.insert(e, id_b, B(2), Tick::new(1));
+        ar.insert(e, id_c, C(3), Tick::new(1));
 
         assert_eq!(ar.get::<A>(e, id_a), Some(&A(1)));
         assert_eq!(ar.get::<B>(e, id_b), Some(&B(2)));
@@ -1492,8 +1656,8 @@ mod tests {
         ar.spawn(e);
         let id_a = ar.component_id::<A>();
         let id_b = ar.component_id::<B>();
-        ar.insert(e, id_a, A(10));
-        ar.insert(e, id_b, B(20));
+        ar.insert(e, id_a, A(10), Tick::new(1));
+        ar.insert(e, id_b, B(20), Tick::new(1));
 
         let removed = ar.remove::<B>(e, id_b);
         assert_eq!(removed, Some(B(20)));
@@ -1531,12 +1695,12 @@ mod tests {
         let e = spawn();
         ar.spawn(e);
         let id_a = ar.component_id::<A>();
-        ar.insert(e, id_a, A(5));
+        ar.insert(e, id_a, A(5), Tick::new(1));
         ar.remove::<A>(e, id_a);
 
         // Back in the empty archetype -- inserting A again must work
         // exactly like the very first time.
-        assert!(ar.insert(e, id_a, A(99)));
+        assert!(ar.insert(e, id_a, A(99), Tick::new(1)));
         assert_eq!(ar.get::<A>(e, id_a), Some(&A(99)));
     }
 
@@ -1561,13 +1725,13 @@ mod tests {
 
         // All three land in the same {A} archetype, e1 row 0, e2 row 1,
         // e3 row 2 (insertion order).
-        ar.insert(e1, id_a, A(1));
-        ar.insert(e2, id_a, A(2));
-        ar.insert(e3, id_a, A(3));
+        ar.insert(e1, id_a, A(1), Tick::new(1));
+        ar.insert(e2, id_a, A(2), Tick::new(1));
+        ar.insert(e3, id_a, A(3), Tick::new(1));
 
         // e2 (the middle one, not the last) migrates out by gaining B.
         // e3 (currently last) should get swapped into e2's old row.
-        assert!(ar.insert(e2, id_b, B(200)));
+        assert!(ar.insert(e2, id_b, B(200), Tick::new(1)));
 
         // e1 must be completely unaffected.
         assert_eq!(ar.get::<A>(e1, id_a), Some(&A(1)));
@@ -1584,7 +1748,7 @@ mod tests {
         // And e3's own row must actually be usable for a FURTHER
         // migration afterward -- proves the fix-up wasn't just
         // "readable" but structurally correct for future writes too.
-        assert!(ar.insert(e3, id_b, B(300)));
+        assert!(ar.insert(e3, id_b, B(300), Tick::new(1)));
         assert_eq!(
             ar.get::<A>(e3, id_a),
             Some(&A(3)),
@@ -1610,9 +1774,9 @@ mod tests {
         ar.spawn(e1);
         ar.spawn(e2);
         ar.spawn(e3);
-        ar.insert(e1, id_a, A(1));
-        ar.insert(e2, id_a, A(2));
-        ar.insert(e3, id_a, A(3));
+        ar.insert(e1, id_a, A(1), Tick::new(1));
+        ar.insert(e2, id_a, A(2), Tick::new(1));
+        ar.insert(e3, id_a, A(3), Tick::new(1));
 
         // Despawn the middle entity -- e3 should get swapped into its row.
         ar.despawn(e2);
@@ -1626,7 +1790,7 @@ mod tests {
 
         // And e3's row must still be structurally usable afterward.
         let id_b = ar.component_id::<B>();
-        assert!(ar.insert(e3, id_b, B(30)));
+        assert!(ar.insert(e3, id_b, B(30), Tick::new(1)));
         assert_eq!(ar.get::<A>(e3, id_a), Some(&A(3)));
     }
 
@@ -1647,9 +1811,9 @@ mod tests {
         let e = spawn();
         ar.spawn(e);
         let id_a = ar.component_id::<A>();
-        ar.insert(e, id_a, A(1));
+        ar.insert(e, id_a, A(1), Tick::new(1));
 
-        ar.get_mut::<A>(e, id_a).unwrap().0 = 999;
+        ar.get_mut::<A>(e, id_a, Tick::new(2)).unwrap().0 = 999;
         assert_eq!(ar.get::<A>(e, id_a), Some(&A(999)));
     }
 
@@ -1671,11 +1835,11 @@ mod tests {
         let e2 = spawn();
         ar.spawn(e1);
         ar.spawn(e2);
-        ar.insert(e1, id_a, A(1));
-        ar.insert(e2, id_a, A(2));
+        ar.insert(e1, id_a, A(1), Tick::new(1));
+        ar.insert(e2, id_a, A(2), Tick::new(1));
 
-        ar.insert(e1, id_b, B(10));
-        ar.insert(e2, id_b, B(20));
+        ar.insert(e1, id_b, B(10), Tick::new(1));
+        ar.insert(e2, id_b, B(20), Tick::new(1));
 
         assert_eq!(ar.remove::<A>(e1, id_a), Some(A(1)));
         assert_eq!(ar.remove::<A>(e2, id_a), Some(A(2)));
@@ -1699,12 +1863,12 @@ mod tests {
         for i in 0..30u32 {
             let e = spawn();
             ar.spawn(e);
-            ar.insert(e, id_a, A(i));
+            ar.insert(e, id_a, A(i), Tick::new(1));
             if i % 2 == 0 {
-                ar.insert(e, id_b, B(i * 10));
+                ar.insert(e, id_b, B(i * 10), Tick::new(1));
             }
             if i % 3 == 0 {
-                ar.insert(e, id_c, C(i * 100));
+                ar.insert(e, id_c, C(i * 100), Tick::new(1));
             }
             entities.push((e, i));
         }
@@ -1777,8 +1941,8 @@ mod tests {
         let e2 = spawn();
         ar.spawn(e1);
         ar.spawn(e2);
-        assert!(ar.insert(e1, id, FfiHealth { hp: 10 }));
-        assert!(ar.insert(e2, id, FfiHealth { hp: 20 }));
+        assert!(ar.insert(e1, id, FfiHealth { hp: 10 }, Tick::new(1)));
+        assert!(ar.insert(e2, id, FfiHealth { hp: 20 }, Tick::new(1)));
 
         let archetype_id = ar
             .archetypes_with(id)
@@ -1803,7 +1967,7 @@ mod tests {
         let id = ar.register_ffi::<FfiHealth>("FfiHealth");
         let e = spawn();
         ar.spawn(e);
-        assert!(ar.insert(e, id, FfiHealth { hp: 5 }));
+        assert!(ar.insert(e, id, FfiHealth { hp: 5 }, Tick::new(1)));
         let archetype_id = ar
             .archetypes_with(id)
             .next()
@@ -1842,7 +2006,7 @@ mod tests {
         ar.register_ffi::<FfiMana>("FfiMana");
         let e = spawn();
         ar.spawn(e);
-        assert!(ar.insert_bundle(e, (FfiHealth { hp: 1 }, FfiMana { mp: 2 })));
+        assert!(ar.insert_bundle(e, (FfiHealth { hp: 1 }, FfiMana { mp: 2 }), Tick::new(1)));
 
         let mut counts = Vec::new();
         for archetype_id in ar.archetypes_with(health) {
@@ -1867,7 +2031,7 @@ mod tests {
         let mana = ar.register_ffi::<FfiMana>("FfiMana");
         let e = spawn();
         ar.spawn(e);
-        assert!(ar.insert(e, health, FfiHealth { hp: 1 }));
+        assert!(ar.insert(e, health, FfiHealth { hp: 1 }, Tick::new(1)));
         let health_only = ar.archetypes_with(health).next().unwrap();
         assert_eq!(ar.raw_span(health_only, mana), None);
     }
@@ -1886,13 +2050,13 @@ mod tests {
         for e in [e1, e2, e3, e4] {
             ar.spawn(e);
         }
-        assert!(ar.insert(e1, a, A(1)));
-        assert!(ar.insert(e2, a, A(2)));
-        assert!(ar.insert(e2, b, B(2)));
-        assert!(ar.insert(e3, b, B(3)));
-        assert!(ar.insert(e4, a, A(4)));
-        assert!(ar.insert(e4, b, B(4)));
-        assert!(ar.insert(e4, c, C(4)));
+        assert!(ar.insert(e1, a, A(1), Tick::new(1)));
+        assert!(ar.insert(e2, a, A(2), Tick::new(1)));
+        assert!(ar.insert(e2, b, B(2), Tick::new(1)));
+        assert!(ar.insert(e3, b, B(3), Tick::new(1)));
+        assert!(ar.insert(e4, a, A(4), Tick::new(1)));
+        assert!(ar.insert(e4, b, B(4), Tick::new(1)));
+        assert!(ar.insert(e4, c, C(4), Tick::new(1)));
         let at = |e| ar.locations.get(e).unwrap().archetype_id;
         let archetypes = [at(e1), at(e2), at(e3), at(e4)];
         (ar, [a, b, c], archetypes)
@@ -1903,7 +2067,16 @@ mod tests {
         with: &[ComponentId],
         without: &[ComponentId],
     ) -> Vec<ArchetypeId> {
-        let mut v: Vec<ArchetypeId> = ar.archetypes_matching(with, without).collect();
+        matching_any(ar, with, without, &[])
+    }
+
+    fn matching_any(
+        ar: &Archetypes,
+        with: &[ComponentId],
+        without: &[ComponentId],
+        any_of: &[ComponentId],
+    ) -> Vec<ArchetypeId> {
+        let mut v: Vec<ArchetypeId> = ar.archetypes_matching(with, without, any_of).collect();
         v.sort_by_key(|id| id.as_u32());
         v
     }
@@ -1917,7 +2090,7 @@ mod tests {
     fn archetypes_matching_with_only_equals_archetypes_with() {
         let (ar, [a, ..], _) = matching_fixture();
         let expected: Vec<ArchetypeId> = ar.archetypes_with(a).collect();
-        let actual: Vec<ArchetypeId> = ar.archetypes_matching(&[a], &[]).collect();
+        let actual: Vec<ArchetypeId> = ar.archetypes_matching(&[a], &[], &[]).collect();
         assert_eq!(actual, expected, "same set, same dense order");
     }
 
@@ -1947,9 +2120,50 @@ mod tests {
     fn archetypes_matching_with_both_lists_empty_is_every_archetype() {
         let (ar, _, _) = matching_fixture();
         let all: Vec<ArchetypeId> = ar.archetypes.iter().map(|(id, _)| id).collect();
-        let matched: Vec<ArchetypeId> = ar.archetypes_matching(&[], &[]).collect();
+        let matched: Vec<ArchetypeId> = ar.archetypes_matching(&[], &[], &[]).collect();
         assert_eq!(matched, all);
         assert!(matched.contains(&EMPTY_ARCHETYPE));
+    }
+
+    #[test]
+    fn archetypes_matching_any_of_requires_at_least_one() {
+        let (ar, [a, b, c], [only_a, a_b, only_b, a_b_c]) = matching_fixture();
+        // any_of {A, C}: matches only_a (A), a_b_c (A and C), not only_b
+        // (neither), not a_b (A but that's covered; b_only lacks both).
+        assert_eq!(
+            matching_any(&ar, &[], &[], &[a, c]),
+            sorted_ids(vec![only_a, a_b, a_b_c]),
+            "a_b has A, so it's included too — any_of is 'at least one', not 'only'"
+        );
+        // Combined with `with`: (has B) and (A or C).
+        assert_eq!(
+            matching_any(&ar, &[b], &[], &[a, c]),
+            sorted_ids(vec![a_b, a_b_c])
+        );
+        // Combined with `without`: (A or C) and not B.
+        assert_eq!(
+            matching_any(&ar, &[], &[b], &[a, c]),
+            sorted_ids(vec![only_a])
+        );
+        // any_of naming only ids nothing has: matches nothing.
+        let unknown = ComponentId(9999);
+        assert!(matching_any(&ar, &[], &[], &[unknown]).is_empty());
+        // Contradiction between with and any_of is still just AND-then-OR:
+        // with={B}, any_of={A} -> needs B AND (A) -> a_b, a_b_c.
+        assert_eq!(
+            matching_any(&ar, &[b], &[], &[a]),
+            sorted_ids(vec![a_b, a_b_c])
+        );
+    }
+
+    #[test]
+    fn archetypes_matching_empty_any_of_is_no_constraint_not_match_nothing() {
+        let (ar, [a, ..], _) = matching_fixture();
+        assert_eq!(
+            matching_any(&ar, &[a], &[], &[]),
+            matching(&ar, &[a], &[]),
+            "an empty any_of behaves exactly like archetypes_matching before any_of existed"
+        );
     }
 
     #[test]
@@ -1985,9 +2199,9 @@ mod tests {
         let e2 = spawn();
         ar.spawn(e1);
         ar.spawn(e2);
-        assert!(ar.insert(e1, health_id, FfiHealth { hp: 1 }));
-        assert!(ar.insert(e2, health_id, FfiHealth { hp: 2 }));
-        assert!(ar.insert(e2, a_id, A(99)));
+        assert!(ar.insert(e1, health_id, FfiHealth { hp: 1 }, Tick::new(1)));
+        assert!(ar.insert(e2, health_id, FfiHealth { hp: 2 }, Tick::new(1)));
+        assert!(ar.insert(e2, a_id, A(99), Tick::new(1)));
 
         let archetypes_with_health: Vec<_> = ar.archetypes_with(health_id).collect();
         assert_eq!(
@@ -2014,7 +2228,7 @@ mod tests {
         let id = ar.register_ffi::<FfiHealth>("FfiHealth");
         let e = spawn();
         ar.spawn(e);
-        assert!(ar.insert(e, id, FfiHealth { hp: 1 }));
+        assert!(ar.insert(e, id, FfiHealth { hp: 1 }, Tick::new(1)));
         let archetype_id = ar.archetypes_with(id).next().expect("just inserted");
         assert_eq!(ArchetypeId::from_u32(archetype_id.as_u32()), archetype_id);
     }
@@ -2039,7 +2253,7 @@ mod tests {
         let id = ar.register_ffi::<FfiHealth>("FfiHealth");
         let e = spawn();
         ar.spawn(e);
-        assert!(ar.insert(e, id, FfiHealth { hp: 5 }));
+        assert!(ar.insert(e, id, FfiHealth { hp: 5 }, Tick::new(1)));
         let archetype_id = ar
             .archetypes_with(id)
             .next()
@@ -2063,8 +2277,8 @@ mod tests {
         let e2 = spawn();
         ar.spawn(e1);
         ar.spawn(e2);
-        assert!(ar.insert(e1, id, FfiHealth { hp: 10 }));
-        assert!(ar.insert(e2, id, FfiHealth { hp: 20 }));
+        assert!(ar.insert(e1, id, FfiHealth { hp: 10 }, Tick::new(1)));
+        assert!(ar.insert(e2, id, FfiHealth { hp: 20 }, Tick::new(1)));
 
         let archetype_id = ar
             .archetypes_with(id)
@@ -2108,9 +2322,9 @@ mod tests {
         // e2 row 1, e3 row 2 (insertion order). The archetype itself
         // doesn't exist until the first insert creates it via
         // migration, so it's captured after, not before.
-        assert!(ar.insert(e1, health_id, FfiHealth { hp: 1 }));
-        assert!(ar.insert(e2, health_id, FfiHealth { hp: 2 }));
-        assert!(ar.insert(e3, health_id, FfiHealth { hp: 3 }));
+        assert!(ar.insert(e1, health_id, FfiHealth { hp: 1 }, Tick::new(1)));
+        assert!(ar.insert(e2, health_id, FfiHealth { hp: 2 }, Tick::new(1)));
+        assert!(ar.insert(e3, health_id, FfiHealth { hp: 3 }, Tick::new(1)));
         let archetype_id = ar
             .archetypes_with(health_id)
             .next()
@@ -2119,7 +2333,7 @@ mod tests {
         // e2 (the middle one, not the last) migrates out of
         // archetype_id by gaining A. e3 (currently last in
         // archetype_id's table) gets swapped into e2's old row.
-        assert!(ar.insert(e2, a_id, A(200)));
+        assert!(ar.insert(e2, a_id, A(200), Tick::new(1)));
 
         let ids = ar
             .entity_ids(archetype_id, health_id)

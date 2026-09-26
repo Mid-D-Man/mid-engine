@@ -2162,12 +2162,13 @@ rather than once per component, is the next structural candidate here,
 mirroring bevy's own `bundle_ids: TypeIdMap<BundleId>` read from its
 0.19.1 source earlier in this doc), location `SparseSet::insert` 69.
 
-### `filter.rs`: `With` / `Without` query filters
+### `filter.rs`: `With` / `Without` / `Or` query filters
 
 **What it does:** Narrows which archetypes a query on the Archetype Core
 visits, without adding anything to the query's item. `With<T>` keeps an
 archetype only if `T` is in its signature, `Without<T>` only if it is not,
-and a tuple `(F1, F2, ...)` (up to eight members) only if every member
+a tuple `(F1, F2, ...)` (up to eight members) only if *every* member does,
+and `Or<(F1, F2, ...)>` (also up to eight members) only if *any* member
 does. `()` means no filter.
 
 ```rust
@@ -2223,11 +2224,35 @@ AND.
 - *Archetype half only.* Bevy's trait splits filters into archetypal ones
   (`IS_ARCHETYPAL`, resolved per archetype) and per-row ones (`Changed`,
   `Added`, which call `filter_fetch` per entity and need change-detection
-  ticks on columns). This trait has only the archetypal half.
-  `Or`, `Changed` and `Added` are not implemented. `Or` fits the existing
-  state design with no rework. `Changed`/`Added` need column tick storage
-  and a per-row path, which is a separate, larger piece of work and will
-  change this trait.
+  ticks on columns). This trait has only the archetypal half. `Changed`
+  and `Added` are *not* implemented as `QueryFilter`s — they exist, but as
+  their own dedicated `World` methods, entirely outside this trait; see
+  `tick.rs` below for why, and what "outside this trait" actually means
+  for how they compose with `With`/`Without`/`Or` today (it doesn't, yet).
+
+**`Or`: OR-semantics tuples.** `Or<(F1, F2, ...)>` wraps a tuple the same
+way the plain tuple impl does, but evaluates it with OR instead of AND.
+That needed a second trait, `OrFilterGroup` (sealed, implemented only for
+tuples of `QueryFilter` up to eight members by
+`impl_or_filter_group_for_tuple!`), because the plain tuple `QueryFilter`
+impl's own `matches_component_set` is hard-coded to AND — `Or` can't just
+call it. `OrFilterGroup::any_matches` is the OR version of that same
+check; `Or<T: OrFilterGroup>`'s own `QueryFilter` impl is a two-line
+wrapper delegating to it. `Or` is itself a `QueryFilter`, so it composes
+with everything else: `(Or<(With<A>, With<B>)>, Without<C>)` is `(A or B)
+and not C`, and `Or` can nest inside `Or`. Read directly from bevy's own
+`Or<T>` (`query/filter.rs`) for the shape (a tuple's states ORed together
+via a second per-member check, not the tuple's own AND check) — this
+crate's version differs the same two ways the plain tuple version does
+(sealed instead of `unsafe`, no registration on a read path), for the same
+reasons. `Or<()>` has no impl and does not compile — there's no sensible
+"any of nothing" reading to pick, and nothing needs it.
+
+`archetypes_matching`/`archetypes_matching_static`/
+`mid_ecs_world_archetypes_matching_static` (below) all gained a third
+`any_of` list for `Or`'s id-based counterpart, in the same pass — this
+crate's stated policy for the FFI surface (each new ECS feature ships its
+C counterpart alongside it, not as an afterthought).
 
 **Scope limits, on purpose:**
 
@@ -2265,16 +2290,23 @@ while mid-ecs builds its matched list inside it on every iteration
 archetypes in `QueryState`; mid-ecs does not, and would only need to if
 query creation ever shows up in a profile.
 
-**Tests:** 225 default (27 new), 230 with `scratch-arena`, plus one
-compiled doctest on `query_static_filtered`. 11 new tests in `filter.rs`
-cover the leaf and tuple logic without a `World` (unregistered types, empty
-signatures, contradictory tuples, nested tuples, the eight-member arity).
-16 new tests in `query.rs` cover all four `World` methods across four
-distinct archetypes, `()` matching the unfiltered query exactly including
-order, `With` and `Without` partitioning the unfiltered result, results
-following `remove_static`/`insert_static`/`despawn`, and zero-row
-intermediate archetypes left behind by `insert_bundle` (a `Without` filter
-matches those and must contribute nothing and not panic).
+**Tests:** 225 default (27 new) at first delivery, 230 with
+`scratch-arena`, plus one compiled doctest on `query_static_filtered`. 11
+tests in `filter.rs` cover the leaf and tuple logic without a `World`
+(unregistered types, empty signatures, contradictory tuples, nested
+tuples, the eight-member arity). 16 tests in `query.rs` cover all four
+`World` methods across four distinct archetypes, `()` matching the
+unfiltered query exactly including order, `With` and `Without`
+partitioning the unfiltered result, results following
+`remove_static`/`insert_static`/`despawn`, and zero-row intermediate
+archetypes left behind by `insert_bundle` (a `Without` filter matches
+those and must contribute nothing and not panic). `Or` added 8 more tests
+in `filter.rs` (any-member matching, one-member and nested `Or`, `Or`
+composing inside a tuple, the eight-member arity, an unregistered member
+inside `Or` not poisoning the whole filter the way it would inside a plain
+`With` tuple) and one `query.rs` test proving `Or` needed no new `World`
+method — it's a `QueryFilter` like any other, so it works through
+`query_static_filtered` unmodified.
 
 **Bench:** new group `filtered_query_iteration` in
 `benches/ecs-vs-bevy-ecs/benches/vs_bevy_ecs.rs`, mid-ecs's
@@ -2347,28 +2379,45 @@ surface already is:
 - Same structural semantics as the Rust side, with a test that runs both
   and compares them.
 
-**What was added.** `Archetypes::archetypes_matching(with, without)` and
-`World::archetypes_matching_static(with, without)` list every archetype
-whose signature contains all of `with` and none of `without`. Over C:
+**What was added.** `Archetypes::archetypes_matching(with, without, any_of)`
+and `World::archetypes_matching_static(with, without, any_of)` list every
+archetype whose signature contains all of `with`, none of `without`, and —
+if `any_of` is non-empty — at least one of `any_of`. Over C:
 
 ```c
 int32_t mid_ecs_world_archetypes_matching_static(
     const MidEcsWorld *world,
     const uint32_t *with_ids, size_t with_len,
     const uint32_t *without_ids, size_t without_len,
+    const uint32_t *any_of_ids, size_t any_of_len,
     uint32_t *out_buf, size_t out_buf_capacity);
 ```
 
 It follows the conventions of `mid_ecs_world_archetypes_with_static_component`:
 a NULL `out_buf` returns the count, a too-small buffer returns
 `MID_ECS_BUFFER_TOO_SMALL` with nothing written, and it never returns
-`MID_ECS_NOT_FOUND`. An id list may be NULL only when its length is 0. The
-semantics are structural: archetypes with zero rows are included, an id
-that names no registered component matches nothing in `with_ids` and is
-ignored in `without_ids`, an id in both lists matches nothing, and two
-empty lists match every archetype (the empty archetype included). Include
-the component to be read in `with_ids`, since an archetype that lacks it
-answers `raw_span` and `entity_ids` with `MID_ECS_NOT_FOUND`.
+`MID_ECS_NOT_FOUND`. Each id list may be NULL only when its own length is
+0. The semantics are structural: archetypes with zero rows are included,
+an id that names no registered component matches nothing in
+`with_ids`/`any_of_ids` and is ignored in `without_ids`, an id in both
+`with_ids` and `without_ids` matches nothing, and `with_ids`/`without_ids`
+both empty with `any_of_ids` also empty matches every archetype (the empty
+archetype included). An empty `any_of_ids` is "no `Or` constraint", not
+"match nothing" — the same reading `Or`'s own Rust side has no typed
+spelling for (see the `filter.rs` section above). Include the component to
+be read in `with_ids`, since an archetype that lacks it answers `raw_span`
+and `entity_ids` with `MID_ECS_NOT_FOUND`.
+
+**`any_of_ids`/`any_of_len` were added to this function's signature when
+`Or` landed on the Rust side**, inserted before `out_buf` — a breaking
+signature change to a function that had already shipped, not a second
+function. This project's own convention: the C surface is redelivered in
+full with every change, never frozen against a stable ABI mid-development,
+so extending an existing signature and updating every call site in the
+same pass (the 7 in `ffi.rs`'s own tests, plus `test.c`) costs the same as
+adding a parallel function, without leaving two ways to do the same thing.
+Every existing call site (this crate's own tests included) needed the two
+new arguments added — `NULL, 0` where unused.
 
 This is the same set of archetypes the typed `*_static_filtered` queries
 visit. A test builds one world, runs eight filter combinations through both
@@ -2407,20 +2456,38 @@ reverting it): one at the `Archetypes` level, and two through the C
 surface, one of which walks every enumerated archetype and requires `OK`
 from `raw_span`.
 
-**Tests:** 237 default (12 new: 6 at the `Archetypes` level covering
-`archetypes_matching` and the `raw_span` cases, 6 through the C surface
-covering the expected archetype counts, `raw_span` on every enumerated
-archetype, typed-versus-FFI parity, the buffer idiom, the NULL cases, and
-bogus and contradictory ids). The C smoke test gained 13 checks and
-compiles clean under `-Wall -Wextra`; it ran against a debug
-`libmid_ecs.so` in the sandbox and all checks passed. In CI that step is
-`continue-on-error`, so read `mid-ecs-ffi-smoke-raw.txt` and do not rely
-on a green job.
+**Tests (first delivery, `With`/`Without` only):** 237 default (12 new: 6
+at the `Archetypes` level covering `archetypes_matching` and the
+`raw_span` cases, 6 through the C surface covering the expected archetype
+counts, `raw_span` on every enumerated archetype, typed-versus-FFI parity,
+the buffer idiom, the NULL cases, and bogus and contradictory ids). The C
+smoke test gained 13 checks and compiles clean under `-Wall -Wextra`; it
+ran against a debug `libmid_ecs.so` in the sandbox and all checks passed.
 
-**Not covered, on purpose.** `Or` and any-of lists (`Or` is not built on
-the Rust side yet; the C form would be a third list, `any_of_ids`, added
-with it), the Sparse Shell (no archetypes to enumerate), and change
-detection.
+**Tests added for `any_of` (`Or`).** 2 more at the `Archetypes` level
+(`any_of` requiring at least one match, combined with `with`/`without`; an
+empty `any_of` behaving exactly like the pre-`any_of` function), 1 more
+through the C surface (`matching_static_any_of_matches_the_typed_or_filter`:
+`any_of` matching the typed `Or<(With<A>, With<B>)>` filter exactly via
+`entities_via_ffi` extended with an `any_of` parameter, an empty `any_of`
+matching the plain call, and `any_of` naming only a never-registered id
+matching nothing), plus the NULL case for `any_of_ids` with a non-zero
+length added to the existing NULL-pointer test. `test.c`'s own `WALK`
+macro gained an `any_of` pair of arguments, plus three new checks: `with
+{Health} any_of {FlagA, FlagB}` — 3 archetypes, not 2, because the
+zero-row `{FlagB, Health}` intermediate has `FlagB` in its own signature
+too and so still counts, a fact this project's own earlier
+`archetypes_with` tests had already established but this delivery's first
+draft of the new check forgot, caught by actually compiling and running
+it (real gcc, real link, real failure) rather than predicting the
+number — an empty, non-NULL `any_of` matching the no-`any_of` count
+exactly, and `any_of` naming only a never-registered id matching nothing.
+In CI the C smoke step is `continue-on-error`, so read
+`mid-ecs-ffi-smoke-raw.txt` and do not rely on a green job.
+
+**Not covered, on purpose.** The Sparse Shell (no archetypes to
+enumerate) and change detection. `Changed`/`Added`'s own FFI surface is a
+separate, deliberately deferred scoping decision — see `tick.rs` below.
 
 ### `resource.rs`: resources and their C write path
 
@@ -2506,4 +2573,145 @@ hash probe plus a `downcast_ref`; bevy's is an id-indexed lookup. A
 `resource_access` group against `world.resource::<T>()` is the natural next
 measurement, and given the inlining behaviour recorded in the filters section,
 read its ratio with the bench binary's layout in mind.
+
+### `tick.rs`: change ticks, `ChangeTracker`, `Added`/`Changed` queries
+
+**What it does.** `World` owns one monotonically increasing counter
+(`Tick`, a `u32` wrapper), advanced by `World::increment_change_tick()`.
+Every archetype-tracked component value gets a paired `ComponentTicks {
+added, changed }`: `added`/`changed` are both set to the current tick on
+insertion (`insert_static`, `insert_bundle`, `spawn_bundle`), and
+`changed` is updated again on every `World::get_static_mut` call — the
+only place a value can be mutated through, since there is no bulk
+`&mut` query yet. `ChangeTracker` is a small, caller-held "since when"
+marker: `ChangeTracker::new()` starts at `Tick::ZERO` (so a fresh one
+sees everything currently present as added/changed), and
+`ChangeTracker::update(&world)` advances it to the world's current tick.
+`World::query_added::<T>(&tracker)` and `World::query_changed::<T>(&tracker)`
+are the two new `World` methods that read it.
+
+```rust
+let mut tracker = ChangeTracker::new();
+// ... spawn / mutate entities ...
+for (entity, health) in world.query_changed::<Health>(&tracker) { /* ... */ }
+tracker.update(&world); // now last_run == this step's tick
+world.increment_change_tick(); // caller's own game loop, once per step
+```
+
+**No `Schedule`, so this is manual.** Bevy's own change detection is
+automatic because a `System` has its own `last_run` tick that its
+`Schedule` advances for it. This crate has neither, so the caller owns
+both steps explicitly: advancing the world's tick once per step of their
+own game loop, and advancing each `ChangeTracker` they keep after using
+it. This is not a smaller version of bevy's design so much as the same
+mechanism with the automation stripped out, because there is nothing yet
+to do the automating.
+
+**Deliberately simplified relative to bevy's own tick comparison.** The
+comparison itself (`Tick::is_newer_than`, wrapping-counter arithmetic) is
+read directly from `Mid-D-Man/bevy`'s `change_detection/tick.rs` — same
+`ticks_since_insert`/`ticks_since_last_run` shape. What was **not**
+ported: bevy periodically scans every stored tick (`check_tick`) and
+clamps its age to `MAX_CHANGE_AGE`, because a long-running `Schedule`
+would otherwise let `this_run - tick` overflow `u32::MAX` and silently
+invert every comparison. Nothing here runs that scan, so the comparison
+is only correct as long as no single tick's age exceeds roughly
+`u32::MAX / 2` — at one `increment_change_tick` per rendered frame,
+somewhere past a billion frames between an insertion and a query
+checking it. Stated in `tick.rs`'s own doc comment as a real, load-bearing
+limit, not a rounding error glossed over: a `check_tick`-equivalent is
+real future work if this crate ever needs to run that long without a
+restart.
+
+**Why `Added`/`Changed` are their own `World` methods, not `QueryFilter`
+types.** This was the plan going into this pass (see `filter.rs`'s own
+earlier note: "`Changed`/`Added` ... will change this trait"), and it
+turned out to conflict with something this project has already paid for
+twice: `archetype/iter.rs`'s `next()` bodies are held byte-for-byte fixed
+because the whole-program inliner's willingness to resolve them at all is
+inline-budget-sensitive, and the `filter.rs` section above just measured
+that sensitivity directly (a 3x per-row swing from one unrelated line of
+code in the same binary). `Added`/`Changed` are inherently a per-row
+check — unlike `With`/`Without`/`Or`, which resolve once per archetype
+before `next()` is ever called — so making them `QueryFilter`s the same
+way would mean a branch inside `Iter1`/`Iter2`/`Iter1Ref`/`Iter2Ref`'s
+`next()` itself, which is exactly the kind of change that file's own
+header already warns off. So `query_added`/`query_changed` are a separate
+path (`World::change_rows` in `query.rs`): walk
+`Archetypes::archetypes_with`, then a new `Archetypes::rows_with_ticks`
+gives one archetype's entities/values/ticks as three row-aligned slices,
+zipped and filtered with a plain iterator chain. Neither touches
+`Iter1`/`Iter2`/`Iter1Ref`/`Iter2Ref` or their `matched`-list-building
+helpers at all.
+
+**Scope this pass stopped at, stated plainly:**
+
+- **Single-component only.** `query_added<T>`/`query_changed<T>` take one
+  type, both the filter and the fetch. No `query2_added`, and no way yet
+  to combine an archetype-level `With`/`Without`/`Or` filter with a
+  row-level `Added`/`Changed` check in one call — the natural next step,
+  not built here.
+- **No bulk mutable query.** `World::get_static_mut` is the *only* place
+  `changed` gets touched, because it's the only place that exists.
+  Whenever a `query_static_mut`-style bulk mutable iterator gets built,
+  it needs to mark `changed` per row it yields, or `Changed` will silently
+  miss everything written through it.
+- **No FFI counterpart yet, unlike every other feature this pass** (`Or`
+  included). This is the one deliberate exception to this crate's own
+  "ship the C counterpart alongside it" rule, for a real reason: a C
+  caller would need per-row tick data, not just an archetype list — a
+  fundamentally different shape from every enumeration function that
+  exists so far (`raw_span`, `entity_ids`, `archetypes_matching_static`),
+  and one that deserves its own design pass (a parallel tick buffer next
+  to `raw_span`? a `last_run`/`this_run` pair passed in and a filtered
+  index list back?) rather than being bolted on to fit the existing
+  shape. Left for the dedicated FFI test/bench pass mentioned below.
+
+**Row-alignment risk, and how it was actually checked, not just argued.**
+Threading `Table::ticks` (a new `SparseSet<ComponentId, Vec<ComponentTicks>>`,
+row-aligned with `Table::columns`' own per-component `Vec<T>`, mirrored via
+a new `ensure_ticks` alongside every `ensure_column`) through
+`Table::swap_remove_row`, `Archetypes::insert<T>`/`remove<T>`,
+`spawn_bundle`/`insert_bundle`/`remove_bundle`'s survivor-migration loops,
+and the `Bundle` trait's `push_into`/`take_direct` touches nearly every
+structural code path in `archetype.rs`. The existing 260-test suite passing
+unchanged is one signal, but the real, adversarial check was two mutation
+tests added specifically for this: spawn 6 entities sharing one archetype,
+mutate two of them, then force a swap-remove that lands a *mutated* entity
+into the *slot being freed* (despawning entity 0, whose freed row-0 slot
+gets filled by entity 5's row — the table's last row — because
+`Vec::swap_remove(0)` moves the last element into the freed one). A ticks
+vector that wasn't kept in lockstep would make entity 5 read back with
+entity 0's stale, never-changed ticks instead of its own — and a plain
+"despawn from the middle, check the untouched ones" test does not expose
+this, because coincidentally correct-looking output can hide the bug (this
+project's own first draft of this test made exactly that mistake and had
+to be rewritten once the coincidence was noticed). Both mutation checks
+were actually run: reverting `swap_remove_row`'s ticks handling, and
+separately reverting `insert<T>`'s survivor-tick migration, each broke the
+adversarial test (the second one also broke several pre-existing tests via
+a `ticks`/`columns` key-set mismatch panic elsewhere, extra confirmation
+the migration code is load-bearing) — confirmed by actually reverting and
+re-running, not assumed from reading the diff.
+
+**Tests:** 294 with `scratch-arena` (289 default), up from 260 at the
+start of this pass. 7 in `tick.rs` itself (ordering, the tick-zero
+boundary, and a `u32` wraparound case for `is_newer_than`; `added`/
+`changed` diverging independently on one `ComponentTicks`). 10 in
+`world.rs`: the tick counter starting at 1 and advancing, a fresh tracker
+seeing everything present, `update` narrowing what a tracker sees,
+`get_static_mut` marking `changed` but not `added`, a read-only
+`get_static` never marking `changed`, survivor ticks preserved across both
+an unrelated insert and an unrelated remove (proving a structural move
+doesn't look like a re-add or a spurious change), `query_added`/
+`query_changed` empty for a never-registered type, and the two adversarial
+swap-remove tests above (one through `Table::swap_remove_row` via
+`despawn`, one through `Archetypes::insert<T>`'s survivor-migration path).
+
+**Not measured.** No bench group yet for `query_added`/`query_changed` or
+for the per-insertion/per-mutation tick-write cost. The tick write itself
+is two `u32` stores per insertion and one per `get_static_mut` call, so it
+should be small next to everything else those paths already do, but that's
+an expectation, not a measurement — put it through the same real-CI
+process as everything else here before trusting it.
 

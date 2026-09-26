@@ -684,10 +684,11 @@ pub unsafe extern "C" fn mid_ecs_world_archetypes_with_static_component(
 }
 
 /// Enumerates every currently-existing archetype whose signature
-/// contains *all* of `with_ids` and *none* of `without_ids`, writing each
-/// as a plain `u32` — the runtime counterpart to the typed
-/// `With`/`Without` query filters on the Rust side. Pass the ids back
-/// into [`mid_ecs_world_static_component_raw_span`]/
+/// contains *all* of `with_ids`, *none* of `without_ids`, and — if
+/// `any_of_ids` is non-empty — *at least one* of `any_of_ids`, writing
+/// each as a plain `u32` — the runtime counterpart to the typed
+/// `With`/`Without`/`Or` query filters on the Rust side. Pass the ids
+/// back into [`mid_ecs_world_static_component_raw_span`]/
 /// [`mid_ecs_world_static_component_entity_ids`] as-is. Include the
 /// component you intend to read in `with_ids`: an archetype that doesn't
 /// hold it answers those two calls with `NotFound`.
@@ -695,17 +696,27 @@ pub unsafe extern "C" fn mid_ecs_world_archetypes_with_static_component(
 /// Structural, like [`mid_ecs_world_archetypes_with_static_component`]:
 /// archetypes with zero rows are included (their spans come back `Ok`
 /// with `count == 0`), an id that names no registered component matches
-/// nothing in `with_ids` and is ignored in `without_ids`, an id in both
-/// lists matches nothing, and two empty lists match every archetype.
-/// Never returns `NotFound`. Same NULL-buffer-queries-count idiom as the
-/// other enumerations.
+/// nothing in `with_ids`/`any_of_ids` and is ignored in `without_ids`, an
+/// id in both `with_ids` and `without_ids` matches nothing, and
+/// `with_ids`/`without_ids` both empty with `any_of_ids` also empty
+/// matches every archetype. An empty `any_of_ids` is "no `Or`
+/// constraint", not "match nothing" — pass a zero length (the pointer
+/// may then be NULL or dangling) when there's no `any_of` list. Never
+/// returns `NotFound`. Same NULL-buffer-queries-count idiom as the other
+/// enumerations.
+///
+/// **Signature change:** this function gained `any_of_ids`/`any_of_len`
+/// (inserted before `out_buf`) when `Or` was added on the Rust side —
+/// every existing call site needs those two arguments now, `NULL, 0` if
+/// unused. See `docs/mid-ecs.md`, "filter.rs" (the `Or` section), for
+/// why this signature was changed rather than adding a second function.
 ///
 /// # Safety
 /// `world` must be a valid, non-null handle from `mid_ecs_world_new`.
 /// `with_ids` must be NULL only if `with_len` is 0, otherwise valid for
-/// `with_len` `uint32_t` elements; likewise `without_ids`/`without_len`.
-/// If `out_buf` is non-null, it must be valid for `out_buf_capacity`
-/// `uint32_t` elements.
+/// `with_len` `uint32_t` elements; likewise `without_ids`/`without_len`
+/// and `any_of_ids`/`any_of_len`. If `out_buf` is non-null, it must be
+/// valid for `out_buf_capacity` `uint32_t` elements.
 #[no_mangle]
 pub unsafe extern "C" fn mid_ecs_world_archetypes_matching_static(
     world: *const MidEcsWorld,
@@ -713,6 +724,8 @@ pub unsafe extern "C" fn mid_ecs_world_archetypes_matching_static(
     with_len: usize,
     without_ids: *const u32,
     without_len: usize,
+    any_of_ids: *const u32,
+    any_of_len: usize,
     out_buf: *mut u32,
     out_buf_capacity: usize,
 ) -> i32 {
@@ -720,6 +733,7 @@ pub unsafe extern "C" fn mid_ecs_world_archetypes_matching_static(
         if world.is_null()
             || (with_ids.is_null() && with_len > 0)
             || (without_ids.is_null() && without_len > 0)
+            || (any_of_ids.is_null() && any_of_len > 0)
         {
             return MidEcsStatus::NullPointer as i32;
         }
@@ -735,9 +749,10 @@ pub unsafe extern "C" fn mid_ecs_world_archetypes_matching_static(
         };
         let with = read_ids(with_ids, with_len);
         let without = read_ids(without_ids, without_len);
+        let any_of = read_ids(any_of_ids, any_of_len);
         let ids: Vec<u32> = world
             .0
-            .archetypes_matching_static(&with, &without)
+            .archetypes_matching_static(&with, &without, &any_of)
             .map(|id| id.as_u32())
             .collect();
         if out_buf.is_null() {
@@ -1365,7 +1380,7 @@ mod tests {
 
     // ── archetypes_matching_static ──────────────────────────────────
 
-    use crate::filter::{QueryFilter, With, Without};
+    use crate::filter::{Or, QueryFilter, With, Without};
 
     fn empty_span() -> FfiSpan {
         FfiSpan {
@@ -1383,8 +1398,19 @@ mod tests {
         id
     }
 
-    /// Runs the count-then-fill idiom the C header documents.
+    /// Runs the count-then-fill idiom the C header documents, with no
+    /// `any_of` constraint. See [`matching_ids_any`] for the `Or` form.
     fn matching_ids(world: *const MidEcsWorld, with: &[u32], without: &[u32]) -> Vec<u32> {
+        matching_ids_any(world, with, without, &[])
+    }
+
+    /// [`matching_ids`], with an explicit `any_of` (`Or`) list.
+    fn matching_ids_any(
+        world: *const MidEcsWorld,
+        with: &[u32],
+        without: &[u32],
+        any_of: &[u32],
+    ) -> Vec<u32> {
         // SAFETY: `world` is a live handle; the id slices outlive the call.
         let count = unsafe {
             mid_ecs_world_archetypes_matching_static(
@@ -1393,6 +1419,8 @@ mod tests {
                 with.len(),
                 without.as_ptr(),
                 without.len(),
+                any_of.as_ptr(),
+                any_of.len(),
                 std::ptr::null_mut(),
                 0,
             )
@@ -1407,6 +1435,8 @@ mod tests {
                 with.len(),
                 without.as_ptr(),
                 without.len(),
+                any_of.as_ptr(),
+                any_of.len(),
                 buf.as_mut_ptr(),
                 buf.len(),
             )
@@ -1423,9 +1453,10 @@ mod tests {
         read: u32,
         with: &[u32],
         without: &[u32],
+        any_of: &[u32],
     ) -> Vec<u64> {
         let mut out = Vec::new();
-        for archetype in matching_ids(world, with, without) {
+        for archetype in matching_ids_any(world, with, without, any_of) {
             let mut span = empty_span();
             // SAFETY: `world` is a live handle, `span` is valid.
             let status = unsafe {
@@ -1502,7 +1533,7 @@ mod tests {
 
         // `entities_via_ffi` asserts `Ok` from raw_span on all four
         // archetypes, one of which never held a row.
-        let found = entities_via_ffi(world, h, &[h], &[]);
+        let found = entities_via_ffi(world, h, &[h], &[], &[]);
         assert_eq!(found.len(), 3);
 
         // SAFETY: as above.
@@ -1519,7 +1550,7 @@ mod tests {
         let world = unsafe { &(*world_ptr).0 };
 
         let check = |typed: Vec<u64>, with: &[u32], without: &[u32], expected_len: usize| {
-            let via_ffi = entities_via_ffi(world_ptr, h, with, without);
+            let via_ffi = entities_via_ffi(world_ptr, h, with, without, &[]);
             assert_eq!(via_ffi, typed, "with {with:?} without {without:?}");
             assert_eq!(
                 typed.len(),
@@ -1590,6 +1621,8 @@ mod tests {
                 with.len(),
                 std::ptr::null(),
                 0,
+                std::ptr::null(),
+                0,
                 buf,
                 cap,
             )
@@ -1640,6 +1673,8 @@ mod tests {
                     1,
                     std::ptr::null(),
                     0,
+                    std::ptr::null(),
+                    0,
                     std::ptr::null_mut(),
                     0
                 ),
@@ -1651,6 +1686,8 @@ mod tests {
                     world,
                     std::ptr::null(),
                     1,
+                    std::ptr::null(),
+                    0,
                     std::ptr::null(),
                     0,
                     std::ptr::null_mut(),
@@ -1666,6 +1703,8 @@ mod tests {
                     1,
                     std::ptr::null(),
                     2,
+                    std::ptr::null(),
+                    0,
                     std::ptr::null_mut(),
                     0
                 ),
@@ -1679,14 +1718,61 @@ mod tests {
                     0,
                     std::ptr::null(),
                     0,
+                    std::ptr::null(),
+                    0,
                     std::ptr::null_mut(),
                     0
                 ),
                 6,
                 "(NULL, 0) is a valid empty list: every archetype matches"
             );
+            assert_eq!(
+                mid_ecs_world_archetypes_matching_static(
+                    world,
+                    ids.as_ptr(),
+                    1,
+                    std::ptr::null(),
+                    0,
+                    std::ptr::null(),
+                    1,
+                    std::ptr::null_mut(),
+                    0
+                ),
+                np,
+                "NULL any_of_ids with a non-zero length"
+            );
             mid_ecs_world_free(world);
         }
+    }
+
+    #[test]
+    fn matching_static_any_of_matches_the_typed_or_filter() {
+        let world_ptr = mid_ecs_test_filter_fixture_world_new();
+        let h = static_id(world_ptr, "FfiHealthStatic");
+        let a = static_id(world_ptr, "FfiFlagA");
+        let b = static_id(world_ptr, "FfiFlagB");
+        // SAFETY: `world_ptr` is a live handle for this whole test.
+        let world = unsafe { &(*world_ptr).0 };
+
+        // any_of {A, B}: e2 (A) and e3 (A and B), not e1 (neither).
+        let via_ffi = entities_via_ffi(world_ptr, h, &[h], &[], &[a, b]);
+        let via_typed = typed_entities::<Or<(With<MidEcsTestFlagA>, With<MidEcsTestFlagB>)>>(world);
+        assert_eq!(via_ffi, via_typed);
+        assert_eq!(via_ffi.len(), 2);
+
+        // Empty any_of is "no constraint", matching the plain with/without
+        // case exactly.
+        assert_eq!(
+            matching_ids_any(world_ptr, &[h], &[], &[]),
+            matching_ids(world_ptr, &[h], &[])
+        );
+
+        // any_of naming only an id nothing has matches nothing, even
+        // though with_ids alone would have matched.
+        assert!(matching_ids_any(world_ptr, &[h], &[], &[MID_ECS_INVALID_ID]).is_empty());
+
+        // SAFETY: freed exactly once.
+        unsafe { mid_ecs_world_free(world_ptr) };
     }
 
     #[test]

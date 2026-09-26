@@ -41,6 +41,7 @@ use crate::archetype::{ArchetypeId, Archetypes, Bundle};
 use crate::component::{ComponentId, SparseShell};
 use crate::hash::TypeIdMap;
 use crate::resource::{ResourceFfiError, ResourceId, Resources};
+use crate::tick::Tick;
 
 /// A handle to an entity. Detects its own staleness after despawn — a
 /// thin wrapper over `mid_collections::GenerationalIndex`, not a
@@ -206,6 +207,7 @@ pub struct World {
     pub(crate) sync: crate::sync::SyncRegistry,
     resources: Resources,
     storage_claims: StorageClaims,
+    change_tick: Tick,
 }
 
 impl World {
@@ -218,6 +220,7 @@ impl World {
             sync: crate::sync::SyncRegistry::new(),
             resources: Resources::new(),
             storage_claims: StorageClaims::default(),
+            change_tick: Tick::new(1),
         }
     }
 
@@ -231,6 +234,7 @@ impl World {
             sync: crate::sync::SyncRegistry::new(),
             resources: Resources::new(),
             storage_claims: StorageClaims::default(),
+            change_tick: Tick::new(1),
         }
     }
 
@@ -404,7 +408,8 @@ impl World {
         }
         self.storage_claims.claim::<T>(StorageKind::Archetype);
         let id = self.archetypes.component_id::<T>();
-        self.archetypes.insert(entity, id, component)
+        self.archetypes
+            .insert(entity, id, component, self.change_tick)
     }
 
     /// Inserts every element of `bundle` as one atomic structural
@@ -438,7 +443,8 @@ impl World {
     #[allow(private_bounds)]
     pub fn spawn_bundle<B: Bundle>(&mut self, bundle: B) -> Entity {
         let entity = Entity(self.entities.allocate());
-        self.archetypes.spawn_bundle(entity, bundle);
+        self.archetypes
+            .spawn_bundle(entity, bundle, self.change_tick);
         entity
     }
 
@@ -447,7 +453,8 @@ impl World {
         if !self.is_alive(entity) {
             return false;
         }
-        self.archetypes.insert_bundle(entity, bundle)
+        self.archetypes
+            .insert_bundle(entity, bundle, self.change_tick)
     }
 
     /// Removes and returns `entity`'s archetype-tracked `T` component,
@@ -497,7 +504,26 @@ impl World {
             return None;
         }
         let id = self.archetypes.existing_component_id::<T>()?;
-        self.archetypes.get_mut(entity, id)
+        self.archetypes.get_mut(entity, id, self.change_tick)
+    }
+
+    /// The world's current point on its change-tick counter. Every
+    /// archetype-tracked component records this at insertion, and
+    /// [`Self::get_static_mut`] records it again on every mutable
+    /// access — see `tick.rs`.
+    pub fn change_tick(&self) -> Tick {
+        self.change_tick
+    }
+
+    /// Advances the world's change-tick counter by one and returns the
+    /// new value. Call once per step of the caller's own game loop —
+    /// there is no `Schedule` here to do this automatically. Until this
+    /// is called at least once, every [`crate::ChangeTracker`] reads
+    /// every component currently present as added/changed (see
+    /// [`crate::ChangeTracker::new`]).
+    pub fn increment_change_tick(&mut self) -> Tick {
+        self.change_tick = Tick::new(self.change_tick.get().wrapping_add(1));
+        self.change_tick
     }
 
     /// Whether `entity` is alive and currently has an archetype-tracked
@@ -565,18 +591,23 @@ impl World {
     }
 
     /// Enumerates every currently-existing archetype whose signature
-    /// contains all of `with` and none of `without` — thin wrapper over
+    /// contains all of `with`, none of `without`, and — if `any_of` is
+    /// non-empty — at least one of `any_of` — thin wrapper over
     /// `Archetypes::archetypes_matching`, the id-based counterpart to
-    /// the typed `*_static_filtered` queries in `query.rs`. Include the
-    /// component you intend to read in `with`; pair the ids this yields
-    /// with [`Self::static_component_raw_span`] and
-    /// [`Self::static_component_entity_ids`].
+    /// the typed `*_static_filtered` queries in `query.rs`
+    /// (`With`/`Without`/`Or`). Include the component you intend to
+    /// read in `with`; pair the ids this yields with
+    /// [`Self::static_component_raw_span`] and
+    /// [`Self::static_component_entity_ids`]. Pass `&[]` for `any_of`
+    /// when there's no `Or` constraint — that's "no constraint", not
+    /// "match nothing".
     pub fn archetypes_matching_static<'a>(
         &'a self,
         with: &'a [ComponentId],
         without: &'a [ComponentId],
+        any_of: &'a [ComponentId],
     ) -> impl Iterator<Item = ArchetypeId> + 'a {
-        self.archetypes.archetypes_matching(with, without)
+        self.archetypes.archetypes_matching(with, without, any_of)
     }
 
     /// Looks up the `ComponentId` an Archetype-Core type was registered
@@ -1626,11 +1657,23 @@ mod tests {
         w.insert_static(e, Tracked(drops.clone()));
         w.insert_static(e, Mass(1.0));
         w.insert_static(e, Charge(2.0));
-        assert_eq!(drops.get(), 0, "migration must move values, never drop them");
+        assert_eq!(
+            drops.get(),
+            0,
+            "migration must move values, never drop them"
+        );
         assert_eq!(w.remove_static::<Mass>(e), Some(Mass(1.0)));
-        assert_eq!(drops.get(), 0, "removing a sibling must not drop the survivor");
+        assert_eq!(
+            drops.get(),
+            0,
+            "removing a sibling must not drop the survivor"
+        );
         assert!(w.despawn(e));
-        assert_eq!(drops.get(), 1, "dropped exactly once, when the entity is despawned");
+        assert_eq!(
+            drops.get(),
+            1,
+            "dropped exactly once, when the entity is despawned"
+        );
     }
 
     #[test]
@@ -1652,7 +1695,11 @@ mod tests {
         w.insert_static(e, Mass(1.0));
         let value = w.remove_static::<Tracked>(e);
         assert!(value.is_some());
-        assert_eq!(drops.get(), 0, "the removed value belongs to the caller now");
+        assert_eq!(
+            drops.get(),
+            0,
+            "the removed value belongs to the caller now"
+        );
         drop(value);
         assert_eq!(drops.get(), 1);
     }
@@ -1744,8 +1791,10 @@ mod tests {
         assert_eq!(w.get_static::<Mass>(via_two_step), Some(&Mass(3.0)));
         // Query over the archetype-tracked storage must see both --
         // only true if they share one archetype's table.
-        let seen: std::collections::HashSet<_> =
-            w.query2_static::<Mass, Charge>().map(|(e, _, _)| e).collect();
+        let seen: std::collections::HashSet<_> = w
+            .query2_static::<Mass, Charge>()
+            .map(|(e, _, _)| e)
+            .collect();
         assert!(seen.contains(&via_direct));
         assert!(seen.contains(&via_two_step));
         assert_eq!(seen.len(), 2);
@@ -1766,9 +1815,17 @@ mod tests {
         let drops = Rc::new(Cell::new(0));
         let mut w = World::new();
         let e = w.spawn_bundle((Tracked(drops.clone()), Mass(1.0)));
-        assert_eq!(drops.get(), 0, "spawning must move the value, never drop it");
+        assert_eq!(
+            drops.get(),
+            0,
+            "spawning must move the value, never drop it"
+        );
         assert!(w.despawn(e));
-        assert_eq!(drops.get(), 1, "dropped exactly once, when the entity is despawned");
+        assert_eq!(
+            drops.get(),
+            1,
+            "dropped exactly once, when the entity is despawned"
+        );
     }
 
     // ── Resources ───────────────────────────────────────────────────
@@ -1842,5 +1899,229 @@ mod tests {
         assert_eq!(w.remove_ffi_resource(id), Ok(()));
         assert_eq!(w.remove_ffi_resource(id), Err(ResourceFfiError::Absent));
         assert_eq!(w.get_resource::<Wind>(), None);
+    }
+
+    // ── Change detection: Tick / ChangeTracker / Added / Changed ────
+
+    use crate::{ChangeTracker, Tick};
+
+    #[derive(Debug, Clone, Copy, PartialEq)]
+    struct Vigor {
+        hp: u32,
+    }
+    #[derive(Debug, Clone, Copy, PartialEq)]
+    struct Marker2;
+
+    #[test]
+    fn new_world_starts_at_tick_one_and_increment_advances_it() {
+        let mut w = World::new();
+        assert_eq!(w.change_tick(), Tick::new(1));
+        assert_eq!(w.increment_change_tick(), Tick::new(2));
+        assert_eq!(w.change_tick(), Tick::new(2));
+        assert_eq!(w.increment_change_tick(), Tick::new(3));
+    }
+
+    #[test]
+    fn a_fresh_tracker_sees_every_component_already_present_as_added_and_changed() {
+        let mut w = World::new();
+        let e1 = w.spawn_bundle((Vigor { hp: 1 },));
+        let e2 = w.spawn_bundle((Vigor { hp: 2 },));
+        w.increment_change_tick();
+
+        let tracker = ChangeTracker::new();
+        let mut added: Vec<Entity> = w.query_added::<Vigor>(&tracker).map(|(e, _)| e).collect();
+        added.sort_by_key(|e| e.index());
+        let mut expected = vec![e1, e2];
+        expected.sort_by_key(|e| e.index());
+        assert_eq!(added, expected);
+
+        let mut changed: Vec<Entity> = w.query_changed::<Vigor>(&tracker).map(|(e, _)| e).collect();
+        changed.sort_by_key(|e| e.index());
+        assert_eq!(changed, expected);
+    }
+
+    #[test]
+    fn after_update_a_tracker_no_longer_sees_old_insertions_only_new_ones() {
+        let mut w = World::new();
+        let old = w.spawn_bundle((Vigor { hp: 1 },));
+        w.increment_change_tick();
+
+        let mut tracker = ChangeTracker::new();
+        assert_eq!(w.query_added::<Vigor>(&tracker).count(), 1);
+        tracker.update(&w);
+        assert_eq!(
+            w.query_added::<Vigor>(&tracker).count(),
+            0,
+            "already seen, and nothing new since"
+        );
+
+        w.increment_change_tick();
+        let new = w.spawn_bundle((Vigor { hp: 2 },));
+        let found: Vec<Entity> = w.query_added::<Vigor>(&tracker).map(|(e, _)| e).collect();
+        assert_eq!(found, vec![new]);
+        assert!(!found.contains(&old));
+    }
+
+    #[test]
+    fn get_static_mut_marks_changed_but_not_added() {
+        let mut w = World::new();
+        let e = w.spawn_bundle((Vigor { hp: 1 },));
+        w.increment_change_tick();
+
+        let mut tracker = ChangeTracker::new();
+        tracker.update(&w); // now last_run == the tick Vigor was inserted at
+
+        assert_eq!(w.query_added::<Vigor>(&tracker).count(), 0);
+        assert_eq!(w.query_changed::<Vigor>(&tracker).count(), 0);
+
+        w.increment_change_tick();
+        w.get_static_mut::<Vigor>(e).unwrap().hp = 99;
+
+        assert_eq!(
+            w.query_added::<Vigor>(&tracker).count(),
+            0,
+            "mutation is not a re-add"
+        );
+        let changed: Vec<Entity> = w.query_changed::<Vigor>(&tracker).map(|(e, _)| e).collect();
+        assert_eq!(changed, vec![e]);
+        assert_eq!(w.get_static::<Vigor>(e), Some(&Vigor { hp: 99 }));
+    }
+
+    #[test]
+    fn a_read_only_get_static_never_marks_changed() {
+        let mut w = World::new();
+        let e = w.spawn_bundle((Vigor { hp: 1 },));
+        w.increment_change_tick();
+        let mut tracker = ChangeTracker::new();
+        tracker.update(&w);
+
+        w.increment_change_tick();
+        let _ = w.get_static::<Vigor>(e);
+        assert_eq!(w.query_changed::<Vigor>(&tracker).count(), 0);
+    }
+
+    #[test]
+    fn structural_migration_preserves_ticks_of_surviving_components() {
+        // Adding Marker2 to `e` moves it to a new archetype. Vigor's own
+        // ticks must migrate with it unchanged -- gaining an unrelated
+        // component must not look like Vigor was re-added or changed.
+        let mut w = World::new();
+        let e = w.spawn_bundle((Vigor { hp: 1 },));
+        w.increment_change_tick();
+
+        let mut tracker = ChangeTracker::new();
+        tracker.update(&w);
+
+        w.increment_change_tick();
+        assert!(w.insert_static(e, Marker2));
+
+        assert_eq!(
+            w.query_added::<Vigor>(&tracker).count(),
+            0,
+            "Vigor wasn't re-added by an unrelated structural change"
+        );
+        assert_eq!(w.query_changed::<Vigor>(&tracker).count(), 0);
+        // Marker2 itself, inserted after tracker's last_run, does show up
+        // as newly added on its own type.
+        let added_marker: Vec<Entity> =
+            w.query_added::<Marker2>(&tracker).map(|(e, _)| e).collect();
+        assert_eq!(added_marker, vec![e]);
+    }
+
+    #[test]
+    fn removing_an_unrelated_component_also_preserves_survivor_ticks() {
+        let mut w = World::new();
+        let e = w.spawn_bundle((Vigor { hp: 1 }, Marker2));
+        w.increment_change_tick();
+        let mut tracker = ChangeTracker::new();
+        tracker.update(&w);
+
+        w.increment_change_tick();
+        assert_eq!(w.remove_static::<Marker2>(e), Some(Marker2));
+
+        assert_eq!(
+            w.query_changed::<Vigor>(&tracker).count(),
+            0,
+            "Vigor untouched by removing Marker2"
+        );
+        assert_eq!(w.get_static::<Vigor>(e), Some(&Vigor { hp: 1 }));
+    }
+
+    #[test]
+    fn query_added_and_changed_are_empty_for_a_never_registered_type() {
+        let w = World::new();
+        let tracker = ChangeTracker::new();
+        assert_eq!(w.query_added::<Vigor>(&tracker).count(), 0);
+        assert_eq!(w.query_changed::<Vigor>(&tracker).count(), 0);
+    }
+
+    #[test]
+    fn ticks_stay_row_aligned_when_a_despawn_swaps_a_mutated_entity_into_the_freed_slot() {
+        // Adversarial regression coverage for the row-alignment risk in
+        // threading `Table::ticks` through `Table::swap_remove_row`:
+        // `Vec::swap_remove(0)` moves the table's LAST row into row 0, so
+        // despawning entity 0 while entity 5 (the last row, and the one
+        // we mutated) is the one that lands in the freed slot is the
+        // case that actually exposes a tick vector that didn't shrink or
+        // shrank at the wrong index -- a merely-unshrunk-but-never-read
+        // tick vector, or one shrunk at the wrong row, would make the
+        // *swapped-in* entity read back with the *despawned* entity's
+        // old, never-changed ticks instead of its own.
+        let mut w = World::new();
+        let entities: Vec<Entity> = (0..6).map(|i| w.spawn_bundle((Vigor { hp: i },))).collect();
+        w.increment_change_tick();
+        let mut tracker = ChangeTracker::new();
+        tracker.update(&w);
+
+        w.increment_change_tick();
+        w.get_static_mut::<Vigor>(entities[1]).unwrap().hp = 100;
+        w.get_static_mut::<Vigor>(entities[5]).unwrap().hp = 500;
+
+        // Despawn entity 0: `entities`/`columns`/`ticks` must each swap
+        // the table's last row (entity 5's) into row 0.
+        assert!(w.despawn(entities[0]));
+
+        let mut changed: Vec<Entity> = w.query_changed::<Vigor>(&tracker).map(|(e, _)| e).collect();
+        changed.sort_by_key(|e| e.index());
+        let mut expected = vec![entities[1], entities[5]];
+        expected.sort_by_key(|e| e.index());
+        assert_eq!(
+            changed, expected,
+            "entity 5's own changed tick must follow it into row 0, not entity 0's stale one"
+        );
+
+        // And the surviving values are still each entity's own, not
+        // shuffled by the swap-remove.
+        assert_eq!(w.get_static::<Vigor>(entities[1]), Some(&Vigor { hp: 100 }));
+        assert_eq!(w.get_static::<Vigor>(entities[5]), Some(&Vigor { hp: 500 }));
+        assert_eq!(w.get_static::<Vigor>(entities[2]), Some(&Vigor { hp: 2 }));
+        assert_eq!(w.get_static::<Vigor>(entities[3]), Some(&Vigor { hp: 3 }));
+        assert_eq!(w.get_static::<Vigor>(entities[4]), Some(&Vigor { hp: 4 }));
+        assert_eq!(w.get_static::<Vigor>(entities[0]), None);
+    }
+
+    #[test]
+    fn ticks_stay_row_aligned_through_a_structural_migration_swap_remove() {
+        // Same adversarial shape as the despawn test above, but for the
+        // `insert<T>`/`insert_bundle` survivor-migration path instead of
+        // `Table::swap_remove_row`: giving entity 0 an unrelated Marker2
+        // migrates it to a new archetype, which swap-removes entity 0's
+        // OLD row the same way a despawn would -- entity 5 (mutated,
+        // last row) lands in the freed slot and must keep its own tick,
+        // not inherit entity 0's.
+        let mut w = World::new();
+        let entities: Vec<Entity> = (0..6).map(|i| w.spawn_bundle((Vigor { hp: i },))).collect();
+        w.increment_change_tick();
+        let mut tracker = ChangeTracker::new();
+        tracker.update(&w);
+
+        w.increment_change_tick();
+        w.get_static_mut::<Vigor>(entities[5]).unwrap().hp = 500;
+        assert!(w.insert_static(entities[0], Marker2));
+
+        let changed: Vec<Entity> = w.query_changed::<Vigor>(&tracker).map(|(e, _)| e).collect();
+        assert_eq!(changed, vec![entities[5]]);
+        assert_eq!(w.get_static::<Vigor>(entities[5]), Some(&Vigor { hp: 500 }));
+        assert_eq!(w.get_static::<Vigor>(entities[0]), Some(&Vigor { hp: 0 }));
     }
 }

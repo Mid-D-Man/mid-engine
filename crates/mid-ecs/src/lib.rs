@@ -15,6 +15,7 @@ pub mod query;
 pub mod resource;
 mod scratch;
 pub mod sync;
+pub mod tick;
 pub mod transform;
 pub mod world;
 
@@ -28,7 +29,8 @@ pub mod world;
 // real.
 pub use archetype::ArchetypeId;
 pub use component::{ComponentId, SparseShell};
-pub use filter::{QueryFilter, With, Without};
+pub use filter::{Or, QueryFilter, With, Without};
 pub use resource::{ResourceFfiError, ResourceId};
+pub use tick::{ChangeTracker, Tick};
 pub use transform::{GlobalTransform, GlobalTransformLWC};
 pub use world::{Entity, World};
