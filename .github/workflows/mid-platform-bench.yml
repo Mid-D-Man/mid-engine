@@ -1,54 +1,27 @@
-# .github/workflows/mid-platform-bench.yml
+# .github/workflows/mid-platform-test.yml
 #
-# sync::Mutex and sync::RwLock against spin (the real crate their no_std
-# fallback algorithms were grounded in) and std::sync. See
-# crates/mid-platform/benches/sync_bench.rs's own doc comment for exactly
-# what's measured and why (uncontended single-thread throughput only; real
-# multi-threaded correctness is the test suite's job, not this bench's).
+# Fixed after review: this workflow originally ran on push/pull_request
+# with a fake "summary" job that just echoed a few lines to the job log,
+# not a real $GITHUB_STEP_SUMMARY -- both wrong against this project's
+# actual, established convention. See mid-ptr-test.yml's own header
+# comment for the full explanation; same fix applied here, adapted for
+# this crate's two feature configurations (default/std vs
+# --no-default-features/no_std fallback) instead of one.
 #
-# Modeled on bench-mid-alloc.yml's structure (bash-grep pattern, not the
-# Python parser -- several independent groups, no single natural "vs X"
-# baseline throughout every group the way bench-vs-bevy-ecs.yml has, matching
-# docs/benching-standards.md's own guidance for when to use which). No SIMD
-# target-cpu matrix: none of this crate's code is vectorized or has a
-# dispatched backend to sweep, same real reasoning bench-mid-alloc.yml and
-# bench-mid-collections-sparse-set.yml both give for themselves.
-#
-# Runs TWICE, matching mid-platform-test.yml's own established two-
-# configuration pattern -- default features (std passthrough, mostly a
-# sanity check) and --no-default-features (the actual hand-rolled spin-based
-# fallback, the run that answers something new). Two separate raw logs, two
-# separate summary sections, one artifact upload covering both.
-#
-# HONEST VERIFICATION NOTE, same class bench-mid-alloc.yml's own header
-# already states for itself: adding criterion as a dev-dependency here pulls
-# in clap_builder, which needs edition2024, past this sandbox's rustc 1.75
-# floor (see crates/mid-platform/Cargo.toml's own comment on this). No rustc
-# reachable in this sandbox to compile-check any of this bench file or this
-# workflow's grep patterns against real output -- the grep patterns are
-# grounded in criterion 0.5.1's real report.rs source (not memory), same as
-# bench-mid-alloc.yml's own note, but this workflow's first real dispatch is
-# what actually proves it.
-#
-# Run: Actions -> "mid-platform — bench sync primitives" -> Run workflow
-# DO NOT add push/pull_request triggers.
+# gh-pages deploy deliberately not replicated here either, same reasoning
+# as mid-ptr-test.yml -- see that file's header comment.
 
-name: mid-platform — bench sync primitives
+name: mid-platform — Tests
 
 on:
   workflow_dispatch:
-    inputs:
-      baseline_note:
-        description: 'Context for this run (e.g. "after RwLock MAX_READERS change")'
-        required: false
-        default: 'manual mid-platform sync_bench run'
 
 permissions:
   contents: read
   actions:  read
 
 jobs:
-  bench:
+  run-tests:
     runs-on: ubuntu-latest
 
     steps:
@@ -57,141 +30,335 @@ jobs:
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
 
       - name: Get Rust version
         id: rustver
         run: echo "ver=$(rustc --version)" >> $GITHUB_OUTPUT
 
-      - name: Cache cargo registry + build artifacts
+      - name: Cache cargo registry
         uses: actions/cache@v4
         with:
           path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-bench-mid-platform-${{ hashFiles('crates/mid-platform/**/Cargo.toml') }}
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+          key: cargo-registry-mid-platform-${{ runner.os }}-${{ hashFiles('crates/mid-platform/Cargo.toml') }}
           restore-keys: |
-            ${{ runner.os }}-bench-mid-platform-
+            cargo-registry-mid-platform-${{ runner.os }}-
 
-      - name: Confirm environment
+      - name: Check formatting
+        run: cargo fmt -p mid-platform --check
+        continue-on-error: true
+
+      - name: Clippy (default features -- std)
+        run: cargo clippy -p mid-platform -- -D warnings
+        continue-on-error: true
+
+      - name: Clippy (no default features -- no_std fallback path)
+        run: cargo clippy -p mid-platform --no-default-features -- -D warnings
+        continue-on-error: true
+
+      - name: Build (default features -- std)
+        run: cargo build -p mid-platform
+
+      - name: Build (no default features -- no_std fallback path)
+        run: cargo build -p mid-platform --no-default-features
+
+      # Two separate runs, two separate raw logs -- default features
+      # (std passthrough) and --no-default-features (the actual
+      # hand-rolled spin-based fallback in sync::mutex, a genuinely
+      # different code path). set -o pipefail on both: see
+      # docs/benching-standards.md's "correctness detail" section.
+      - name: Test (default features -- std)
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          cargo test -p mid-platform --color=never --no-fail-fast \
+            -- --show-output 2>&1 | tee mid-platform-test-std-raw.txt
+
+      - name: Test (no default features -- no_std fallback path)
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          cargo test -p mid-platform --no-default-features --color=never --no-fail-fast \
+            -- --show-output 2>&1 | tee mid-platform-test-nostd-raw.txt
+
+      # Real end-to-end verification of src/ffi.rs (Once/Barrier -- see
+      # that file's own doc comment for why Mutex/RwLock/OnceLock/LazyLock
+      # aren't covered yet): an actual C program, compiled with gcc,
+      # linked against the libmid_platform.so the "Build (default
+      # features -- std)" step above just built -- same pattern
+      # mid-net-test.yml's/mid-ecs-test.yml's own FFI smoke test steps
+      # already use, mirrored here, not reinvented. -lpthread: unlike
+      # mid-ecs's own smoke test, this one spawns real OS threads
+      # (test.c's barrier_thread_fn) to exercise Barrier under genuine
+      # multi-thread contention, not just single-threaded calls.
+      - name: FFI smoke test (real C program via gcc, not just Rust tests)
+        continue-on-error: true
+        run: |
+          echo "=== Compiling C smoke test against mid_platform.h ==="
+          gcc -o crates/mid-platform/ffi-smoke-test/test \
+            crates/mid-platform/ffi-smoke-test/test.c \
+            -I crates/mid-platform/ffi-smoke-test \
+            -L target/debug \
+            -lmid_platform -lpthread -Wall -Wextra
+          echo ""
+          echo "=== Running against the real compiled libmid_platform.so ==="
+          LD_LIBRARY_PATH=target/debug crates/mid-platform/ffi-smoke-test/test 2>&1 | tee mid-platform-ffi-smoke-raw.txt
+
+      - name: Parse results to JSON
+        if: always()
         env:
+          BUILD_NUM:    ${{ github.run_number }}
+          BRANCH:       ${{ github.ref_name }}
+          COMMIT:       ${{ github.sha }}
           RUST_VERSION: ${{ steps.rustver.outputs.ver }}
         run: |
-          {
-            echo "## mid-platform sync Bench — Build #${{ github.run_number }}"
-            echo ""
-            echo "| | |"
-            echo "|---|---|"
-            echo "| Rust   | \`${RUST_VERSION}\` |"
-            echo "| Branch | \`${{ github.ref_name }}\` |"
-            echo "| Commit | \`${GITHUB_SHA:0:8}\` |"
-            echo "| Note   | ${{ inputs.baseline_note }} |"
-            echo ""
-            echo "Runs both feature configurations: default (\`std\` passthrough,"
-            echo "mostly a sanity check) and \`--no-default-features\` (the actual"
-            echo "hand-rolled spin-based fallback). See"
-            echo "crates/mid-platform/benches/sync_bench.rs."
-            echo ""
-          } >> "$GITHUB_STEP_SUMMARY"
+          python3 - << 'PYEOF'
+          import re, json, os
 
-      - name: Run benchmarks (default features -- std passthrough)
+          RE_ANSI = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
+          def strip(s): return RE_ANSI.sub('', s)
+
+          RE_RUN    = re.compile(r'Running\s+.*?\(\S*?/deps/([A-Za-z0-9_]+)-[0-9a-f]{8,}\)\s*$')
+          RE_DOC    = re.compile(r'^\s*Doc-tests\s+(\S+)\s*$')
+          RE_TEST   = re.compile(
+              r'^test\s+([\w:./-]+(?:::\w+)*(?:\s-\s\S+\s\(line\s\d+\))?)\s+\.\.\.\s+'
+              r'(ok|FAILED|ignored)(?:\s+\(([\d.]+)s\))?'
+          )
+          RE_RESULT = re.compile(r'test result:.*?finished in ([\d.]+)s')
+
+          def parse_file(path, config_label):
+              try:
+                  raw = open(path, encoding='utf-8', errors='replace').read()
+              except FileNotFoundError:
+                  return []
+              text = strip(raw)
+
+              test_output = {}
+              for m in re.finditer(
+                  r'---- ([\w:]+(?:::\w+)*) stdout ----\n(.*?)'
+                  r'(?=\n---- |\n\n(?:successes|failures):\n|\ntest result:|\Z)',
+                  text, re.DOTALL):
+                  content = m.group(2).strip()
+                  if content:
+                      test_output[m.group(1)] = content
+
+              fail_output = {}
+              fail_section = re.search(r'\nfailures:\n(.*?)(?:\ntest result:|\Z)', text, re.DOTALL)
+              if fail_section:
+                  for m in re.finditer(
+                      r'---- ([\w:]+(?:::\w+)*) stdout ----\n(.*?)(?=\n---- |\Z)',
+                      fail_section.group(1), re.DOTALL):
+                      content = m.group(2).strip()
+                      if content:
+                          fail_output[m.group(1)] = content
+
+              suites    = []
+              cur_name  = None
+              cur_tests = []
+              cur_dur   = 0.0
+
+              def flush(name, tests, dur):
+                  if name is not None:
+                      suites.append({
+                          'name':       f"{name} [{config_label}]",
+                          'passed':     sum(1 for t in tests if t['status'] == 'passed'),
+                          'failed':     sum(1 for t in tests if t['status'] == 'failed'),
+                          'ignored':    sum(1 for t in tests if t['status'] == 'ignored'),
+                          'duration_s': round(dur, 4),
+                          'tests':      tests,
+                      })
+
+              for line in text.splitlines():
+                  m = RE_RUN.search(line)
+                  if m:
+                      flush(cur_name, cur_tests, cur_dur)
+                      cur_name, cur_tests, cur_dur = m.group(1).replace('_', '-'), [], 0.0
+                      continue
+                  m = RE_DOC.match(line)
+                  if m:
+                      flush(cur_name, cur_tests, cur_dur)
+                      cur_name, cur_tests, cur_dur = f"{m.group(1)} (doc-tests)", [], 0.0
+                      continue
+                  m = RE_TEST.match(line)
+                  if m:
+                      if cur_name is None:
+                          cur_name, cur_tests, cur_dur = 'unknown suite', [], 0.0
+                      tname, status, dur = m.group(1), m.group(2), m.group(3)
+                      out = fail_output.get(tname) or test_output.get(tname, '')
+                      cur_tests.append({
+                          'name':        tname,
+                          'status':      {'ok':'passed','FAILED':'failed','ignored':'ignored'}.get(status,'unknown'),
+                          'duration_ms': int(float(dur) * 1000) if dur else 0,
+                          'output':      out,
+                      })
+                      continue
+                  m = RE_RESULT.search(line)
+                  if m:
+                      cur_dur = float(m.group(1))
+                      flush(cur_name, cur_tests, cur_dur)
+                      cur_name, cur_tests, cur_dur = None, [], 0.0
+
+              flush(cur_name, cur_tests, cur_dur)
+              return suites
+
+          suites  = parse_file('mid-platform-test-std-raw.txt',   'std')
+          suites += parse_file('mid-platform-test-nostd-raw.txt', 'no_std fallback')
+
+          total   = sum(s['passed'] + s['failed'] + s['ignored'] for s in suites)
+          passed  = sum(s['passed']  for s in suites)
+          failed  = sum(s['failed']  for s in suites)
+          ignored = sum(s['ignored'] for s in suites)
+          dur     = sum(s['duration_s'] for s in suites)
+
+          result = {
+              'build':        os.environ.get('BUILD_NUM',    '0'),
+              'branch':       os.environ.get('BRANCH',       'unknown'),
+              'commit':       os.environ.get('COMMIT',       'unknown')[:8],
+              'rust_version': os.environ.get('RUST_VERSION', 'stable'),
+              'crate':        'mid-platform',
+              'summary': {
+                  'total':      total,
+                  'passed':     passed,
+                  'failed':     failed,
+                  'ignored':    ignored,
+                  'duration_s': round(dur, 3),
+              },
+              'suites': suites,
+          }
+
+          with open('mid-platform-test-results.json', 'w') as f:
+              json.dump(result, f, indent=2)
+
+          print(f"Suites:{len(suites)}  Passed:{passed}  Failed:{failed}  Ignored:{ignored}")
+          PYEOF
+
+      - name: Write test results to job summary
+        if: always()
         run: |
-          # set -o pipefail: see Abench-vs-all-f64.yml's own "Run f64
-          # criterion benchmarks" step comment for the exact incident this
-          # guards against -- without it, `cargo bench | tee file` reports
-          # tee's exit code (always 0), not cargo bench's.
-          set -o pipefail
-          cargo bench -p mid-platform --bench sync_bench -- --color never \
-            2>&1 | tee bench-mid-platform-std-raw.txt
-          echo "Bench exit code (std): $?" >> "$GITHUB_STEP_SUMMARY"
+          python3 - << 'PYEOF'
+          import json, os
 
-      - name: Run benchmarks (no default features -- hand-rolled fallback)
-        run: |
-          set -o pipefail
-          cargo bench -p mid-platform --no-default-features --bench sync_bench -- --color never \
-            2>&1 | tee bench-mid-platform-nostd-raw.txt
-          echo "Bench exit code (no_std fallback): $?" >> "$GITHUB_STEP_SUMMARY"
+          try:
+              with open('mid-platform-test-results.json') as f:
+                  result = json.load(f)
+          except FileNotFoundError:
+              with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as f:
+                  f.write("## mid-platform Test Results\n\n")
+                  f.write("`mid-platform-test-results.json` wasn't produced — the parse step "
+                          "above likely failed before writing it. Check its log.\n")
+              raise SystemExit(0)
 
-      - name: Surface bench diagnostics
+          summary = result['summary']
+          suites  = result['suites']
+
+          lines = []
+          lines.append(f"## mid-platform Test Results — Build #{result['build']}")
+          lines.append("")
+          lines.append(
+              f"Branch: `{result['branch']}` &nbsp;|&nbsp; "
+              f"Commit: `{result['commit']}` &nbsp;|&nbsp; "
+              f"Rust: `{result['rust_version']}`"
+          )
+          lines.append("")
+          lines.append(
+              "Runs both feature configurations: default (`std`) and "
+              "`--no-default-features` (the hand-rolled no_std spin-based "
+              "fallback). See docs/mid-platform.md."
+          )
+          lines.append("")
+
+          if summary['failed'] == 0 and summary['total'] > 0:
+              lines.append(f"### ✅ All {summary['total']} tests passed (both configurations)")
+          elif summary['total'] == 0:
+              lines.append("### ⚠️ No tests were collected — check the raw logs")
+          else:
+              lines.append(f"### ❌ {summary['failed']} of {summary['total']} tests failed")
+          lines.append("")
+
+          failing = [
+              (s['name'], t)
+              for s in suites
+              for t in s['tests']
+              if t['status'] == 'failed'
+          ]
+          if failing:
+              lines.append("### Failures")
+              lines.append("")
+              for suite_name, t in failing:
+                  lines.append(f"- **{suite_name} :: {t['name']}**")
+                  if t.get('output'):
+                      first_line = t['output'].strip().splitlines()[0]
+                      lines.append(f"  - `{first_line}`")
+              lines.append("")
+
+          lines.append("| Suite | Passed | Failed | Ignored | Duration |")
+          lines.append("|---|---|---|---|---|")
+          for s in suites:
+              mark = "✅" if s['failed'] == 0 else "❌"
+              lines.append(
+                  f"| {mark} {s['name']} | {s['passed']} | {s['failed']} | "
+                  f"{s['ignored']} | {s['duration_s']:.2f}s |"
+              )
+          lines.append("")
+          lines.append(
+              f"**Total: {summary['total']}** &nbsp;|&nbsp; "
+              f"Passed: {summary['passed']} &nbsp;|&nbsp; "
+              f"Failed: {summary['failed']} &nbsp;|&nbsp; "
+              f"Ignored: {summary['ignored']} &nbsp;|&nbsp; "
+              f"Duration: {summary['duration_s']:.2f}s"
+          )
+          lines.append("")
+
+          for s in suites:
+              lines.append(f"<details><summary>{s['name']} — {len(s['tests'])} tests</summary>")
+              lines.append("")
+              lines.append("| Test | Status |")
+              lines.append("|---|---|")
+              for t in s['tests']:
+                  mark = "✅" if t['status'] == 'passed' else "❌"
+                  lines.append(f"| `{t['name']}` | {mark} |")
+              lines.append("")
+              lines.append("</details>")
+              lines.append("")
+
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as f:
+              f.write("\n".join(lines) + "\n")
+          PYEOF
+
+      - name: Write FFI smoke test result to job summary
         if: always()
         run: |
           {
-            echo "### Diagnostics"
             echo ""
-            echo "**std passthrough run:**"
-            echo '```'
-            grep -E 'took zero time|Unable to complete|Warning:|panicked|Completed [0-9]+ iterations' \
-              bench-mid-platform-std-raw.txt | head -60 || echo "(none found)"
-            echo '```'
+            echo "### FFI smoke test (real C program via gcc)"
             echo ""
-            echo "**no_std fallback run:**"
-            echo '```'
-            grep -E 'took zero time|Unable to complete|Warning:|panicked|Completed [0-9]+ iterations' \
-              bench-mid-platform-nostd-raw.txt | head -60 || echo "(none found)"
-            echo '```'
+            if [ -f mid-platform-ffi-smoke-raw.txt ]; then
+              if grep -q "=== 0 check(s) failed ===" mid-platform-ffi-smoke-raw.txt; then
+                echo "✅ All checks passed — see the raw log in this run's artifact for detail."
+              else
+                echo "❌ Some checks failed — see the raw log in this run's artifact for detail."
+              fi
+              echo ""
+              echo '```'
+              tail -5 mid-platform-ffi-smoke-raw.txt
+              echo '```'
+            else
+              echo "\`mid-platform-ffi-smoke-raw.txt\` wasn't produced — the compile step above likely failed before running the test binary at all. Check that step's own log."
+            fi
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Publish summary
-        if: always()
-        run: |
-          {
-            echo "### Results"
-            echo ""
-            echo "Lower is faster. Groups: mutex_lock_unlock, mutex_try_lock"
-            echo "(mid-platform::sync::Mutex vs spin::Mutex vs std::sync::Mutex),"
-            echo "rwlock_read, rwlock_write (mid-platform::sync::RwLock vs"
-            echo "spin::RwLock vs std::sync::RwLock). See the raw logs below for"
-            echo "full confidence intervals."
-            echo ""
-            echo "#### std passthrough (default features)"
-            echo '```'
-            grep -B 1 "time:" bench-mid-platform-std-raw.txt | grep -v "^--$" || echo "(no results parsed -- see raw log)"
-            echo '```'
-            echo ""
-            echo "#### no_std fallback (--no-default-features)"
-            echo '```'
-            grep -B 1 "time:" bench-mid-platform-nostd-raw.txt | grep -v "^--$" || echo "(no results parsed -- see raw log)"
-            echo '```'
-            echo ""
-            echo "<details><summary>Full raw output (both runs)</summary>"
-            echo ""
-            echo "_Build output (compiler warnings, \`Compiling\`/\`Finished\` lines) is_"
-            echo "_stripped below to stay clear of GitHub's 1024k step-summary limit --_"
-            echo "_the untouched logs, warnings included, are in this run's uploaded_"
-            echo "_artifact. Also hard-capped at 900k here per log as a second guard._"
-            echo ""
-            echo "**std passthrough:**"
-            echo '```'
-            if grep -q 'Finished `bench` profile' bench-mid-platform-std-raw.txt; then
-              awk '/Finished `bench` profile/{f=1} f' bench-mid-platform-std-raw.txt | head -c 900000
-            else
-              echo "(Compilation never finished -- showing the full raw log, including build errors.)"
-              echo ""
-              head -c 900000 bench-mid-platform-std-raw.txt
-            fi
-            echo '```'
-            echo ""
-            echo "**no_std fallback:**"
-            echo '```'
-            if grep -q 'Finished `bench` profile' bench-mid-platform-nostd-raw.txt; then
-              awk '/Finished `bench` profile/{f=1} f' bench-mid-platform-nostd-raw.txt | head -c 900000
-            else
-              echo "(Compilation never finished -- showing the full raw log, including build errors.)"
-              echo ""
-              head -c 900000 bench-mid-platform-nostd-raw.txt
-            fi
-            echo '```'
-            echo ""
-            echo "</details>"
-          } >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Upload artifacts
+      - name: Upload raw logs + JSON as artifact
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: bench-mid-platform-${{ github.run_number }}
+          name: mid-platform-test-results-${{ github.run_number }}
           path: |
-            bench-mid-platform-std-raw.txt
-            bench-mid-platform-nostd-raw.txt
-            target/criterion
-          retention-days: 30
+            mid-platform-test-std-raw.txt
+            mid-platform-test-nostd-raw.txt
+            mid-platform-test-results.json
+            mid-platform-ffi-smoke-raw.txt
+          retention-days: 7
