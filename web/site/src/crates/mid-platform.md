@@ -21,4 +21,6 @@ the crate.
 
 **Status:** Phase 1 and Phase 2 both done (see `docs/mid-platform.md`). A
 fast hasher and a `HashMap`/`HashSet` are a separate, later decision, not
-started.
+started. C FFI: `Once` and `Barrier` are callable from C today (see their
+own module pages); `Mutex`/`RwLock`/`OnceLock`/`LazyLock` are open work —
+see `docs/mid-platform.md`, "Fixes and Problems."

@@ -5,7 +5,11 @@ edition     = "2021"
 description = "Platform-agnostic primitives for mid-engine (Mutex/RwLock/Once/OnceLock/LazyLock/Barrier/Arc/atomics/cells), bevy_platform-shaped but hand-rolled and dependency-free -- see docs/mid-platform.md"
 
 [lib]
-name = "mid_platform"
+name       = "mid_platform"
+# Closes half the FFI gap docs/mid-platform.md's "Fixes and Problems" named:
+# a cdylib/staticlib for src/ffi.rs's Once/Barrier surface to actually link
+# against. Matches mid-ecs's/mid-net's own [lib] shape exactly.
+crate-type = ["lib", "cdylib", "staticlib"]
 
 [features]
 default = ["std"]

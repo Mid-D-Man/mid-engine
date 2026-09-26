@@ -42,3 +42,6 @@ for h in handles {
 
 Done — Phase 2, the lowest-priority primitive of this group (rarely used).
 Full design write-up: `docs/mid-platform.md`, "sync/barrier.rs."
+
+Also callable from C: `mid_platform_barrier_{new,free,wait}` — see
+`docs/mid-platform.md`, "ffi.rs."

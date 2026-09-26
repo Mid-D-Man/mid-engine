@@ -42,3 +42,11 @@ extern crate std;
 
 pub mod cell;
 pub mod sync;
+
+/// C-compatible FFI exports. `std`-only — see this module's own doc
+/// comment for why (a linkable `cdylib`/`staticlib` needs a real OS
+/// underneath it regardless). First pass covers `Once`/`Barrier` only;
+/// `Mutex`/`RwLock`/`OnceLock`/`LazyLock` are open work — see
+/// `docs/mid-platform.md`, "Fixes and Problems."
+#[cfg(feature = "std")]
+pub mod ffi;

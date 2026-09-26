@@ -215,6 +215,37 @@ real-multi-thread test (10 threads, barrier reused across two generations,
 confirms exactly one leader per round and that the generation counter
 actually unblocks the next round).
 
+### `ffi.rs`
+
+**What it does:** C-compatible FFI exports. `std`-only. `Once`/`Barrier`
+only — see "Fixes and Problems" below for the full reasoning on scope and
+what's still open.
+
+**Decisions:**
+- Every convention (status enum shape, `ffi_guard`/`catch_unwind`, opaque
+  `Box::into_raw`/`Box::from_raw` handles, null-safe defaults, `# Safety`
+  doc sections on every pointer-taking fn) copied directly from
+  `mid-ecs`'s/`mid-net`'s own real `ffi.rs` files, not reinvented.
+- `Once`/`Barrier` picked for this first pass specifically because
+  neither hands back a borrowed guard/reference a C caller would need to
+  explicitly, correctly release — the harder problem `Mutex`/`RwLock`/
+  `OnceLock`/`LazyLock`'s FFI surface all share, deliberately not
+  attempted in this same pass.
+- `Once`'s C surface takes a `void (*f)(void *ctx)` callback rather than
+  trying to expose anything about the closure it wraps on the Rust side
+  — the only way a C ABI can express "run this once," matching how
+  `register_ffi_*`'s own genericity forced `mid-ecs`'s `ffi.rs` to leave
+  those functions uncallable from pure C either.
+
+**Tests:** in-file `#[cfg(test)]` — lifecycle, NULL-handling, and a real
+multi-thread test for `Barrier` (four real OS threads via
+`std::thread::spawn`, addresses passed as `usize` since raw pointers
+aren't `Send`). Plus `ffi-smoke-test/test.c` — a real, separately
+compiled C program, run against the actual compiled
+`libmid_platform.so`/`.a`, whose own `Barrier` check spawns four real
+`pthread`s (not just single-threaded C calls) via
+`.github/workflows/mid-platform-test.yml`.
+
 ## Benchmarks
 
 `benches/sync_bench.rs` — `sync::Mutex` and `sync::RwLock` against `spin`
@@ -233,10 +264,25 @@ pattern: default features (std passthrough — mostly a sanity check that the
 passthrough really is zero-cost) and `--no-default-features` (this crate's
 own hand-rolled fallback — the run that actually answers something new).
 
-**Not yet run** — `.github/workflows/mid-platform-bench.yml`'s first real
-dispatch is what actually produces numbers; nothing here is a real result
-yet, same honesty `bench-mid-alloc.yml`'s own header keeps for itself until
-its own first run.
+**Real first-run results (Build #1, `rustc 1.98.1`, commit `25956a8f`):**
+confirms exactly what this bench exists to check. Default features:
+`mid-platform::Mutex`/`RwLock` track `std::sync`'s own numbers almost
+exactly (43.98µs vs 43.98µs mutex lock/unlock; 48.27µs vs 48.59µs rwlock
+read) — the passthrough really is zero-cost, not just zero-cost in theory.
+`--no-default-features`: `mid-platform::Mutex`'s hand-rolled fallback
+(21.78µs) lands within noise of real `spin::Mutex` (21.77µs) — no
+performance left on the table. `RwLock`'s fallback (41.2µs read, 41.2µs
+write) also tracks `spin::RwLock` closely (40.4µs / 41.5µs) and beats
+`std::sync::RwLock`'s real OS-backed numbers (48.4µs / 47.3µs, unchanged
+between runs since that baseline doesn't depend on this crate's own
+features) — the simplified no-upgradeable-guard design isn't paying for
+the machinery it left out. Full numbers in that run's own uploaded
+artifact, not reproduced here — this paragraph is a summary, not the
+record of truth.
+
+Historical numbers age fast (a future change to either implementation
+makes this paragraph stale) — treat this as "confirmed once, on Build #1,"
+not a promise every future run reproduces exactly these figures.
 
 ## CI and Workflows
 
@@ -261,12 +307,45 @@ its own first run.
   **Not replicated**: the HTML-report-plus-`gh-pages`-deploy half of
   `mid-ecs-test.yml`'s pattern — same reasoning as `mid-ptr-test.yml`, the
   whole `gh-pages` pipeline is being migrated to Cloudflare Pages.
+  Now also runs `ffi-smoke-test/test.c` (real gcc, real link against the
+  `libmid_platform.so` the default-features build step produces) after
+  both Rust test runs — same "real C program, not just Rust tests"
+  pattern `mid-ecs-test.yml` already uses, `continue-on-error: true`
+  matching that same precedent. See "Fixes and Problems" below for what
+  it covers.
 
 ## Fixes and Problems
 
-### FFI — open gap, not yet fixed
-- The root `README.md`'s own Design Mandates state "every crate exposes a
-  strict `#[repr(C)]` FFI boundary." This crate currently has neither an FFI
-  module nor a `cdylib`/`staticlib` `crate-type`. Same gap as `mid-ptr`
-  (see `docs/mid-ptr.md`'s own Fixes and Problems) — flagged here rather
-  than left silently missing, not fixed in the pass that built Phase 1.
+### FFI — partially closed, started deliberately narrow
+
+Started this pass rather than deferred further — the root `README.md`'s
+own Design Mandates state "every crate exposes a strict `#[repr(C)]` FFI
+boundary," and letting that stay unaddressed indefinitely is exactly what
+happened with `mid-ptr` (see `docs/mid-ptr.md`'s own Fixes and Problems);
+not repeating that here.
+
+`Cargo.toml`'s `[lib]` now declares `crate-type = ["lib", "cdylib",
+"staticlib"]`, and `src/ffi.rs` (`std`-only — a linkable `cdylib` needs a
+real OS underneath it regardless) covers `Once` and `Barrier`:
+`mid_platform_once_{new,free,call,is_completed}`,
+`mid_platform_barrier_{new,free,wait}`. Real, hand-written C header and a
+real C program compiled with gcc and run against the actual compiled
+`libmid_platform.so` — `ffi-smoke-test/mid_platform.h`,
+`ffi-smoke-test/test.c` — wired into `mid-platform-test.yml`, same pattern
+`mid-ecs`'s/`mid-net`'s own smoke tests already use. `test.c`'s barrier
+check spawns four real `pthread`s, not just single-threaded calls, so the
+smoke test exercises `Barrier` under genuine multi-thread contention
+through the actual C ABI, not only Rust-side.
+
+**Still open, deliberately not attempted in this same pass:** `Mutex`,
+`RwLock`, `OnceLock`, `LazyLock`. Every one of them hands back a live,
+borrowed guard/reference into memory this crate owns — a C caller would
+need an opaque guard handle explicitly released with a paired unlock call
+(C has no `Drop`), plus a real hazard if the underlying handle is freed
+while a guard is still outstanding. `Once`/`Barrier` were picked for this
+first pass specifically because neither has that problem at all
+(`Barrier::wait` returns a plain `bool`; `Once::call_once` takes a
+callback and returns nothing) — the same "narrowest real slice first,
+name the harder piece and defer it explicitly" call `mid-ecs`'s own
+`ffi.rs` made for component-data access in its first pass, not a new
+principle invented here.

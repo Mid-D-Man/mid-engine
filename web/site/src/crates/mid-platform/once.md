@@ -40,3 +40,6 @@ fn expensive_computation() -> u32 { 42 }
 Done — Phase 2. Full design write-up, including why the four-state
 `spin::Once`-style atomic protocol was deliberately not ported:
 `docs/mid-platform.md`, "sync/once.rs."
+
+Also callable from C: `mid_platform_once_{new,free,call,is_completed}` —
+see `docs/mid-platform.md`, "ffi.rs."
