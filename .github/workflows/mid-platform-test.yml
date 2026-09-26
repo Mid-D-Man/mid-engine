@@ -85,6 +85,29 @@ jobs:
           cargo test -p mid-platform --no-default-features --color=never --no-fail-fast \
             -- --show-output 2>&1 | tee mid-platform-test-nostd-raw.txt
 
+      # Real end-to-end verification of src/ffi.rs (Once/Barrier -- see
+      # that file's own doc comment for why Mutex/RwLock/OnceLock/LazyLock
+      # aren't covered yet): an actual C program, compiled with gcc,
+      # linked against the libmid_platform.so the "Build (default
+      # features -- std)" step above just built -- same pattern
+      # mid-net-test.yml's/mid-ecs-test.yml's own FFI smoke test steps
+      # already use, mirrored here, not reinvented. -lpthread: unlike
+      # mid-ecs's own smoke test, this one spawns real OS threads
+      # (test.c's barrier_thread_fn) to exercise Barrier under genuine
+      # multi-thread contention, not just single-threaded calls.
+      - name: FFI smoke test (real C program via gcc, not just Rust tests)
+        continue-on-error: true
+        run: |
+          echo "=== Compiling C smoke test against mid_platform.h ==="
+          gcc -o crates/mid-platform/ffi-smoke-test/test \
+            crates/mid-platform/ffi-smoke-test/test.c \
+            -I crates/mid-platform/ffi-smoke-test \
+            -L target/debug \
+            -lmid_platform -lpthread -Wall -Wextra
+          echo ""
+          echo "=== Running against the real compiled libmid_platform.so ==="
+          LD_LIBRARY_PATH=target/debug crates/mid-platform/ffi-smoke-test/test 2>&1 | tee mid-platform-ffi-smoke-raw.txt
+
       - name: Parse results to JSON
         if: always()
         env:
@@ -306,6 +329,28 @@ jobs:
               f.write("\n".join(lines) + "\n")
           PYEOF
 
+      - name: Write FFI smoke test result to job summary
+        if: always()
+        run: |
+          {
+            echo ""
+            echo "### FFI smoke test (real C program via gcc)"
+            echo ""
+            if [ -f mid-platform-ffi-smoke-raw.txt ]; then
+              if grep -q "=== 0 check(s) failed ===" mid-platform-ffi-smoke-raw.txt; then
+                echo "✅ All checks passed — see the raw log in this run's artifact for detail."
+              else
+                echo "❌ Some checks failed — see the raw log in this run's artifact for detail."
+              fi
+              echo ""
+              echo '```'
+              tail -5 mid-platform-ffi-smoke-raw.txt
+              echo '```'
+            else
+              echo "\`mid-platform-ffi-smoke-raw.txt\` wasn't produced — the compile step above likely failed before running the test binary at all. Check that step's own log."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
       - name: Upload raw logs + JSON as artifact
         if: always()
         uses: actions/upload-artifact@v4
@@ -315,4 +360,5 @@ jobs:
             mid-platform-test-std-raw.txt
             mid-platform-test-nostd-raw.txt
             mid-platform-test-results.json
+            mid-platform-ffi-smoke-raw.txt
           retention-days: 7
