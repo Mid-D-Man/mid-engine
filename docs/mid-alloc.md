@@ -825,6 +825,114 @@ because the bench protected them correctly. Fixed by wrapping the
 allocated pointer in `black_box` in every entry of that group,
 matching the pattern already used everywhere else in the file.
 
+**Run #2: `BumpVec` fix confirmed, inline hints mostly not.** Same-run
+ratios: `BumpVec` against `std::Vec` went from 5.4x slower to 0.92x at
+N=10000 and from 1.93x slower to 0.87x at N=1000, so `try_grow_raw` is
+the real fix. `StackAllocator` against `bumpalo::Bump` moved from about
+1.6-2.1x slower to about 1.4-1.9x slower, and `PoolAllocator` against
+`Box` barely moved (2.2-2.8x to 2.2-2.7x), so the `#[inline]` hints were
+not the main cause for either. The `black_box` fix worked:
+`HeapAlloc (baseline)` and `Segregator<Heap, Heap>` report about 93-96 µs
+per 10,000 pairs instead of `0.0000 ps`.
+
+**Run #3: the pool result was a bench artifact, the stack gap is real.**
+
+The change column compares against run #1, not the previous run. The
+workflow restores `target/` (which holds `target/criterion`) with
+`actions/cache` on a key that never changes, and a cache hit is never
+saved again. The check: `BumpVec/10000` shows -84.04%, which is exactly
+6.686 µs against run #1's 41.888 µs. The two `+1.9e22%` entries
+(`HeapAlloc (baseline)`, `Segregator<Heap, Heap>`) divide by run #1's
+`0.0000 ps`, so they are not regressions. Only same-run ratios are used
+below. Dropping `target/criterion` from the cache would fix the column;
+not changed in this pass.
+
+Same-run ratios of medians:
+
+| Comparison | N=100 | N=1000 | N=10000 |
+|---|---|---|---|
+| `StackAllocator` / `bumpalo::Bump` | 1.07x | 1.66x | 2.13x |
+| `BackedStack<Heap>` / `bumpalo::Bump` | 1.12x | 1.60x | 1.70x |
+| `BackedStack<Heap>` / `StackAllocator` | 1.00x | 0.96x | 0.80x |
+| `PoolAllocator` / `Box` (old bench shape) | 1.93x | 2.02x | 1.85x |
+| `BumpVec` / `std::Vec` | 0.73x | 0.88x | 0.74x |
+
+`PoolAllocator` against `Box` is not a real result. `Box` measured
+0.30-0.39 ns per create/destroy cycle, about one clock cycle. In the same
+run `HeapAlloc`'s alloc/dealloc pair cost 7.05 ns through the same global
+allocator, so a real `Box::new` and drop of 32 bytes cannot be 20x
+cheaper. The old shape passed `&v` to `black_box`, which does not force
+the heap pointer itself to escape, and the CI toolchain
+(`dtolnay/rust-toolchain@stable`, newer than the local 1.75) most likely
+removed the allocation. Rustc 1.75 does not remove it (old shape: `Box`
+about 10 ns per cycle, pool about 1 ns), so the mechanism is unconfirmed,
+and no newer toolchain is reachable in the sandbox. The pool side had no
+`black_box` either, so its 0.6 ns per cycle (about two clock cycles) is
+suspect as well. This is the same failure as the run #1
+`combinator_dispatch_overhead` bug: a plausible number does not prove the
+bench measures anything.
+
+The run #1 hypothesis for the `#[inline]` hints assumed cross-crate calls
+without LTO. The workspace `[profile.bench]` sets `lto = true` and
+`codegen-units = 1`, so the bench never needed them. The drops of
+`StackAllocator` against run #1 also appear in `bumpalo` (11-29%), so
+they reflect the runner and not the hints. The hints stay for consumers
+built without LTO.
+
+`StackAllocator` zero-fill. `BackedStack::alloc_raw` has the same
+arithmetic as `StackAllocator::alloc_raw`, but its buffer comes from
+`HeapAlloc` and is not zero-filled, so the two entries in
+`backed_stack_vs_direct` are a controlled measurement of the
+constructor's `memset`. `BackedStack` took 1.00x, 0.96x and 0.80x of
+`StackAllocator`'s time, about 2.5 µs of the 12.3 µs at N=10000 (160 KB).
+A local run of the real bench file on rustc 1.75 gave 0.83x at N=10000.
+`bumpalo` never touches its chunk in this bench and neither side writes
+to what it allocates, so the group leaves out first-touch cost on the
+`bumpalo` side.
+
+`StackAllocator` allocation path. `bumpalo`'s `try_alloc_layout_fast`
+(read directly, `Ordering::Greater` arm, the branch both allocators take
+for an 8-byte-aligned request since `Bump`'s default `MIN_ALIGN` is 1)
+bumps down: one AND-mask on the cursor, the size rounded up, one compare
+against the chunk start, and a wrapping subtract on a raw pointer.
+`StackAllocator::alloc_raw` bumps up from a base plus an offset, does two
+`checked_add` calls, and recomputes `top + padding + size` for the new
+cursor. Marginal cost per allocation in run #3 is about 1.04 ns (N=100 to
+1000) and 1.26 ns (N=1000 to 10000) for `StackAllocator` against about
+0.58 ns for `bumpalo`. In a scratch crate on rustc 1.75 (indicative
+only, shared VM) the current code measured about 1.5 ns, and a bump-down
+variant with an absolute pointer cursor about 0.7 ns, next to real
+`bumpalo` at 0.74-0.97 ns. Wrapping arithmetic in place of `checked_add`
+measured the same as the current code (1.47 against 1.53 ns), which rules
+out the checked arithmetic. Bump-up variants with an absolute cursor were
+inconsistent (1.5 to 3.0 ns) even where the generated code was shorter,
+so these numbers do not justify a bump-up rewrite. Only bump-down matched
+`bumpalo`, and it would give up growing the most recent allocation in
+place without a copy (`resize_raw`, `try_grow_raw`), since growing
+downward moves the start of the block. No benchmark measures that path
+yet. No change to the algorithm in this pass. Dropping the zero-fill
+(about 20% at N=10000 in this bench) is the next candidate. It changes
+the documented zero-filled buffer, so it needs an explicit decision.
+
+Combinators. `FallbackAllocator` and `Segregator` cost nothing
+measurable over `HeapAlloc` (1.00x and 0.99x). `Tracked` costs 7.5x
+(about 53 ns per alloc/dealloc pair against 7 ns) and `SyncAlloc` 3.0x
+(about 21 ns). `Tracked` makes six atomic read-modify-write operations
+per allocation (four adds and two `fetch_max`) and three per
+deallocation, so the extra 46 ns is roughly 5 ns per atomic. `SyncAlloc`
+takes its lock twice per pair. Both costs come from the designs as built
+and are not changed here.
+
+`BumpVec` beat `std::Vec` at all three sizes. The N=100 rise against run
+#1 (132.8 ns to 252.5 ns) compares with the earlier version that copied
+by hand, which was faster at very small sizes.
+
+Next run: the churn group now passes the live value through `black_box`
+on both sides. `Box` should land near the `HeapAlloc` pair cost (roughly
+5 to 10 ns per cycle). If it still reports about 0.3 ns, the elision
+explanation is wrong and needs a fresh look. `#[cold]` on
+`PoolAllocator`'s slow path waits for that baseline.
+
 ## Module plan (catalogued, not built)
 
 Every module from the original foonathan/memory survey has shipped
@@ -888,6 +996,13 @@ guess, not a confirmed one.
   and why the missing hint is the grounded suspect, not a confirmed
   fix. Verified only that nothing broke (68/68 tests, scratch-crate
   technique); the actual speed claim waits on a real re-run.
+
+- Run #3 showed the "2.2-2.8x slower than `Box`" finding was a bench
+  artifact (see "Benches", run #3), so the `#[inline]` entry above no
+  longer fixes a real problem. No code change in this file this pass.
+  `#[cold]` and `#[inline(never)]` on `bump_fresh_slot` and `grow` (the
+  attributes `bumpalo::Bump::alloc_layout_slow` carries) wait for the
+  corrected bench to report first.
 
 ### `raw_alloc.rs`
 
@@ -991,6 +1106,22 @@ guess, not a confirmed one.
   -p mid-alloc` itself stopped being available directly once
   `benches/allocators.rs`'s own dev-dependencies landed (see that
   file's own entry below).
+
+- Added the missing `#[inline]` on `try_alloc_raw`, the only `RawAlloc`
+  impl in the crate without one. Added the NOTICE header, condensed the
+  module and method comments, and repaired the doc comment on
+  `impl RawAlloc for StackAllocator`, which started mid-sentence in the
+  version that introduced it.
+- Abandoned a redesign that hardcoded `MIN_ALIGN = 16` and skipped
+  alignment masking below it. The premise was wrong: `bumpalo::Bump`'s
+  default `MIN_ALIGN` is 1, so the `alloc_layout(16, 8)` call in the
+  bench takes the masking branch in `bumpalo` too. Never delivered, no
+  repo state affected.
+- Read `try_alloc_layout_fast`'s `Ordering::Greater` arm in full and
+  compared it with `alloc_raw` (see "Benches", run #3). Checked
+  arithmetic is ruled out. The remaining gap is bump direction and cursor
+  form. No change made, since only a bump-down rewrite matched `bumpalo`
+  and it would give up copy-free growth of the last allocation.
 
 ### `fallback.rs`
 
@@ -1170,3 +1301,12 @@ guess, not a confirmed one.
   indirection was enough to block that specific optimization -- a
   result "surviving" is not the same as a bench being correct, and the
   ones that looked fine were exactly as buggy as the ones that didn't.
+- Run #3 showed `create_destroy_churn` measured nothing real for `Box`
+  (0.3 ns per cycle against 7 ns for a `HeapAlloc` pair in the same run),
+  and the pool side had no `black_box`. Both entries now pass the live
+  value through `black_box` by value. Numbers for this group from runs #1
+  to #3 should not be compared with later runs. Same class of bug as the
+  run #1 `combinator_dispatch_overhead` fix.
+- Condensed the header comment and added the NOTICE header. Checked by
+  compiling and running the real bench file against a local stand-in for
+  `criterion` on rustc 1.75, all five groups.

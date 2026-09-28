@@ -1,67 +1,28 @@
-//! Criterion benchmarks for every allocator strategy `mid-alloc` has
-//! built so far. Structured the same way
-//! `mid-arena/benches/vs_arena_crates.rs` does: one `Criterion` group
-//! per operation, with feature-gated `#[cfg(feature = "...")]` entries
-//! *inside* each group rather than whole conditional groups -- so
-//! `cargo bench -p mid-alloc` still runs cleanly with any subset of
-//! features enabled, it just has fewer bars in whichever group needed
-//! the missing one. Run the full suite with `--all-features`.
+// ============================================================================
+// NOTICE: Full documentation, design decisions, and fix history for this file
+// live in docs/mid-alloc.md, section "Benches"
+// ============================================================================
+//! Criterion benchmarks for `mid-alloc`, one group per comparison.
 //!
-//! Every entry constructs its own fresh allocator state inside the
-//! timed closure and measures construct+use together -- the same real
-//! convention `mid-arena/benches/vs_arena_crates.rs` already uses (a
-//! fresh `b.iter(|| { ... })` per entry, not `iter_batched`), kept
-//! consistent rather than introducing a second pattern in the same
-//! workspace. Construction cost is real and shared identically across
-//! every entry in a given group, so relative comparisons stay fair
-//! even though the absolute numbers include it.
+//! - `raw_alloc_sequential`: `StackAllocator` vs `bumpalo::Bump`, N raw
+//!   16-byte allocations.
+//! - `create_destroy_churn`: `PoolAllocator` vs `Box`, N create/destroy
+//!   (new/drop) cycles, one at a time.
+//! - `combinator_dispatch_overhead`: `FallbackAllocator`, `Segregator`,
+//!   `Tracked` and `SyncAlloc` vs the plain `HeapAlloc` they wrap.
+//! - `backed_stack_vs_direct`: `BackedStack<HeapAlloc>` vs
+//!   `StackAllocator`.
+//! - `push_sequential`: `BumpVec<u64, HeapAlloc>` vs `std::vec::Vec<u64>`,
+//!   N pushes from empty.
 //!
-//! What's compared against what, and why each is a fair baseline, not
-//! a strawman:
-//!
-//! - **`StackAllocator` vs `bumpalo::Bump`**: both are untyped, raw
-//!   bump allocators over the global heap -- the same operation
-//!   (`alloc_raw`/`Bump::alloc_layout`), the natural apples-to-apples
-//!   comparison, same reasoning `mid-arena`'s own `BumpArena`-vs-
-//!   `bumpalo` bench already uses for the typed case.
-//! - **`PoolAllocator<T>` vs repeated `Box::new`/drop**: `Box` is what
-//!   anyone reaching for "heap-allocate one value, free it later" in
-//!   Rust would use without a specific reason not to -- the honest
-//!   baseline `PoolAllocator` exists to beat on repeated create/destroy
-//!   churn, not a strawman.
-//! - **Combinator overhead (`FallbackAllocator`, `Segregator`,
-//!   `Tracked`, `SyncAlloc`) vs the plain `HeapAlloc` they wrap**: the
-//!   real question for a wrapper type isn't "is it fast" in isolation,
-//!   it's "what does wrapping something already-fast actually cost" --
-//!   each combinator here is built once outside the timed closure
-//!   (construction is cheap and not what this group measures), then
-//!   the same N alloc/dealloc pairs run through it as through the bare
-//!   baseline.
-//! - **`BumpVec<T, HeapAlloc>` vs `std::vec::Vec<T>`**: same real
-//!   comparison `mid-collections`' own `sparse_set.rs` bench uses for
-//!   its own collection type -- what everyone already reaches for,
-//!   not a purpose-built loser.
-//!
-//! **Honest verification note, same shape as `bench-mid-collections-
-//! sparse-set.yml`'s own header comment:** this crate hits the same
-//! criterion-needs-edition2024 wall as every other bench in this
-//! workspace (root `Cargo.toml`'s comments) -- this sandbox's rustc
-//! 1.75 cannot compile a crate that depends on criterion at all, and
-//! no newer toolchain is reachable here (checked directly: `apt-cache
-//! policy rustc` offers nothing past 1.75, `rustup`'s own install
-//! domain is not in this sandbox's allowed network list). Every
-//! constructor and method signature used below was cross-checked
-//! against this crate's own real source directly (not memory) --
-//! `PoolAllocator::destroy`'s real signature
-//! (`unsafe fn destroy(&self, item: &mut T)`) caught this file's first
-//! draft using it wrong (assumed `&mut self`, assumed safe) -- but the
-//! file as a whole has never actually compiled anywhere. Its first
-//! real CI trigger is what actually proves it, the same way that
-//! workflow's own bench file states for itself.
+//! Optional-feature entries are gated with `#[cfg(feature = "...")]`
+//! inside each group, so `cargo bench` builds under any feature subset
+//! and just shows fewer bars. Each entry builds its own allocator inside
+//! the timed closure unless noted, so construction cost is included and
+//! shared by every entry in a group. Results go through `black_box` so
+//! the compiler cannot remove the work being timed.
 //!
 //! Run: `cargo bench -p mid-alloc --all-features --bench allocators`
-//! Report: `target/criterion/report/index.html` (`html_reports`
-//! feature, same as every other bench in this workspace).
 
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 use mid_alloc::{HeapAlloc, RawAlloc, StackAllocator};
@@ -114,9 +75,10 @@ fn bench_raw_alloc(c: &mut Criterion) {
 }
 
 /// `PoolAllocator<[u64; 4]>` vs `Box<[u64; 4]>`: N create+destroy (or
-/// new+drop) cycles, one at a time -- the churn pattern both are meant
-/// to handle, not a bulk-allocate-then-bulk-free shape neither
-/// specifically optimizes for.
+/// new+drop) cycles, one at a time, the churn pattern both are meant to
+/// handle. Both sides pass the live value through `black_box` by value
+/// (the `&mut T` for the pool, the `Box` itself for `Box`), so neither
+/// allocation can be elided.
 fn bench_create_destroy_churn(c: &mut Criterion) {
     let mut group = c.benchmark_group("create_destroy_churn");
     for &n in &SIZES {
@@ -127,7 +89,7 @@ fn bench_create_destroy_churn(c: &mut Criterion) {
             b.iter(|| {
                 let pool = PoolAllocator::<[u64; 4]>::new();
                 for i in 0..n {
-                    let v = pool.create([i as u64; 4]).unwrap();
+                    let v = black_box(pool.create([i as u64; 4]).unwrap());
                     // SAFETY: `v` came from this same `pool`'s own
                     // `create` call immediately above and has not been
                     // destroyed yet.
@@ -141,8 +103,7 @@ fn bench_create_destroy_churn(c: &mut Criterion) {
         group.bench_with_input(BenchmarkId::new("Box", n), &n, |b, &n| {
             b.iter(|| {
                 for i in 0..n {
-                    let v = Box::new([i as u64; 4]);
-                    black_box(&v);
+                    let v = black_box(Box::new([i as u64; 4]));
                     drop(v);
                 }
             });
