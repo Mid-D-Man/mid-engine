@@ -71,6 +71,14 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-bench-mid-alloc-
 
+      # Criterion keeps its saved baseline inside the cached target/. The
+      # cache key only changes with Cargo.toml, so the first run's baseline
+      # is restored every time and every "change" line compares with it.
+      # Runner speed also varies by tens of percent between runs, so a
+      # cross-run delta means little. Compare ratios inside one run.
+      - name: Drop saved criterion baseline
+        run: rm -rf target/criterion
+
       - name: Confirm environment
         env:
           RUST_VERSION: ${{ steps.rustver.outputs.ver }}
@@ -121,7 +129,9 @@ jobs:
             echo "bumpalo::Bump), create_destroy_churn (PoolAllocator vs Box),"
             echo "combinator_dispatch_overhead (Fallback/Segregator/Tracked/SyncAlloc"
             echo "vs plain HeapAlloc), backed_stack_vs_direct (BackedStack vs"
-            echo "StackAllocator), push_sequential (BumpVec vs std::Vec). See the raw"
+            echo "StackAllocator), push_sequential (BumpVec over HeapAlloc vs std::Vec),"
+            echo "push_in_arena (BumpVec over StackAllocator vs"
+            echo "bumpalo::collections::Vec vs std::Vec). See the raw"
             echo "log below for full confidence intervals."
             echo ""
             echo '```'
