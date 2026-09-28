@@ -14,12 +14,15 @@
 //!   `StackAllocator`.
 //! - `push_sequential`: `BumpVec<u64, HeapAlloc>` vs `std::vec::Vec<u64>`,
 //!   N pushes from empty.
+//! - `push_in_arena`: `BumpVec<u64, &StackAllocator>` vs
+//!   `bumpalo::collections::Vec<u64>` vs `std::vec::Vec<u64>`, N pushes
+//!   from empty, arena built outside the timed region.
 //!
 //! Optional-feature entries are gated with `#[cfg(feature = "...")]`
 //! inside each group, so `cargo bench` builds under any feature subset
 //! and just shows fewer bars. Each entry builds its own allocator inside
-//! the timed closure unless noted, so construction cost is included and
-//! shared by every entry in a group. Results go through `black_box` so
+//! the timed closure unless noted (`push_in_arena` builds outside), so
+//! construction cost is included and shared by every entry in a group. Results go through `black_box` so
 //! the compiler cannot remove the work being timed.
 //!
 //! Run: `cargo bench -p mid-alloc --all-features --bench allocators`
@@ -224,10 +227,18 @@ fn bench_backed_vs_direct(c: &mut Criterion) {
     group.finish();
 }
 
-/// `BumpVec<u64, HeapAlloc>` vs `std::vec::Vec<u64>`: N sequential
-/// pushes from empty, no `with_capacity`/`new_in`-plus-capacity head
-/// start on either side, so this measures real growth-cycle cost, not
-/// just steady-state writes.
+/// Two groups of N sequential pushes from empty, no head-start capacity
+/// on any side, so both measure real growth-cycle cost.
+///
+/// - `push_sequential`: `BumpVec<u64, HeapAlloc>` vs `std::vec::Vec<u64>`.
+///   This measures `BumpVec`'s growth path over the global allocator, not
+///   an arena.
+/// - `push_in_arena`: `BumpVec<u64, &StackAllocator>` vs
+///   `bumpalo::collections::Vec<u64>` vs `std::vec::Vec<u64>`. Each arena
+///   is built once, outside the timed region, and reset at the start of
+///   every iteration, so the group does not include the `StackAllocator`
+///   constructor's zero-fill. The arena holds the final doubled capacity,
+///   so no push can run out of room.
 #[cfg(feature = "bump_vec")]
 fn bench_bump_vec_vs_std_vec(c: &mut Criterion) {
     let mut group = c.benchmark_group("push_sequential");
@@ -238,6 +249,48 @@ fn bench_bump_vec_vs_std_vec(c: &mut Criterion) {
         group.bench_with_input(BenchmarkId::new("BumpVec", n), &n, |b, &n| {
             b.iter(|| {
                 let mut v: BumpVec<u64, _> = BumpVec::new_in(&heap);
+                for i in 0..n {
+                    v.push(i as u64);
+                }
+                black_box(&v);
+            });
+        });
+
+        group.bench_with_input(BenchmarkId::new("std::Vec", n), &n, |b, &n| {
+            b.iter(|| {
+                let mut v: Vec<u64> = Vec::new();
+                for i in 0..n {
+                    v.push(i as u64);
+                }
+                black_box(&v);
+            });
+        });
+    }
+    group.finish();
+
+    let mut group = c.benchmark_group("push_in_arena");
+    for &n in &SIZES {
+        group.throughput(Throughput::Elements(n as u64));
+        let final_cap = (n as usize).next_power_of_two().max(4);
+        let arena_bytes = final_cap * core::mem::size_of::<u64>() + 64;
+
+        group.bench_with_input(BenchmarkId::new("BumpVec<StackAllocator>", n), &n, |b, &n| {
+            let mut stack = StackAllocator::with_capacity(arena_bytes);
+            b.iter(|| {
+                stack.reset();
+                let mut v: BumpVec<u64, _> = BumpVec::new_in(&stack);
+                for i in 0..n {
+                    v.push(i as u64);
+                }
+                black_box(&v);
+            });
+        });
+
+        group.bench_with_input(BenchmarkId::new("bumpalo::collections::Vec", n), &n, |b, &n| {
+            let mut bump = bumpalo::Bump::with_capacity(arena_bytes);
+            b.iter(|| {
+                bump.reset();
+                let mut v = bumpalo::collections::Vec::new_in(&bump);
                 for i in 0..n {
                     v.push(i as u64);
                 }

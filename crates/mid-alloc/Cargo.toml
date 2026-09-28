@@ -33,12 +33,12 @@ crate-type = ["lib"]
 # on this project's rustc-1.75 floor after this dependency landed.
 criterion = { version = "0.5", features = ["html_reports"] }
 # Comparison target for benches/allocators.rs's StackAllocator-vs-Bump
-# group -- both are untyped, raw bump allocators, the same fair-
-# baseline reasoning mid-arena's own BumpArena-vs-bumpalo bench uses.
+# group (both are untyped, raw bump allocators) and, through the
+# `collections` feature, for the BumpVec-in-arena group.
 # Version pinned to what actually resolved and was actually benched
 # (checked via Cargo.lock once a real run exists), not left to range
 # drift.
-bumpalo = "3.20.3"
+bumpalo = { version = "3.20.3", features = ["collections"] }
 
 [[bench]]
 name    = "allocators"

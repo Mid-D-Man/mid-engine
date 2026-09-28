@@ -865,8 +865,8 @@ cheaper. The old shape passed `&v` to `black_box`, which does not force
 the heap pointer itself to escape, and the CI toolchain
 (`dtolnay/rust-toolchain@stable`, newer than the local 1.75) most likely
 removed the allocation. Rustc 1.75 does not remove it (old shape: `Box`
-about 10 ns per cycle, pool about 1 ns), so the mechanism is unconfirmed,
-and no newer toolchain is reachable in the sandbox. The pool side had no
+about 10 ns per cycle, pool about 1 ns), and no newer toolchain is
+reachable in the sandbox. Run #4 confirmed the explanation (below). The pool side had no
 `black_box` either, so its 0.6 ns per cycle (about two clock cycles) is
 suspect as well. This is the same failure as the run #1
 `combinator_dispatch_overhead` bug: a plausible number does not prove the
@@ -885,7 +885,9 @@ arithmetic as `StackAllocator::alloc_raw`, but its buffer comes from
 `backed_stack_vs_direct` are a controlled measurement of the
 constructor's `memset`. `BackedStack` took 1.00x, 0.96x and 0.80x of
 `StackAllocator`'s time, about 2.5 µs of the 12.3 µs at N=10000 (160 KB).
-A local run of the real bench file on rustc 1.75 gave 0.83x at N=10000.
+Run #4 gave 0.93x, 0.91x and 0.91x, so the share is 7-20% depending on the
+run. A local run of the real bench file on rustc 1.75 gave 0.83x at
+N=10000.
 `bumpalo` never touches its chunk in this bench and neither side writes
 to what it allocates, so the group leaves out first-touch cost on the
 `bumpalo` side.
@@ -911,27 +913,72 @@ so these numbers do not justify a bump-up rewrite. Only bump-down matched
 place without a copy (`resize_raw`, `try_grow_raw`), since growing
 downward moves the start of the block. No benchmark measures that path
 yet. No change to the algorithm in this pass. Dropping the zero-fill
-(about 20% at N=10000 in this bench) is the next candidate. It changes
+(7-20% of this bench across runs #3 and #4) is the next candidate. It changes
 the documented zero-filled buffer, so it needs an explicit decision.
 
 Combinators. `FallbackAllocator` and `Segregator` cost nothing
-measurable over `HeapAlloc` (1.00x and 0.99x). `Tracked` costs 7.5x
-(about 53 ns per alloc/dealloc pair against 7 ns) and `SyncAlloc` 3.0x
-(about 21 ns). `Tracked` makes six atomic read-modify-write operations
-per allocation (four adds and two `fetch_max`) and three per
-deallocation, so the extra 46 ns is roughly 5 ns per atomic. `SyncAlloc`
-takes its lock twice per pair. Both costs come from the designs as built
-and are not changed here.
+measurable over `HeapAlloc` (1.00x and 0.99x in run #3, 1.04x and 1.01x
+in run #4). `Tracked` and `SyncAlloc` are not stable numbers. Run #3
+showed `Tracked` at 7.5x (about 53 ns per alloc/dealloc pair against 7
+ns) and `SyncAlloc` at 3.0x. Run #4 showed 2.6x and 1.11x with no change
+to `tracking.rs`, `sync.rs` or `raw_alloc.rs`, so the swing comes from
+the runner or toolchain, most likely how the runner's CPU handles
+lock-prefixed instructions. An earlier draft of this paragraph read the
+run #3 figure as "roughly 5 ns per atomic"; run #4 puts it at about 1.4
+ns for `Tracked` (six read-modify-write operations per allocation, four
+adds and two `fetch_max`, and three per deallocation), so that per-atomic
+figure was wrong. These two entries need several runs before any ratio is
+quoted. The costs come from the designs as built and are not changed
+here.
 
 `BumpVec` beat `std::Vec` at all three sizes. The N=100 rise against run
 #1 (132.8 ns to 252.5 ns) compares with the earlier version that copied
 by hand, which was faster at very small sizes.
 
-Next run: the churn group now passes the live value through `black_box`
-on both sides. `Box` should land near the `HeapAlloc` pair cost (roughly
-5 to 10 ns per cycle). If it still reports about 0.3 ns, the elision
-explanation is wrong and needs a fresh look. `#[cold]` on
-`PoolAllocator`'s slow path waits for that baseline.
+**Run #4: churn bench fixed, `Box` and pool are real numbers.**
+
+The change column still compares against run #1 (`HeapAlloc (baseline)`
+and `Segregator<Heap, Heap>` show `+2e22%` again), which fits the cache
+diagnosis above. The runner was about 40% slower than in run #3 on
+`bumpalo` (8.19 µs against 5.82 µs at N=10000), so only same-run ratios
+count.
+
+| Comparison | N=100 | N=1000 | N=10000 |
+|---|---|---|---|
+| `PoolAllocator` / `Box` (fixed bench) | 0.21x | 0.21x | 0.21x |
+| `StackAllocator` / `bumpalo::Bump` | 1.50x | 1.80x | 1.84x |
+| `BackedStack<Heap>` / `StackAllocator` | 0.93x | 0.91x | 0.91x |
+| `BumpVec<HeapAlloc>` / `std::Vec` | 0.51x | 0.80x | 0.95x |
+
+`Box` went from 0.3 ns to about 8 ns per create/destroy cycle after
+`black_box` moved to the `Box` by value, matching the 7.6 ns
+`HeapAlloc` pair in the same run. That confirms the run #3 explanation:
+the old shape let the allocation be removed. The pool measured about 1.6
+ns per cycle once its result also went through `black_box`, against 0.6
+ns before, so its run #3 figure was partly optimized away too. The pool
+is about 4.8x faster than `Box` at every size. The "2.2-2.8x slower"
+finding from runs #1 and #2 is closed as an artifact of both sides. No
+`#[cold]` change is needed for speed and none was made.
+
+`StackAllocator` marginal cost per allocation is 1.53 ns (N=100 to 1000)
+and 1.50 ns (N=1000 to 10000) against 0.83 and 0.82 ns for `bumpalo`,
+about 1.84x. `BackedStack` runs at 1.37 ns, so without the zero-fill the
+path is still about 1.65x behind. Across runs #3 and #4 the marginal
+ratio is 1.8x to 2.2x.
+
+`BumpVec` against `std::Vec` is a same-run ratio and `BumpVec` wins at
+all three sizes, most at small N. The `change` column shows +52% at N=100
+and -85% at N=10000 for `BumpVec`, but that compares with run #1, when
+the hand-copy growth path was fast at small N and very slow at large N.
+It is not a comparison with `std::Vec`. That `push_sequential` group
+runs `BumpVec` over `HeapAlloc`, so it measures growth through the global
+allocator's `realloc`, not an arena.
+
+`push_in_arena` is the arena-plus-vector comparison: `BumpVec` over a
+`StackAllocator` against `bumpalo::collections::Vec` over a `Bump`, with
+`std::Vec` as a third entry. No CI result yet. A local run on rustc 1.75
+had `BumpVec` ahead of `bumpalo::collections::Vec` at N=100 and N=10000
+and level at N=1000, indicative only.
 
 ## Module plan (catalogued, not built)
 
@@ -999,10 +1046,10 @@ guess, not a confirmed one.
 
 - Run #3 showed the "2.2-2.8x slower than `Box`" finding was a bench
   artifact (see "Benches", run #3), so the `#[inline]` entry above no
-  longer fixes a real problem. No code change in this file this pass.
-  `#[cold]` and `#[inline(never)]` on `bump_fresh_slot` and `grow` (the
-  attributes `bumpalo::Bump::alloc_layout_slow` carries) wait for the
-  corrected bench to report first.
+  longer fixes a real problem. No code change in this file. Run #4, with
+  the churn bench fixed, put the pool at 0.21x of `Box`, so the
+  `#[cold]` and `#[inline(never)]` idea for `bump_fresh_slot` and `grow`
+  (the attributes `bumpalo::Bump::alloc_layout_slow` carries) is dropped.
 
 ### `raw_alloc.rs`
 
@@ -1310,3 +1357,9 @@ guess, not a confirmed one.
 - Condensed the header comment and added the NOTICE header. Checked by
   compiling and running the real bench file against a local stand-in for
   `criterion` on rustc 1.75, all five groups.
+- Run #4 confirmed the churn fix: `Box` measured about 8 ns per cycle
+  and the pool about 1.6 ns.
+- Added the `push_in_arena` group and enabled bumpalo's `collections`
+  feature in `Cargo.toml`. Checked by running the real bench file against
+  the local `criterion` stand-in on rustc 1.75, plus a scratch program
+  confirming every push succeeds across three arena resets at each size.
