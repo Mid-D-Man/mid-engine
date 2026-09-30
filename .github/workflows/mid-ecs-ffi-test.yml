@@ -56,18 +56,39 @@ jobs:
         id: rustver
         run: echo "ver=$(rustc --version)" >> $GITHUB_OUTPUT
 
-      # Registry only, not target/: same reasoning as mid-ecs-test.yml.
+      # Registry only: not target/ (same reasoning as mid-ecs-test.yml), and
+      # not ~/.cargo/bin/ either (see "Toolchain check" below).
       - name: Cache cargo registry
         uses: actions/cache@v4
         with:
           path: |
-            ~/.cargo/bin/
             ~/.cargo/registry/index/
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
           key: cargo-registry-${{ hashFiles('crates/mid-collections/**/Cargo.toml', 'crates/mid-ecs/**/Cargo.toml') }}
           restore-keys: |
             cargo-registry-
+
+      # Added after the first real run of this job on rustc 1.98.1 died with
+      # `cargo: command not found` (exit 127) at its first cargo call, in
+      # this workflow and in mid-ecs-ffi-test.yml alike. `rustc --version`
+      # had worked right after the toolchain install, and the only steps in
+      # between were the cache restore (plus valgrind's apt install in the
+      # FFI workflow). The restore is the SUSPECT, not a confirmed cause:
+      # ~/.cargo/bin/ is out of the cache paths above because nothing here
+      # `cargo install`s anything, so caching it buys nothing and can only
+      # overwrite the freshly installed rustup proxies. This step prints
+      # what is actually on PATH so that, if that was not the cause, the
+      # next failure says what was.
+      # It fails the run by design when cargo is unusable: with cargo dead,
+      # the later steps that are continue-on-error would fail silently (127).
+      - name: Toolchain check
+        run: |
+          echo "PATH=$PATH"
+          command -v rustup rustc cargo || true
+          ls -la "$HOME/.cargo/bin" 2>&1 | head -20 || true
+          rustc --version
+          cargo --version
 
       - name: Install valgrind
         run: |
