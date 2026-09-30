@@ -23,9 +23,9 @@
 //! that parameterization to carve a *contiguous sub-region* out of
 //! another allocator the way this does). The bump-allocation logic
 //! itself is a direct copy of `StackAllocator::alloc_raw`'s own real
-//! math (checked-arithmetic alignment, `usize` pointer arithmetic
-//! rather than `<*const T>::add`), not reinvented, since that logic
-//! was already reviewed and tested there.
+//! math (absolute-address cursor, wrap-free padding, `usize` pointer
+//! arithmetic rather than `<*const T>::add`), not reinvented, since
+//! that logic was already reviewed and tested there.
 
 use crate::raw_alloc::RawAlloc;
 use core::cell::Cell;
@@ -51,7 +51,10 @@ pub struct BackedStack<'p, P: RawAlloc> {
     buf: NonNull<u8>,
     capacity: usize,
     align: usize,
-    top: Cell<usize>,
+    /// Bump position as an absolute address inside `buf`.
+    cur: Cell<usize>,
+    /// One past the last byte of `buf`.
+    end: usize,
 }
 
 impl<'p, P: RawAlloc> BackedStack<'p, P> {
@@ -63,13 +66,26 @@ impl<'p, P: RawAlloc> BackedStack<'p, P> {
     pub fn new(parent: &'p P, capacity: usize, align: usize) -> Option<Self> {
         let capacity = capacity.max(1);
         let buf = parent.try_alloc_raw(capacity, align)?;
+        let base = buf.as_ptr() as usize;
         Some(Self {
             parent,
             buf,
             capacity,
             align,
-            top: Cell::new(0),
+            cur: Cell::new(base),
+            end: base + capacity,
         })
+    }
+
+    /// Bump position as an offset from the start of the buffer.
+    #[inline]
+    fn top(&self) -> usize {
+        self.cur.get() - self.buf.as_ptr() as usize
+    }
+
+    #[inline]
+    fn set_top(&self, top: usize) {
+        self.cur.set(self.buf.as_ptr() as usize + top);
     }
 
     /// Total capacity in bytes, fixed at construction.
@@ -81,20 +97,20 @@ impl<'p, P: RawAlloc> BackedStack<'p, P> {
     /// Bytes currently in use.
     #[inline]
     pub fn used(&self) -> usize {
-        self.top.get()
+        self.top()
     }
 
     /// Bytes still available before the next allocation returns `None`.
     #[inline]
     pub fn remaining(&self) -> usize {
-        self.capacity - self.top.get()
+        self.end - self.cur.get()
     }
 
     /// Saves the current position. Pass to [`rewind`](Self::rewind)
     /// later to reclaim everything allocated after this call.
     #[inline]
     pub fn marker(&self) -> BackedStackMarker {
-        BackedStackMarker(self.top.get())
+        BackedStackMarker(self.top())
     }
 
     /// Reclaims every byte allocated since `marker` was taken. Takes
@@ -105,44 +121,51 @@ impl<'p, P: RawAlloc> BackedStack<'p, P> {
     /// checker enforce that none are still alive when this is called.
     pub fn rewind(&mut self, marker: BackedStackMarker) {
         debug_assert!(
-            marker.0 <= self.top.get(),
+            marker.0 <= self.top(),
             "rewind() marker is ahead of the current position -- from a \
              different BackedStack, or already rewound past?"
         );
-        self.top.set(marker.0);
+        self.set_top(marker.0);
     }
 
     /// Reclaims everything, equivalent to rewinding to the marker taken
     /// at construction.
     #[inline]
     pub fn reset(&mut self) {
-        self.top.set(0);
+        self.set_top(0);
     }
 
-    /// Allocates `size_bytes` aligned to `align`. Same checked-
-    /// arithmetic bump math as `StackAllocator::alloc_raw`, ported
-    /// directly, just relative to this allocator's parent-provisioned
-    /// `buf` instead of an owned `Vec<u8>`.
+    /// Allocates `size_bytes` aligned to `align`. Same bump math as
+    /// `StackAllocator::alloc_raw`, just inside this allocator's
+    /// parent-provisioned `buf` instead of an owned `Vec<u8>`.
     #[inline]
     pub fn alloc_raw(&self, size_bytes: usize, align: usize) -> Option<NonNull<u8>> {
         debug_assert!(align.is_power_of_two(), "align must be a power of two");
-
-        let base = self.buf.as_ptr() as usize;
-        let current = base + self.top.get();
-        let aligned = current.checked_add(align - 1)? & !(align - 1);
-        let padding = aligned - current;
-        let end = aligned.checked_add(size_bytes)?;
-
-        if end > base + self.capacity {
+        // Release builds also refuse a bad `align` or a size no `Layout`
+        // could hold, which keeps the arithmetic below from wrapping.
+        if size_bytes > isize::MAX as usize || !align.is_power_of_two() {
             return None;
         }
 
-        self.top.set(self.top.get() + padding + size_bytes);
+        let cur = self.cur.get();
+        // Bytes from `cur` up to the next multiple of `align`. Bit ops
+        // only, so it cannot wrap.
+        let padding = cur.wrapping_neg() & (align - 1);
+        // `padding < align <= 2^(BITS-1)` and `size_bytes <= isize::MAX`,
+        // so this sum cannot wrap.
+        let needed = padding + size_bytes;
+        // `cur <= end` always holds, so this cannot underflow.
+        if needed > self.end - cur {
+            return None;
+        }
 
-        // SAFETY: same reasoning as `StackAllocator::alloc_raw` --
-        // `aligned` is inside `[base, base + capacity)` by the `end >
-        // base + capacity` check just above.
-        Some(unsafe { NonNull::new_unchecked(aligned as *mut u8) })
+        self.cur.set(cur + needed);
+
+        // SAFETY: `needed <= end - cur` puts `cur + padding` and the
+        // `size_bytes` after it inside the buffer, and `cur >= base`
+        // (a live allocation's non-null start), so the pointer is
+        // non-null and valid for `size_bytes` bytes.
+        Some(unsafe { NonNull::new_unchecked((cur + padding) as *mut u8) })
     }
 
     /// Safe, typed convenience over [`alloc_raw`](Self::alloc_raw).
@@ -172,7 +195,8 @@ impl<'p, P: RawAlloc> Drop for BackedStack<'p, P> {
         // `new` above, never mutated since, and this is the only
         // place that ever deallocates them.
         unsafe {
-            self.parent.try_dealloc_raw(self.buf, self.capacity, self.align);
+            self.parent
+                .try_dealloc_raw(self.buf, self.capacity, self.align);
         }
     }
 }
@@ -181,6 +205,21 @@ impl<'p, P: RawAlloc> Drop for BackedStack<'p, P> {
 mod tests {
     use super::*;
     use crate::raw_alloc::{HeapAlloc, NullAlloc};
+
+    #[test]
+    fn alloc_raw_refuses_sizes_and_alignments_no_buffer_could_satisfy() {
+        let heap = HeapAlloc;
+        let s = BackedStack::new(&heap, 64, 8).unwrap();
+        assert!(s.alloc_raw(usize::MAX, 1).is_none());
+        assert!(s.alloc_raw(isize::MAX as usize + 1, 1).is_none());
+        assert!(s.alloc_raw(8, 1 << (usize::BITS - 1)).is_none());
+        assert_eq!(
+            s.used(),
+            0,
+            "a refused request must not move the bump position"
+        );
+        assert!(s.alloc_raw(8, 8).is_some(), "still usable after refusals");
+    }
 
     #[test]
     fn new_fails_cleanly_when_the_parent_cannot_provide_the_block() {
@@ -243,7 +282,11 @@ mod tests {
         use crate::stack_allocator::StackAllocator;
         let big = StackAllocator::with_capacity(256);
         let small = BackedStack::new(&big, 32, 8).expect("big has plenty of room for 32 bytes");
-        assert_eq!(big.used(), 32, "the small stack's whole block was carved out of big");
+        assert_eq!(
+            big.used(),
+            32,
+            "the small stack's whole block was carved out of big"
+        );
         let v = small.alloc(7u32).unwrap();
         assert_eq!(*v, 7);
         drop(small);

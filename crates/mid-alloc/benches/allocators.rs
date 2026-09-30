@@ -5,7 +5,9 @@
 //! Criterion benchmarks for `mid-alloc`, one group per comparison.
 //!
 //! - `raw_alloc_sequential`: `StackAllocator` vs `bumpalo::Bump`, N raw
-//!   16-byte allocations.
+//!   16-byte allocations, allocator built inside every iteration.
+//! - `raw_alloc_reset`: the same comparison with each allocator built
+//!   once and reset per iteration, so only the bump path is timed.
 //! - `create_destroy_churn`: `PoolAllocator` vs `Box`, N create/destroy
 //!   (new/drop) cycles, one at a time.
 //! - `combinator_dispatch_overhead`: `FallbackAllocator`, `Segregator`,
@@ -21,9 +23,10 @@
 //! Optional-feature entries are gated with `#[cfg(feature = "...")]`
 //! inside each group, so `cargo bench` builds under any feature subset
 //! and just shows fewer bars. Each entry builds its own allocator inside
-//! the timed closure unless noted (`push_in_arena` builds outside), so
-//! construction cost is included and shared by every entry in a group. Results go through `black_box` so
-//! the compiler cannot remove the work being timed.
+//! the timed closure unless noted (`raw_alloc_reset` and `push_in_arena`
+//! build outside it), so the other groups include construction cost.
+//! Results go through `black_box` so the compiler cannot remove the work
+//! being timed.
 //!
 //! Run: `cargo bench -p mid-alloc --all-features --bench allocators`
 
@@ -48,8 +51,16 @@ use mid_alloc::Tracked;
 const SIZES: [u32; 3] = [100, 1_000, 10_000];
 
 /// `StackAllocator` vs `bumpalo::Bump`: N sequential raw 16-byte
-/// allocations, each entry constructing its own fresh, generously
-/// pre-sized allocator so the run never actually exhausts either one.
+/// allocations, in two groups.
+///
+/// - `raw_alloc_sequential` builds a fresh, generously pre-sized
+///   allocator inside every iteration. `StackAllocator::with_capacity`
+///   zero-fills its buffer and `bumpalo` does not, so this group
+///   includes a cost only one side pays.
+/// - `raw_alloc_reset` builds each allocator once, outside the timed
+///   region, and resets it at the start of every iteration, so it
+///   measures the bump path alone. The arena has 64 bytes of slack so
+///   no allocation can run out of room.
 fn bench_raw_alloc(c: &mut Criterion) {
     let mut group = c.benchmark_group("raw_alloc_sequential");
     for &n in &SIZES {
@@ -68,6 +79,34 @@ fn bench_raw_alloc(c: &mut Criterion) {
             b.iter(|| {
                 let bump = bumpalo::Bump::with_capacity(n as usize * 16);
                 let layout = std::alloc::Layout::from_size_align(16, 8).unwrap();
+                for _ in 0..n {
+                    black_box(bump.alloc_layout(layout));
+                }
+            });
+        });
+    }
+    group.finish();
+
+    let mut group = c.benchmark_group("raw_alloc_reset");
+    for &n in &SIZES {
+        group.throughput(Throughput::Elements(n as u64));
+        let arena_bytes = n as usize * 16 + 64;
+
+        group.bench_with_input(BenchmarkId::new("StackAllocator", n), &n, |b, &n| {
+            let mut stack = StackAllocator::with_capacity(arena_bytes);
+            b.iter(|| {
+                stack.reset();
+                for _ in 0..n {
+                    black_box(stack.alloc_raw(16, 8));
+                }
+            });
+        });
+
+        group.bench_with_input(BenchmarkId::new("bumpalo::Bump", n), &n, |b, &n| {
+            let mut bump = bumpalo::Bump::with_capacity(arena_bytes);
+            let layout = std::alloc::Layout::from_size_align(16, 8).unwrap();
+            b.iter(|| {
+                bump.reset();
                 for _ in 0..n {
                     black_box(bump.alloc_layout(layout));
                 }
@@ -274,29 +313,37 @@ fn bench_bump_vec_vs_std_vec(c: &mut Criterion) {
         let final_cap = (n as usize).next_power_of_two().max(4);
         let arena_bytes = final_cap * core::mem::size_of::<u64>() + 64;
 
-        group.bench_with_input(BenchmarkId::new("BumpVec<StackAllocator>", n), &n, |b, &n| {
-            let mut stack = StackAllocator::with_capacity(arena_bytes);
-            b.iter(|| {
-                stack.reset();
-                let mut v: BumpVec<u64, _> = BumpVec::new_in(&stack);
-                for i in 0..n {
-                    v.push(i as u64);
-                }
-                black_box(&v);
-            });
-        });
+        group.bench_with_input(
+            BenchmarkId::new("BumpVec<StackAllocator>", n),
+            &n,
+            |b, &n| {
+                let mut stack = StackAllocator::with_capacity(arena_bytes);
+                b.iter(|| {
+                    stack.reset();
+                    let mut v: BumpVec<u64, _> = BumpVec::new_in(&stack);
+                    for i in 0..n {
+                        v.push(i as u64);
+                    }
+                    black_box(&v);
+                });
+            },
+        );
 
-        group.bench_with_input(BenchmarkId::new("bumpalo::collections::Vec", n), &n, |b, &n| {
-            let mut bump = bumpalo::Bump::with_capacity(arena_bytes);
-            b.iter(|| {
-                bump.reset();
-                let mut v = bumpalo::collections::Vec::new_in(&bump);
-                for i in 0..n {
-                    v.push(i as u64);
-                }
-                black_box(&v);
-            });
-        });
+        group.bench_with_input(
+            BenchmarkId::new("bumpalo::collections::Vec", n),
+            &n,
+            |b, &n| {
+                let mut bump = bumpalo::Bump::with_capacity(arena_bytes);
+                b.iter(|| {
+                    bump.reset();
+                    let mut v = bumpalo::collections::Vec::new_in(&bump);
+                    for i in 0..n {
+                        v.push(i as u64);
+                    }
+                    black_box(&v);
+                });
+            },
+        );
 
         group.bench_with_input(BenchmarkId::new("std::Vec", n), &n, |b, &n| {
             b.iter(|| {

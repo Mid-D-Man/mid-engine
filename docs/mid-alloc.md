@@ -140,7 +140,22 @@ report a successful logical shrink (a smaller size is always a valid
 view of the same bytes) but can never grow, since real live data may
 sit immediately after it in the buffer.
 
-**Tests:** 13, real, passing on rustc 1.75 — including one that actually
+**Bump path.** `alloc_raw` keeps its position as an absolute address
+(`cur`) next to a stored `end`, not as an offset from the buffer start,
+so the hot path has no base add. Markers, `used()` and `rewind` still
+speak in offsets through the private `top()` and `set_top()`. Padding
+is `cur.wrapping_neg() & (align - 1)` and the only capacity check is
+`needed > end - cur`, which cannot underflow because `cur <= end`
+always holds. Release builds return `None` for a `size_bytes` above
+`isize::MAX` or an `align` that is not a power of two, and that keeps
+`padding + size_bytes` from wrapping (debug builds still
+`debug_assert!` on `align`). The buffer is `vec![0u8; capacity]`, so it
+stays fully zero-filled while the allocator may serve it as zeroed
+memory. `resize_raw` and `try_grow_raw` compare against `cur` the same
+way. The bump position still moves upward, which keeps in-place growth
+of the last allocation copy-free.
+
+**Tests:** 19, real, passing on rustc 1.75 (the earlier figure of 13 was stale), including one that
 matters for trusting the `unsafe` in `alloc_raw()`:
 `alignment_is_actually_respected_not_just_assumed` forces a misaligned
 starting position with a 1-byte allocation first, then checks a
@@ -157,6 +172,10 @@ start hands back the literal same address on the next allocation, a
 shrink it and reclaim the tail for real rather than only logically,
 a non-last allocation shrinking logically but refusing to grow, and a
 grow past total capacity failing cleanly without moving anything).
+Three more cover the bump path: refused sizes and alignments leave
+`used()` untouched, a zero-capacity stack serves only zero-sized
+requests, and `used()` equals padding plus size measured from the
+buffer start.
 
 **Verification honestly scoped, not overstated:** this sandbox's rustc
 1.75 has no rustup/nightly component, so no Miri and no
@@ -591,10 +610,9 @@ sub-region out of an arbitrary parent `RawAlloc`" shape to port
 (foonathan's own allocators are template-parameterized over a
 `RawAllocator`, but none this survey read used that parameterization
 to carve a sub-region the way this does). The bump-allocation math
-itself is not reinvented either: a direct copy of
-`StackAllocator::alloc_raw`'s own already-reviewed checked-arithmetic
-logic, just measured against a parent-provisioned buffer instead of a
-`Vec<u8>`. `rewind`/`reset` keep `StackAllocator`'s own real reason for
+itself is not reinvented either: the same absolute-cursor bump math as
+`StackAllocator::alloc_raw`, inside a parent-provisioned buffer instead
+of a `Vec<u8>`. `rewind`/`reset` keep `StackAllocator`'s own real reason for
 taking `&mut self` rather than `&self`: retroactively invalidating any
 `&mut T` still borrowed from an allocation after the rewind point, with
 `&mut self` being what makes the borrow checker enforce none are still
@@ -699,8 +717,8 @@ locally doesn't, same real split `mid-arena`/`mid-collections` already
 made.
 
 First bench suite this crate has had (previously noted as an open gap
-in `PoolAllocator`'s own "What's built" entry above). Five groups, one
-per real comparison rather than one giant do-everything group:
+in `PoolAllocator`'s own "What's built" entry above). Five groups at
+first, one per real comparison rather than one giant do-everything group:
 `raw_alloc_sequential` (`StackAllocator` vs `bumpalo::Bump` -- both
 untyped raw bump allocators, same fair-baseline reasoning `mid-arena`'s
 own `BumpArena`-vs-`bumpalo` bench already uses), `create_destroy_churn`
@@ -720,13 +738,22 @@ own real pattern -- `cargo bench -p mid-alloc` stays buildable under
 any feature subset, just with fewer bars in whichever group needed the
 missing one. Full suite needs `--all-features`.
 
-Every entry constructs its own fresh allocator inside the timed
-closure and measures construct+use together (`b.iter(|| { ... })`),
-not `iter_batched` -- kept consistent with `vs_arena_crates.rs`'s own
-real, already-proven convention rather than introducing a second
-pattern into the same workspace; construction cost is real but shared
-identically across every entry in a given group, so relative
-comparisons stay fair.
+Two groups came later. `push_in_arena` compares `BumpVec` over a
+`StackAllocator` with `bumpalo::collections::Vec` over a `Bump` (and
+`std::Vec`), so the arena-plus-vector pair is measured directly.
+`raw_alloc_reset` repeats the `StackAllocator` against `bumpalo::Bump`
+comparison with each allocator built once outside the timed region and
+reset per iteration. Both groups build outside the timed region.
+
+Every entry in the first five groups constructs its own fresh
+allocator inside the timed closure and measures construct+use together
+(`b.iter(|| { ... })`), not `iter_batched`, kept consistent with
+`vs_arena_crates.rs`'s own real, already-proven convention rather than
+introducing a second pattern into the same workspace. That cost is not
+identical on both sides of `raw_alloc_sequential`:
+`StackAllocator::with_capacity` fills its buffer with zeros and
+`bumpalo::Bump::with_capacity` never writes to its chunk. The later
+`raw_alloc_reset` group removes that difference.
 
 **Honest verification, stated in the file's own header too:** this
 sandbox's rustc 1.75 cannot compile anything depending on criterion
@@ -751,7 +778,7 @@ first real CI trigger is what actually proves it, the same honest gap
 `.github/workflows/bench-mid-alloc.yml` follows the bash-grep pattern
 from `docs/benching-standards.md` (`bench-mid-collections-sparse-
 set.yml` as the template) rather than the Python-parser pattern --
-five independent groups with different baselines each, not one "vs X"
+independent groups with different baselines each, not one "vs X"
 comparison with a single natural ratio to compute throughout, matching
 that doc's own stated guidance for which pattern fits which shape. No
 SIMD `target_cpu` dispatch matrix: nothing in this crate is vectorized
@@ -885,8 +912,8 @@ arithmetic as `StackAllocator::alloc_raw`, but its buffer comes from
 `backed_stack_vs_direct` are a controlled measurement of the
 constructor's `memset`. `BackedStack` took 1.00x, 0.96x and 0.80x of
 `StackAllocator`'s time, about 2.5 µs of the 12.3 µs at N=10000 (160 KB).
-Run #4 gave 0.93x, 0.91x and 0.91x, so the share is 7-20% depending on the
-run. A local run of the real bench file on rustc 1.75 gave 0.83x at
+Run #4 gave 0.93x, 0.91x and 0.91x and run #5 gave 0.95x, 0.89x and
+0.90x, so the share is 5-20% depending on the run. A local run of the real bench file on rustc 1.75 gave 0.83x at
 N=10000.
 `bumpalo` never touches its chunk in this bench and neither side writes
 to what it allocates, so the group leaves out first-touch cost on the
@@ -897,39 +924,61 @@ to what it allocates, so the group leaves out first-touch cost on the
 for an 8-byte-aligned request since `Bump`'s default `MIN_ALIGN` is 1)
 bumps down: one AND-mask on the cursor, the size rounded up, one compare
 against the chunk start, and a wrapping subtract on a raw pointer.
-`StackAllocator::alloc_raw` bumps up from a base plus an offset, does two
-`checked_add` calls, and recomputes `top + padding + size` for the new
-cursor. Marginal cost per allocation in run #3 is about 1.04 ns (N=100 to
-1000) and 1.26 ns (N=1000 to 10000) for `StackAllocator` against about
-0.58 ns for `bumpalo`. In a scratch crate on rustc 1.75 (indicative
-only, shared VM) the current code measured about 1.5 ns, and a bump-down
-variant with an absolute pointer cursor about 0.7 ns, next to real
-`bumpalo` at 0.74-0.97 ns. Wrapping arithmetic in place of `checked_add`
-measured the same as the current code (1.47 against 1.53 ns), which rules
-out the checked arithmetic. Bump-up variants with an absolute cursor were
-inconsistent (1.5 to 3.0 ns) even where the generated code was shorter,
-so these numbers do not justify a bump-up rewrite. Only bump-down matched
-`bumpalo`, and it would give up growing the most recent allocation in
-place without a copy (`resize_raw`, `try_grow_raw`), since growing
-downward moves the start of the block. No benchmark measures that path
-yet. No change to the algorithm in this pass. Dropping the zero-fill
-(7-20% of this bench across runs #3 and #4) is the next candidate. It changes
-the documented zero-filled buffer, so it needs an explicit decision.
+Before this pass `StackAllocator::alloc_raw` bumped up from a base plus
+an offset, made two `checked_add` calls, and recomputed
+`top + padding + size` for the new cursor. Marginal cost per allocation
+was about 1.5 ns against about 0.8 ns for `bumpalo`, a same-run ratio of
+1.8x to 2.2x across runs #3 to #5.
+
+A scratch crate on rustc 1.75 (31 interleaved rounds, medians,
+indicative only, shared VM) compared cursor shapes against real
+`bumpalo`. The old code measured 1.37 to 1.47 ns. An absolute cursor
+with add-then-mask alignment and three overflow guards measured 2.8 ns.
+An offset cursor with negated-address padding and a runtime
+power-of-two check measured 1.37 to 1.41 ns, the same as the old code.
+An absolute cursor with `wrapping_neg() & (align - 1)` padding and one
+capacity compare measured 1.09 to 1.12 ns (1.5x `bumpalo`), and adding
+the power-of-two check kept it at 1.12 ns. A bump-down copy of
+`bumpalo`'s shape measured 0.68 to 0.77 ns, level with `bumpalo`'s 0.72
+to 0.84 ns. Only the combination of absolute cursor, negated-address
+padding and one capacity compare was faster than the old code, which is
+what the port uses. An earlier note that read the absolute-cursor
+variants as inconclusive (1.5 to 3.0 ns) compared shapes from single
+runs, and the padding math turned out to be the difference.
+
+The port keeps the bump position moving upward, so `resize_raw` and
+`try_grow_raw` still grow the last allocation in place. Bumping down
+as `bumpalo` does would match its speed but would move the start of a
+grown block: `bumpalo`'s `grow_internal` bumps down by the delta and
+then calls `ptr::copy` on the old contents at every growth of the last
+allocation. Local A/B of the real bench file against the previous code
+(five alternating rounds, ratios inside each round, criterion stand-in,
+rustc 1.75): `raw_alloc_reset` went from 2.09x, 2.03x and 1.66x to
+1.47x, 1.50x and 1.36x of `bumpalo` at N=100, 1000 and 10000 (per
+allocation 1.43, 1.42 and 1.39 ns became 1.04, 1.11 and 1.10 ns), and
+`BackedStack` against `bumpalo`, which has no zero-fill on either side,
+went from 1.80x, 2.30x and 2.11x to 1.37x, 1.61x and 1.41x. These are
+local numbers: CI has not run the new code, and the sandbox has no Miri,
+so the pointer arithmetic is checked by reasoning and tests only. The
+remaining gap of about 1.4x to 1.5x is what bumping upward costs.
+Dropping the zero-fill would remove the constructor share of
+`raw_alloc_sequential` and would change the documented zero-filled
+buffer, so it needs an explicit decision.
 
 Combinators. `FallbackAllocator` and `Segregator` cost nothing
 measurable over `HeapAlloc` (1.00x and 0.99x in run #3, 1.04x and 1.01x
-in run #4). `Tracked` and `SyncAlloc` are not stable numbers. Run #3
-showed `Tracked` at 7.5x (about 53 ns per alloc/dealloc pair against 7
-ns) and `SyncAlloc` at 3.0x. Run #4 showed 2.6x and 1.11x with no change
-to `tracking.rs`, `sync.rs` or `raw_alloc.rs`, so the swing comes from
-the runner or toolchain, most likely how the runner's CPU handles
-lock-prefixed instructions. An earlier draft of this paragraph read the
-run #3 figure as "roughly 5 ns per atomic"; run #4 puts it at about 1.4
-ns for `Tracked` (six read-modify-write operations per allocation, four
-adds and two `fetch_max`, and three per deallocation), so that per-atomic
-figure was wrong. These two entries need several runs before any ratio is
-quoted. The costs come from the designs as built and are not changed
-here.
+in run #4, 1.03x and 1.00x in run #5). `Tracked` and `SyncAlloc` swung
+between runs. Run #3 showed `Tracked` at 7.5x (about 53 ns per
+alloc/dealloc pair against 7 ns) and `SyncAlloc` at 3.0x. Runs #4 and #5
+showed 2.6x and 1.11x, then 2.39x and 1.16x, with no change to
+`tracking.rs`, `sync.rs` or `raw_alloc.rs`, so run #3 was the outlier
+and the swing came from the runner or toolchain. An earlier draft of
+this paragraph read the run #3 figure as "roughly 5 ns per atomic"; run
+#5 puts `Tracked` at about 13 ns above the `HeapAlloc` pair for nine
+read-modify-write operations (six per allocation, four adds and two
+`fetch_max`, and three per deallocation), about 1.5 ns each, so that
+per-atomic figure was wrong. The costs come from the designs as built and
+are not changed here.
 
 `BumpVec` beat `std::Vec` at all three sizes. The N=100 rise against run
 #1 (132.8 ns to 252.5 ns) compares with the earlier version that copied
@@ -976,9 +1025,42 @@ allocator's `realloc`, not an arena.
 
 `push_in_arena` is the arena-plus-vector comparison: `BumpVec` over a
 `StackAllocator` against `bumpalo::collections::Vec` over a `Bump`, with
-`std::Vec` as a third entry. No CI result yet. A local run on rustc 1.75
-had `BumpVec` ahead of `bumpalo::collections::Vec` at N=100 and N=10000
-and level at N=1000, indicative only.
+`std::Vec` as a third entry. No CI result yet. Local runs on rustc 1.75
+(criterion stand-in, five alternating rounds, indicative only) put
+`BumpVec` at 0.40x, 0.64x and 0.43x of `bumpalo::collections::Vec` and
+0.33x, 0.60x and 0.50x of `std::Vec` at N=100, 1000 and 10000. A likely
+reason is growth: `BumpVec` over a `StackAllocator` extends the last
+allocation in place, while `bumpalo` copies the old contents at every
+growth (see the allocation path note below). A profile has not confirmed
+that.
+
+**Run #5: baseline column gone, ratios stable.**
+
+The `change` lines no longer appear, so the workflow's
+`rm -rf target/criterion` step works. This run used the same allocator
+code as run #4 and has no `push_in_arena` lines, so it most likely ran
+before the run-4 bench file landed. Same-run ratios agree with run #4
+to within a few percent:
+
+| Comparison | N=100 | N=1000 | N=10000 |
+|---|---|---|---|
+| `StackAllocator` / `bumpalo::Bump` | 1.45x | 1.82x | 1.84x |
+| `PoolAllocator` / `Box` | 0.19x | 0.19x | 0.19x |
+| `BackedStack<Heap>` / `StackAllocator` | 0.95x | 0.89x | 0.90x |
+| `BumpVec<HeapAlloc>` / `std::Vec` | 0.79x | 0.88x | 0.96x |
+
+`Box` measured 9.7 ns per create/destroy cycle and the pool 1.85 ns,
+about 5.2x. The runner was about 15% slower than in run #4 on
+`bumpalo` (9.43 µs against 8.19 µs at N=10000), and the ratios did not
+move. `StackAllocator` marginal cost per allocation was 1.77 ns (N=100
+to 1000) and 1.73 ns (N=1000 to 10000) against 0.94 ns for `bumpalo`,
+about 1.85x.
+
+Next run: `push_in_arena` and `raw_alloc_reset` report for the first
+time, and it is the first run of the new bump path. Local numbers for
+`raw_alloc_reset` were 2.09x, 2.03x and 1.66x before the change and
+1.47x, 1.50x and 1.36x after. If CI does not show a similar drop, the
+local result does not transfer and the change needs a second look.
 
 ## Module plan (catalogued, not built)
 
@@ -1170,6 +1252,26 @@ guess, not a confirmed one.
   form. No change made, since only a bump-down rewrite matched `bumpalo`
   and it would give up copy-free growth of the last allocation.
 
+- Bump path rewritten. `cur` (absolute address) and `end` replace the
+  offset `top`. Padding is `cur.wrapping_neg() & (align - 1)`, the only
+  capacity check is `needed > end - cur`, and release builds return
+  `None` for `size_bytes > isize::MAX` or a non-power-of-two `align`.
+  Markers, `used()` and `rewind` keep offset semantics through `top()`
+  and `set_top()`, and `resize_raw`/`try_grow_raw` compare against
+  `cur`. This supersedes the entry above that made no change: single-run
+  scratch timings had shown absolute-cursor variants between 1.5 and 3.0
+  ns, and interleaved medians over 31 rounds showed the padding math was
+  the difference (see "Benches"). Three tests added (refused sizes and
+  alignments, zero capacity, `used()` from the buffer start), for 19 in
+  the file. Local only: not run under CI or Miri yet.
+- `with_capacity` builds the buffer with `vec![0u8; capacity]`. The old
+  `Vec::with_capacity` plus `resize` failed `cargo clippy -D warnings`
+  (`slow_vector_initialization`) with the workspace job's flags. The
+  contents are still zero-filled. The local A/B showed no shorter
+  construction: `BackedStack`, which never zero-fills, stayed at 0.78x
+  to 0.97x of `StackAllocator`'s time.
+- Formatted with rustfmt.
+
 ### `fallback.rs`
 
 - First pass, new file. No `unsafe` of its own — `try_alloc_raw`/
@@ -1278,6 +1380,13 @@ guess, not a confirmed one.
   the reason a distinct type exists instead. All 6 tests pass on this
   sandbox's rustc 1.75, alongside the rest of the crate's 56 total.
 
+- Bump path ported from `StackAllocator` (absolute `cur` and `end`,
+  `top()` and `set_top()` for offset markers). One test added for refused
+  sizes and alignments, for 7 in the file. Local A/B: `BackedStack`
+  against `bumpalo` went from 1.80x, 2.30x and 2.11x to 1.37x, 1.61x and
+  1.41x at N=100, 1000 and 10000. Not run under CI or Miri yet.
+- Formatted with rustfmt.
+
 ### `bump_vec.rs`
 
 - First pass, new file. This one started as a planned addition to
@@ -1363,3 +1472,13 @@ guess, not a confirmed one.
   feature in `Cargo.toml`. Checked by running the real bench file against
   the local `criterion` stand-in on rustc 1.75, plus a scratch program
   confirming every push succeeds across three arena resets at each size.
+- Added `raw_alloc_reset` (each allocator built once, reset per
+  iteration). `raw_alloc_sequential` includes `StackAllocator`'s
+  zero-fill, which `bumpalo` does not pay, so its ratio mixes bump cost
+  and construction cost.
+- Corrected the header comment, which said construction cost was shared
+  by every entry, and formatted the file with rustfmt (the
+  `push_in_arena` block from run #4 was not clean).
+- Run #5 confirmed the workflow fix: no `change:` lines. Checked the new
+  group by running the real bench file against the criterion stand-in on
+  rustc 1.75, all seven groups.

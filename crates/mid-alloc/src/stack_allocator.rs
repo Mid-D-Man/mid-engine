@@ -21,6 +21,7 @@
 //! AddressSanitizer.
 
 use crate::raw_alloc::{grow_via_alloc_copy_dealloc, RawAlloc};
+use alloc::vec;
 use alloc::vec::Vec;
 use core::cell::Cell;
 use core::mem;
@@ -44,19 +45,43 @@ pub struct StackMarker(usize);
 /// comment for the full design.
 pub struct StackAllocator {
     buf: Vec<u8>,
-    top: Cell<usize>,
+    /// Bump position as an absolute address inside `buf`, so the hot
+    /// path skips a base add. `buf` never reallocates, so the address
+    /// stays valid when this struct moves.
+    cur: Cell<usize>,
+    /// One past the last byte of `buf`.
+    end: usize,
 }
 
 impl StackAllocator {
     /// Allocates `capacity` bytes up front. This is the allocator's
     /// entire budget for its whole lifetime, since it never grows.
     pub fn with_capacity(capacity: usize) -> Self {
-        let mut buf = Vec::with_capacity(capacity);
-        buf.resize(capacity, 0u8);
+        // `vec![0; n]` asks the allocator for zeroed memory, so the buffer
+        // is still fully zero-filled but large blocks need not be written.
+        let buf = vec![0u8; capacity];
+        let base = buf.as_ptr() as usize;
         Self {
+            end: base + buf.len(),
+            cur: Cell::new(base),
             buf,
-            top: Cell::new(0),
         }
+    }
+
+    #[inline]
+    fn base(&self) -> usize {
+        self.buf.as_ptr() as usize
+    }
+
+    /// Bump position as an offset from the start of the buffer.
+    #[inline]
+    fn top(&self) -> usize {
+        self.cur.get() - self.base()
+    }
+
+    #[inline]
+    fn set_top(&self, top: usize) {
+        self.cur.set(self.base() + top);
     }
 
     /// Total capacity in bytes, fixed at construction.
@@ -69,21 +94,21 @@ impl StackAllocator {
     /// current bump position).
     #[inline]
     pub fn used(&self) -> usize {
-        self.top.get()
+        self.top()
     }
 
     /// Bytes still available before the next allocation returns
     /// `None`/`Err`.
     #[inline]
     pub fn remaining(&self) -> usize {
-        self.buf.len() - self.top.get()
+        self.end - self.cur.get()
     }
 
     /// Saves the current position. Pass to [`rewind`](Self::rewind)
     /// later to reclaim everything allocated after this call.
     #[inline]
     pub fn marker(&self) -> StackMarker {
-        StackMarker(self.top.get())
+        StackMarker(self.top())
     }
 
     /// Reclaims every byte allocated since `marker` was taken. See
@@ -95,57 +120,56 @@ impl StackAllocator {
     /// error, not something this method tries to guess its way around.
     pub fn rewind(&mut self, marker: StackMarker) {
         debug_assert!(
-            marker.0 <= self.top.get(),
+            marker.0 <= self.top(),
             "rewind() marker is ahead of the current position -- from a \
              different StackAllocator, or already rewound past?"
         );
-        self.top.set(marker.0);
+        self.set_top(marker.0);
     }
 
     /// Reclaims everything, equivalent to rewinding to the marker taken
     /// at construction.
     #[inline]
     pub fn reset(&mut self) {
-        self.top.set(0);
+        self.set_top(0);
     }
 
     /// Allocates `size_bytes` aligned to `align`, returning a pointer to
     /// memory (zero-filled at construction) that stays valid until the
     /// next `rewind`/`reset` that reclaims it, or `None` if the
     /// remaining capacity can't satisfy the request, alignment padding
-    /// included. `align` must be a power of two, debug-asserted and not
-    /// checked in release, matching `Layout`'s own contract. Exists for
-    /// callers below [`alloc`](Self::alloc) who need an unusual or
-    /// runtime alignment.
+    /// included, or if `size_bytes` exceeds `isize::MAX`. `align` must be
+    /// a power of two: debug-asserted, and release builds return `None`
+    /// for anything else. Exists for callers below
+    /// [`alloc`](Self::alloc) who need an unusual or runtime alignment.
     #[inline]
     pub fn alloc_raw(&self, size_bytes: usize, align: usize) -> Option<NonNull<u8>> {
         debug_assert!(align.is_power_of_two(), "align must be a power of two");
-
-        let base = self.buf.as_ptr() as usize;
-        let current = base + self.top.get();
-        // Round `current` up to a multiple of `align` (a power of two).
-        // `checked_add` so a huge `align` cannot wrap back into the
-        // buffer and report a false success.
-        let aligned = current.checked_add(align - 1)? & !(align - 1);
-        let padding = aligned - current;
-        let end = aligned.checked_add(size_bytes)?;
-
-        if end > base + self.buf.len() {
+        // Release builds also refuse a bad `align` or a size no `Layout`
+        // could hold, which keeps the arithmetic below from wrapping.
+        if size_bytes > isize::MAX as usize || !align.is_power_of_two() {
             return None;
         }
 
-        self.top.set(self.top.get() + padding + size_bytes);
+        let cur = self.cur.get();
+        // Bytes from `cur` up to the next multiple of `align`. Bit ops
+        // only, so it cannot wrap.
+        let padding = cur.wrapping_neg() & (align - 1);
+        // `padding < align <= 2^(BITS-1)` and `size_bytes <= isize::MAX`,
+        // so this sum cannot wrap.
+        let needed = padding + size_bytes;
+        // `cur <= end` always holds, so this cannot underflow.
+        if needed > self.end - cur {
+            return None;
+        }
 
-        // SAFETY: `aligned` is inside `[base, base + buf.len())` by the
-        // `end > base + self.buf.len()` check just above (and
-        // `aligned >= current >= base` since `padding >= 0`), so this
-        // is a valid, non-null pointer into `self.buf`'s live
-        // allocation. Deriving it via `usize` arithmetic on
-        // `self.buf.as_ptr()` rather than pointer-offset methods
-        // throughout is what let the alignment math above use
-        // `checked_add` (a real overflow check) instead of relying on
-        // `<*const T>::add`'s narrower, UB-on-overflow contract.
-        Some(unsafe { NonNull::new_unchecked(aligned as *mut u8) })
+        self.cur.set(cur + needed);
+
+        // SAFETY: `needed <= end - cur` puts `cur + padding` and the
+        // `size_bytes` after it inside the buffer, and `cur >= base`
+        // (a live allocation's non-null start), so the pointer is
+        // non-null and valid for `size_bytes` bytes.
+        Some(unsafe { NonNull::new_unchecked((cur + padding) as *mut u8) })
     }
 
     /// Safe, typed convenience over [`alloc_raw`](Self::alloc_raw):
@@ -189,9 +213,8 @@ impl StackAllocator {
     /// shrink logically, reporting success without moving anything, but
     /// can never grow, since live data may sit right after it.
     pub fn resize_raw(&self, ptr: NonNull<u8>, old_size: usize, new_size: usize) -> bool {
-        let base = self.buf.as_ptr() as usize;
         let addr = ptr.as_ptr() as usize;
-        let is_last_allocation = addr + old_size == base + self.top.get();
+        let is_last_allocation = addr + old_size == self.cur.get();
 
         if !is_last_allocation {
             return new_size <= old_size;
@@ -201,15 +224,15 @@ impl StackAllocator {
             // Shrinking the last allocation for real reclaims the
             // freed tail immediately, rather than waiting for the
             // usual `rewind`/`reset` reclamation.
-            self.top.set(self.top.get() - (old_size - new_size));
+            self.cur.set(self.cur.get() - (old_size - new_size));
             return true;
         }
 
         let grow_by = new_size - old_size;
-        if self.top.get() + grow_by > self.buf.len() {
+        if grow_by > self.end - self.cur.get() {
             return false;
         }
-        self.top.set(self.top.get() + grow_by);
+        self.cur.set(self.cur.get() + grow_by);
         true
     }
 }
@@ -247,16 +270,18 @@ impl RawAlloc for StackAllocator {
         new_size: usize,
         align: usize,
     ) -> Option<NonNull<u8>> {
-        debug_assert!(new_size >= old_size, "try_grow_raw is for growing, not shrinking");
+        debug_assert!(
+            new_size >= old_size,
+            "try_grow_raw is for growing, not shrinking"
+        );
 
-        let base = self.buf.as_ptr() as usize;
         let addr = ptr.as_ptr() as usize;
-        let is_last_allocation = addr + old_size == base + self.top.get();
+        let is_last_allocation = addr + old_size == self.cur.get();
 
         if is_last_allocation {
             let grow_by = new_size - old_size;
-            if self.top.get() + grow_by <= self.buf.len() {
-                self.top.set(self.top.get() + grow_by);
+            if grow_by <= self.end - self.cur.get() {
+                self.cur.set(self.cur.get() + grow_by);
                 return Some(ptr);
             }
         }
@@ -388,8 +413,47 @@ mod tests {
         let y = a.alloc(222u32).unwrap();
         let y_addr = y as *mut u32 as usize;
 
-        assert_eq!(x_addr, y_addr, "rewinding to the start should hand back the exact same bytes");
+        assert_eq!(
+            x_addr, y_addr,
+            "rewinding to the start should hand back the exact same bytes"
+        );
         assert_eq!(*y, 222);
+    }
+
+    #[test]
+    fn alloc_raw_refuses_sizes_and_alignments_no_buffer_could_satisfy() {
+        let a = StackAllocator::with_capacity(64);
+        assert!(a.alloc_raw(usize::MAX, 1).is_none());
+        assert!(a.alloc_raw(isize::MAX as usize + 1, 1).is_none());
+        assert!(a.alloc_raw(isize::MAX as usize, 8).is_none());
+        assert!(a.alloc_raw(8, 1 << (usize::BITS - 1)).is_none());
+        assert_eq!(
+            a.used(),
+            0,
+            "a refused request must not move the bump position"
+        );
+        assert!(a.alloc_raw(8, 8).is_some(), "still usable after refusals");
+    }
+
+    #[test]
+    fn zero_capacity_stack_serves_only_zero_sized_requests() {
+        let a = StackAllocator::with_capacity(0);
+        assert!(a.alloc_raw(0, 1).is_some());
+        assert!(a.alloc_raw(1, 1).is_none());
+        assert_eq!(a.used(), 0);
+        assert_eq!(a.remaining(), 0);
+    }
+
+    #[test]
+    fn used_is_padding_plus_size_measured_from_the_buffer_start() {
+        let a = StackAllocator::with_capacity(64);
+        let _first = a.alloc_raw(1, 1).unwrap();
+        assert_eq!(a.used(), 1);
+        let p = a.alloc_raw(8, 8).unwrap();
+        assert_eq!(p.as_ptr() as usize % 8, 0);
+        let offset = p.as_ptr() as usize - a.buf.as_ptr() as usize;
+        assert_eq!(a.used(), offset + 8);
+        assert_eq!(a.remaining(), 64 - a.used());
     }
 
     #[test]
@@ -444,10 +508,17 @@ mod tests {
         let a = StackAllocator::with_capacity(64);
         let ptr = a.alloc_raw(20, 1).unwrap();
         assert!(a.resize_raw(ptr, 20, 8));
-        assert_eq!(a.used(), 8, "the freed tail must be reclaimed immediately, not just logically");
+        assert_eq!(
+            a.used(),
+            8,
+            "the freed tail must be reclaimed immediately, not just logically"
+        );
         // The reclaimed space is real: a fresh allocation can reuse it.
         let next = a.alloc_raw(56, 1);
-        assert!(next.is_some(), "the 12 reclaimed bytes plus remaining capacity should fit 56 more");
+        assert!(
+            next.is_some(),
+            "the 12 reclaimed bytes plus remaining capacity should fit 56 more"
+        );
     }
 
     #[test]
@@ -488,7 +559,8 @@ mod tests {
         unsafe {
             (ptr.as_ptr() as *mut u64).write(0x1122_3344_5566_7788);
         }
-        let grown = unsafe { a.try_grow_raw(ptr, 8, 32, 8) }.expect("plenty of room to grow in place");
+        let grown =
+            unsafe { a.try_grow_raw(ptr, 8, 32, 8) }.expect("plenty of room to grow in place");
         assert_eq!(
             grown, ptr,
             "growing the most recent allocation in place must return the same address"
@@ -512,7 +584,8 @@ mod tests {
         let _second = a.try_alloc_raw(8, 8).unwrap(); // now `first` is no longer last
         let used_before = a.used();
 
-        let grown = unsafe { a.try_grow_raw(first, 8, 32, 8) }.expect("fallback path should still succeed");
+        let grown =
+            unsafe { a.try_grow_raw(first, 8, 32, 8) }.expect("fallback path should still succeed");
         assert_ne!(
             grown, first,
             "a non-last allocation cannot grow in place -- must land at a new address"

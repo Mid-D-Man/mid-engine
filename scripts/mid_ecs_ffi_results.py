@@ -27,6 +27,14 @@
 # failed" line becomes one FAILED test named "program ran to completion",
 # not an empty passing suite: a crash or a link error prints no `FAIL:`
 # lines at all, and would otherwise read as zero failures.
+#
+# The same rule holds for the Rust side: if --cargo-raw is given and its
+# log yields no tests (cargo missing from PATH, a compile error, a filter
+# that matches nothing), the result is one FAILED "collected at least one
+# test" check, not a suite that quietly isn't there. Without it, the first
+# real CI run of this workflow showed the hole: with cargo dead, only the
+# C suites' own failures turned the run red, and a Rust-only breakage
+# alongside healthy C logs would have gated green.
 
 import argparse
 import json
@@ -118,7 +126,14 @@ def parse_valgrind(path, status):
 
 def cmd_parse(args):
     suites = []
-    suites.extend(parse_file(args.cargo_raw, 'ffi unit tests') if args.cargo_raw else [])
+    if args.cargo_raw:
+        rust = parse_file(args.cargo_raw, 'ffi unit tests')
+        if sum(len(x['tests']) for x in rust) == 0:
+            rust = [suite('mid-ecs [ffi unit tests]', [test(
+                'collected at least one test', False,
+                'no `test ... ok/FAILED` lines in the cargo log: cargo missing, '
+                'compile error, or the `ffi::` filter matched nothing')])]
+        suites.extend(rust)
     for entry in args.c_log:
         label, _, path = entry.rpartition('=')
         suites.append(parse_c_log(label, path))
