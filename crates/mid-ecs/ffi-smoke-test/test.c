@@ -278,6 +278,72 @@ int main(void) {
     CHECK(mid_ecs_world_resource_remove(rw, time_id) == MID_ECS_NOT_FOUND, "removing it again is MID_ECS_NOT_FOUND");
     mid_ecs_world_free(rw);
 
+    // --- Change detection: added / changed rows ---
+    MidEcsWorld *cw = mid_ecs_test_change_fixture_world_new();
+    uint32_t ch_id = mid_ecs_world_lookup_ffi_static_component_id(cw, "FfiHealthStatic");
+    CHECK(ch_id != MID_ECS_INVALID_ID, "change fixture: FfiHealthStatic resolves");
+    uint32_t ch_arch[8];
+    int32_t ch_arch_n = mid_ecs_world_archetypes_matching_static(cw, &ch_id, 1, NULL, 0, NULL, 0, ch_arch, 8);
+    // The fixture's entities were spawned into the empty archetype and
+    // migrated, so exactly one archetype holds Health and it is populated.
+    CHECK(ch_arch_n == 1, "change fixture: exactly one archetype holds Health");
+    uint32_t ch_a = ch_arch[0];
+
+    CHECK(mid_ecs_world_change_tick(cw) == 2, "fixture leaves the change tick at 2");
+    CHECK(mid_ecs_world_change_tick(NULL) == 0, "change_tick on a NULL world is 0");
+    CHECK(mid_ecs_world_increment_change_tick(NULL) == 0, "increment_change_tick on a NULL world is 0");
+
+    uint32_t ch_rows[8];
+    // A fresh tracker (last_run 0) sees all three rows as added and changed.
+    CHECK(mid_ecs_world_static_component_added_rows(cw, ch_a, ch_id, 0, NULL, 0) == 3,
+          "NULL buffer queries the added-row count: 3 for a fresh tracker");
+    CHECK(mid_ecs_world_static_component_added_rows(cw, ch_a, ch_id, 0, ch_rows, 8) == 3
+              && ch_rows[0] == 0 && ch_rows[1] == 1 && ch_rows[2] == 2,
+          "fresh tracker: added rows are 0, 1, 2 in ascending order");
+    CHECK(mid_ecs_world_static_component_changed_rows(cw, ch_a, ch_id, 0, ch_rows, 8) == 3,
+          "fresh tracker: all three rows are also changed");
+    CHECK(mid_ecs_world_static_component_added_rows(cw, ch_a, ch_id, 0, ch_rows, 2) == MID_ECS_BUFFER_TOO_SMALL,
+          "a too-small buffer is MID_ECS_BUFFER_TOO_SMALL, not a partial fill");
+
+    // Having read the tick, the tracker sees nothing.
+    uint32_t last_run = mid_ecs_world_change_tick(cw);
+    CHECK(mid_ecs_world_static_component_added_rows(cw, ch_a, ch_id, last_run, NULL, 0) == 0
+              && mid_ecs_world_static_component_changed_rows(cw, ch_a, ch_id, last_run, NULL, 0) == 0,
+          "after last_run = change_tick, nothing is added or changed");
+
+    // One frame of Rust-side game code: hp 2 -> 22, plus a new hp 4 entity.
+    CHECK(mid_ecs_world_increment_change_tick(cw) == 3, "increment_change_tick returns the new tick, 3");
+    CHECK(mid_ecs_test_change_fixture_mutate(cw) == MID_ECS_OK, "the fixture's scripted mutation runs");
+    CHECK(mid_ecs_world_static_component_added_rows(cw, ch_a, ch_id, last_run, ch_rows, 8) == 1 && ch_rows[0] == 3,
+          "added since last_run: only the new entity, row 3 (a mutation is not an addition)");
+    CHECK(mid_ecs_world_static_component_changed_rows(cw, ch_a, ch_id, last_run, ch_rows, 8) == 2
+              && ch_rows[0] == 1 && ch_rows[1] == 3,
+          "changed since last_run: the mutated row 1 and the new row 3");
+
+    // The rows index the same span and entity list a C caller already reads.
+    MidEcsFfiSpan ch_span;
+    CHECK(mid_ecs_world_static_component_raw_span(cw, ch_a, ch_id, &ch_span) == MID_ECS_OK && ch_span.count == 4,
+          "the span now has 4 elements");
+    const FfiHealthC *ch_view = (const FfiHealthC *)ch_span.ptr;
+    CHECK(ch_view[1].hp == 22 && ch_view[3].hp == 4,
+          "the changed rows point at hp 22 and hp 4 in the span");
+    uint64_t ch_ids[8];
+    CHECK(mid_ecs_world_static_component_entity_ids(cw, ch_a, ch_id, ch_ids, 8) == 4
+              && mid_ecs_world_is_alive(cw, ch_ids[1]) && mid_ecs_world_is_alive(cw, ch_ids[3]),
+          "the same rows resolve to live entities through entity_ids");
+
+    CHECK(mid_ecs_test_change_fixture_mutate(cw) == MID_ECS_NOT_FOUND, "the scripted mutation only runs once");
+    CHECK(mid_ecs_world_static_component_added_rows(cw, ch_a, 9999, 0, NULL, 0) == MID_ECS_NOT_FOUND,
+          "an unregistered component id is MID_ECS_NOT_FOUND");
+    CHECK(mid_ecs_world_static_component_changed_rows(cw, 9999, ch_id, 0, NULL, 0) == MID_ECS_NOT_FOUND,
+          "an unknown archetype id is MID_ECS_NOT_FOUND");
+    CHECK(mid_ecs_world_static_component_added_rows(NULL, ch_a, ch_id, 0, NULL, 0) == MID_ECS_NULL_POINTER
+              && mid_ecs_world_static_component_changed_rows(NULL, ch_a, ch_id, 0, NULL, 0) == MID_ECS_NULL_POINTER,
+          "a NULL world is MID_ECS_NULL_POINTER");
+    CHECK(mid_ecs_test_change_fixture_mutate(NULL) == MID_ECS_NULL_POINTER,
+          "the fixture mutation on a NULL world is MID_ECS_NULL_POINTER");
+    mid_ecs_world_free(cw);
+
     printf("\n=== %d check(s) failed ===\n", failures);
     return failures == 0 ? 0 : 1;
 }

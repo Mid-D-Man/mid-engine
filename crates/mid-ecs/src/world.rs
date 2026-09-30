@@ -580,6 +580,65 @@ impl World {
         self.archetypes.entity_ids(archetype_id, component_id)
     }
 
+    /// The untyped, id-based counterpart of [`Self::query_added`] for
+    /// one `(archetype_id, component_id)` pair: the row indices, in
+    /// ascending order, whose value was inserted after `last_run`.
+    /// Row `i` is element `i` of [`Self::static_component_raw_span`]
+    /// and [`Self::static_component_entity_ids`] for the same pair.
+    /// Takes a plain [`Tick`] instead of a [`crate::ChangeTracker`]
+    /// because its caller (the FFI surface) holds the marker as a bare
+    /// `u32`. `None` under exactly the conditions
+    /// `static_component_raw_span` returns `None`; a zero-row archetype
+    /// is `Some` of an empty list. Measured against [`Self::change_tick`]
+    /// as it stands now, so call [`Self::increment_change_tick`] between
+    /// a step's mutations and the check that should see them (see
+    /// `tick.rs`).
+    pub fn static_component_added_rows(
+        &self,
+        archetype_id: ArchetypeId,
+        component_id: ComponentId,
+        last_run: Tick,
+    ) -> Option<Vec<u32>> {
+        self.static_component_change_rows(archetype_id, component_id, last_run, true)
+    }
+
+    /// As [`Self::static_component_added_rows`], for values inserted
+    /// *or* last mutated through [`Self::get_static_mut`] after
+    /// `last_run` — the id-based counterpart of [`Self::query_changed`].
+    pub fn static_component_changed_rows(
+        &self,
+        archetype_id: ArchetypeId,
+        component_id: ComponentId,
+        last_run: Tick,
+    ) -> Option<Vec<u32>> {
+        self.static_component_change_rows(archetype_id, component_id, last_run, false)
+    }
+
+    fn static_component_change_rows(
+        &self,
+        archetype_id: ArchetypeId,
+        component_id: ComponentId,
+        last_run: Tick,
+        added_only: bool,
+    ) -> Option<Vec<u32>> {
+        let this_run = self.change_tick;
+        let ticks = self.archetypes.ticks_span(archetype_id, component_id)?;
+        Some(
+            ticks
+                .iter()
+                .enumerate()
+                .filter(|(_, t)| {
+                    if added_only {
+                        t.is_added(last_run, this_run)
+                    } else {
+                        t.is_changed(last_run, this_run)
+                    }
+                })
+                .map(|(row, _)| row as u32)
+                .collect(),
+        )
+    }
+
     /// Enumerates every currently-existing archetype whose signature
     /// includes `component_id` — thin wrapper over
     /// `Archetypes::archetypes_with`.

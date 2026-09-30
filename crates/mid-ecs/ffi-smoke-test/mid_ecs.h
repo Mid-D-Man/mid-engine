@@ -205,6 +205,49 @@ int32_t mid_ecs_world_resource_write(MidEcsWorld *world, uint32_t resource_id, c
 // previously obtained for it.
 int32_t mid_ecs_world_resource_remove(MidEcsWorld *world, uint32_t resource_id);
 
+// --- Change detection: added / changed rows ---
+//
+// The C counterpart of Rust's World::query_added / query_changed, for
+// components in the Archetype Core (the only storage that tracks ticks).
+// The world keeps one change tick, starting at 1. Your "tracker" is a
+// plain uint32_t last_run you hold yourself, starting at 0 (a fresh
+// tracker sees everything present); after using the rows below, set it
+// to mid_ecs_world_change_tick(world). Advance the tick once per step of
+// your own loop with mid_ecs_world_increment_change_tick, BETWEEN the
+// step's mutations and the check that should see them: a value touched
+// in the same tick last_run was set to is not reported.
+//
+// Results are row indices into one (archetype_id, component_id) pair, so
+// they line up with mid_ecs_world_static_component_raw_span and
+// _entity_ids for that same pair: row i is element i of both. Walk
+// archetypes with mid_ecs_world_archetypes_matching_static and call the
+// row functions per archetype.
+
+// The world's current change tick. 0 on a NULL world (a real world's tick
+// is always >= 1).
+uint32_t mid_ecs_world_change_tick(const MidEcsWorld *world);
+
+// Advances the change tick by one and returns the new value. 0 on a NULL
+// world.
+uint32_t mid_ecs_world_increment_change_tick(MidEcsWorld *world);
+
+// Writes, in ascending order, the rows whose value was INSERTED after
+// last_run into out_rows, and returns how many. NULL out_rows returns the
+// count; a too-small buffer is MID_ECS_BUFFER_TOO_SMALL and nothing is
+// written. MID_ECS_NOT_FOUND under exactly the conditions
+// mid_ecs_world_static_component_raw_span returns it (component never
+// registered for FFI, unknown archetype, or the archetype's signature
+// lacks the component); an archetype with no rows is 0, not an error.
+// Row indices are valid against the span only until the next call that
+// changes that component's storage.
+int32_t mid_ecs_world_static_component_added_rows(const MidEcsWorld *world, uint32_t archetype_id, uint32_t component_id, uint32_t last_run, uint32_t *out_rows, size_t out_capacity);
+
+// As above, for rows whose value was inserted OR last mutated (through
+// Rust's World::get_static_mut) after last_run. C cannot mutate
+// archetype-tracked components itself (the spans are read-only), so this
+// reports changes made by the Rust side of a mixed-language program.
+int32_t mid_ecs_world_static_component_changed_rows(const MidEcsWorld *world, uint32_t archetype_id, uint32_t component_id, uint32_t last_run, uint32_t *out_rows, size_t out_capacity);
+
 // --- Test fixture (see ffi.rs's own doc comment on this function) ---
 
 // NOT a real part of this library's intended public API -- exists only
@@ -236,6 +279,23 @@ MidEcsWorld *mid_ecs_test_filter_fixture_world_new(void);
 // frame; }`) registered and inserted as { 0.016f, 7 }, and "FfiGravity"
 // (`{ float g; }`) registered but not inserted. Never returns NULL.
 MidEcsWorld *mid_ecs_test_resource_fixture_world_new(void);
+
+// NOT a real part of the public API, like the fixtures above. A world for
+// exercising the change-detection functions: "FfiHealthStatic" registered
+// in the Archetype Core (`{ uint32_t hp; }`) and three entities {Health}
+// with hp 1, 2, 3 (rows 0, 1, 2 of their one archetype), inserted at the
+// starting tick, with the tick then advanced once (so it reads 2). Never
+// returns NULL.
+MidEcsWorld *mid_ecs_test_change_fixture_world_new(void);
+
+// NOT a real part of the public API. The Rust-side "frame of game code" C
+// cannot write itself: against a world from
+// mid_ecs_test_change_fixture_world_new, sets the entity with hp == 2 to
+// hp == 22 through get_static_mut (changed, not added) and inserts a new
+// {Health hp=4} entity (row 3), both at the CURRENT tick. Call
+// mid_ecs_world_increment_change_tick first. MID_ECS_NOT_FOUND if no
+// entity has hp == 2 (not that fixture, or already run).
+int32_t mid_ecs_test_change_fixture_mutate(MidEcsWorld *world);
 
 #ifdef __cplusplus
 }

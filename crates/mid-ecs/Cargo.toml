@@ -67,6 +67,10 @@ harness = false
 name    = "sparse_shell"
 harness = false
 
+[[bench]]
+name    = "ffi_overhead"
+harness = false
+
 [features]
 default = []
 # `scratch.rs`'s bumpalo-backed `ScratchArena` implementation. Off by

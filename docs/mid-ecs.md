@@ -2482,8 +2482,9 @@ draft of the new check forgot, caught by actually compiling and running
 it (real gcc, real link, real failure) rather than predicting the
 number — an empty, non-NULL `any_of` matching the no-`any_of` count
 exactly, and `any_of` naming only a never-registered id matching nothing.
-In CI the C smoke step is `continue-on-error`, so read
-`mid-ecs-ffi-smoke-raw.txt` and do not rely on a green job.
+At the time of this pass the C smoke step was `continue-on-error`, so a
+green job proved nothing about it. It has since moved to its own workflow
+with its own pass/fail; see "FFI test and bench" below.
 
 **Not covered, on purpose.** The Sparse Shell (no archetypes to
 enumerate) and change detection. `Changed`/`Added`'s own FFI surface is a
@@ -2565,14 +2566,16 @@ round trip), and 7 through the C surface (lookup, span contents and the empty
 registered case, in-place write, write-inserts, size mismatch for several
 lengths, remove then span then second remove, NULL and unknown-id cases). The C
 smoke test gained 20 checks, compiles clean under `-Wall -Wextra`, and passed
-against a debug `libmid_ecs.so` in the sandbox. As before, that CI step is
-`continue-on-error`, so read `mid-ecs-ffi-smoke-raw.txt`.
+against a debug `libmid_ecs.so` in the sandbox. (That CI step has since moved
+to its own workflow; see "FFI test and bench" below.)
 
-**Not measured.** There is no resource bench group yet. A lookup here is a
-hash probe plus a `downcast_ref`; bevy's is an id-indexed lookup. A
-`resource_access` group against `world.resource::<T>()` is the natural next
-measurement, and given the inlining behaviour recorded in the filters section,
-read its ratio with the bench binary's layout in mind.
+**Measured only against itself.** A lookup here is a hash probe plus a
+`downcast_ref`; bevy's is an id-indexed lookup. `resource_access` in
+`benches/ffi_overhead.rs` now measures the Rust-side read/write against the
+`extern "C"` read/write on the same world (see "FFI test and bench" below), but
+nothing measures it against `world.resource::<T>()` in bevy yet. Given the
+inlining behaviour recorded in the filters section, read any ratio with the
+bench binary's layout in mind.
 
 ### `tick.rs`: change ticks, `ChangeTracker`, `Added`/`Changed` queries
 
@@ -2656,16 +2659,11 @@ helpers at all.
   Whenever a `query_static_mut`-style bulk mutable iterator gets built,
   it needs to mark `changed` per row it yields, or `Changed` will silently
   miss everything written through it.
-- **No FFI counterpart yet, unlike every other feature this pass** (`Or`
-  included). This is the one deliberate exception to this crate's own
-  "ship the C counterpart alongside it" rule, for a real reason: a C
-  caller would need per-row tick data, not just an archetype list — a
-  fundamentally different shape from every enumeration function that
-  exists so far (`raw_span`, `entity_ids`, `archetypes_matching_static`),
-  and one that deserves its own design pass (a parallel tick buffer next
-  to `raw_span`? a `last_run`/`this_run` pair passed in and a filtered
-  index list back?) rather than being bolted on to fit the existing
-  shape. Left for the dedicated FFI test/bench pass mentioned below.
+- **No FFI counterpart in this pass, unlike every other feature** (`Or`
+  included), for a real reason: a C caller needs per-row change data, a
+  different shape from every enumeration function that existed then. Its
+  design was done in the FFI test/bench pass; see "FFI test and bench"
+  below for what shipped and what was chosen over the alternatives.
 
 **Row-alignment risk, and how it was actually checked, not just argued.**
 Threading `Table::ticks` (a new `SparseSet<ComponentId, Vec<ComponentTicks>>`,
@@ -2715,3 +2713,150 @@ should be small next to everything else those paths already do, but that's
 an expectation, not a measurement — put it through the same real-CI
 process as everything else here before trusting it.
 
+### FFI test and bench
+
+Three pieces, done together: the FFI shape of `Added`/`Changed`, the FFI
+smoke test split into its own workflow, and a first bench of the `extern "C"`
+surface.
+
+#### Changed/Added over the C ABI
+
+**What shipped.** Four functions and one accessor pair on the Rust side:
+
+- `mid_ecs_world_change_tick(world) -> u32` and
+  `mid_ecs_world_increment_change_tick(world) -> u32` (`0` on a NULL world; a
+  real world's tick starts at `1`, so `0` is never a real reading).
+- `mid_ecs_world_static_component_added_rows(world, archetype_id,
+  component_id, last_run, out_rows, out_capacity)` and
+  `..._changed_rows(...)`: for one `(archetype, component)` pair, the
+  ascending row indices whose value was inserted (added) or inserted or
+  mutated (changed) after `last_run`. `last_run` is a plain `uint32_t` the
+  caller holds; a fresh tracker is `0`, and after using the rows the caller
+  sets it to `change_tick`. That is `ChangeTracker` with the tracker on the C
+  side.
+- On the Rust side, `World::static_component_added_rows` /
+  `static_component_changed_rows` (untyped, id-based, taking a `Tick`) over a
+  new `Archetypes::ticks_span`, which mirrors `raw_span`'s rules.
+
+**Why a row list, not a parallel tick buffer.** The two shapes the tick.rs
+section left open were "a parallel tick buffer next to `raw_span`" and "a
+`last_run`/`this_run` pair passed in and a filtered index list back". The row
+list won on three grounds. It keeps `ComponentTicks` (`pub(crate)`, two `u32`s
+today) out of the C ABI, so its layout can still change. The wrapping-counter
+comparison (`Tick::is_newer_than`) stays in one place, Rust, instead of being
+re-implemented by every C caller, which is exactly the code that goes subtly
+wrong at a wrap. And it composes with what already exists: row `i` is element
+`i` of `raw_span` and `entity_ids` for the same pair, so a caller picks the
+changed elements out of the span it already reads. The cost is that the check
+is per `(archetype, component)`; a C caller enumerates archetypes with
+`archetypes_matching_static` and calls per archetype.
+
+**Semantics carried over, not re-decided.** Measured against the world's
+current tick, so call `increment_change_tick` between a step's mutations and
+the check that should see them (a value touched in the same tick `last_run`
+was set to is not reported; this is `is_newer_than`'s existing behaviour).
+`NotFound` under exactly the conditions `static_component_raw_span` returns it
+(including the FFI-registration gate); an archetype with no rows is `0`, not
+an error; the NULL-buffer-queries-count and `BufferTooSmall` (nothing written)
+idioms are the same as every other enumeration.
+
+**Not covered.** Archetype Core only, because the Sparse Shell has no ticks. C
+cannot mutate an archetype-tracked component (the spans are read-only), so
+`changed_rows` reports changes made by the Rust side of a mixed-language
+program; the C tests get a Rust-side "frame of game code" through a test-only
+fixture pair, `mid_ecs_test_change_fixture_world_new` and
+`mid_ecs_test_change_fixture_mutate`. Still single-component, and still not
+composable with `With`/`Without`/`Or` in one call (a caller composes them
+itself: enumerate with `archetypes_matching_static`, then call the row
+function per archetype).
+
+**Verification.** 8 new Rust tests in `ffi.rs` (297 default / 302 with
+`scratch-arena`, up from 289/294), and 22 new C checks (100 in `test.c` now,
+`-Wall -Wextra -Werror` clean, run against both `libmid_ecs.so` and
+`libmid_ecs.a`). One test compares the C row lists step by step against the
+typed `query_added`/`query_changed` through a mutation-then-add sequence.
+Mutation-checked, not just written: making `swap_remove_row` use
+`Vec::remove` for ticks fails `change_rows_stay_aligned_with_entity_ids_after_a_swap_remove`;
+making `added_rows` compute the changed set fails three tests and one C check;
+disabling the capacity guard fails `change_rows_buffer_idiom`. Each mutant was
+reverted and the suite re-run green.
+
+#### The FFI smoke test is its own workflow
+
+`.github/workflows/mid-ecs-ffi-test.yml` (dashboard: gh-pages `mid-ecs-ffi/`,
+template `.github/mid-ecs-ffi-test-template.html`, results script
+`scripts/mid_ecs_ffi_results.py`). It runs the Rust `ffi::` unit tests, then
+`test.c` compiled with `gcc -Wall -Wextra` against `libmid_ecs.so`, then
+against `libmid_ecs.a`, then the `.so` build under valgrind (`--error-exitcode=99`,
+definite leaks counted as errors). The step was removed from
+`mid-ecs-test.yml`; its raw log used to be an artifact only, so a failure there
+was invisible to that dashboard and job summary.
+
+**The one deliberate difference from `mid-ecs-test.yml`.** Every step here is
+allowed to fail on its own so that later steps run and the dashboard always
+publishes, but the last step fails the run if any check in the results JSON
+failed or none were collected. The rest of this repo's test workflows never
+gate; this one does, because its only purpose is to say whether the C ABI still
+works. If that is the wrong call, delete the final step; nothing else depends
+on it.
+
+**A missing log is a failure.** `scripts/mid_ecs_ffi_results.py` turns a C log
+with no closing `=== N check(s) failed ===` line (compile error, link error,
+crash) into one failed check. Without that, a crash prints no `FAIL:` lines and
+would read as zero failures.
+
+**Checked before shipping.** The script was run on real logs from the same
+commands the workflow runs (247 checks: 41 Rust, 101 per C link mode, 4
+valgrind) and on deliberately broken logs. The dashboard was rendered in jsdom
+against the real JSON (247 rows, 4 suites, no script errors). Valgrind was
+confirmed able to fail: with one `mid_ecs_world_free` removed from `test.c` it
+exits 99 and reports 832 bytes definitely lost. The static-link flags
+(`-lpthread -ldl -lm`) were confirmed on the sandbox's Linux only.
+
+#### `benches/ffi_overhead.rs`: FFI call overhead
+
+Workflow `.github/workflows/bench-mid-ecs-ffi.yml`, parser
+`scripts/bench_mid_ecs_ffi.py`, criterion, in-crate (no bevy dependency, so no
+toolchain wall). Groups: `lifecycle_spawn_despawn`, `span_read` (with
+`*_call_only` variants that stop after obtaining the span), `archetypes_matching`
+(swept over the number of archetypes, not entities), `change_rows` (1 row in 10
+changed), `resource_access`. Every group asserts at setup that its `rust` and
+`ffi` variants compute the same answer.
+
+**What it does not measure.** The `ffi` side is the `extern "C"` function called
+from Rust, so it includes null checks, `catch_unwind`, status plumbing and the
+count-then-fill double call, but not the ABI crossing from a separately compiled
+C program. Under the default `bench` profile (LTO, one codegen unit) the
+optimizer can also inline through the boundary inside the one bench binary,
+which no real C caller allows. Read every ratio as a lower bound, and dispatch
+`profile: bench-nolto` as well before trusting a small one. A C-timed harness
+(`clock_gettime` in `test.c`-style code against the real `.so`) is the remaining
+half of "both" and is not built.
+
+**First sample, sandbox only, not authoritative.** rustc 1.91.1, `--sample-size
+10`, so treat these as orders of magnitude. Real CI is the answer. FFI ÷ Rust
+at the same size:
+
+| Group | Ratio |
+|---|---|
+| `lifecycle_spawn_despawn` | 1.01–1.14× |
+| `span_read`, span call only | 1.08–1.17× (about 17–20 ns either way) |
+| `span_read`, span plus sum | 0.98–1.27× |
+| `archetypes_matching`, count-then-fill | 1.96–2.81× |
+| `change_rows` | 3.55–5.27× |
+| `resource_access` read / write | 4.54× / 2.71× (3.4 ns vs 15.3 ns; 3.6 ns vs 9.8 ns) |
+
+Per-call cost is small and roughly constant. The larger ratios are the
+count-then-fill idiom (two calls, and `changed_rows` scans the tick column
+twice and allocates a `Vec` each time) and the single-call resource path,
+where both sides do a `TypeId`-keyed lookup and the FFI side adds
+`ffi_guard`'s `catch_unwind`, resolving the resource id to its registration,
+and building the span. That is an expectation from reading the code, not an
+attribution: none of it has been profiled. If real CI
+agrees, the obvious candidate is a `changed_rows` that fills the caller's
+buffer in one pass and reports the count separately, at the cost of a less
+uniform idiom.
+
+**Also not done.** `query_added`/`query_changed` still have no bench against
+bevy (the "Not measured" note in the tick.rs section stands); the tick-write
+cost on insertion and mutation is still an expectation, not a measurement.

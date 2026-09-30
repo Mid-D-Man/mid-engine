@@ -817,6 +817,32 @@ impl Archetypes {
         Some((&archetype.table.entities, values, ticks))
     }
 
+    /// The [`ComponentTicks`] column for `component_id` within
+    /// `archetype_id`'s table, row-aligned with [`Self::raw_span`] and
+    /// [`Self::entity_ids`]: `ticks_span(a, c)[i]` belongs to the value
+    /// at element `i` of `raw_span(a, c)`. Untyped (no `T`), so unlike
+    /// [`Self::rows_with_ticks`] it is reachable from the FFI surface.
+    /// Same `None`/empty-slice rules as `raw_span`, including the FFI
+    /// registration gate: a component a caller could never read a data
+    /// span for has no readable change data either. Used only by
+    /// `World::static_component_added_rows`/
+    /// `World::static_component_changed_rows`.
+    pub(crate) fn ticks_span(
+        &self,
+        archetype_id: ArchetypeId,
+        component_id: ComponentId,
+    ) -> Option<&[ComponentTicks]> {
+        self.ffi_accessors.get(&component_id)?;
+        let archetype = self.archetypes.get(archetype_id)?;
+        if !archetype.component_ids.contains(&component_id) {
+            return None;
+        }
+        Some(match archetype.table.ticks.get(component_id) {
+            Some(ticks) => ticks.as_slice(),
+            None => &[],
+        })
+    }
+
     /// Enumerates every currently-existing archetype whose signature
     /// includes `component_id` — the real fragmentation
     /// [`Self::raw_span`]'s own doc comment describes. Not gated by

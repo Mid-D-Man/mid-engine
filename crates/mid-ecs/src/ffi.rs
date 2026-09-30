@@ -63,6 +63,7 @@ use std::slice;
 use crate::archetype::ArchetypeId;
 use crate::component::ComponentId;
 use crate::resource::{ResourceFfiError, ResourceId};
+use crate::tick::Tick;
 use crate::world::{Entity, World};
 use mid_collections::FfiSpan;
 
@@ -113,6 +114,33 @@ fn ffi_guard(f: impl FnOnce() -> i32) -> i32 {
 /// every handle returned by `mid_ecs_world_new` must be freed with
 /// `mid_ecs_world_free` exactly once.
 pub struct MidEcsWorld(World);
+
+impl MidEcsWorld {
+    /// Wraps an already-built Rust `World` in a heap handle, the same
+    /// allocation `mid_ecs_world_new` makes. `#[doc(hidden)]` and `pub`
+    /// (not `pub(crate)`) for the same reason as every other hook of
+    /// this kind in this crate: `benches/ffi_overhead.rs` is an external
+    /// crate, and needs to populate a world through the typed Rust API
+    /// before driving the very same world through the `extern "C"`
+    /// functions below. Free the result with `mid_ecs_world_free`.
+    #[doc(hidden)]
+    pub fn from_world(world: World) -> *mut MidEcsWorld {
+        Box::into_raw(Box::new(MidEcsWorld(world)))
+    }
+
+    /// The wrapped world, for the Rust-side half of an FFI-vs-Rust
+    /// comparison. See [`Self::from_world`].
+    #[doc(hidden)]
+    pub fn world(&self) -> &World {
+        &self.0
+    }
+
+    /// See [`Self::from_world`].
+    #[doc(hidden)]
+    pub fn world_mut(&mut self) -> &mut World {
+        &mut self.0
+    }
+}
 
 /// Creates a new, empty `World`. Never returns NULL — allocation failure
 /// aborts the process the same way any other Rust `Box` allocation
@@ -373,6 +401,69 @@ pub extern "C" fn mid_ecs_test_resource_fixture_world_new() -> *mut MidEcsWorld 
         frame: 7,
     });
     Box::into_raw(Box::new(MidEcsWorld(world)))
+}
+
+/// **Test-fixture only, like [`mid_ecs_test_fixture_world_new`].** A world
+/// for exercising the change-detection functions
+/// ([`mid_ecs_world_static_component_added_rows`] and friends) from a
+/// pure C program: `"FfiHealthStatic"` registered with the Archetype
+/// Core, and three entities `{Health}` with `hp` 1, 2, 3 (rows 0, 1, 2
+/// of the one archetype holding them), all inserted at the world's
+/// starting tick and then the tick advanced once, so a tracker at `0`
+/// sees all three as added and changed and one that has just read the
+/// tick sees none. See [`mid_ecs_test_change_fixture_mutate`] for the
+/// scripted follow-up. Never returns NULL.
+#[no_mangle]
+pub extern "C" fn mid_ecs_test_change_fixture_world_new() -> *mut MidEcsWorld {
+    let mut world = World::new();
+    world.register_ffi_static_component::<MidEcsTestHealthStatic>("FfiHealthStatic");
+    for hp in 1..=3u32 {
+        let e = world.spawn();
+        world.insert_static(e, MidEcsTestHealthStatic { hp });
+    }
+    world.increment_change_tick();
+    Box::into_raw(Box::new(MidEcsWorld(world)))
+}
+
+/// **Test-fixture only.** The Rust-side "frame of game code" a C caller
+/// cannot write itself (`get_static_mut` is generic): against a world
+/// from [`mid_ecs_test_change_fixture_world_new`], mutates the entity
+/// with `hp == 2` to `hp == 22` through `get_static_mut` (marking it
+/// changed, not added) and inserts a new `{Health}` entity with
+/// `hp == 4`, both at the world's *current* tick. Does not advance the
+/// tick itself: the C caller does that with
+/// [`mid_ecs_world_increment_change_tick`] first, which is what makes a
+/// tracker taken before it see exactly these two rows. Returns
+/// `MidEcsStatus::NotFound` if no entity has `hp == 2` (the world isn't
+/// that fixture, or this already ran).
+///
+/// # Safety
+/// `world` must be a valid, non-null handle from
+/// [`mid_ecs_test_change_fixture_world_new`].
+#[no_mangle]
+pub unsafe extern "C" fn mid_ecs_test_change_fixture_mutate(world: *mut MidEcsWorld) -> i32 {
+    ffi_guard(|| {
+        if world.is_null() {
+            return MidEcsStatus::NullPointer as i32;
+        }
+        let world = unsafe { &mut *world };
+        let target = world
+            .0
+            .query_static::<MidEcsTestHealthStatic>()
+            .find(|(_, health)| health.hp == 2)
+            .map(|(entity, _)| entity);
+        let Some(target) = target else {
+            return MidEcsStatus::NotFound as i32;
+        };
+        if let Some(health) = world.0.get_static_mut::<MidEcsTestHealthStatic>(target) {
+            health.hp = 22;
+        }
+        let fresh = world.0.spawn();
+        world
+            .0
+            .insert_static(fresh, MidEcsTestHealthStatic { hp: 4 });
+        MidEcsStatus::Ok as i32
+    })
 }
 
 /// A sentinel `component_id`/`archetype_id` value meaning "not found" —
@@ -765,6 +856,176 @@ pub unsafe extern "C" fn mid_ecs_world_archetypes_matching_static(
         out.copy_from_slice(&ids);
         ids.len() as i32
     })
+}
+
+/// The world's current change tick, for use as a tracker: hold a plain
+/// `uint32_t last_run` starting at `0` (a fresh tracker sees everything
+/// present), pass it to the `*_rows` functions below, and once you've
+/// used their results set it to this function's return value. `0` on a
+/// null `world` (a real world's tick starts at `1` and only ever
+/// advances, so `0` is never a real reading short of a full `u32`
+/// wrap).
+///
+/// # Safety
+/// `world` must either be NULL or a valid handle from
+/// `mid_ecs_world_new`.
+#[no_mangle]
+pub unsafe extern "C" fn mid_ecs_world_change_tick(world: *const MidEcsWorld) -> u32 {
+    if world.is_null() {
+        return 0;
+    }
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        let world = unsafe { &*world };
+        world.0.change_tick().get()
+    }));
+    result.unwrap_or(0)
+}
+
+/// Advances the world's change tick by one and returns the new value.
+/// Call once per step of the caller's own game loop, between the step's
+/// mutations and the `*_rows` check that should see them: a value
+/// touched in the same tick a tracker was last set to is not reported
+/// (see `tick.rs`). `0` on a null `world`.
+///
+/// # Safety
+/// `world` must either be NULL or a valid handle from
+/// `mid_ecs_world_new`.
+#[no_mangle]
+pub unsafe extern "C" fn mid_ecs_world_increment_change_tick(world: *mut MidEcsWorld) -> u32 {
+    if world.is_null() {
+        return 0;
+    }
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        let world = unsafe { &mut *world };
+        world.0.increment_change_tick().get()
+    }));
+    result.unwrap_or(0)
+}
+
+/// Shared body of [`mid_ecs_world_static_component_added_rows`] and
+/// [`mid_ecs_world_static_component_changed_rows`].
+///
+/// # Safety
+/// As those two functions.
+unsafe fn static_component_change_rows(
+    world: *const MidEcsWorld,
+    archetype_id: u32,
+    component_id: u32,
+    last_run: u32,
+    added_only: bool,
+    out_rows: *mut u32,
+    out_capacity: usize,
+) -> i32 {
+    ffi_guard(|| {
+        if world.is_null() {
+            return MidEcsStatus::NullPointer as i32;
+        }
+        let world = unsafe { &*world };
+        let archetype = ArchetypeId::from_u32(archetype_id);
+        let component = ComponentId::from_u32(component_id);
+        let last_run = Tick::new(last_run);
+        let rows = if added_only {
+            world
+                .0
+                .static_component_added_rows(archetype, component, last_run)
+        } else {
+            world
+                .0
+                .static_component_changed_rows(archetype, component, last_run)
+        };
+        let Some(rows) = rows else {
+            return MidEcsStatus::NotFound as i32;
+        };
+        if out_rows.is_null() {
+            return rows.len() as i32;
+        }
+        if rows.len() > out_capacity {
+            return MidEcsStatus::BufferTooSmall as i32;
+        }
+        let out = unsafe { slice::from_raw_parts_mut(out_rows, rows.len()) };
+        out.copy_from_slice(&rows);
+        rows.len() as i32
+    })
+}
+
+/// The rows of one `(archetype_id, component_id)` pair whose value was
+/// inserted after `last_run` (the C counterpart of Rust's
+/// `World::query_added`), as ascending `uint32_t` row indices written
+/// into `out_rows`. Row `i` is element `i` of
+/// [`mid_ecs_world_static_component_raw_span`] and
+/// [`mid_ecs_world_static_component_entity_ids`] for the same pair, so
+/// the row list picks the added elements out of the span it was built
+/// against. Walk archetypes with
+/// [`mid_ecs_world_archetypes_matching_static`] and call this per
+/// archetype. Only the Archetype Core tracks ticks; there is no
+/// Sparse-Shell counterpart.
+///
+/// Same NULL-buffer-queries-count idiom as the other enumerations: a
+/// NULL `out_rows` returns the row count, a too-small buffer returns
+/// `MidEcsStatus::BufferTooSmall` and writes nothing. `NotFound` under
+/// exactly the conditions [`mid_ecs_world_static_component_raw_span`]
+/// returns it (component never registered for FFI, unknown archetype,
+/// or an archetype whose signature lacks the component); an archetype
+/// holding no rows is `0`, not an error.
+///
+/// Row indices are valid against the span only until the next call that
+/// changes this component's storage, the same contract as the span.
+///
+/// # Safety
+/// `world` must be a valid, non-null handle from `mid_ecs_world_new`.
+/// If `out_rows` is non-null, it must be valid for `out_capacity`
+/// `uint32_t` elements.
+#[no_mangle]
+pub unsafe extern "C" fn mid_ecs_world_static_component_added_rows(
+    world: *const MidEcsWorld,
+    archetype_id: u32,
+    component_id: u32,
+    last_run: u32,
+    out_rows: *mut u32,
+    out_capacity: usize,
+) -> i32 {
+    unsafe {
+        static_component_change_rows(
+            world,
+            archetype_id,
+            component_id,
+            last_run,
+            true,
+            out_rows,
+            out_capacity,
+        )
+    }
+}
+
+/// As [`mid_ecs_world_static_component_added_rows`], for rows whose
+/// value was inserted *or* last mutated through Rust's
+/// `World::get_static_mut` after `last_run` (the C counterpart of
+/// `World::query_changed`). C itself cannot mutate archetype-tracked
+/// components (the spans are read-only), so this reports changes made by
+/// the Rust side of a mixed-language program.
+///
+/// # Safety
+/// As [`mid_ecs_world_static_component_added_rows`].
+#[no_mangle]
+pub unsafe extern "C" fn mid_ecs_world_static_component_changed_rows(
+    world: *const MidEcsWorld,
+    archetype_id: u32,
+    component_id: u32,
+    last_run: u32,
+    out_rows: *mut u32,
+    out_capacity: usize,
+) -> i32 {
+    unsafe {
+        static_component_change_rows(
+            world,
+            archetype_id,
+            component_id,
+            last_run,
+            false,
+            out_rows,
+            out_capacity,
+        )
+    }
 }
 
 fn resource_status(error: ResourceFfiError) -> i32 {
@@ -1985,6 +2246,501 @@ mod tests {
             );
             assert_eq!(
                 mid_ecs_world_resource_write(world, 999, byte.as_ptr(), 8),
+                MidEcsStatus::NotFound as i32
+            );
+            mid_ecs_world_free(world);
+        }
+    }
+
+    // ── Change-detection FFI: added/changed rows ────────────────────
+
+    /// The count-then-fill idiom for one `(archetype, component)` pair.
+    fn change_rows(
+        world: *const MidEcsWorld,
+        archetype: u32,
+        component: u32,
+        last_run: u32,
+        added: bool,
+    ) -> Vec<u32> {
+        let call = |buf: *mut u32, cap: usize| -> i32 {
+            // SAFETY: `world` is a live handle; `buf` is NULL or valid
+            // for `cap` elements.
+            unsafe {
+                if added {
+                    mid_ecs_world_static_component_added_rows(
+                        world, archetype, component, last_run, buf, cap,
+                    )
+                } else {
+                    mid_ecs_world_static_component_changed_rows(
+                        world, archetype, component, last_run, buf, cap,
+                    )
+                }
+            }
+        };
+        let count = call(std::ptr::null_mut(), 0);
+        assert!(count >= 0, "count query failed with status {count}");
+        let mut rows = vec![u32::MAX; count as usize];
+        let written = call(rows.as_mut_ptr(), rows.len());
+        assert_eq!(written, count);
+        rows
+    }
+
+    fn entity_ids_of(world: *const MidEcsWorld, archetype: u32, component: u32) -> Vec<u64> {
+        // SAFETY: `world` is a live handle; NULL buffer asks for the count.
+        let n = unsafe {
+            mid_ecs_world_static_component_entity_ids(
+                world,
+                archetype,
+                component,
+                std::ptr::null_mut(),
+                0,
+            )
+        };
+        assert!(n >= 0, "entity id count failed with status {n}");
+        let mut ids = vec![0u64; n as usize];
+        // SAFETY: `ids` is valid for `ids.len()` elements.
+        let written = unsafe {
+            mid_ecs_world_static_component_entity_ids(
+                world,
+                archetype,
+                component,
+                ids.as_mut_ptr(),
+                ids.len(),
+            )
+        };
+        assert_eq!(written, n);
+        ids
+    }
+
+    /// Every entity the change rows pick out, found the way a C caller
+    /// would: enumerate archetypes holding `component`, take each one's
+    /// row list, map the rows through `entity_ids`. Sorted.
+    fn changed_entities_via_ffi(
+        world: *const MidEcsWorld,
+        component: u32,
+        last_run: u32,
+        added: bool,
+    ) -> Vec<u64> {
+        let mut out = Vec::new();
+        for archetype in matching_ids(world, &[component], &[]) {
+            let ids = entity_ids_of(world, archetype, component);
+            for row in change_rows(world, archetype, component, last_run, added) {
+                out.push(ids[row as usize]);
+            }
+        }
+        out.sort_unstable();
+        out
+    }
+
+    fn typed_changed_entities(w: &World, tracker: &crate::ChangeTracker, added: bool) -> Vec<u64> {
+        let mut v: Vec<u64> = if added {
+            w.query_added::<MidEcsTestHealthStatic>(tracker)
+                .map(|(e, _)| e.as_ffi())
+                .collect()
+        } else {
+            w.query_changed::<MidEcsTestHealthStatic>(tracker)
+                .map(|(e, _)| e.as_ffi())
+                .collect()
+        };
+        v.sort_unstable();
+        v
+    }
+
+    fn health_world(n: u32) -> (*mut MidEcsWorld, Vec<crate::Entity>) {
+        let mut w = World::new();
+        w.register_ffi_static_component::<MidEcsTestHealthStatic>("FfiHealthStatic");
+        let entities: Vec<_> = (0..n)
+            .map(|hp| {
+                let e = w.spawn();
+                w.insert_static(e, MidEcsTestHealthStatic { hp });
+                e
+            })
+            .collect();
+        w.increment_change_tick();
+        (MidEcsWorld::from_world(w), entities)
+    }
+
+    fn rust_side<'a>(handle: *mut MidEcsWorld) -> &'a mut World {
+        // SAFETY: every caller passes a live handle and drops the
+        // reference before the next FFI call.
+        unsafe { &mut *handle }.world_mut()
+    }
+
+    #[test]
+    fn change_tick_functions_round_trip_and_handle_null() {
+        let world = mid_ecs_world_new();
+        // SAFETY: `world` is a live handle, freed exactly once below.
+        unsafe {
+            assert_eq!(mid_ecs_world_change_tick(world), 1);
+            assert_eq!(mid_ecs_world_increment_change_tick(world), 2);
+            assert_eq!(mid_ecs_world_increment_change_tick(world), 3);
+            assert_eq!(mid_ecs_world_change_tick(world), 3);
+            assert_eq!(mid_ecs_world_change_tick(std::ptr::null()), 0);
+            assert_eq!(mid_ecs_world_increment_change_tick(std::ptr::null_mut()), 0);
+            mid_ecs_world_free(world);
+        }
+    }
+
+    #[test]
+    fn added_and_changed_rows_match_the_typed_queries_step_by_step() {
+        let (handle, es) = health_world(6);
+        let h = static_id(handle, "FfiHealthStatic");
+        let mut tracker = crate::ChangeTracker::new();
+        let mut last_run = 0u32;
+
+        // A fresh tracker (and `last_run == 0`) sees every entity.
+        let all: Vec<u64> = {
+            let mut v: Vec<u64> = es.iter().map(|e| e.as_ffi()).collect();
+            v.sort_unstable();
+            v
+        };
+        for added in [true, false] {
+            assert_eq!(changed_entities_via_ffi(handle, h, last_run, added), all);
+            assert_eq!(
+                changed_entities_via_ffi(handle, h, last_run, added),
+                typed_changed_entities(rust_side(handle), &tracker, added)
+            );
+        }
+
+        // Having read the tick, nothing is new.
+        tracker.update(rust_side(handle));
+        // SAFETY: `handle` is live.
+        last_run = unsafe { mid_ecs_world_change_tick(handle) };
+        for added in [true, false] {
+            assert!(changed_entities_via_ffi(handle, h, last_run, added).is_empty());
+        }
+
+        // A step: mutate two, add one.
+        // SAFETY: `handle` is live.
+        unsafe { mid_ecs_world_increment_change_tick(handle) };
+        let fresh = {
+            let w = rust_side(handle);
+            w.get_static_mut::<MidEcsTestHealthStatic>(es[1])
+                .unwrap()
+                .hp = 100;
+            w.get_static_mut::<MidEcsTestHealthStatic>(es[4])
+                .unwrap()
+                .hp = 400;
+            let fresh = w.spawn();
+            w.insert_static(fresh, MidEcsTestHealthStatic { hp: 6 });
+            fresh
+        };
+        assert_eq!(
+            changed_entities_via_ffi(handle, h, last_run, true),
+            vec![fresh.as_ffi()],
+            "a mutation is not an addition"
+        );
+        let mut want_changed = vec![es[1].as_ffi(), es[4].as_ffi(), fresh.as_ffi()];
+        want_changed.sort_unstable();
+        assert_eq!(
+            changed_entities_via_ffi(handle, h, last_run, false),
+            want_changed
+        );
+        for added in [true, false] {
+            assert_eq!(
+                changed_entities_via_ffi(handle, h, last_run, added),
+                typed_changed_entities(rust_side(handle), &tracker, added)
+            );
+        }
+
+        // SAFETY: freed exactly once.
+        unsafe { mid_ecs_world_free(handle) };
+    }
+
+    #[test]
+    fn change_rows_stay_aligned_with_entity_ids_after_a_swap_remove() {
+        // Despawning row 0 moves the table's last row into it. The
+        // entity now living in row 0 must carry *its own* ticks, not the
+        // despawned entity's. Mutate exactly the entity that ends up in
+        // the freed slot, so a misaligned tick column reports the wrong
+        // entity (or none).
+        let (handle, es) = health_world(4);
+        let h = static_id(handle, "FfiHealthStatic");
+        // SAFETY: `handle` is live.
+        let last_run = unsafe { mid_ecs_world_change_tick(handle) };
+        // SAFETY: `handle` is live.
+        unsafe { mid_ecs_world_increment_change_tick(handle) };
+        {
+            let w = rust_side(handle);
+            w.get_static_mut::<MidEcsTestHealthStatic>(es[3])
+                .unwrap()
+                .hp = 333;
+            assert!(w.despawn(es[0]));
+        }
+        let archetype = matching_ids(handle, &[h], &[])
+            .into_iter()
+            .find(|&a| !entity_ids_of(handle, a, h).is_empty())
+            .expect("one populated archetype");
+        let ids = entity_ids_of(handle, archetype, h);
+        assert_eq!(ids.len(), 3);
+        assert_eq!(ids[0], es[3].as_ffi(), "es[3] was swapped into row 0");
+        assert_eq!(
+            change_rows(handle, archetype, h, last_run, false),
+            vec![0],
+            "only the mutated entity, now at row 0"
+        );
+        assert!(change_rows(handle, archetype, h, last_run, true).is_empty());
+        // SAFETY: freed exactly once.
+        unsafe { mid_ecs_world_free(handle) };
+    }
+
+    #[test]
+    fn change_rows_survive_migration_into_another_archetype() {
+        let (handle, es) = health_world(3);
+        let h = static_id(handle, "FfiHealthStatic");
+        // SAFETY: `handle` is live.
+        let last_run = unsafe { mid_ecs_world_change_tick(handle) };
+        // SAFETY: `handle` is live.
+        unsafe { mid_ecs_world_increment_change_tick(handle) };
+        {
+            let w = rust_side(handle);
+            // Gaining an unrelated component migrates es[1]; Health's
+            // ticks must move with it unchanged.
+            assert!(w.insert_static(es[1], MidEcsTestFlagA { v: 1 }));
+            w.get_static_mut::<MidEcsTestHealthStatic>(es[2])
+                .unwrap()
+                .hp = 9;
+        }
+        for added in [true, false] {
+            assert_eq!(
+                changed_entities_via_ffi(handle, h, last_run, added).contains(&es[1].as_ffi()),
+                false,
+                "an unrelated structural change is neither added nor changed"
+            );
+        }
+        assert_eq!(
+            changed_entities_via_ffi(handle, h, last_run, false),
+            vec![es[2].as_ffi()]
+        );
+        // SAFETY: freed exactly once.
+        unsafe { mid_ecs_world_free(handle) };
+    }
+
+    #[test]
+    fn change_rows_buffer_idiom() {
+        let (handle, _es) = health_world(5);
+        let h = static_id(handle, "FfiHealthStatic");
+        let archetype = matching_ids(handle, &[h], &[])
+            .into_iter()
+            .find(|&a| !entity_ids_of(handle, a, h).is_empty())
+            .unwrap();
+        // SAFETY (all calls below): `handle` is live, buffers valid for
+        // the capacity passed.
+        unsafe {
+            assert_eq!(
+                mid_ecs_world_static_component_added_rows(
+                    handle,
+                    archetype,
+                    h,
+                    0,
+                    std::ptr::null_mut(),
+                    0
+                ),
+                5,
+                "NULL buffer queries the count"
+            );
+            let mut small = [0xDEADu32; 2];
+            assert_eq!(
+                mid_ecs_world_static_component_added_rows(
+                    handle,
+                    archetype,
+                    h,
+                    0,
+                    small.as_mut_ptr(),
+                    small.len()
+                ),
+                MidEcsStatus::BufferTooSmall as i32
+            );
+            assert_eq!(small, [0xDEAD, 0xDEAD], "nothing written on BufferTooSmall");
+            let mut exact = [0u32; 5];
+            assert_eq!(
+                mid_ecs_world_static_component_added_rows(
+                    handle,
+                    archetype,
+                    h,
+                    0,
+                    exact.as_mut_ptr(),
+                    exact.len()
+                ),
+                5
+            );
+            assert_eq!(exact, [0, 1, 2, 3, 4], "ascending row order");
+            mid_ecs_world_free(handle);
+        }
+    }
+
+    #[test]
+    fn change_rows_not_found_and_zero_row_cases() {
+        let mut w = World::new();
+        w.register_ffi_static_component::<MidEcsTestHealthStatic>("FfiHealthStatic");
+        w.register_ffi_static_component::<MidEcsTestFlagA>("FfiFlagA");
+        w.register_ffi_static_component::<MidEcsTestFlagB>("FfiFlagB");
+        let e = w.spawn();
+        // Leaves the zero-row intermediate {FlagB} behind.
+        w.insert_bundle(
+            e,
+            (MidEcsTestFlagB { v: 1 }, MidEcsTestHealthStatic { hp: 1 }),
+        );
+        let handle = MidEcsWorld::from_world(w);
+        let health = static_id(handle, "FfiHealthStatic");
+        let flag_b = static_id(handle, "FfiFlagB");
+        let flag_a = static_id(handle, "FfiFlagA");
+
+        let mut zero_row = None;
+        let mut populated = None;
+        for a in matching_ids(handle, &[flag_b], &[]) {
+            if entity_ids_of(handle, a, flag_b).is_empty() {
+                zero_row = Some(a);
+            } else {
+                populated = Some(a);
+            }
+        }
+        let zero_row = zero_row.expect("insert_bundle leaves {FlagB} behind");
+        let populated = populated.unwrap();
+
+        // The zero-row archetype's signature holds FlagB: Ok, empty.
+        assert!(change_rows(handle, zero_row, flag_b, 0, true).is_empty());
+        assert!(change_rows(handle, zero_row, flag_b, 0, false).is_empty());
+
+        let nf = MidEcsStatus::NotFound as i32;
+        // SAFETY: `handle` is live; every pointer is NULL or valid.
+        unsafe {
+            // Health is not in the zero-row archetype's signature.
+            assert_eq!(
+                mid_ecs_world_static_component_changed_rows(
+                    handle,
+                    zero_row,
+                    health,
+                    0,
+                    std::ptr::null_mut(),
+                    0
+                ),
+                nf
+            );
+            // FlagA is registered but in no archetype's signature here.
+            assert_eq!(
+                mid_ecs_world_static_component_added_rows(
+                    handle,
+                    populated,
+                    flag_a,
+                    0,
+                    std::ptr::null_mut(),
+                    0
+                ),
+                nf
+            );
+            // An id that was never registered, and an archetype that
+            // never existed.
+            assert_eq!(
+                mid_ecs_world_static_component_added_rows(
+                    handle,
+                    populated,
+                    9999,
+                    0,
+                    std::ptr::null_mut(),
+                    0
+                ),
+                nf
+            );
+            assert_eq!(
+                mid_ecs_world_static_component_added_rows(
+                    handle,
+                    9999,
+                    health,
+                    0,
+                    std::ptr::null_mut(),
+                    0
+                ),
+                nf
+            );
+            mid_ecs_world_free(handle);
+        }
+    }
+
+    #[test]
+    fn change_rows_null_world_is_a_null_pointer_error() {
+        // SAFETY: NULL world is the documented error case.
+        unsafe {
+            assert_eq!(
+                mid_ecs_world_static_component_added_rows(
+                    std::ptr::null(),
+                    0,
+                    0,
+                    0,
+                    std::ptr::null_mut(),
+                    0
+                ),
+                MidEcsStatus::NullPointer as i32
+            );
+            assert_eq!(
+                mid_ecs_world_static_component_changed_rows(
+                    std::ptr::null(),
+                    0,
+                    0,
+                    0,
+                    std::ptr::null_mut(),
+                    0
+                ),
+                MidEcsStatus::NullPointer as i32
+            );
+            assert_eq!(
+                mid_ecs_test_change_fixture_mutate(std::ptr::null_mut()),
+                MidEcsStatus::NullPointer as i32
+            );
+        }
+    }
+
+    #[test]
+    fn change_fixture_scripted_sequence_matches_what_test_c_asserts() {
+        let world = mid_ecs_test_change_fixture_world_new();
+        let h = static_id(world, "FfiHealthStatic");
+        let archetype = matching_ids(world, &[h], &[])
+            .into_iter()
+            .find(|&a| !entity_ids_of(world, a, h).is_empty())
+            .expect("one populated archetype");
+
+        assert_eq!(change_rows(world, archetype, h, 0, true), vec![0, 1, 2]);
+        assert_eq!(change_rows(world, archetype, h, 0, false), vec![0, 1, 2]);
+
+        // SAFETY: `world` is live.
+        let last_run = unsafe { mid_ecs_world_change_tick(world) };
+        assert_eq!(last_run, 2);
+        assert!(change_rows(world, archetype, h, last_run, true).is_empty());
+        assert!(change_rows(world, archetype, h, last_run, false).is_empty());
+
+        // SAFETY: `world` is live, and is the fixture world.
+        unsafe {
+            assert_eq!(mid_ecs_world_increment_change_tick(world), 3);
+            assert_eq!(
+                mid_ecs_test_change_fixture_mutate(world),
+                MidEcsStatus::Ok as i32
+            );
+        }
+        assert_eq!(change_rows(world, archetype, h, last_run, true), vec![3]);
+        assert_eq!(
+            change_rows(world, archetype, h, last_run, false),
+            vec![1, 3]
+        );
+
+        // The rows index the span the same call sequence would read.
+        let mut span = empty_span();
+        // SAFETY: `world` is live, `span` is valid.
+        let status =
+            unsafe { mid_ecs_world_static_component_raw_span(world, archetype, h, &mut span) };
+        assert_eq!(status, MidEcsStatus::Ok as i32);
+        assert_eq!(span.count, 4);
+        let hp = |row: usize| {
+            // SAFETY: `row < span.count`, the span points at
+            // `MidEcsTestHealthStatic` elements `stride` bytes apart.
+            unsafe { (*(span.ptr.add(row * span.stride) as *const MidEcsTestHealthStatic)).hp }
+        };
+        assert_eq!((hp(1), hp(3)), (22, 4));
+
+        // A second mutate finds no `hp == 2` any more.
+        // SAFETY: `world` is live.
+        unsafe {
+            assert_eq!(
+                mid_ecs_test_change_fixture_mutate(world),
                 MidEcsStatus::NotFound as i32
             );
             mid_ecs_world_free(world);
