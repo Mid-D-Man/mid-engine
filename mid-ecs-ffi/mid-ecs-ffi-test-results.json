@@ -1,0 +1,80 @@
+{
+  "build": "1",
+  "branch": "main",
+  "commit": "f9a631ae",
+  "date": "",
+  "rust_version": "rustc 1.98.1 (48a229cea 2026-09-01)",
+  "crate": "mid-ecs-ffi",
+  "summary": {
+    "total": 6,
+    "passed": 1,
+    "failed": 5,
+    "ignored": 0,
+    "duration_s": 0.0
+  },
+  "suites": [
+    {
+      "name": "C smoke test (libmid_ecs.so)",
+      "passed": 0,
+      "failed": 1,
+      "ignored": 0,
+      "duration_s": 0.0,
+      "tests": [
+        {
+          "name": "program ran to completion",
+          "status": "failed",
+          "duration_ms": 0,
+          "output": "no \"=== N check(s) failed ===\" line: the program did not run to the end (compile/link error, crash, or missing log)"
+        }
+      ]
+    },
+    {
+      "name": "C smoke test (libmid_ecs.a)",
+      "passed": 0,
+      "failed": 1,
+      "ignored": 0,
+      "duration_s": 0.0,
+      "tests": [
+        {
+          "name": "program ran to completion",
+          "status": "failed",
+          "duration_ms": 0,
+          "output": "no \"=== N check(s) failed ===\" line: the program did not run to the end (compile/link error, crash, or missing log)"
+        }
+      ]
+    },
+    {
+      "name": "C smoke test under valgrind",
+      "passed": 1,
+      "failed": 3,
+      "ignored": 0,
+      "duration_s": 0.0,
+      "tests": [
+        {
+          "name": "valgrind ran and printed an error summary",
+          "status": "failed",
+          "duration_ms": 0,
+          "output": "no ERROR SUMMARY line in the log"
+        },
+        {
+          "name": "no memory errors",
+          "status": "failed",
+          "duration_ms": 0,
+          "output": "valgrind never reported a summary"
+        },
+        {
+          "name": "no definitely-lost heap blocks",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "test program exit status is 0",
+          "status": "failed",
+          "duration_ms": 0,
+          "output": "exit status 127 (99 is valgrind's own error exit)"
+        }
+      ]
+    }
+  ]
+}
