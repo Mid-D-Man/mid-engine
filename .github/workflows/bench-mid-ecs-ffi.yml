@@ -1,0 +1,179 @@
+# .github/workflows/bench-mid-ecs-ffi.yml
+#
+# FFI call overhead of mid-ecs's `extern "C"` surface, against the
+# equivalent Rust-side call on the same world in the same process.
+# mid-ecs only, no bevy_ecs dependency, so it runs on any toolchain this
+# workspace supports (unlike benches/ecs-vs-bevy-ecs). See
+# crates/mid-ecs/benches/ffi_overhead.rs's own header comment for what
+# each group measures and what it does NOT: the `ffi` side is the
+# `extern "C"` function called from Rust, so it includes its null checks,
+# catch_unwind and status plumbing but not the ABI crossing from a
+# separately compiled C program. Read every ratio as a lower bound.
+#
+# Groups: lifecycle_spawn_despawn, span_read, archetypes_matching,
+# change_rows, resource_access. scripts/bench_mid_ecs_ffi.py prints one
+# table per group plus an "FFI vs Rust" table pairing each ffi_* variant
+# with its rust_* counterpart. No pass/fail thresholds yet: there is no
+# real-CI history to set one against, and the script says so.
+#
+# Same structure as bench-mid-ecs-archetype-core.yml, including
+# `set -o pipefail` on the bench step, the step-summary size guard
+# (strip everything before cargo's own `Finished `bench` line, then a
+# 900k hard cap; see docs/benching-standards.md's "step-summary size
+# limit" section), and the `profile` input. `profile` matters more here
+# than for most suites: with `bench` (LTO, codegen-units=1) the optimizer
+# can inline straight through the `extern "C"` boundary inside the one
+# bench binary, which no real C caller ever allows, so `bench-nolto`
+# (codegen-units=16, no LTO) is the run closer to a real cross-language
+# call. Dispatch both and compare before trusting a small ratio.
+#
+# No ISA-tier matrix and no cross-OS matrix, same reasoning as the
+# Archetype Core bench: nothing here is vectorizable arithmetic or
+# platform-specific.
+#
+# Run: Actions -> "mid-ecs — bench FFI" -> Run workflow
+# DO NOT add push/pull_request triggers.
+
+name: mid-ecs — bench FFI
+
+on:
+  workflow_dispatch:
+    inputs:
+      baseline_note:
+        description: 'Context for this run (e.g. "after change-rows FFI")'
+        required: false
+        default: 'manual FFI benchmark run'
+      profile:
+        description: 'Cargo profile: bench (current, LTO+codegen-units=1) or bench-nolto (matches bevy''s own unconfigured default -- see Cargo.toml''s profile.bench-nolto comment for why this exists)'
+        required: false
+        type: choice
+        default: 'bench'
+        options:
+          - 'bench'
+          - 'bench-nolto'
+
+permissions:
+  contents: read
+  actions:  read
+
+jobs:
+  bench:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Get Rust version
+        id: rustver
+        run: echo "ver=$(rustc --version)" >> $GITHUB_OUTPUT
+
+      # Caches target/ too, not just the registry -- same reasoning as
+      # bench-mid-collections-sparse-set.yml: lets criterion's own
+      # target/criterion baseline persist between runs, so after the
+      # first run each subsequent one shows a real comparison-to-
+      # previous delta, not just an absolute number in isolation. This
+      # is the actual mechanism that will show whether a future change
+      # regresses query2_static_two_components back toward its old
+      # per-entity-lookup cost.
+      - name: Cache cargo registry + build artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-bench-mid-ecs-ffi-${{ inputs.profile }}-${{ hashFiles('crates/mid-ecs/**/Cargo.toml', 'crates/mid-collections/**/Cargo.toml', 'crates/mid-math/**/Cargo.toml', 'Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-bench-mid-ecs-ffi-${{ inputs.profile }}-
+
+      - name: Confirm environment
+        env:
+          RUST_VERSION: ${{ steps.rustver.outputs.ver }}
+        run: |
+          {
+            echo "## mid-ecs FFI Bench — Build #${{ github.run_number }}"
+            echo ""
+            echo "| | |"
+            echo "|---|---|"
+            echo "| Rust   | \`${RUST_VERSION}\` |"
+            echo "| Branch | \`${{ github.ref_name }}\` |"
+            echo "| Commit | \`${GITHUB_SHA:0:8}\` |"
+            echo "| Profile | \`${{ inputs.profile }}\` |"
+            echo "| Note   | ${{ inputs.baseline_note }} |"
+            echo ""
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Run FFI criterion benchmarks
+        run: |
+          # set -o pipefail: without it, `cargo bench | tee file`
+          # reports tee's exit code (always 0), not cargo bench's, and
+          # a real failure would show as green. See docs/benching-
+          # standards.md's own "correctness detail" section -- this
+          # workflow has it from the start, not as a later fix.
+          set -o pipefail
+          echo "Note: ${{ inputs.baseline_note }}"
+          echo "Profile: ${{ inputs.profile }}"
+          cargo bench -p mid-ecs --bench ffi_overhead --profile ${{ inputs.profile }} -- --color never \
+            2>&1 | tee bench-mid-ecs-ffi-raw.txt
+          echo "Bench exit code: $?" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Surface bench diagnostics
+        if: always()
+        run: |
+          {
+            echo "### Diagnostics"
+            echo '```'
+            grep -E 'took zero time|Unable to complete|Warning:|panicked|Completed [0-9]+ iterations' \
+              bench-mid-ecs-ffi-raw.txt | head -60 || echo "(none found)"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Publish summary
+        if: always()
+        run: |
+          {
+            echo "### Results"
+            echo ""
+            echo "Lower is faster. Groups: lifecycle_spawn_despawn, span_read (N = 100 to"
+            echo "100,000), archetypes_matching (K = 1 / 4 / 16 archetypes), change_rows,"
+            echo "resource_access. See \`crates/mid-ecs/benches/ffi_overhead.rs\`'s own header"
+            echo "doc comment for what each group measures, and for why the \`ffi\` side is a"
+            echo "lower bound on real cross-language overhead (it is called from Rust, so it"
+            echo "excludes the ABI crossing from a separately compiled C program)."
+            echo ""
+            python3 scripts/bench_mid_ecs_ffi.py
+            echo ""
+            echo "<details><summary>Full raw output</summary>"
+            echo ""
+            echo "_Build output (compiler warnings, \`Compiling\`/\`Finished\` lines) is_"
+            echo "_stripped below to stay clear of GitHub's 1024k step-summary limit --_"
+            echo "_the untouched log, warnings included, is in this run's uploaded_"
+            echo "_artifact. Also hard-capped at 900k here as a second guard, however_"
+            echo "_that budget ends up used._"
+            echo ""
+            echo '```'
+            if grep -q 'Finished `bench' bench-mid-ecs-ffi-raw.txt; then
+              awk '/Finished `bench/{f=1} f' bench-mid-ecs-ffi-raw.txt | head -c 900000
+            else
+              echo "(Compilation never finished -- showing the full raw log, including build errors, since there's no benchmark output to isolate it from.)"
+              echo ""
+              head -c 900000 bench-mid-ecs-ffi-raw.txt
+            fi
+            echo '```'
+            echo ""
+            echo "</details>"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bench-mid-ecs-ffi-${{ github.run_number }}
+          path: |
+            bench-mid-ecs-ffi-raw.txt
+            target/criterion
+          retention-days: 30
