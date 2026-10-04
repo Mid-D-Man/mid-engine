@@ -87,6 +87,13 @@
       <div class="card-status" id="status-mid-ecs"><div class="dot dot-grey"></div><span>Loading…</span></div>
       <span class="badge badge-wip">Rust</span>
     </a>
+    <a class="card" href="mid-ecs-ffi/mid-ecs-ffi-test-results.json" id="card-mid-ecs-ffi">
+      <div class="card-icon">🔌</div>
+      <div class="card-title">mid-ecs FFI</div>
+      <div class="card-desc">C ABI of mid-ecs — Rust unit tests plus a real C program under gcc and valgrind.</div>
+      <div class="card-status" id="status-mid-ecs-ffi"><div class="dot dot-grey"></div><span>Loading…</span></div>
+      <span class="badge badge-wip">Rust + C</span>
+    </a>
 
   </div>
 
@@ -110,6 +117,7 @@ const crates = [
   { name: 'mid-math',     jsonFile: 'mid-math/mid-math-test-results.json' },
   { name: 'mid-net',      jsonFile: 'mid-net/mid-net-test-results.json' },
   { name: 'mid-ecs',      jsonFile: 'mid-ecs/mid-ecs-test-results.json' },
+  { name: 'mid-ecs-ffi',  jsonFile: 'mid-ecs-ffi/mid-ecs-ffi-test-results.json' },
 ];
 
 crates.forEach(({ name, jsonFile }) => {

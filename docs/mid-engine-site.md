@@ -106,8 +106,8 @@ for instance) gets appended to every suite name parsed from that file.
 
 ## `.github/workflows/deploy-site.yml`
 
-Two jobs: `build` (optionally re-runs `mid-ptr`/`mid-platform` tests behind
-a `run_tests_first` dispatch input, builds the mdBook docs via a pinned
+Two jobs: `build` (optionally re-runs `mid-ptr`/`mid-platform` tests and the
+`mid-ecs` FFI suite behind a `run_tests_first` dispatch input, builds the mdBook docs via a pinned
 `mdbook` release binary — not `cargo install`, which would spend real
 minutes compiling it fresh on every run — then assembles `dist/`) and
 `deploy` (downloads that artifact, ships it with
@@ -117,4 +117,27 @@ minutes compiling it fresh on every run — then assembles `dist/`) and
 
 ## Fixes and Problems
 
-*(none yet — this is the initial build)*
+*(Initial build: no problems recorded.)*
+
+### mid-ecs FFI wired in
+
+`web/tests/index.html` gained a "mid-ecs FFI" card (`mid-ecs-ffi/mid-ecs-ffi-test-results.json`)
+and `deploy-site.yml` gained the steps that produce that JSON: install
+valgrind, build `mid-ecs`, the Rust `ffi::` unit tests, the C smoke test
+(`libmid_ecs.so`, `libmid_ecs.a`), the C smoke test under valgrind, then
+`scripts/mid_ecs_ffi_results.py parse`. They mirror
+`.github/workflows/mid-ecs-ffi-test.yml`, the same way the mid-ptr and
+mid-platform steps mirror their own workflows; that workflow stays the source
+of truth for what each step is for, and a change to one is a change to both.
+
+Every step is `continue-on-error`, so a failing FFI suite never blocks the
+deploy. The results script is fail-closed (a missing or truncated log becomes a
+failed check), so a broken build shows as a red card rather than "No results
+yet". Cost: with `run_tests_first` on, a Deploy Site run now also does a cold
+`mid-ecs` build and an apt install of valgrind, a few extra minutes.
+
+Known gaps, not changed: the existing `mid-ecs` card (the crate's main tests)
+is still unfed, because nothing here runs them; and the tests page's own note
+says Deploy Site publishes "the latest JSON" a crate's workflow wrote, whereas
+the workflow actually re-runs the tests itself and no result JSON is committed.
+The FFI wiring follows what the workflow does, not what the note says.

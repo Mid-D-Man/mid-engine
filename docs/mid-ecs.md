@@ -2783,9 +2783,9 @@ reverted and the suite re-run green.
 
 #### The FFI smoke test is its own workflow
 
-`.github/workflows/mid-ecs-ffi-test.yml` (dashboard: gh-pages `mid-ecs-ffi/`,
-template `.github/mid-ecs-ffi-test-template.html`, results script
-`scripts/mid_ecs_ffi_results.py`). It runs the Rust `ffi::` unit tests, then
+`.github/workflows/mid-ecs-ffi-test.yml` (results script
+`scripts/mid_ecs_ffi_results.py`; published as the "mid-ecs FFI" card on the
+site's tests page, see "Publishing" below). It runs the Rust `ffi::` unit tests, then
 `test.c` compiled with `gcc -Wall -Wextra` against `libmid_ecs.so`, then
 against `libmid_ecs.a`, then the `.so` build under valgrind (`--error-exitcode=99`,
 definite leaks counted as errors). The step was removed from
@@ -2793,8 +2793,8 @@ definite leaks counted as errors). The step was removed from
 was invisible to that dashboard and job summary.
 
 **The one deliberate difference from `mid-ecs-test.yml`.** Every step here is
-allowed to fail on its own so that later steps run and the dashboard always
-publishes, but the last step fails the run if any check in the results JSON
+allowed to fail on its own so that later steps run and the results are always
+reported, but the last step fails the run if any check in the results JSON
 failed or none were collected. The rest of this repo's test workflows never
 gate; this one does, because its only purpose is to say whether the C ABI still
 works. If that is the wrong call, delete the final step; nothing else depends
@@ -2805,10 +2805,51 @@ with no closing `=== N check(s) failed ===` line (compile error, link error,
 crash) into one failed check. Without that, a crash prints no `FAIL:` lines and
 would read as zero failures.
 
+**Publishing.** This workflow deploys nothing. The site is on Cloudflare Pages
+(`deploy-site.yml`, see `docs/mid-engine-site.md`), and `deploy-site.yml`
+re-runs these same steps behind its `run_tests_first` input, writes
+`mid-ecs-ffi-test-results.json` into `dist/tests/mid-ecs-ffi/`, and
+`web/tests/index.html` has a "mid-ecs FFI" card reading it. The steps in
+`deploy-site.yml` are a mirror: change one, change the other. This workflow was
+first written with an HTML dashboard pushed to `gh-pages`, copied from
+`mid-ecs-test.yml`, before the migration notes in
+`docs/RUST_AND_CRATE_GUIDELINES.md` section 7 were read; that half (template,
+deploy job, landing-page card) was removed, not built on.
+
+**First real CI run, and what it changed.** Dispatched on rustc 1.98.1, both
+this workflow (#1) and `mid-ecs-test.yml` (#17) died with `cargo: command not
+found` (exit 127) at their first cargo call, although `rustc --version` had
+worked right after the toolchain install; `mid-ecs-test.yml` #16, on 1.98.0,
+had passed. The only step between the two shared by both workflows was the
+cache restore. Cause: suspected, by the same mechanism section 7 of the
+guidelines records for `mid-ptr-test.yml` (a bare `cargo-registry-` restore
+prefix matching another workflow's archive, and an archive holding
+`~/.cargo/bin/` overwriting the installed rustup proxies). The symptom here was
+127, not that incident's "Exec format error", so it is the same family, not a
+proven match. Two changes, both from that documented fix: `~/.cargo/bin/` left
+the cached paths, and the key is now `cargo-registry-mid-ecs-${{ runner.os }}-<hash>`
+with a matching restore prefix instead of a bare one. A "Toolchain check" step
+after the restore prints `PATH` and runs `cargo --version`, so a recurrence names
+its own cause. Ten other workflows cache `~/.cargo/bin/`; five of them still
+use the bare `cargo-registry-` restore prefix (`headless-server-smoke-test`,
+`mid-log-test`, `mid-math-test`, `mid-net-test`, `mid-net-transport-wasm-test`)
+and were not touched.
+
+The same run exposed a hole in `scripts/mid_ecs_ffi_results.py`: with cargo
+dead, the Rust `ffi::` suite simply was not in the results, and only the C
+suites' failures turned the run red. A Rust-only breakage next to healthy C
+logs would have gated green (reproduced, then fixed): a Rust log that yields no
+tests is now one failed check, "collected at least one test".
+
 **Checked before shipping.** The script was run on real logs from the same
 commands the workflow runs (247 checks: 41 Rust, 101 per C link mode, 4
-valgrind) and on deliberately broken logs. The dashboard was rendered in jsdom
-against the real JSON (247 rows, 4 suites, no script errors). Valgrind was
+valgrind) and on deliberately broken logs. For the Deploy Site wiring, the real
+`run:` blocks of the new `deploy-site.yml` steps and of its "Assemble dist/"
+step were executed in the sandbox in order, and the tests page was rendered
+against the assembled `dist/` (the FFI card read "247 passed", the cards with no
+JSON "No results yet"). Linting every workflow caught a real error before it
+shipped: an unquoted step name containing `ffi:: ` reads as a YAML mapping and
+would have broken all of Deploy Site. Valgrind was
 confirmed able to fail: with one `mid_ecs_world_free` removed from `test.c` it
 exits 99 and reports 832 bytes definitely lost. The static-link flags
 (`-lpthread -ldl -lm`) were confirmed on the sandbox's Linux only.
@@ -2833,29 +2874,36 @@ which no real C caller allows. Read every ratio as a lower bound, and dispatch
 (`clock_gettime` in `test.c`-style code against the real `.so`) is the remaining
 half of "both" and is not built.
 
-**First sample, sandbox only, not authoritative.** rustc 1.91.1, `--sample-size
-10`, so treat these as orders of magnitude. Real CI is the answer. FFI ÷ Rust
-at the same size:
+**First real CI run** (`bench-mid-ecs-ffi` #1, rustc 1.98.1, `bench` profile
+only, `bench-nolto` not yet dispatched). Mean times, `rust` vs `ffi`:
 
-| Group | Ratio |
-|---|---|
-| `lifecycle_spawn_despawn` | 1.01–1.14× |
-| `span_read`, span call only | 1.08–1.17× (about 17–20 ns either way) |
-| `span_read`, span plus sum | 0.98–1.27× |
-| `archetypes_matching`, count-then-fill | 1.96–2.81× |
-| `change_rows` | 3.55–5.27× |
-| `resource_access` read / write | 4.54× / 2.71× (3.4 ns vs 15.3 ns; 3.6 ns vs 9.8 ns) |
+| Group | Rust | FFI | FFI ÷ Rust |
+|---|---|---|---|
+| `lifecycle_spawn_despawn`, N=100 to 100,000 | 4.12 µs to 6.63 ms | 4.40 µs to 6.94 ms | 1.04–1.12× |
+| `span_read`, span call only | 18.5–19.0 ns | 22.9–23.2 ns | 1.20–1.24× (+4.4 ns, constant in N) |
+| `span_read`, span plus sum | 34.8 ns to 10.8 µs | 46.8 ns to 10.8 µs | 1.34× at N=100, 1.00× at N=100,000 |
+| `archetypes_matching`, K=1 / 4 / 16 | 27.7 / 71.0 / 208.9 ns | 88.8 / 174.9 / 418.0 ns | 3.21× / 2.47× / 2.00× |
+| `archetypes_matching`, `ffi_count_only` | | 40.2 / 83.2 / 215.0 ns | |
+| `change_rows`, N=100 to 100,000 | 85 ns to 44.2 µs | 318 ns to 110.6 µs | 3.74× to 2.50× |
+| `resource_access` read | 4.12 ns | 14.10 ns | 3.42× |
+| `resource_access` write | 3.86 ns | 9.04 ns | 2.34× |
 
-Per-call cost is small and roughly constant. The larger ratios are the
-count-then-fill idiom (two calls, and `changed_rows` scans the tick column
-twice and allocates a `Vec` each time) and the single-call resource path,
-where both sides do a `TypeId`-keyed lookup and the FFI side adds
-`ffi_guard`'s `catch_unwind`, resolving the resource id to its registration,
-and building the span. That is an expectation from reading the code, not an
-attribution: none of it has been profiled. If real CI
-agrees, the obvious candidate is a `changed_rows` that fills the caller's
-buffer in one pass and reports the count separately, at the cost of a less
-uniform idiom.
+Read: per-call cost is small and constant (a span is about 4 ns, a resource
+read about 10 ns, a write about 5 ns), and a plain span read stops showing it
+by N=100,000 (1.00×). The large ratios are two idioms, not the calls.
+`archetypes_matching`: one `ffi_count_only` call (writes nothing) already costs
+about as much as the whole Rust collect at K=16 (215 vs 209 ns) and more than
+it at K=1 (40 vs 28 ns), and count-then-fill is about 2x count-only at every K,
+which fits the match being computed twice. `change_rows` scans the tick column
+twice (count, then fill) and allocates a `Vec` each call; its ratio shrinks as
+N grows, but the absolute gap is 66 µs at N=100,000 for 10,000 changed rows.
+Both are expectations from reading the code, not attributions: none of it has
+been profiled. The obvious candidate, if one of these ever matters, is an
+enumeration that fills the caller's buffer in one pass and reports the count
+separately; it is not done because it would change the count-then-fill idiom
+every other enumeration shares. An earlier sandbox-only sample (rustc 1.91.1)
+agreed in shape but ran higher on `change_rows` (3.55–5.27×) and resource reads
+(4.54×); this table replaces it.
 
 **Also not done.** `query_added`/`query_changed` still have no bench against
 bevy (the "Not measured" note in the tick.rs section stands); the tick-write

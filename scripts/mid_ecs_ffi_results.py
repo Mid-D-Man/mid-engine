@@ -4,9 +4,9 @@
 # NOTICE: Full documentation, design decisions, and fix history for this
 # file live in docs/mid-ecs.md, section "FFI test and bench"
 #
-# Turns the raw logs of .github/workflows/mid-ecs-ffi-test.yml into the
-# JSON shape the per-crate dashboards read (same shape as
-# scripts/parse_test_results.py: build/branch/commit/rust_version/crate,
+# Turns the raw logs of .github/workflows/mid-ecs-ffi-test.yml (and the
+# mirror of its steps in .github/workflows/deploy-site.yml) into the JSON
+# web/tests/index.html reads (same shape as scripts/parse_test_results.py: build/branch/commit/rust_version/crate,
 # summary, suites[{name, passed, failed, ignored, duration_s, tests[]}]),
 # and prints a markdown job summary from that JSON.
 #
