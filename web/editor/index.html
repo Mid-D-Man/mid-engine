@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Mid Engine Editor</title>
+  <link rel="icon" href="/shared/logo.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/editor/editor.css">
+</head>
+<body>
+  <main class="editor-shell">
+    <header class="topbar">
+      <div class="brand-lockup">
+        <img src="/shared/logo.svg" alt="Mid Engine">
+        <span>Mid Engine</span>
+        <span class="build-badge">EDITOR / 0.1.0</span>
+      </div>
+      <div class="project-path"><span class="live-dot"></span> Untitled Project <span class="path-divider">/</span> scenes/arena.mid</div>
+      <div class="top-actions">
+        <button class="icon-button" title="Search" aria-label="Search">⌕</button>
+        <button class="icon-button" title="Command palette" aria-label="Command palette">⌘K</button>
+        <button class="avatar" title="Account">MD</button>
+      </div>
+    </header>
+
+    <nav class="menubar" aria-label="Main menu">
+      <button>File</button><button>Edit</button><button>View</button><button>Project</button><button>Build</button><button>Help</button>
+      <span class="menu-spacer"></span>
+      <button class="branch-button"><span class="branch-icon">⑂</span> main <span class="chevron">⌄</span></button>
+    </nav>
+
+    <section class="workspace">
+      <aside class="left-rail" aria-label="Workspace tools">
+        <button class="rail-button active" data-panel="scene" title="Scene"><span>◈</span><small>Scene</small></button>
+        <button class="rail-button" data-panel="assets" title="Assets"><span>▧</span><small>Assets</small></button>
+        <button class="rail-button" data-panel="scripts" title="Scripts"><span>⌘</span><small>Code</small></button>
+        <span class="rail-spacer"></span>
+        <button class="rail-button" title="Settings"><span>⚙</span><small>Prefs</small></button>
+      </aside>
+
+      <aside class="scene-panel panel" aria-label="Scene hierarchy">
+        <div class="panel-heading"><div><span class="eyebrow">WORLD</span><h2>Scene</h2></div><button class="ghost-button" title="Add node">＋</button></div>
+        <div class="scene-tabs"><button class="selected">Hierarchy</button><button>Layers</button></div>
+        <div class="scene-search"><span>⌕</span><input aria-label="Filter scene" placeholder="Filter nodes…"></div>
+        <div class="tree" role="tree">
+          <button class="tree-row root" data-node="Arena"><span class="twisty">⌄</span><span class="node-icon scene">◈</span><span>Arena</span><span class="row-menu">•••</span></button>
+          <div class="tree-children">
+            <button class="tree-row" data-node="WorldEnvironment"><span class="twisty">⌄</span><span class="node-icon env">☼</span><span>WorldEnvironment</span></button>
+            <div class="tree-children nested">
+              <button class="tree-row" data-node="SkyLight"><span class="twisty empty">·</span><span class="node-icon light">✦</span><span>SkyLight</span></button>
+            </div>
+            <button class="tree-row selected" data-node="Player"><span class="twisty">⌄</span><span class="node-icon player">◇</span><span>Player</span><span class="status-dot"></span></button>
+            <div class="tree-children nested">
+              <button class="tree-row" data-node="Camera3D"><span class="twisty empty">·</span><span class="node-icon camera">▣</span><span>Camera3D</span></button>
+              <button class="tree-row" data-node="PlayerMesh"><span class="twisty empty">·</span><span class="node-icon mesh">△</span><span>PlayerMesh</span></button>
+            </div>
+            <button class="tree-row" data-node="ArenaGeometry"><span class="twisty">⌄</span><span class="node-icon mesh">△</span><span>ArenaGeometry</span></button>
+            <button class="tree-row" data-node="DirectionalLight"><span class="twisty empty">·</span><span class="node-icon light">✦</span><span>DirectionalLight</span></button>
+          </div>
+        </div>
+        <div class="panel-footer"><span>6 nodes</span><button class="add-node">＋ Add Node</button></div>
+      </aside>
+
+      <section class="viewport-column">
+        <div class="toolbar">
+          <div class="tool-group"><button class="tool active" data-tool="select">↖</button><button class="tool" data-tool="move">✣</button><button class="tool" data-tool="rotate">↻</button><button class="tool" data-tool="scale">⤢</button></div>
+          <div class="tool-divider"></div>
+          <button class="tool-label active">Perspective <span>⌄</span></button><button class="tool-label">3D <span>⌄</span></button>
+          <span class="toolbar-spacer"></span>
+          <button class="viewport-action">▣ <span>Frame Selected</span></button><button class="viewport-action">⋮</button>
+        </div>
+        <div class="viewport" id="viewport">
+          <div class="grid-floor"></div><div class="horizon-glow"></div>
+          <div class="world-axis axis-x">X</div><div class="world-axis axis-y">Y</div><div class="world-axis axis-z">Z</div>
+          <div class="gizmo"><span class="gizmo-y"></span><span class="gizmo-x"></span><span class="gizmo-z"></span><span class="gizmo-origin"></span></div>
+          <div class="viewport-crosshair">＋</div>
+          <div class="viewport-corner"><span>GPU</span><strong>Vulkan</strong><span class="fps">60 FPS</span></div>
+          <div class="scene-label"><span class="label-dot"></span> Player <small>Entity 0001</small></div>
+        </div>
+        <div class="timeline">
+          <div class="transport"><button id="playButton" class="play-button">▶</button><button>◀</button><button>▶</button><span class="timecode">00:00:00.000</span></div>
+          <div class="timeline-track"><div class="track-ruler"><span>0</span><span>15</span><span>30</span><span>45</span><span>60</span></div><div class="playhead"></div></div>
+          <div class="timeline-label">SIMULATION <span class="pulse"></span></div>
+        </div>
+      </section>
+
+      <aside class="inspector-panel panel" aria-label="Inspector">
+        <div class="panel-heading"><div><span class="eyebrow">INSPECTOR</span><h2 id="inspectorTitle">Player</h2></div><button class="ghost-button">•••</button></div>
+        <div class="inspector-tabs"><button class="selected">Properties</button><button>Debug</button></div>
+        <div class="component-card"><div class="component-heading"><span class="component-icon">◇</span><div><strong>Transform</strong><small>mid_transform</small></div><button>⌄</button></div><div class="property-grid"><label>Position <span class="axis-x-text">X</span><input value="0.000" aria-label="Position X"><span class="axis-y-text">Y</span><input value="1.250" aria-label="Position Y"><span class="axis-z-text">Z</span><input value="-4.500" aria-label="Position Z"></label><label>Rotation <span class="axis-x-text">X</span><input value="0°" aria-label="Rotation X"><span class="axis-y-text">Y</span><input value="180°" aria-label="Rotation Y"><span class="axis-z-text">Z</span><input value="0°" aria-label="Rotation Z"></label><label>Scale <span class="axis-neutral-text">↔</span><input value="1.000" aria-label="Scale"></label></div></div>
+        <div class="component-card"><div class="component-heading"><span class="component-icon purple">▱</span><div><strong>Mesh Renderer</strong><small>mid_render::MeshRenderer</small></div><button>⌃</button></div><div class="component-row"><span>Mesh</span><button class="asset-chip">player.mesh <span>↗</span></button></div><div class="component-row"><span>Material</span><button class="asset-chip">player_default.mat <span>↗</span></button></div><div class="component-row"><span>Cast Shadows</span><button class="toggle on" aria-label="Cast shadows"><span></span></button></div></div>
+        <div class="component-card collapsed"><div class="component-heading"><span class="component-icon orange">ϟ</span><div><strong>Network Identity</strong><small>mid_net::NetworkIdentity</small></div><button>⌄</button></div></div>
+        <button class="add-component">＋ Add Component</button>
+        <div class="inspector-foot"><span>Entity ID</span><code>0x0000_0001</code></div>
+      </aside>
+    </section>
+
+    <footer class="statusbar"><div><span class="status-online"></span> Local runtime ready</div><div class="status-center"><span>main</span><span>·</span><span>0 changes</span><span>·</span><span>Rust 1.89</span></div><div>Memory <strong>42.6 MB</strong><span class="status-divider"></span> <span class="green">●</span> Connected</div></footer>
+  </main>
+  <script src="/editor/editor.js"></script>
+</body>
+</html>
