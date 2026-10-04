@@ -62,23 +62,28 @@ jobs:
             ~/.cargo/registry/index/
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
-          key: cargo-registry-${{ hashFiles('crates/mid-collections/**/Cargo.toml', 'crates/mid-ecs/**/Cargo.toml') }}
+          key: cargo-registry-mid-ecs-${{ runner.os }}-${{ hashFiles('crates/mid-collections/**/Cargo.toml', 'crates/mid-ecs/**/Cargo.toml') }}
           restore-keys: |
-            cargo-registry-
+            cargo-registry-mid-ecs-${{ runner.os }}-
 
       # Added after the first real run of this job on rustc 1.98.1 died with
       # `cargo: command not found` (exit 127) at its first cargo call, in
       # this workflow and in mid-ecs-ffi-test.yml alike. `rustc --version`
       # had worked right after the toolchain install, and the only steps in
       # between were the cache restore (plus valgrind's apt install in the
-      # FFI workflow). The restore is the SUSPECT, not a confirmed cause:
-      # ~/.cargo/bin/ is out of the cache paths above because nothing here
-      # `cargo install`s anything, so caching it buys nothing and can only
-      # overwrite the freshly installed rustup proxies. This step prints
-      # what is actually on PATH so that, if that was not the cause, the
-      # next failure says what was.
-      # It fails the run by design when cargo is unusable: with cargo dead,
-      # the later steps that are continue-on-error would fail silently (127).
+      # FFI workflow). The cache is the suspect, by the mechanism
+      # docs/RUST_AND_CRATE_GUIDELINES.md section 7 records for
+      # mid-ptr-test.yml: a bare `cargo-registry-` restore prefix can match
+      # ANOTHER workflow's archive, and an archive holding ~/.cargo/bin/
+      # overwrites the freshly installed rustup proxies when restored. So
+      # the key above is scoped to this crate and the runner OS, and
+      # ~/.cargo/bin/ is out of the paths (nothing here `cargo install`s
+      # anything). The symptom here was 127, not that incident's "Exec
+      # format error": same mechanism family, not a proven match. This step
+      # prints what is actually on PATH so that, if the cache was not the
+      # cause, the next failure says what was. It fails the run by design
+      # when cargo is unusable: with cargo dead, the later steps that are
+      # continue-on-error would fail silently (127).
       - name: Toolchain check
         run: |
           echo "PATH=$PATH"

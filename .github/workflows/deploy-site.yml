@@ -20,7 +20,7 @@ on:
   workflow_dispatch:
     inputs:
       run_tests_first:
-        description: "Re-run mid-ptr/mid-platform tests before building the site (off = reuse whatever JSON already exists in the repo from a prior manual run, if any)"
+        description: "Re-run mid-ptr/mid-platform/mid-ecs FFI tests before building the site (off = reuse whatever JSON already exists in the repo from a prior manual run, if any)"
         type: boolean
         default: true
 
@@ -57,6 +57,8 @@ jobs:
 
       # ── Refresh results (optional) ──────────────────────────────────────
       # Same crates web/tests/index.html already knows how to render.
+      # mid-ecs FFI (below) mirrors .github/workflows/mid-ecs-ffi-test.yml,
+      # which stays the source of truth for what each of its steps is for.
       # Add a new crate to BOTH this list and that file's `crates` array
       # when it gets its own workflow_dispatch test workflow.
       - name: Test mid-ptr
@@ -83,6 +85,71 @@ jobs:
           cargo test -p mid-platform --no-default-features --color=never --no-fail-fast \
             -- --show-output 2>&1 | tee mid-platform-nostd-raw.txt
 
+      - name: Install valgrind (mid-ecs FFI)
+        if: inputs.run_tests_first
+        continue-on-error: true
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq valgrind
+
+      - name: Build mid-ecs (rlib + cdylib + staticlib)
+        if: inputs.run_tests_first
+        continue-on-error: true
+        run: cargo build -p mid-ecs
+
+      - name: Test mid-ecs FFI (Rust unit tests in the ffi module)
+        if: inputs.run_tests_first
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          cargo test -p mid-ecs --lib ffi:: --color=never --no-fail-fast \
+            -- --show-output 2>&1 | tee ffi-rust-raw.txt
+
+      - name: Compile mid-ecs C smoke test (shared and static)
+        if: inputs.run_tests_first
+        continue-on-error: true
+        run: |
+          mkdir -p ffi-smoke-build
+          gcc -o ffi-smoke-build/test_so \
+            crates/mid-ecs/ffi-smoke-test/test.c \
+            -I crates/mid-ecs/ffi-smoke-test \
+            -L target/debug -lmid_ecs -Wall -Wextra
+          gcc -o ffi-smoke-build/test_a \
+            crates/mid-ecs/ffi-smoke-test/test.c \
+            -I crates/mid-ecs/ffi-smoke-test \
+            target/debug/libmid_ecs.a -lpthread -ldl -lm -Wall -Wextra
+
+      - name: mid-ecs C smoke test (libmid_ecs.so)
+        if: inputs.run_tests_first
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          LD_LIBRARY_PATH=target/debug ffi-smoke-build/test_so 2>&1 | tee ffi-smoke-so-raw.txt
+
+      - name: mid-ecs C smoke test (libmid_ecs.a)
+        if: inputs.run_tests_first
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          ffi-smoke-build/test_a 2>&1 | tee ffi-smoke-a-raw.txt
+
+      - name: mid-ecs C smoke test under valgrind
+        id: ffi_valgrind
+        if: inputs.run_tests_first
+        continue-on-error: true
+        run: |
+          set +e
+          LD_LIBRARY_PATH=target/debug valgrind \
+            --error-exitcode=99 \
+            --leak-check=full \
+            --show-leak-kinds=definite \
+            --errors-for-leak-kinds=definite \
+            ffi-smoke-build/test_so > ffi-valgrind-stdout.txt 2> ffi-valgrind-raw.txt
+          status=$?
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+          tail -n 20 ffi-valgrind-raw.txt
+          exit $status
+
       - name: Parse results to JSON
         if: inputs.run_tests_first
         env:
@@ -103,6 +170,28 @@ jobs:
             --out mid-platform-test-results.json \
             "mid-platform-std-raw.txt:std" "mid-platform-nostd-raw.txt:no_std fallback"
 
+      # Fail-closed by design (scripts/mid_ecs_ffi_results.py): a missing log
+      # or a program that never reached its closing line becomes a failed
+      # check, so a broken build shows as a red card, not as no card.
+      - name: Parse mid-ecs FFI results to JSON
+        if: inputs.run_tests_first
+        env:
+          BUILD_NUM:    ${{ github.run_number }}
+          BRANCH:       ${{ github.ref_name }}
+          COMMIT:       ${{ github.sha }}
+          RUST_VERSION: ${{ steps.rustver.outputs.ver }}
+          VG_STATUS:    ${{ steps.ffi_valgrind.outputs.status }}
+        run: |
+          python3 scripts/mid_ecs_ffi_results.py parse \
+            --out mid-ecs-ffi-test-results.json \
+            --build "$BUILD_NUM" --branch "$BRANCH" --commit "$COMMIT" \
+            --rust-version "$RUST_VERSION" \
+            --cargo-raw ffi-rust-raw.txt \
+            --c-log "C smoke test (libmid_ecs.so)=ffi-smoke-so-raw.txt" \
+            --c-log "C smoke test (libmid_ecs.a)=ffi-smoke-a-raw.txt" \
+            --valgrind ffi-valgrind-raw.txt \
+            --valgrind-status "${VG_STATUS:-127}"
+
       # ── Install mdBook ───────────────────────────────────────────────────
       - name: Install mdBook
         run: |
@@ -122,7 +211,7 @@ jobs:
           set -e
           rm -rf dist
           mkdir -p dist/docs dist/tests/mid-ptr dist/tests/mid-platform \
-                   dist/benchmarks dist/shared
+                   dist/tests/mid-ecs-ffi dist/benchmarks dist/shared
 
           cp web/home/index.html dist/index.html
           cp -r web/site/book/.  dist/docs/
@@ -139,6 +228,8 @@ jobs:
             cp mid-ptr-test-results.json dist/tests/mid-ptr/ || true
           [ -f mid-platform-test-results.json ] && \
             cp mid-platform-test-results.json dist/tests/mid-platform/ || true
+          [ -f mid-ecs-ffi-test-results.json ] && \
+            cp mid-ecs-ffi-test-results.json dist/tests/mid-ecs-ffi/ || true
 
           find dist -maxdepth 2 -type d | sort
 

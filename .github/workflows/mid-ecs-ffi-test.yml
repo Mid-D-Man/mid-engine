@@ -4,8 +4,8 @@
 # where the FFI smoke test was one `continue-on-error` step among many
 # and its raw log was only ever an artifact: nothing in that workflow's
 # dashboard or job summary could tell you it had failed. Here the FFI
-# surface has its own dashboard (gh-pages `mid-ecs-ffi/`), its own job
-# summary, and its own pass/fail.
+# surface has its own job summary, its own results JSON and its own
+# pass/fail, and the site's tests page reads that JSON (see "Publishing").
 #
 # What runs, in order:
 #   1. the Rust-side `ffi::` unit tests (cargo test -p mid-ecs --lib ffi::)
@@ -15,7 +15,7 @@
 #   4. the same program, against the .so, under valgrind: no memory
 #      errors, no definitely-lost blocks
 # Every step is allowed to fail on its own so that the later ones still
-# run and the dashboard is always published (same "always report" shape as
+# run and the results are always reported (same "always report" shape as
 # mid-ecs-test.yml). The LAST step then fails the run if any check in the
 # results JSON failed, so a real FFI regression is a red run, not a
 # quietly-orange step in a green one. That final gate is the one thing
@@ -29,6 +29,15 @@
 # Not here: FFI call overhead. That is .github/workflows/bench-mid-ecs-
 # ffi.yml.
 #
+# Publishing: this workflow deploys nothing. The Cloudflare Pages site
+# (.github/workflows/deploy-site.yml) re-runs these same steps behind its
+# `run_tests_first` input and publishes the JSON as the "mid-ecs FFI" card
+# on web/tests/index.html, the way it already does for mid-ptr and
+# mid-platform. If a step changes here, change its mirror there. An earlier
+# version of this file pushed an HTML dashboard to gh-pages; the
+# gh-pages half is being migrated away (docs/RUST_AND_CRATE_GUIDELINES.md
+# section 7) and was removed rather than built on.
+#
 # Run: Actions -> "mid-ecs — FFI Tests" -> Run workflow
 # DO NOT add push/pull_request triggers.
 
@@ -38,7 +47,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
   actions:  read
 
 jobs:
@@ -65,23 +74,28 @@ jobs:
             ~/.cargo/registry/index/
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
-          key: cargo-registry-${{ hashFiles('crates/mid-collections/**/Cargo.toml', 'crates/mid-ecs/**/Cargo.toml') }}
+          key: cargo-registry-mid-ecs-${{ runner.os }}-${{ hashFiles('crates/mid-collections/**/Cargo.toml', 'crates/mid-ecs/**/Cargo.toml') }}
           restore-keys: |
-            cargo-registry-
+            cargo-registry-mid-ecs-${{ runner.os }}-
 
       # Added after the first real run of this job on rustc 1.98.1 died with
       # `cargo: command not found` (exit 127) at its first cargo call, in
       # this workflow and in mid-ecs-ffi-test.yml alike. `rustc --version`
       # had worked right after the toolchain install, and the only steps in
       # between were the cache restore (plus valgrind's apt install in the
-      # FFI workflow). The restore is the SUSPECT, not a confirmed cause:
-      # ~/.cargo/bin/ is out of the cache paths above because nothing here
-      # `cargo install`s anything, so caching it buys nothing and can only
-      # overwrite the freshly installed rustup proxies. This step prints
-      # what is actually on PATH so that, if that was not the cause, the
-      # next failure says what was.
-      # It fails the run by design when cargo is unusable: with cargo dead,
-      # the later steps that are continue-on-error would fail silently (127).
+      # FFI workflow). The cache is the suspect, by the mechanism
+      # docs/RUST_AND_CRATE_GUIDELINES.md section 7 records for
+      # mid-ptr-test.yml: a bare `cargo-registry-` restore prefix can match
+      # ANOTHER workflow's archive, and an archive holding ~/.cargo/bin/
+      # overwrites the freshly installed rustup proxies when restored. So
+      # the key above is scoped to this crate and the runner OS, and
+      # ~/.cargo/bin/ is out of the paths (nothing here `cargo install`s
+      # anything). The symptom here was 127, not that incident's "Exec
+      # format error": same mechanism family, not a proven match. This step
+      # prints what is actually on PATH so that, if the cache was not the
+      # cause, the next failure says what was. It fails the run by design
+      # when cargo is unusable: with cargo dead, the later steps that are
+      # continue-on-error would fail silently (127).
       - name: Toolchain check
         run: |
           echo "PATH=$PATH"
@@ -190,18 +204,6 @@ jobs:
         if: always()
         run: python3 scripts/mid_ecs_ffi_results.py summary mid-ecs-ffi-test-results.json >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Build HTML report
-        if: always()
-        env:
-          RUST_VERSION: ${{ steps.rustver.outputs.ver }}
-        run: |
-          cp .github/mid-ecs-ffi-test-template.html mid-ecs-ffi-test-index.html
-          sed -i "s/BUILD_NUM_PLACEHOLDER/${{ github.run_number }}/g"  mid-ecs-ffi-test-index.html
-          sed -i "s/BRANCH_PLACEHOLDER/${{ github.ref_name }}/g"       mid-ecs-ffi-test-index.html
-          sed -i "s/COMMIT_PLACEHOLDER/${GITHUB_SHA:0:8}/g"            mid-ecs-ffi-test-index.html
-          sed -i "s|DATE_PLACEHOLDER|$(date -u)|g"                     mid-ecs-ffi-test-index.html
-          sed -i "s|RUST_VERSION_PLACEHOLDER|${RUST_VERSION}|g"        mid-ecs-ffi-test-index.html
-
       - name: Upload artifacts
         if: always()
         uses: actions/upload-artifact@v4
@@ -209,14 +211,13 @@ jobs:
           name: mid-ecs-ffi-test-results-${{ github.run_number }}
           path: |
             mid-ecs-ffi-test-results.json
-            mid-ecs-ffi-test-index.html
             ffi-rust-raw.txt
             ffi-smoke-so-raw.txt
             ffi-smoke-a-raw.txt
             ffi-valgrind-raw.txt
           retention-days: 14
 
-      # Last on purpose: everything above has already published. Fails
+      # Last on purpose: everything above has already reported. Fails
       # the run when any check in the JSON failed, or when nothing was
       # collected at all (a run that produced no results is not a pass).
       - name: Fail the run if any FFI check failed
@@ -237,89 +238,3 @@ jobs:
               print(f"{summary['failed']} FFI check(s) failed -- see the job summary.")
               sys.exit(1)
           PYEOF
-
-  deploy-results:
-    runs-on: ubuntu-latest
-    needs: [run-tests]
-    if: always() && needs.run-tests.result != 'skipped'
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Download artifacts
-        continue-on-error: true
-        uses: actions/download-artifact@v4
-        with:
-          name: mid-ecs-ffi-test-results-${{ github.run_number }}
-          path: deploy/mid-ecs-ffi/
-
-      - name: Ensure deploy content exists
-        run: |
-          mkdir -p deploy/mid-ecs-ffi
-          if [ ! -f deploy/mid-ecs-ffi/mid-ecs-ffi-test-results.json ]; then
-            echo '{
-              "build":"${{ github.run_number }}",
-              "branch":"${{ github.ref_name }}",
-              "commit":"${{ github.sha }}",
-              "crate":"mid-ecs-ffi",
-              "summary":{"total":0,"passed":0,"failed":0,"ignored":0,"duration_s":0},
-              "suites":[]
-            }' > deploy/mid-ecs-ffi/mid-ecs-ffi-test-results.json
-          fi
-          if [ ! -f deploy/mid-ecs-ffi/mid-ecs-ffi-test-index.html ]; then
-            cp .github/mid-ecs-ffi-test-template.html deploy/mid-ecs-ffi/mid-ecs-ffi-test-index.html
-            sed -i "s/BUILD_NUM_PLACEHOLDER/${{ github.run_number }}/g" deploy/mid-ecs-ffi/mid-ecs-ffi-test-index.html
-            sed -i "s/BRANCH_PLACEHOLDER/${{ github.ref_name }}/g"      deploy/mid-ecs-ffi/mid-ecs-ffi-test-index.html
-            sed -i "s/COMMIT_PLACEHOLDER/${GITHUB_SHA:0:8}/g"           deploy/mid-ecs-ffi/mid-ecs-ffi-test-index.html
-            sed -i "s|DATE_PLACEHOLDER|$(date -u)|g"                   deploy/mid-ecs-ffi/mid-ecs-ffi-test-index.html
-            sed -i "s|RUST_VERSION_PLACEHOLDER|unknown|g"              deploy/mid-ecs-ffi/mid-ecs-ffi-test-index.html
-          fi
-
-      - name: Deploy to gh-pages
-        run: |
-          git config --global user.name  "Mid Engine CI"
-          git config --global user.email "ci@mid-engine.dev"
-
-          BUILD_NUM=${{ github.run_number }}
-          WORK=$(mktemp -d)
-
-          if git fetch origin gh-pages:gh-pages 2>/dev/null; then
-            git worktree add "$WORK" gh-pages
-          else
-            git worktree add --orphan -b gh-pages "$WORK"
-          fi
-
-          mkdir -p "$WORK/mid-ecs-ffi" "$WORK/mid-ecs-ffi/builds/build_${BUILD_NUM}"
-
-          cp deploy/mid-ecs-ffi/mid-ecs-ffi-test-results.json "$WORK/mid-ecs-ffi/mid-ecs-ffi-test-results.json"
-          cp deploy/mid-ecs-ffi/mid-ecs-ffi-test-index.html   "$WORK/mid-ecs-ffi/index.html"
-          cp deploy/mid-ecs-ffi/mid-ecs-ffi-test-results.json "$WORK/mid-ecs-ffi/builds/build_${BUILD_NUM}/mid-ecs-ffi-test-results.json"
-          cp deploy/mid-ecs-ffi/mid-ecs-ffi-test-index.html   "$WORK/mid-ecs-ffi/builds/build_${BUILD_NUM}/index.html"
-
-          cp .github/mid-engine-landing-index.html "$WORK/index.html"
-
-          cd "$WORK"
-          git add .
-          if git diff --staged --quiet; then
-            echo "Nothing new to deploy."
-            exit 0
-          fi
-          git commit -m "mid-ecs FFI tests — Build #${BUILD_NUM} [skip ci]"
-          git push \
-            "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git" \
-            gh-pages
-
-  summary:
-    runs-on: ubuntu-latest
-    needs: [run-tests, deploy-results]
-    if: always()
-    steps:
-      - name: Print summary
-        run: |
-          echo "============================================="
-          echo "  mid-ecs FFI Test Summary"
-          echo "============================================="
-          echo "Build:   #${{ github.run_number }}"
-          echo "Branch:  ${{ github.ref_name }}"
-          echo "Tests:   ${{ needs.run-tests.result    || 'skipped' }}"
-          echo "Deploy:  ${{ needs.deploy-results.result || 'skipped' }}"
