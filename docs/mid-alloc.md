@@ -149,13 +149,14 @@ is `cur.wrapping_neg() & (align - 1)` and the only capacity check is
 always holds. Release builds return `None` for a `size_bytes` above
 `isize::MAX` or an `align` that is not a power of two, and that keeps
 `padding + size_bytes` from wrapping (debug builds still
-`debug_assert!` on `align`). The buffer is `vec![0u8; capacity]`, so it
-stays fully zero-filled while the allocator may serve it as zeroed
-memory. `resize_raw` and `try_grow_raw` compare against `cur` the same
-way. The bump position still moves upward, which keeps in-place growth
+`debug_assert!` on `align`). The buffer is a `Vec<MaybeUninit<u8>>`
+built with `with_capacity` and `set_len`, so construction writes
+nothing and `alloc_raw` returns uninitialized memory: callers write
+before they read. `resize_raw` and `try_grow_raw` compare against `cur`
+the same way. The bump position still moves upward, which keeps in-place growth
 of the last allocation copy-free.
 
-**Tests:** 19, real, passing on rustc 1.75 (the earlier figure of 13 was stale), including one that
+**Tests:** 20, real, passing on rustc 1.75 (the earlier figure of 13 was stale), including one that
 matters for trusting the `unsafe` in `alloc_raw()`:
 `alignment_is_actually_respected_not_just_assumed` forces a misaligned
 starting position with a 1-byte allocation first, then checks a
@@ -175,7 +176,9 @@ grow past total capacity failing cleanly without moving anything).
 Three more cover the bump path: refused sizes and alignments leave
 `used()` untouched, a zero-capacity stack serves only zero-sized
 requests, and `used()` equals padding plus size measured from the
-buffer start.
+buffer start. `whole_capacity_is_usable_as_one_allocation` writes and
+reads back every byte of a full-capacity allocation, which checks the
+buffer length after the uninitialized `set_len`.
 
 **Verification honestly scoped, not overstated:** this sandbox's rustc
 1.75 has no rustup/nightly component, so no Miri and no
@@ -1062,6 +1065,56 @@ time, and it is the first run of the new bump path. Local numbers for
 1.47x, 1.50x and 1.36x after. If CI does not show a similar drop, the
 local result does not transfer and the change needs a second look.
 
+**Runs #6 and #7: first CI runs of the new bump path.**
+
+Both runs used the allocator code from the bump-path rewrite, the first
+CI runs of it, and both report `raw_alloc_reset` and `push_in_arena`.
+Same-run ratios agree between the two runs to within about 5%, while
+absolute times in run #7 are 15% to 25% higher on every entry,
+including `bumpalo` and `Box`, so the runner and not the code moved.
+
+| Comparison | N=100 | N=1000 | N=10000 |
+|---|---|---|---|
+| `StackAllocator` / `bumpalo::Bump`, `raw_alloc_sequential` (run #6, #7) | 1.13x, 1.19x | 1.45x, 1.49x | 1.48x, 1.52x |
+| `StackAllocator` / `bumpalo::Bump`, `raw_alloc_reset` (run #6, #7) | 0.72x, 0.75x | 0.80x, 0.79x | 0.80x, 0.80x |
+| `PoolAllocator` / `Box` (run #6, #7) | 0.21x, 0.19x | 0.21x, 0.19x | 0.21x, 0.19x |
+| `BackedStack<Heap>` / `StackAllocator` (run #6, #7) | 0.96x, 0.97x | 0.89x, 0.87x | 0.89x, 0.87x |
+| `BumpVec<HeapAlloc>` / `std::Vec` (run #6, #7) | 0.56x, 0.74x | 0.76x, 0.87x | 0.95x, 0.95x |
+| `BumpVec<StackAllocator>` / `bumpalo` `Vec` (run #6, #7) | 0.30x, 0.31x | 0.42x, 0.43x | 0.36x, 0.36x |
+
+`raw_alloc_sequential` improved from 1.45x, 1.82x and 1.84x in run #5 to
+the figures above, and the marginal cost per allocation of
+`StackAllocator` is about 1.25 ns in run #6 (1.77 ns in run #5) against
+0.83 ns for `bumpalo`, about 1.5x. The pool is about 4.8x (run #6) and
+5.2x (run #7) faster than `Box`. `FallbackAllocator` and `Segregator`
+stay within 4% of `HeapAlloc`, `SyncAlloc` uncontended is 1.11x and
+1.17x, and `Tracked` is 2.6x and 2.4x.
+
+The `raw_alloc_reset` group was expected to show a drop similar to the
+local 1.47x, 1.50x and 1.36x. It shows `StackAllocator` ahead of
+`bumpalo`, which the local run did not. This ratio should not be read as
+a clean win. In the same run `bumpalo` takes 13.65 µs at N=10000 in the
+reset group and 8.31 µs in `raw_alloc_sequential`, for the same 10,000
+allocations, and the reset group does strictly less work per iteration.
+That is about 1.36 ns against 0.83 ns per allocation for the same
+allocator. The cause was not investigated. Until it is, `raw_alloc_sequential`
+and `raw_alloc_reset` give different answers about the bump path, and
+this doc claims neither.
+
+`BackedStack` stays at 0.87x to 0.89x of `StackAllocator` at N of 1000
+and above, which is the same controlled `memset` measurement as runs #4
+and #5. The explicit decision the earlier zero-fill paragraph asked for
+was made after these runs: `with_capacity` no longer zero-fills (see
+"Fixes and Problems", `stack_allocator.rs`). The expected effect on
+`raw_alloc_sequential` is a ratio near `BackedStack`'s, about 1.3x at
+N=10000, not parity with `bumpalo`. That figure is an estimate from the
+`BackedStack` gap and is not measured on the new code.
+
+Next run: `raw_alloc_sequential` and `backed_stack_vs_direct` after the
+uninitialized buffer. `StackAllocator` and `BackedStack` should land
+within noise of each other. If `StackAllocator` is still more than a few
+percent behind, the zero-fill was not the whole difference.
+
 ## Module plan (catalogued, not built)
 
 Every module from the original foonathan/memory survey has shipped
@@ -1271,6 +1324,26 @@ guess, not a confirmed one.
   construction: `BackedStack`, which never zero-fills, stayed at 0.78x
   to 0.97x of `StackAllocator`'s time.
 - Formatted with rustfmt.
+- `with_capacity` no longer zero-fills. The buffer is a
+  `Vec<MaybeUninit<u8>>` built with `Vec::with_capacity` and `set_len`,
+  which is sound because `MaybeUninit<u8>` has no validity invariant.
+  There is no `resize`, so the `slow_vector_initialization` lint from
+  the earlier version does not apply. `cargo clippy` is not available in
+  this sandbox, so `uninit_vec` was not checked. The idiom is the one
+  `mid-arena`'s `RegionNode::new_boxed` already uses. The documented
+  guarantee that `alloc_raw` memory is "zero-filled at construction" is
+  gone: the memory is uninitialized, and it was never zero after a
+  `rewind` or `reset` anyway. A search of the tests and of every file
+  that uses `StackAllocator` found nothing that reads freshly allocated
+  stack memory before writing it. The `alloc` safety comment no longer
+  mentions zeroed bytes. Prompted by runs #6 and #7, where
+  `BackedStack`, which never zero-fills, ran at 0.87x to 0.89x of
+  `StackAllocator` for N of 1000 and above. One test added
+  (`whole_capacity_is_usable_as_one_allocation`), for 20 in the file.
+  Checked in the scratch crate without `criterion` on rustc 1.75: 27
+  tests with default features, 73 with every feature, no warnings.
+  Local only: not run under CI or Miri, and the speedup is an estimate
+  until the next bench run.
 
 ### `fallback.rs`
 
@@ -1482,3 +1555,9 @@ guess, not a confirmed one.
 - Run #5 confirmed the workflow fix: no `change:` lines. Checked the new
   group by running the real bench file against the criterion stand-in on
   rustc 1.75, all seven groups.
+- Two comments updated after `StackAllocator::with_capacity` stopped
+  zero-filling: the `raw_alloc_sequential` group note no longer says only
+  one side pays a cost, and the `push_in_arena` note no longer mentions
+  the zero-fill. No code change. The `raw_alloc_reset` result in runs #6
+  and #7 (`bumpalo` slower per allocation there than in
+  `raw_alloc_sequential`) is logged in "Benches" and not yet explained.

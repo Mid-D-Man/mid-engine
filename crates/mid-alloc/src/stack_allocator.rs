@@ -9,9 +9,10 @@
 //! earlier allocations stay usable while new ones are made. Rewinding
 //! to a [`StackMarker`] reclaims everything allocated after it.
 //!
-//! The buffer is one zero-filled `Vec<u8>` sized at construction. It
-//! never grows: `alloc_raw` returns `None`, and `alloc` hands the value
-//! back, when the remaining capacity is too small.
+//! The buffer is one uninitialized `Vec<MaybeUninit<u8>>` sized at
+//! construction. It never grows: `alloc_raw` returns `None`, and `alloc`
+//! hands the value back, when the remaining capacity is too small.
+//! Memory from `alloc_raw` is uninitialized, so write before reading.
 //!
 //! `rewind` and `reset` reclaim bytes without running destructors, the
 //! same tradeoff `bumpalo` makes. Store `Copy` types, or types where
@@ -21,10 +22,9 @@
 //! AddressSanitizer.
 
 use crate::raw_alloc::{grow_via_alloc_copy_dealloc, RawAlloc};
-use alloc::vec;
 use alloc::vec::Vec;
 use core::cell::Cell;
-use core::mem;
+use core::mem::{self, MaybeUninit};
 use core::ptr::NonNull;
 
 /// A saved position in a [`StackAllocator`], obtained from
@@ -44,7 +44,7 @@ pub struct StackMarker(usize);
 /// Fixed-capacity marker/rewind bump allocator. See this module's doc
 /// comment for the full design.
 pub struct StackAllocator {
-    buf: Vec<u8>,
+    buf: Vec<MaybeUninit<u8>>,
     /// Bump position as an absolute address inside `buf`, so the hot
     /// path skips a base add. `buf` never reallocates, so the address
     /// stays valid when this struct moves.
@@ -57,9 +57,10 @@ impl StackAllocator {
     /// Allocates `capacity` bytes up front. This is the allocator's
     /// entire budget for its whole lifetime, since it never grows.
     pub fn with_capacity(capacity: usize) -> Self {
-        // `vec![0; n]` asks the allocator for zeroed memory, so the buffer
-        // is still fully zero-filled but large blocks need not be written.
-        let buf = vec![0u8; capacity];
+        let mut buf: Vec<MaybeUninit<u8>> = Vec::with_capacity(capacity);
+        // SAFETY: `MaybeUninit<u8>` has no validity invariant, so any
+        // `capacity` uninitialized slots are valid elements.
+        unsafe { buf.set_len(capacity) };
         let base = buf.as_ptr() as usize;
         Self {
             end: base + buf.len(),
@@ -135,8 +136,8 @@ impl StackAllocator {
     }
 
     /// Allocates `size_bytes` aligned to `align`, returning a pointer to
-    /// memory (zero-filled at construction) that stays valid until the
-    /// next `rewind`/`reset` that reclaims it, or `None` if the
+    /// uninitialized memory that stays valid until the next
+    /// `rewind`/`reset` that reclaims it, or `None` if the
     /// remaining capacity can't satisfy the request, alignment padding
     /// included, or if `size_bytes` exceeds `isize::MAX`. `align` must be
     /// a power of two: debug-asserted, and release builds return `None`
@@ -187,14 +188,10 @@ impl StackAllocator {
         // SAFETY: `alloc_raw` reserved exactly `size_of::<T>()` bytes
         // starting at an address aligned to `align_of::<T>()`, and that
         // byte range is exclusively ours until the next
-        // `rewind`/`reset` -- nothing else in this module hands out a
+        // `rewind`/`reset`: nothing else in this module hands out a
         // pointer into the same range without first bumping `top` past
-        // it. `ptr::write` here is a real initialization, not a raw
-        // store into possibly-live memory: the bytes were zeroed at
-        // construction (`with_capacity`) and nothing has read them as
-        // a `T` before this write, so this takes them from "zeroed
-        // bytes" to "a live `T`" in one step, matching the usage
-        // pattern this kind of placement requires.
+        // it. The `write` initializes the slot before the reference is
+        // formed.
         unsafe {
             typed.as_ptr().write(value);
             Ok(&mut *typed.as_ptr())
@@ -442,6 +439,23 @@ mod tests {
         assert!(a.alloc_raw(1, 1).is_none());
         assert_eq!(a.used(), 0);
         assert_eq!(a.remaining(), 0);
+    }
+
+    #[test]
+    fn whole_capacity_is_usable_as_one_allocation() {
+        let a = StackAllocator::with_capacity(4096);
+        let p = a.alloc_raw(4096, 1).expect("full capacity fits in one allocation");
+        assert_eq!(a.remaining(), 0);
+        // SAFETY: `p` is valid for 4096 bytes, and every byte is written
+        // before it is read.
+        unsafe {
+            for i in 0..4096usize {
+                p.as_ptr().add(i).write((i % 251) as u8);
+            }
+            for i in 0..4096usize {
+                assert_eq!(p.as_ptr().add(i).read(), (i % 251) as u8);
+            }
+        }
     }
 
     #[test]

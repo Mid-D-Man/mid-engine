@@ -54,9 +54,8 @@ const SIZES: [u32; 3] = [100, 1_000, 10_000];
 /// allocations, in two groups.
 ///
 /// - `raw_alloc_sequential` builds a fresh, generously pre-sized
-///   allocator inside every iteration. `StackAllocator::with_capacity`
-///   zero-fills its buffer and `bumpalo` does not, so this group
-///   includes a cost only one side pays.
+///   allocator inside every iteration, so construction is part of the
+///   measurement. Neither side initializes its buffer.
 /// - `raw_alloc_reset` builds each allocator once, outside the timed
 ///   region, and resets it at the start of every iteration, so it
 ///   measures the bump path alone. The arena has 64 bytes of slack so
@@ -276,8 +275,8 @@ fn bench_backed_vs_direct(c: &mut Criterion) {
 ///   `bumpalo::collections::Vec<u64>` vs `std::vec::Vec<u64>`. Each arena
 ///   is built once, outside the timed region, and reset at the start of
 ///   every iteration, so the group does not include the `StackAllocator`
-///   constructor's zero-fill. The arena holds the final doubled capacity,
-///   so no push can run out of room.
+///   constructor. The arena holds the final doubled capacity, so no push
+///   can run out of room.
 #[cfg(feature = "bump_vec")]
 fn bench_bump_vec_vs_std_vec(c: &mut Criterion) {
     let mut group = c.benchmark_group("push_sequential");
