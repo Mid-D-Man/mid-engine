@@ -29,6 +29,8 @@
 //! value's insertion and a query checking it, so this is a real limit,
 //! not a rounding error, but not one worth a background scanner for yet.
 
+use std::ops::{Deref, DerefMut};
+
 /// A point on the world's change-tick counter. Comparisons
 /// (`is_newer_than`) are all that ever matters about a `Tick` — the raw
 /// value has no meaning on its own.
@@ -128,6 +130,96 @@ impl Default for ChangeTracker {
     }
 }
 
+/// Mutable access to one archetype-tracked component value that records
+/// the write: obtained from the bulk mutable queries
+/// ([`crate::World::query_static_mut`] and friends), the bulk counterpart
+/// of [`crate::World::get_static_mut`].
+///
+/// Reading through it ([`Deref`]) leaves the value's change tick alone;
+/// *mutably* dereferencing it ([`DerefMut`], so any `*m = ..`, `m.field =
+/// ..` or `&mut *m`) stamps the value as changed at the world's tick as of
+/// query creation, which is what [`crate::World::query_changed`] and the
+/// C `..._changed_rows` function read. That makes a row a query merely
+/// visits free of charge: only rows actually written to are reported
+/// changed, unlike [`crate::World::get_static_mut`], which marks on the
+/// call whether or not the caller then writes. Marking is a single `u32`
+/// store through a pointer the iterator already holds, no lookup.
+///
+/// What it deliberately is not: bevy's `Mut` also carries the system's
+/// last-run tick, so `is_changed()` takes no argument there. There is no
+/// system here, so [`Self::is_added`]/[`Self::is_changed`] take the
+/// [`ChangeTracker`] the caller is already holding. See
+/// `docs/mid-ecs.md`, "tick.rs" and "Mutable queries".
+pub struct Mut<'a, T> {
+    value: &'a mut T,
+    ticks: &'a mut ComponentTicks,
+    this_run: Tick,
+}
+
+impl<'a, T> Mut<'a, T> {
+    pub(crate) fn new(value: &'a mut T, ticks: &'a mut ComponentTicks, this_run: Tick) -> Self {
+        Self {
+            value,
+            ticks,
+            this_run,
+        }
+    }
+
+    /// Whether this value was inserted after `tracker`'s last-checked
+    /// tick, the per-row form of [`crate::World::query_added`].
+    pub fn is_added(&self, tracker: &ChangeTracker) -> bool {
+        self.ticks.is_added(tracker.last_run(), self.this_run)
+    }
+
+    /// Whether this value was inserted or mutated after `tracker`'s
+    /// last-checked tick, the per-row form of
+    /// [`crate::World::query_changed`]. Includes a write made earlier in
+    /// this same iteration through this very `Mut` only if the world's
+    /// tick has moved past `tracker`'s since: see `tick.rs`'s note on
+    /// calling [`crate::World::increment_change_tick`] between a step's
+    /// mutations and the check that should see them.
+    pub fn is_changed(&self, tracker: &ChangeTracker) -> bool {
+        self.ticks.is_changed(tracker.last_run(), self.this_run)
+    }
+
+    /// Marks the value changed without writing to it, for a mutation made
+    /// some other way (through interior mutability, say).
+    pub fn set_changed(&mut self) {
+        self.ticks.changed = self.this_run;
+    }
+
+    /// Mutable access that does *not* mark the value changed: for a write
+    /// that should be invisible to `Changed`, such as re-applying a value
+    /// derived from state the reader already has. The caller is asserting
+    /// that no change-detecting reader needs to see this write.
+    pub fn bypass_change_detection(&mut self) -> &mut T {
+        self.value
+    }
+}
+
+impl<T> Deref for Mut<'_, T> {
+    type Target = T;
+
+    #[inline]
+    fn deref(&self) -> &T {
+        self.value
+    }
+}
+
+impl<T> DerefMut for Mut<'_, T> {
+    #[inline]
+    fn deref_mut(&mut self) -> &mut T {
+        self.ticks.changed = self.this_run;
+        self.value
+    }
+}
+
+impl<T: std::fmt::Debug> std::fmt::Debug for Mut<'_, T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("Mut").field(&*self.value).finish()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -203,5 +295,49 @@ mod tests {
         let tracker = ChangeTracker::new();
         assert_eq!(tracker.last_run(), Tick::ZERO);
         assert_eq!(ChangeTracker::default().last_run(), Tick::ZERO);
+    }
+
+    #[test]
+    fn mut_reads_do_not_mark_and_writes_do() {
+        let mut value = 5u32;
+        let mut ticks = ComponentTicks::new(Tick::new(1));
+        {
+            let m = Mut::new(&mut value, &mut ticks, Tick::new(7));
+            assert_eq!(*m, 5);
+        }
+        assert_eq!(ticks.changed, Tick::new(1), "a read leaves the tick alone");
+        {
+            let mut m = Mut::new(&mut value, &mut ticks, Tick::new(7));
+            *m = 6;
+        }
+        assert_eq!(
+            ticks.changed,
+            Tick::new(7),
+            "a write stamps this run's tick"
+        );
+        assert_eq!(ticks.added, Tick::new(1), "and never touches `added`");
+        assert_eq!(value, 6);
+    }
+
+    #[test]
+    fn mut_set_changed_and_bypass() {
+        let mut value = 5u32;
+        let mut ticks = ComponentTicks::new(Tick::new(1));
+        {
+            let mut m = Mut::new(&mut value, &mut ticks, Tick::new(9));
+            *m.bypass_change_detection() = 8;
+        }
+        assert_eq!(ticks.changed, Tick::new(1));
+        assert_eq!(value, 8);
+        Mut::new(&mut value, &mut ticks, Tick::new(9)).set_changed();
+        assert_eq!(ticks.changed, Tick::new(9));
+    }
+
+    #[test]
+    fn mut_debug_shows_the_value_not_the_ticks() {
+        let mut value = 5u32;
+        let mut ticks = ComponentTicks::new(Tick::new(1));
+        let m = Mut::new(&mut value, &mut ticks, Tick::new(2));
+        assert_eq!(format!("{m:?}"), "Mut(5)");
     }
 }

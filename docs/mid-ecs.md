@@ -2584,9 +2584,11 @@ bench binary's layout in mind.
 Every archetype-tracked component value gets a paired `ComponentTicks {
 added, changed }`: `added`/`changed` are both set to the current tick on
 insertion (`insert_static`, `insert_bundle`, `spawn_bundle`), and
-`changed` is updated again on every `World::get_static_mut` call — the
-only place a value can be mutated through, since there is no bulk
-`&mut` query yet. `ChangeTracker` is a small, caller-held "since when"
+`changed` is updated again on every `World::get_static_mut` call, and (added
+in a later pass, see "Mutable queries") on every mutable dereference of
+the `Mut<T>` the bulk mutable queries yield. When this pass was written
+`get_static_mut` was the only place a value could be mutated through, since
+there was no bulk `&mut` query yet. `ChangeTracker` is a small, caller-held "since when"
 marker: `ChangeTracker::new()` starts at `Tick::ZERO` (so a fresh one
 sees everything currently present as added/changed), and
 `ChangeTracker::update(&world)` advances it to the world's current tick.
@@ -2654,11 +2656,12 @@ helpers at all.
   to combine an archetype-level `With`/`Without`/`Or` filter with a
   row-level `Added`/`Changed` check in one call — the natural next step,
   not built here.
-- **No bulk mutable query.** `World::get_static_mut` is the *only* place
-  `changed` gets touched, because it's the only place that exists.
-  Whenever a `query_static_mut`-style bulk mutable iterator gets built,
-  it needs to mark `changed` per row it yields, or `Changed` will silently
-  miss everything written through it.
+- **No bulk mutable query** *(closed since: see "Mutable queries")*.
+  `World::get_static_mut` was the *only* place `changed` got touched,
+  because it was the only place that existed. Whenever a
+  `query_static_mut`-style bulk mutable iterator got built, it needed to
+  mark `changed` per row it yields, or `Changed` would silently miss
+  everything written through it. It does, through `Mut<T>`.
 - **No FFI counterpart in this pass, unlike every other feature** (`Or`
   included), for a real reason: a C caller needs per-row change data, a
   different shape from every enumeration function that existed then. Its
@@ -2908,3 +2911,127 @@ agreed in shape but ran higher on `change_rows` (3.55–5.27×) and resource rea
 **Also not done.** `query_added`/`query_changed` still have no bench against
 bevy (the "Not measured" note in the tick.rs section stands); the tick-write
 cost on insertion and mutation is still an expectation, not a measurement.
+
+### Mutable queries
+
+`Mut<T>`, `World::query_static_mut`, `query2_static_mut`,
+`query2_static_mut_ref` and their `_filtered` forms: the bulk counterpart of
+`get_static_mut`, and the closing of the hole the tick.rs section recorded
+("No bulk mutable query"). Before this, a bulk write could not be seen by
+`Changed`, from Rust or over the C ABI.
+
+**What it does.**
+
+- `query_static_mut::<T>()` yields `(Entity, Mut<T>)`; `query2_static_mut::<A, B>()`
+  yields `(Entity, Mut<A>, Mut<B>)`; `query2_static_mut_ref::<A, B>()` yields
+  `(Entity, Mut<A>, &B)`, the `(&mut Position, &Velocity)` shape most per-frame
+  updates are. Each has a `_filtered::<.., F: QueryFilter>` form taking the same
+  `With`/`Without`/`Or` filters as the shared queries. Archetype Core only,
+  `&mut self`, same archetype and row order as the shared queries.
+- `Mut<T>` derefs to `&T` for free and stamps the row changed, at the world's tick
+  as of query creation, on every *mutable* dereference. A row a query merely
+  visits is not marked, which is the difference from `get_static_mut`, where the
+  call itself marks. `set_changed()` marks without a write;
+  `bypass_change_detection()` writes without marking; `is_added`/`is_changed`
+  take the `ChangeTracker` the caller already holds (bevy's take no argument
+  because a system carries its own last-run tick; there is no system here).
+- Same-type queries (`query2_static_mut::<Position, Position>()`) panic when the
+  query is created, not part-way through it: one value cannot be borrowed
+  mutably twice.
+- The usual rule from the tick.rs section applies: advance
+  `increment_change_tick()` between a step's writes and the check that should see
+  them.
+
+**Zero `unsafe`.** `SparseSet::iter_mut` hands out one `&mut Archetype` at a
+time, and inside one archetype a `Table`'s `columns`, `ticks` and `entities` are
+disjoint fields, so destructuring `&mut Table` gives independent borrows of the
+value column, its tick column and the entity list. Two columns of one archetype
+come from `SparseSet::get_disjoint_mut`, which is `split_at_mut` underneath.
+Archetype selection reuses `matched_filtered` (the one change to `iter.rs`: its
+visibility, `pub(super)`; no function body) and keeps the matching archetypes in
+the dense order `iter_mut` walks them in, which is the order `iter()` enumerates.
+That is what makes the result visit the same entities in the same order as the
+shared queries, and a test asserts it, because the merge depends on it.
+
+**Separate from `Iter1`/`Iter2` on purpose.** The code lives in
+`archetype/iter_mut.rs`; `Iter1`/`Iter2` and their `Ref` forms are untouched.
+
+**The iterator went through four designs, and the first was 5.6x too slow for a
+`for` loop.** Instruction counts under callgrind (deterministic, unlike timing),
+release profile, rustc 1.91.1, one archetype of 5,000 rows, 200 passes. Ir per
+row:
+
+| Design | one column, `for` | one column, `for_each` | mixed `(&mut A, &B)`, `for` |
+|---|---|---|---|
+| `flat_map` over per-archetype `zip` | 63–65 | 6.1 | 17.1 |
+| hand-written, one cursor per column, one fat `next()` | 44.1 | 5.6 | 22.1 |
+| same, with `next()` split from a cold `advance()` | 19.1 | 5.6 | 41.1 |
+| **shipped:** one nested `Zip` per archetype, cold `advance()` | **16.1** | **6.1** | **25.1** |
+
+For reference, the shared `query_static` summing one column is 11.1 and
+`query2_static` summing two is 13.1. Reading through a `Mut` (`Deref`, no write)
+is 12.1; the write and its tick store add about 4. The mixed row does two writes,
+so two tick stores, where its shared counterpart does two reads.
+
+What each step taught:
+
+- A `for` loop calls `next()`, never `fold`, so an iterator's `fold` override
+  does nothing for it, and `FlatMap::next` is the slow path. `for_each` through the same iterator was
+  already 6, so the first design looked fine until it was measured the way
+  people write loops.
+- Splitting a cold, out-of-line `advance()` off `next()` made the single-column
+  case 2.3x cheaper but left the 4-column case at 41: the hot path was inlined
+  (forcing `#[inline(always)]` changed nothing) but `advance(&mut self)` being a
+  real call keeps the iterator in memory, so every per-column cursor is loaded
+  and stored each row, and cost scaled with column count (3 cursors 19, 4
+  cursors 41).
+- One nested `Zip` of slice iterators specializes to a single shared row index,
+  so the state a `for` loop carries is one counter however many columns the query
+  has. A column shorter than the entity list truncates the zip instead of
+  misaligning rows. `fold` is overridden (by-value `zip`, which keeps that
+  specialization) so `for_each`, `sum` and friends stay on the fast path;
+  `next()` is `#[inline]` with the archetype advance out of line and `#[cold]`.
+
+This is a sandbox measurement. The `Iter1::next` notes in `iter.rs` record a
+`next()`/`advance()` split that regressed on real CI (builds #29/#30) while
+looking fine here, and every figure above depends on the whole-program inliner,
+so read the table as "no obvious per-row disaster", not as the number CI will
+show.
+
+**Verification.** 20 new tests (297 default / 302 `scratch-arena` became 317 /
+322): `Mut` semantics (read does not mark, write marks `changed` and never
+`added`, `set_changed`, `bypass_change_detection`, `Debug`); that a visit is not
+a write; that exactly the written rows are marked, in the right rows; that
+writes stay attached to their entity through a `despawn` swap-remove (the entity
+that lands in the freed slot is the one written, per the tick.rs lesson that a
+mid-list despawn passes even with broken ticks); filter parity with the shared
+queries over `()`, `With`, `Without`, `(With, Without)`, `Or` and an
+unregistered type, same entities in the same order; mixed mutability marking only
+the mutable side; two mutable components marked independently; the same-type
+panics; zero-row intermediate archetypes (`insert_bundle`); `for` loop and
+`for_each` agreeing across several archetypes; iteration continuing past an
+archetype with no rows; and one end-to-end test that a bulk write is visible
+through the C `..._changed_rows`. Seven mutants were each caught by the right
+tests and reverted: `DerefMut` not marking (8 tests); `next()` marking every
+visited row (6); `advance()` dropping the first row of each archetype (7);
+selection ignoring the filter (2); the two-mutable ticks swapped (1); `fold`
+never marking (1); `fold` stopping at the first archetype (1). The last two are
+only reachable through `for_each`, which is why the `for`-loop tests alone were
+not enough once `fold` existed.
+
+**Not covered, stated plainly.**
+
+- **No `Ref<T>`.** The read-only counterpart (`is_changed()` on a shared
+  fetch) is what combining a row-level `Changed` with other query terms in one
+  call needs, and is the natural next step; `query_changed`/`query_added` are
+  still single-component and still separate paths.
+- **No three-component or entity-free forms, no `Option<&T>`/`Has<T>`.**
+- **No C counterpart, deliberately, the one exception to shipping FFI with each
+  feature.** The spans are read-only, so there is no bulk mutable query to
+  mirror; a C-side row write would be a byte-copy write path like
+  `resource_write` and deserves its own design. What C *does* get is the point of
+  this pass: `..._changed_rows` now reports bulk writes made by the Rust side.
+- **Not benched in Criterion and not compared with bevy.** Only the Ir figures
+  above exist. `archetype_core.rs` and `ecs-vs-bevy-ecs` have no mutable-query
+  group yet.
+- **Sparse Shell has no ticks**, so there is no `Mut` for it.

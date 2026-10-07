@@ -510,7 +510,9 @@ impl World {
     /// The world's current point on its change-tick counter. Every
     /// archetype-tracked component records this at insertion, and
     /// [`Self::get_static_mut`] records it again on every mutable
-    /// access — see `tick.rs`.
+    /// access. The bulk mutable queries ([`Self::query_static_mut`] and
+    /// friends) record it per row actually written through — see
+    /// `tick.rs`.
     pub fn change_tick(&self) -> Tick {
         self.change_tick
     }

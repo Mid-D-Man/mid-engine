@@ -31,6 +31,6 @@ pub use archetype::ArchetypeId;
 pub use component::{ComponentId, SparseShell};
 pub use filter::{Or, QueryFilter, With, Without};
 pub use resource::{ResourceFfiError, ResourceId};
-pub use tick::{ChangeTracker, Tick};
+pub use tick::{ChangeTracker, Mut, Tick};
 pub use transform::{GlobalTransform, GlobalTransformLWC};
 pub use world::{Entity, World};

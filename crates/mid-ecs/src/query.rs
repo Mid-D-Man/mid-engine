@@ -19,7 +19,7 @@
 
 use crate::archetype::ArchetypeId;
 use crate::filter::QueryFilter;
-use crate::tick::{ChangeTracker, Tick};
+use crate::tick::{ChangeTracker, Mut, Tick};
 use crate::world::{Entity, World};
 
 impl World {
@@ -194,6 +194,102 @@ impl World {
         self.archetypes.iter2_ref_filtered::<A, B, F>()
     }
 
+    // ── Bulk mutable queries ────────────────────────────────────────
+    //
+    // The bulk counterpart of `get_static_mut`: every item carries a
+    // [`Mut`], which stamps a row changed only when it is actually written
+    // through, so `query_changed` (and the C `..._changed_rows`) see bulk
+    // writes. Archetype Core only, `&mut self`, so no structural change
+    // can happen while an iterator is alive (the borrow checker, not a
+    // runtime check). Implemented in `archetype/iter_mut.rs`, deliberately
+    // not on `Iter1`/`Iter2`; see that file and `docs/mid-ecs.md`,
+    // "Mutable queries", for the design and what is still missing.
+
+    /// Iterates every `(Entity, Mut<T>)` with an archetype-tracked `T`:
+    /// the mutable counterpart of [`Self::query_static`], same archetype
+    /// and row order. Writing through the `Mut` marks that row changed;
+    /// merely visiting it does not.
+    ///
+    /// ```
+    /// use mid_ecs::{ChangeTracker, World};
+    ///
+    /// struct Hp(u32);
+    /// let mut world = World::new();
+    /// let a = world.spawn();
+    /// let b = world.spawn();
+    /// world.insert_static(a, Hp(10));
+    /// world.insert_static(b, Hp(20));
+    ///
+    /// let mut tracker = ChangeTracker::new();
+    /// tracker.update(&world);
+    /// world.increment_change_tick();
+    /// for (_, mut hp) in world.query_static_mut::<Hp>() {
+    ///     if hp.0 > 15 {
+    ///         hp.0 -= 5; // only this row is marked changed
+    ///     }
+    /// }
+    /// world.increment_change_tick();
+    /// let changed: Vec<_> = world.query_changed::<Hp>(&tracker).map(|(e, hp)| (e, hp.0)).collect();
+    /// assert_eq!(changed, vec![(b, 15)]);
+    /// ```
+    pub fn query_static_mut<T: 'static>(
+        &mut self,
+    ) -> impl Iterator<Item = (Entity, Mut<'_, T>)> + '_ {
+        self.query_static_mut_filtered::<T, ()>()
+    }
+
+    /// [`Self::query_static_mut`] restricted to archetypes satisfying `F`.
+    pub fn query_static_mut_filtered<T: 'static, F: QueryFilter>(
+        &mut self,
+    ) -> impl Iterator<Item = (Entity, Mut<'_, T>)> + '_ {
+        let this_run = self.change_tick();
+        self.archetypes.iter_mut_filtered::<T, F>(this_run)
+    }
+
+    /// Iterates every `(Entity, Mut<A>, Mut<B>)` for entities holding both
+    /// archetype-tracked components, each independently change-tracked.
+    ///
+    /// # Panics
+    /// If `A` and `B` are the same type (one value cannot be borrowed
+    /// mutably twice). Raised when the query is created, not part-way
+    /// through it.
+    pub fn query2_static_mut<A: 'static, B: 'static>(
+        &mut self,
+    ) -> impl Iterator<Item = (Entity, Mut<'_, A>, Mut<'_, B>)> + '_ {
+        self.query2_static_mut_filtered::<A, B, ()>()
+    }
+
+    /// [`Self::query2_static_mut`] restricted to archetypes satisfying
+    /// `F`. Panics if `A` and `B` are the same type.
+    pub fn query2_static_mut_filtered<A: 'static, B: 'static, F: QueryFilter>(
+        &mut self,
+    ) -> impl Iterator<Item = (Entity, Mut<'_, A>, Mut<'_, B>)> + '_ {
+        let this_run = self.change_tick();
+        self.archetypes.iter2_mut_filtered::<A, B, F>(this_run)
+    }
+
+    /// Iterates every `(Entity, Mut<A>, &B)`: `A` mutable and
+    /// change-tracked, `B` read-only and untouched, the
+    /// `(&mut Position, &Velocity)` shape that most per-frame updates
+    /// are. `B`'s change ticks are not read or written.
+    ///
+    /// # Panics
+    /// If `A` and `B` are the same type.
+    pub fn query2_static_mut_ref<A: 'static, B: 'static>(
+        &mut self,
+    ) -> impl Iterator<Item = (Entity, Mut<'_, A>, &B)> + '_ {
+        self.query2_static_mut_ref_filtered::<A, B, ()>()
+    }
+
+    /// [`Self::query2_static_mut_ref`] restricted to archetypes satisfying
+    /// `F`. Panics if `A` and `B` are the same type.
+    pub fn query2_static_mut_ref_filtered<A: 'static, B: 'static, F: QueryFilter>(
+        &mut self,
+    ) -> impl Iterator<Item = (Entity, Mut<'_, A>, &B)> + '_ {
+        let this_run = self.change_tick();
+        self.archetypes.iter2_mut_ref_filtered::<A, B, F>(this_run)
+    }
+
     // ── Change-detection queries: `Added`/`Changed` ─────────────────
     //
     // Deliberately their own methods, not `With`/`Without`-style
@@ -281,6 +377,7 @@ impl World {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::filter::Or;
 
     #[derive(Debug, PartialEq, Clone, Copy)]
     struct Position {
@@ -961,5 +1058,380 @@ mod tests {
                 .count(),
             0
         );
+    }
+
+    // ── Bulk mutable queries ────────────────────────────────────────
+
+    /// `n` entities with `Position { x: i }` and a fixed `Velocity`, in
+    /// one archetype, and a tracker that has already seen them: writes made
+    /// after this are the only things `query_changed` should report.
+    fn mut_world(n: u32) -> (World, Vec<Entity>, ChangeTracker) {
+        let mut w = World::new();
+        let es: Vec<Entity> = (0..n)
+            .map(|i| {
+                w.spawn_bundle((
+                    Position {
+                        x: i as f32,
+                        y: 0.0,
+                    },
+                    Velocity { dx: 1.0, dy: 2.0 },
+                ))
+            })
+            .collect();
+        w.increment_change_tick();
+        let mut t = ChangeTracker::new();
+        t.update(&w);
+        w.increment_change_tick();
+        (w, es, t)
+    }
+
+    fn changed_entities(w: &World, t: &ChangeTracker) -> Vec<Entity> {
+        sorted(w.query_changed::<Position>(t).map(|(e, _)| e).collect())
+    }
+
+    #[test]
+    fn query_static_mut_updates_values_in_place() {
+        let (mut w, _, _) = mut_world(5);
+        for (_, mut p) in w.query_static_mut::<Position>() {
+            p.x += 10.0;
+        }
+        let xs: Vec<f32> = w.query_static::<Position>().map(|(_, p)| p.x).collect();
+        assert_eq!(xs, vec![10.0, 11.0, 12.0, 13.0, 14.0]);
+    }
+
+    #[test]
+    fn reading_through_mut_does_not_mark_changed() {
+        let (mut w, _, t) = mut_world(5);
+        let mut sum = 0.0;
+        for (_, p) in w.query_static_mut::<Position>() {
+            sum += p.x; // Deref only
+        }
+        assert_eq!(sum, 10.0);
+        w.increment_change_tick();
+        assert!(
+            changed_entities(&w, &t).is_empty(),
+            "a visit is not a write"
+        );
+    }
+
+    #[test]
+    fn writing_through_mut_marks_exactly_the_written_rows() {
+        let (mut w, es, t) = mut_world(6);
+        let written = [es[1], es[4]];
+        for (e, mut p) in w.query_static_mut::<Position>() {
+            if written.contains(&e) {
+                p.y = 99.0;
+            }
+        }
+        w.increment_change_tick();
+        assert_eq!(
+            changed_entities(&w, &t),
+            sorted(written.to_vec()),
+            "exactly the written rows, in the right rows (a tick column zipped \
+             off by one would mark the wrong ones)"
+        );
+        assert_eq!(
+            w.query_added::<Position>(&t).count(),
+            0,
+            "a mutation is not an addition"
+        );
+    }
+
+    #[test]
+    fn bulk_writes_stay_attached_to_their_entity_through_a_swap_remove() {
+        // Despawning row 0 moves the last row into it. Write only to the
+        // entity that will land in the freed slot, so a misaligned tick
+        // column reports the wrong entity (or none).
+        let (mut w, es, t) = mut_world(6);
+        for (e, mut p) in w.query_static_mut::<Position>() {
+            if e == es[5] || e == es[2] {
+                p.x = -1.0;
+            }
+        }
+        assert!(w.despawn(es[0]));
+        w.increment_change_tick();
+        assert_eq!(changed_entities(&w, &t), sorted(vec![es[2], es[5]]));
+    }
+
+    #[test]
+    fn mut_api_reports_per_row_state_against_a_tracker() {
+        let (mut w, _, t) = mut_world(3);
+        let fresh = ChangeTracker::new();
+        for (_, mut p) in w.query_static_mut::<Position>() {
+            assert!(
+                p.is_added(&fresh),
+                "a fresh tracker sees everything as added"
+            );
+            assert!(!p.is_added(&t), "this tracker has already seen it");
+            assert!(!p.is_changed(&t));
+            p.bypass_change_detection().x = 7.0;
+            assert!(!p.is_changed(&t), "a bypassed write is invisible");
+            p.set_changed();
+            assert!(p.is_changed(&t), "set_changed marks without a write");
+        }
+    }
+
+    #[test]
+    fn bypass_change_detection_writes_without_marking() {
+        let (mut w, _, t) = mut_world(4);
+        for (_, mut p) in w.query_static_mut::<Position>() {
+            p.bypass_change_detection().x = 123.0;
+        }
+        w.increment_change_tick();
+        assert!(changed_entities(&w, &t).is_empty());
+        assert!(w.query_static::<Position>().all(|(_, p)| p.x == 123.0));
+    }
+
+    #[test]
+    fn query_static_mut_filtered_matches_the_shared_filtered_query_exactly() {
+        let (mut w, _) = filter_world();
+        macro_rules! parity {
+            ($f:ty) => {{
+                let shared: Vec<Entity> = w
+                    .query_static_filtered::<Position, $f>()
+                    .map(|(e, _)| e)
+                    .collect();
+                let exclusive: Vec<Entity> = w
+                    .query_static_mut_filtered::<Position, $f>()
+                    .map(|(e, _)| e)
+                    .collect();
+                assert_eq!(shared, exclusive, "same entities, same order");
+                assert_eq!(
+                    shared,
+                    w.query2_static_mut_filtered::<Position, Velocity, $f>()
+                        .map(|(e, _, _)| e)
+                        .collect::<Vec<_>>()
+                );
+                assert_eq!(
+                    shared,
+                    w.query2_static_mut_ref_filtered::<Position, Velocity, $f>()
+                        .map(|(e, _, _)| e)
+                        .collect::<Vec<_>>()
+                );
+                shared.len()
+            }};
+        }
+        assert_eq!(parity!(()), 4);
+        assert_eq!(parity!(With<Player>), 2);
+        assert_eq!(parity!(Without<Player>), 2);
+        assert_eq!(parity!((With<Player>, Without<Frozen>)), 1);
+        assert_eq!(parity!(Or<(With<Player>, With<Frozen>)>), 3);
+        assert_eq!(parity!(With<NeverInserted>), 0);
+    }
+
+    #[test]
+    fn mut_queries_on_a_never_registered_component_are_empty() {
+        let mut w = World::new();
+        assert_eq!(w.query_static_mut::<Position>().count(), 0);
+        let (mut w, _) = filter_world();
+        assert_eq!(w.query_static_mut::<NeverInserted>().count(), 0);
+        assert_eq!(w.query2_static_mut::<Position, NeverInserted>().count(), 0);
+        assert_eq!(
+            w.query2_static_mut_ref::<NeverInserted, Position>().count(),
+            0
+        );
+    }
+
+    #[test]
+    fn mixed_mutability_query_advances_position_and_marks_only_position() {
+        let (mut w, es, t) = mut_world(4);
+        for (_, mut p, v) in w.query2_static_mut_ref::<Position, Velocity>() {
+            p.x += v.dx;
+            p.y += v.dy;
+        }
+        w.increment_change_tick();
+        let xs: Vec<(f32, f32)> = w
+            .query_static::<Position>()
+            .map(|(_, p)| (p.x, p.y))
+            .collect();
+        assert_eq!(xs, vec![(1.0, 2.0), (2.0, 2.0), (3.0, 2.0), (4.0, 2.0)]);
+        assert_eq!(changed_entities(&w, &t), sorted(es));
+        assert_eq!(
+            w.query_changed::<Velocity>(&t).count(),
+            0,
+            "the read-only side is never marked"
+        );
+    }
+
+    #[test]
+    fn two_mutable_components_are_marked_independently() {
+        let (mut w, es, t) = mut_world(4);
+        for (e, mut p, mut v) in w.query2_static_mut::<Position, Velocity>() {
+            if e == es[1] {
+                p.x = 50.0; // only Position written on this row
+            }
+            if e == es[3] {
+                v.dx = 9.0; // only Velocity written on this row
+            }
+        }
+        w.increment_change_tick();
+        assert_eq!(changed_entities(&w, &t), vec![es[1]]);
+        let vel: Vec<Entity> = w.query_changed::<Velocity>(&t).map(|(e, _)| e).collect();
+        assert_eq!(vel, vec![es[3]]);
+    }
+
+    #[test]
+    #[should_panic(expected = "two distinct component types")]
+    fn query2_static_mut_on_the_same_type_panics_at_creation() {
+        let (mut w, _, _) = mut_world(1);
+        let _ = w.query2_static_mut::<Position, Position>();
+    }
+
+    #[test]
+    #[should_panic(expected = "two distinct component types")]
+    fn query2_static_mut_ref_on_the_same_type_panics_at_creation() {
+        let (mut w, _, _) = mut_world(1);
+        let _ = w.query2_static_mut_ref::<Position, Position>();
+    }
+
+    #[test]
+    fn mut_queries_visit_what_the_shared_queries_visit_in_the_same_order() {
+        let (mut w, _) = filter_world();
+        let shared: Vec<Entity> = w.query_static::<Position>().map(|(e, _)| e).collect();
+        assert_eq!(shared.len(), 4);
+        let one: Vec<Entity> = w.query_static_mut::<Position>().map(|(e, _)| e).collect();
+        let two: Vec<Entity> = w
+            .query2_static_mut::<Position, Velocity>()
+            .map(|(e, _, _)| e)
+            .collect();
+        let mixed: Vec<Entity> = w
+            .query2_static_mut_ref::<Position, Velocity>()
+            .map(|(e, _, _)| e)
+            .collect();
+        assert_eq!(shared, one);
+        assert_eq!(shared, two);
+        assert_eq!(shared, mixed);
+    }
+
+    #[test]
+    fn mut_queries_tolerate_zero_row_intermediate_archetypes() {
+        // `insert_bundle` walks one archetype edge per element, leaving
+        // `{Position}` and `{Position, Velocity}` behind with a signature
+        // but no column and no rows.
+        let mut w = World::new();
+        let e = w.spawn();
+        w.insert_bundle(
+            e,
+            (
+                Position { x: 1.0, y: 0.0 },
+                Velocity { dx: 1.0, dy: 0.0 },
+                Player,
+            ),
+        );
+        let mut t = ChangeTracker::new();
+        w.increment_change_tick();
+        t.update(&w);
+        w.increment_change_tick();
+        let seen: Vec<Entity> = w.query_static_mut::<Position>().map(|(e, _)| e).collect();
+        assert_eq!(seen, vec![e]);
+        for (_, mut p, v) in w.query2_static_mut_ref::<Position, Velocity>() {
+            p.x += v.dx;
+        }
+        for (_, mut p, _) in w.query2_static_mut::<Position, Velocity>() {
+            p.y += 1.0;
+        }
+        w.increment_change_tick();
+        assert_eq!(changed_entities(&w, &t), vec![e]);
+        assert_eq!(
+            w.get_static::<Position>(e),
+            Some(&Position { x: 2.0, y: 1.0 })
+        );
+    }
+
+    #[test]
+    fn for_each_and_for_loop_agree_across_archetypes() {
+        // A `for` loop drives `next()`/`advance()`; `for_each` drives the
+        // `fold` override, which walks archetypes on its own. Both must
+        // write the same values and mark the same rows, over a world with
+        // several archetypes (including a filtered subset).
+        fn run(by_for_each: bool) -> [(Vec<f32>, Vec<Entity>); 3] {
+            let (mut w, _) = filter_world();
+            let mut t = ChangeTracker::new();
+            w.increment_change_tick();
+            t.update(&w);
+            w.increment_change_tick();
+            if by_for_each {
+                w.query_static_mut::<Position>()
+                    .for_each(|(_, mut p)| p.x += 100.0);
+                w.query2_static_mut_ref_filtered::<Position, Velocity, With<Player>>()
+                    .for_each(|(_, mut p, v)| p.y += v.dx + 1.0);
+                w.query2_static_mut::<Position, Velocity>()
+                    .for_each(|(_, _, mut v)| v.dy = -5.0);
+            } else {
+                for (_, mut p) in w.query_static_mut::<Position>() {
+                    p.x += 100.0;
+                }
+                for (_, mut p, v) in
+                    w.query2_static_mut_ref_filtered::<Position, Velocity, With<Player>>()
+                {
+                    p.y += v.dx + 1.0;
+                }
+                for (_, _, mut v) in w.query2_static_mut::<Position, Velocity>() {
+                    v.dy = -5.0;
+                }
+            }
+            w.increment_change_tick();
+            let pos = w
+                .query_static::<Position>()
+                .map(|(_, p)| p.x + p.y)
+                .collect();
+            let vel = w.query_static::<Velocity>().map(|(_, v)| v.dy).collect();
+            [
+                (
+                    pos,
+                    sorted(w.query_changed::<Position>(&t).map(|(e, _)| e).collect()),
+                ),
+                (
+                    vel,
+                    sorted(w.query_changed::<Velocity>(&t).map(|(e, _)| e).collect()),
+                ),
+                (
+                    Vec::new(),
+                    sorted(w.query_added::<Position>(&t).map(|(e, _)| e).collect()),
+                ),
+            ]
+        }
+        let by_loop = run(false);
+        let by_fold = run(true);
+        assert_eq!(by_loop, by_fold);
+        assert_eq!(by_loop[0].1.len(), 4, "every Position row was written");
+        assert_eq!(by_loop[1].1.len(), 4, "every Velocity row was written");
+        assert!(by_loop[2].1.is_empty(), "nothing was added");
+    }
+
+    #[test]
+    fn mut_iterators_keep_going_after_an_archetype_with_no_rows() {
+        // Walk past empty archetypes in the middle of the list in both
+        // `next()` (through `advance`) and `fold`: a zero-row archetype
+        // that matches must not end the iteration early.
+        let mut w = World::new();
+        let a = w.spawn_bundle((Position { x: 1.0, y: 0.0 }, Velocity { dx: 0.0, dy: 0.0 }));
+        let b = w.spawn();
+        w.insert_bundle(
+            b,
+            (
+                Position { x: 2.0, y: 0.0 },
+                Velocity { dx: 0.0, dy: 0.0 },
+                Player,
+            ),
+        );
+        let c = w.spawn_bundle((
+            Position { x: 3.0, y: 0.0 },
+            Velocity { dx: 0.0, dy: 0.0 },
+            Frozen,
+        ));
+        let want = vec![a, b, c];
+        let by_next: Vec<Entity> = {
+            let mut seen = Vec::new();
+            for (e, _) in w.query_static_mut::<Position>() {
+                seen.push(e);
+            }
+            seen
+        };
+        let mut by_fold = Vec::new();
+        w.query_static_mut::<Position>()
+            .for_each(|(e, _)| by_fold.push(e));
+        assert_eq!(sorted(by_next), sorted(want.clone()));
+        assert_eq!(sorted(by_fold), sorted(want));
     }
 }

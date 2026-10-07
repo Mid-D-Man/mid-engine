@@ -2746,4 +2746,31 @@ mod tests {
             mid_ecs_world_free(world);
         }
     }
+
+    #[test]
+    fn bulk_mut_query_writes_are_visible_to_the_c_changed_rows() {
+        // The reason `Mut` exists: before it, only `get_static_mut` could
+        // mark a value changed, so a bulk write was invisible to Changed
+        // from C as well as from Rust.
+        let (handle, es) = health_world(6);
+        let h = static_id(handle, "FfiHealthStatic");
+        // SAFETY: `handle` is live.
+        let last_run = unsafe { mid_ecs_world_change_tick(handle) };
+        // SAFETY: `handle` is live.
+        unsafe { mid_ecs_world_increment_change_tick(handle) };
+        {
+            let w = rust_side(handle);
+            for (e, mut hp) in w.query_static_mut::<MidEcsTestHealthStatic>() {
+                if e == es[1] || e == es[4] {
+                    hp.hp += 1000;
+                }
+            }
+        }
+        let mut want = vec![es[1].as_ffi(), es[4].as_ffi()];
+        want.sort_unstable();
+        assert_eq!(changed_entities_via_ffi(handle, h, last_run, false), want);
+        assert!(changed_entities_via_ffi(handle, h, last_run, true).is_empty());
+        // SAFETY: freed exactly once.
+        unsafe { mid_ecs_world_free(handle) };
+    }
 }

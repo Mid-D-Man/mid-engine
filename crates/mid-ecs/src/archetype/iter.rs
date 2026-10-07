@@ -631,7 +631,10 @@ impl Archetypes {
     /// Every archetype whose signature contains all of `required` *and*
     /// satisfies filter `F`, in the same dense order `archetypes_with`
     /// enumerates. One pass, one `Vec`; nothing here runs per row.
-    fn matched_filtered<F: QueryFilter>(&self, required: &[ComponentId]) -> Vec<ArchetypeId> {
+    pub(super) fn matched_filtered<F: QueryFilter>(
+        &self,
+        required: &[ComponentId],
+    ) -> Vec<ArchetypeId> {
         let state = F::get_state(&|type_id| self.component_ids.get(&type_id).copied());
         self.archetypes
             .iter()

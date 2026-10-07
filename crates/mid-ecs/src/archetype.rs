@@ -109,6 +109,7 @@ type FfiSpanAccessor = fn(&dyn Any) -> FfiSpan;
 // sibling cannot. Nothing had to be made more visible to move them there.
 mod iter;
 pub(crate) use iter::{Iter1, Iter1Ref, Iter2, Iter2Ref};
+mod iter_mut;
 
 /// Dense identifier for one archetype (one exact component-type set).
 /// `ArchetypeId(0)` is always the empty archetype — every entity starts
