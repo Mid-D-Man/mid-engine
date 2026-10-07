@@ -182,6 +182,15 @@ impl<T> RegionNode<T> {
         })
     }
 
+    /// The initialized prefix as a plain slice, for FFI span export.
+    #[cfg(feature = "ffi")]
+    fn initialized(&self) -> &[T] {
+        let len = self.len.get();
+        // SAFETY: every slot below `len` was initialized by `alloc`, and
+        // `MaybeUninit<T>` has the same layout as `T`.
+        unsafe { core::slice::from_raw_parts(self.data.as_ptr().cast::<T>(), len) }
+    }
+
     /// Bump-allocates `n` contiguous slots, filling each with `f(i)`,
     /// returning `&mut [T]` borrowing from `self`. Returns `None` if
     /// the region does not have `n` slots remaining -- same division
@@ -544,6 +553,30 @@ impl<T> BumpArena<T> {
             // region pointer here is exclusive, matching the method's
             // own contract.
             unsafe { ptr.as_mut() }.iter_mut()
+        })
+    }
+
+    /// Each region's initialized prefix, oldest region first. Takes
+    /// `&mut self` for the same reason `iter_mut` does: exclusive access
+    /// rules out any `&mut T` from an earlier `alloc` still being alive
+    /// while these shared slices exist.
+    #[cfg(feature = "ffi")]
+    pub(crate) fn initialized_regions(&mut self) -> impl Iterator<Item = &[T]> {
+        let mut ptrs = Vec::new();
+        let mut cursor = Some(self.current.get());
+        while let Some(ptr) = cursor {
+            ptrs.push(ptr);
+            // SAFETY: same invariant as `region_count`/`len` above.
+            cursor = unsafe { ptr.as_ref() }.prev;
+        }
+        ptrs.reverse();
+
+        ptrs.into_iter().map(|ptr| {
+            // SAFETY: `&mut self` rules out any other live reference into
+            // these regions, and regions stay allocated until this
+            // arena's `reset` or `Drop`, both of which need `&mut self`
+            // and so cannot run while these slices are borrowed.
+            unsafe { ptr.as_ref() }.initialized()
         })
     }
 

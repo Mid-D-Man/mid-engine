@@ -127,6 +127,12 @@ two for the fallible path (happy-path `try_with_capacity`/`try_alloc`/
 exhaustion itself is not exercised by any test, since there is no safe
 way to force real OOM in a unit test.
 
+**`ffi` support:** with `ffi` on, `RegionNode::initialized` and the
+crate-private `BumpArena::initialized_regions` expose each region's
+initialized prefix as a slice, oldest first, for `ffi.rs`'s
+`region_spans`. Both are `cfg`-gated, so the default build and the `alloc`
+hot path are unchanged.
+
 ### `compact_slot_arena.rs`
 **What it does:** `CompactSlotArena<T>`, union-based generational slot
 arena, feature-gated behind `compact`. Same `ArenaKey` handle type and
@@ -200,6 +206,65 @@ description updated to place it there too.
 `.github/workflows/bench-vs-c-arena-libs.yml`'s `cargo bench` line now
 passes `--features bump,compact,unchecked` -- won't show up in a real
 CI run until that lands.
+
+### `ffi.rs`
+**What it does:** checked access to arena-owned memory across an FFI
+boundary, feature-gated behind `ffi` (optional `zerocopy` dependency,
+`derive` feature only, same line as `mid-collections`). Three pieces:
+`read_value` and `write_value` copy one value to or from a caller buffer
+by `u64` handle; `value_span` returns a one-element `ArenaSpan` for
+callers that read in place; `BumpArena::region_spans` exports each
+contiguous region as an `ArenaSpan`. The `FfiKeyed` trait puts
+`SlotArena` (and `CompactSlotArena`/`UncheckedSlotArena` behind their own
+features) behind the same three functions without touching those files.
+
+**Decisions:**
+- Own `ArenaSpan`, not `mid_collections::FfiSpan`. The layout is
+  identical (`repr(C)`: `ptr`, `stride`, `count`), so one C struct covers
+  both. Depending on `mid-collections` would add a crate edge, and its
+  `ffi_span.rs` calls `usize::is_multiple_of`, which needs Rust 1.87 and
+  does not compile on the 1.75 floor. Through that dependency the `ffi`
+  feature could not have been built or tested locally at all.
+- Copy, not pointer, for slot arenas. `insert` can grow the backing
+  `Vec`, so a pointer into a slot is stale after the next insert.
+  `read_value` and `write_value` take a plain byte buffer with an exact
+  length check and no alignment requirement, so misalignment is not an
+  error case at all.
+- No span over many slots. Slot storage is `Vec<Slot<T>>`, an enum or
+  union per slot, so the stride is not `size_of::<T>()` and a span would
+  describe memory that is not an array of `T`. Only `BumpArena` regions
+  are dense `T` arrays.
+- `region_spans` takes `&mut self`. `alloc` hands out `&mut T` from
+  `&self`, so a `&self` version could let C read memory that a live
+  `&mut T` still covers. Exclusive access rules that out when the spans
+  are taken. Later `alloc` calls only write past each span's end and
+  regions never move, so spans stay valid across them. `reset` and drop
+  end them. Spans come oldest region first, the same order as `iter_mut`.
+- Bad input never panics and never writes. A null pointer, a zero-sized
+  `T`, a length other than `size_of::<T>()`, and a removed, reused or
+  never-issued key each return their own `FfiArenaError`. Buffer checks
+  run before the key lookup.
+- `write_value` needs `T: FromBytes + IntoBytes`, so every bit pattern
+  C can send is a valid `T`.
+- `UncheckedSlotArena` keeps its own contract: a reused index reads back
+  the new value. Only a key above `u32::MAX` is rejected, instead of
+  being truncated onto a live index.
+
+**Tests:** 17 in this file: 11 always on (3 span, 8 on `SlotArena`),
+1 each under `compact` and `unchecked`, 4 under `bump`. Whole crate:
+27 with only `ffi`, 85 with every feature on. Covered: round trips, an
+unaligned buffer, every error variant, no write on a rejected call,
+generation reuse, a key with high bits set, spans in allocation order
+across several regions, and spans staying readable after more `alloc`
+calls.
+
+**Verification:** run in a scratch mirror of the crate without
+`criterion` (same technique as the other modules, since `cargo test -p
+mid-arena` needs the newer toolchain), rustc 1.75.0, five feature
+combinations, zero warnings. Not run: Miri or AddressSanitizer (no
+nightly component here), and real CI, since no workflow runs `cargo test
+-p mid-arena` today. The pointer lifetime argument for `region_spans` is
+checked by hand.
 
 ### `examples/drop_arena_standalone.rs`
 **What it does:** standalone `std::time::Instant` micro-benchmark for
@@ -878,7 +943,7 @@ exactly as `mid-ecs` needs it" build order (`docs/mid-collections.md`),
 not a quiet abandonment of it — worth flagging honestly rather than
 letting the two docs read as if they'd never noticed the tension.
 
-## Feature gates (`bump` and `compact` built, rest still planned)
+## Feature gates (`bump`, `compact`, `unchecked` and `ffi` built, rest still planned)
 
 - **`compact`** — built. `CompactSlotArena<T>`, a `slotmap`-style
   unsafe union slot layout. Originally justified in this doc by an
@@ -907,12 +972,8 @@ letting the two docs read as if they'd never noticed the tension.
   approach). Deliberately not default: this survey's own real
   benchmark shows it costing roughly 10–20x more than plain `slab`
   single-threaded, matching `sharded-slab`'s own documented caveat.
-- **`ffi`** — checked FFI access, matching `mid_collections`'s own
-  `ffi` feature shape exactly (optional `zerocopy` 0.8.56 dependency,
-  `derive` feature only, off by default). `ArenaKey::as_ffi`/`from_ffi`
-  already exist unconditionally (cheap, no dependency) — this feature
-  is specifically for a `checked_slice`-equivalent over arena-owned
-  memory, not built yet.
+- **`unchecked`** and **`ffi`** are built too; see the Modules entries
+  for `unchecked_slot_arena.rs` and `ffi.rs`.
 
 Every one of these traces to a specific real number or a specific real
 API gap above, not to "this is what other arena crates tend to have."
@@ -1320,6 +1381,30 @@ call without a pause budget.
   numbers are for catching qualitative regressions (direction), not
   predicting real-CI magnitude, on top of the `#[inline(never)]`
   finding above. The real number is whatever the next CI run says.
+
+### `ffi.rs`
+- Dependency choice. The original plan here was a `checked_slice`
+  equivalent built on `mid_collections`' `ffi_span.rs`. Reading that file
+  showed `checked_slice` calls `usize::is_multiple_of` (Rust 1.87), and
+  its own comment says nothing available had compiled that line. So
+  `mid-collections` with `ffi` does not build on this project's 1.75
+  floor, and a dependency on it would carry that into this crate. This
+  crate takes `zerocopy` directly instead and defines `ArenaSpan` with
+  the same layout. `mid-collections` itself was not touched. Its 1.75
+  gap is a separate item for that crate.
+- First test build warned `unused import: std::vec::Vec` whenever `bump`
+  was off, since only the `bump` tests use it. Moved the import into the
+  `bump` test module. Zero warnings across all five feature combinations
+  after.
+- `mid-collections`' unconditional `zerocopy` dev-dependency was not
+  copied here. Its note found the crate compiled only through feature
+  unification with `mid-ecs`. Here the tests live in a module that only
+  compiles under `ffi`, which already turns the dependency on, and
+  `cargo test --features ffi` on its own passed in the scratch mirror
+  without it.
+- The scratch mirror resolved `zerocopy` to 0.8.60 (no lockfile is
+  committed, and `0.8.56` is a caret requirement). It built and passed on
+  rustc 1.75.0 at that version.
 
 ### `benches/vs_arena_crates.rs`
 - The original sandbox pass (`std::time::Instant`, not criterion)

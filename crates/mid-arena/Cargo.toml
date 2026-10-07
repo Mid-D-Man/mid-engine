@@ -9,11 +9,13 @@ name       = "mid_arena"
 crate-type = ["lib"]
 
 [dependencies]
-# Intentionally empty for the default build. See docs/mid-arena.md
-# "Feature gates" -- `compact`, `ffi` will each add exactly one
-# optional dependency the same way mid-collections' own `ffi` feature
-# does (zerocopy, optional, gated, zero-cost when the feature is off),
-# not a new pattern.
+# Empty for the default build. `ffi` is the one feature with a
+# dependency: zerocopy, optional, gated, zero-cost when the feature is
+# off, same line as mid-collections' own `ffi` feature (version, feature
+# set and `default-features = false` rationale are in
+# crates/mid-collections/Cargo.toml). Only `derive` and the
+# FromBytes/IntoBytes/Immutable traits are used, in src/ffi.rs.
+zerocopy = { version = "0.8.56", default-features = false, features = ["derive"], optional = true }
 
 [dev-dependencies]
 # Same choice mid-collections made (crates/mid-collections/Cargo.toml):
@@ -62,8 +64,8 @@ harness = false
 
 [features]
 default = []
-# `bump`, `compact`, and `unchecked` built -- see src/bump_arena.rs,
-# src/compact_slot_arena.rs, src/unchecked_slot_arena.rs, and
+# `bump`, `compact`, `unchecked`, and `ffi` built -- see src/bump_arena.rs,
+# src/compact_slot_arena.rs, src/unchecked_slot_arena.rs, src/ffi.rs, and
 # docs/mid-arena.md "Modules".
 bump = []
 compact = []
@@ -71,6 +73,7 @@ compact = []
 # technique read from slab 0.4.12 -- see src/unchecked_slot_arena.rs's
 # own doc comment before reaching for this over the default SlotArena.
 unchecked = []
+# Checked FFI access to arena-owned memory, see src/ffi.rs.
+ffi = ["dep:zerocopy"]
 # Still planned, not yet built -- see docs/mid-arena.md "Feature gates".
 # intern  = []
-# ffi     = ["dep:zerocopy"]

@@ -48,10 +48,15 @@
 //!   read — see that module's doc comment for the ~4-5x real cost this
 //!   trades away and, more importantly, what it actually risks before
 //!   reaching for this over `SlotArena`.
+//! - `ffi` (behind the `ffi` feature) — checked access to arena-owned
+//!   memory across an FFI boundary: byte-copy `read_value`/`write_value`
+//!   by `u64` handle, one-element `value_span`, and
+//!   `BumpArena::region_spans`. See that module's doc comment for the
+//!   full design.
 //!
-//! # Feature gates (`bump` and `compact` built, rest still planned —
-//! see `docs/mid-arena.md` "Feature gates" for the reasoning behind
-//! each)
+//! # Feature gates (`bump`, `compact`, `unchecked` and `ffi` built, rest
+//! still planned — see `docs/mid-arena.md` "Feature gates" for the
+//! reasoning behind each)
 //! - `intern` — hashset-of-boxes dedup arena (`internment`'s
 //!   `ArenaIntern` approach), for string/path/asset-key interning.
 //! - `concurrent` — sharded lock-free slab (`sharded-slab`'s approach).
@@ -60,12 +65,6 @@
 //!   accessed from a single thread, matching `sharded-slab`'s own
 //!   documented caveat that the lock-free design only pays for itself
 //!   once actually shared across threads.
-//! - `ffi` — checked FFI access, matching `mid_collections`'s own `ffi`
-//!   feature shape (optional `zerocopy` dependency, off by default).
-//!   [`ArenaKey::as_ffi`](slot_arena::ArenaKey::as_ffi)/`from_ffi`
-//!   already exist unconditionally today (cheap, no dependency) — this
-//!   feature is specifically for a `checked_slice`-equivalent over
-//!   arena-owned memory, not built yet.
 //!
 //! # Explicitly out of scope: garbage collection
 //! `gc`, `gc-arena`, `shredder`, and `elise` (`docs/mid-arena.md`'s
@@ -93,6 +92,9 @@ pub mod compact_slot_arena;
 #[cfg(feature = "unchecked")]
 pub mod unchecked_slot_arena;
 
+#[cfg(feature = "ffi")]
+pub mod ffi;
+
 pub use slot_arena::{ArenaKey, SlotArena};
 
 #[cfg(feature = "bump")]
@@ -103,3 +105,6 @@ pub use compact_slot_arena::CompactSlotArena;
 
 #[cfg(feature = "unchecked")]
 pub use unchecked_slot_arena::UncheckedSlotArena;
+
+#[cfg(feature = "ffi")]
+pub use ffi::{read_value, value_span, write_value, ArenaSpan, FfiArenaError, FfiKeyed};
