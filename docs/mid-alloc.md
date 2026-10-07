@@ -1154,16 +1154,44 @@ real bench harness, did not explain the swing. `StackAllocator`'s loop
 keeps `cur` and `end` in registers, and its loop-carried chain is a
 negate, an AND, an address add and a second add. `bumpalo`'s loop loads
 and stores its cursor in the chunk footer on every iteration, and the
-instruction stream is the same in the sequential and reset versions. So
-the cause of the 0.65 ns against 0.96 ns difference is not found, and
-the earlier explanation that the remaining gap is the cost of bumping
-upward is not supported by the reset group in runs #6 to #8. It may
-still describe part of the sequential group. This doc does not claim
-either.
+instruction stream is the same in the sequential and reset versions.
 
-The `raw_alloc_reset` ratio against `bumpalo` has been 0.72x to 0.80x
-(runs #6 and #7) and 0.87x to 0.99x (run #8). It reads as parity at N of
-1000 and above, not as a win.
+Investigation of the `bumpalo` swing, with `bumpalo` 3.20.3 read
+directly (the git tag matches the crates.io source the bench builds):
+- `ChunkFooter` sits at the end of the chunk and holds the bump cursor,
+  and allocation bumps down from it. `Bump::with_capacity` rounds the
+  usable size up to a page boundary minus a 64-byte overhead, so the
+  sequential group's `n * 16` and the reset group's `n * 16 + 64` ask for
+  the same chunk: 1984, 16320 and 163776 usable bytes at N=100, 1000 and
+  10000, one chunk, no slow path, checked by counting chunks after `n`
+  allocations. `reset()` frees every chunk but the current one and puts
+  the cursor back at the footer, which is where a fresh `Bump` starts. The
+  two groups hand `bumpalo` the same memory state.
+- A local harness (scratch crate, rustc 1.75, one vCPU Intel Xeon at
+  2.1 GHz, minimum of 31 interleaved rounds, run twice) gave `bumpalo`
+  0.49 ns per allocation in all four setups: fresh local, reused local,
+  fresh through `&Bump`, and reset through `&mut Bump`. `StackAllocator`
+  took 0.78 ns in both groups, a ratio of 1.6x. A first attempt using
+  medians showed a swing from 0.64 to 0.85 ns that vanished with the
+  minimum, so it was sandbox noise. Sliding the stack frame through
+  64 offsets of 64 bytes moved `bumpalo`'s reset loop by at most 3%, which
+  rules out 4K aliasing between the `black_box` slot and the cursor on
+  that CPU.
+- Scaling the local figures by the CI to local ratio for
+  `StackAllocator` (0.94 ns against 0.78 ns, about 1.2) predicts roughly
+  0.6 ns per allocation for `bumpalo` on CI. That matches its sequential
+  group (0.64 to 0.65 ns) and not its reset group (0.96 ns).
+
+So the sequential group agrees with the local 1.6x per-allocation gap,
+which fits the earlier explanation that bumping upward with a padding
+step has a longer dependent chain than `bumpalo`'s downward AND-mask. The
+reset group on CI is the outlier. Its cause did not reproduce in the
+sandbox and is most likely specific to the CI toolchain (rustc 1.98.1) or
+CPU. This is not confirmed. Emitting the assembly of the reset loop on
+CI, or running the harness as an example on the runner, would settle it.
+Until then the `raw_alloc_reset` ratio against `bumpalo` (0.72x to 0.80x
+in runs #6 and #7, 0.87x to 0.99x in run #8) is not used as a measure of
+the bump path.
 
 `push_in_arena`: `BumpVec<StackAllocator>` took 2.67 µs at N=10000,
 against 2.78 µs and 3.22 µs before, while `bumpalo`'s `Vec` fell from
