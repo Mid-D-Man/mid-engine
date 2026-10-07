@@ -1115,6 +1115,77 @@ uninitialized buffer. `StackAllocator` and `BackedStack` should land
 within noise of each other. If `StackAllocator` is still more than a few
 percent behind, the zero-fill was not the whole difference.
 
+**Run #8: first run on the uninitialized buffer.**
+
+The runner was faster than in runs #6 and #7 on most entries (`bumpalo`
+took 6.51 µs at N=10000 in `raw_alloc_sequential`, against 8.31 µs and
+9.44 µs), so only ratios inside this run are compared.
+
+| Comparison | N=100 | N=1000 | N=10000 |
+|---|---|---|---|
+| `StackAllocator` / `bumpalo::Bump`, `raw_alloc_sequential` | 1.14x | 1.45x | 1.45x |
+| `StackAllocator` / `bumpalo::Bump`, `raw_alloc_reset` | 0.87x | 0.98x | 0.99x |
+| `BackedStack<Heap>` / `StackAllocator` | 1.03x | 1.01x | 0.99x |
+| `PoolAllocator` / `Box` | 0.16x | 0.15x | 0.14x |
+| `BumpVec<HeapAlloc>` / `std::Vec` | 0.83x | 0.90x | 0.87x |
+| `BumpVec<StackAllocator>` / `bumpalo` `Vec` | 0.54x | 0.72x | 0.61x |
+
+The constructor share is gone. `BackedStack` and `StackAllocator` are
+within 3% of each other at every size, against 0.87x to 0.89x at N of
+1000 and above in runs #6 and #7. `StackAllocator` at N=10000 takes
+9.44 µs in `raw_alloc_sequential` and 9.48 µs in `raw_alloc_reset`, a
+ratio of 1.00x against 1.12x and 1.15x before.
+
+The estimate of about 1.3x against `bumpalo` in `raw_alloc_sequential`
+was too low. The ratio is 1.45x at N of 1000 and 10000, against 1.45x to
+1.52x in runs #6 and #7. What the numbers say is narrower than a gap in
+the bump path. `StackAllocator` costs 0.94 to 0.96 ns per allocation in
+`raw_alloc_sequential` and 0.95 ns in `raw_alloc_reset`. `bumpalo` costs
+0.64 to 0.65 ns in `raw_alloc_sequential` and 0.96 ns in
+`raw_alloc_reset`. In the reset group the two allocators are level (0.87x
+at N=100, then 0.98x and 0.99x), and the 1.45x exists only because
+`bumpalo` is about 1.5x faster in the sequential group than in its own
+reset group. Runs #6 and #7 showed the same swing (8.31 against 13.65 µs
+and 9.44 against 15.59 µs).
+
+An assembly check of the two loops, in a scratch crate built with
+`lto = true` and `codegen-units = 1` on rustc 1.75 and not through the
+real bench harness, did not explain the swing. `StackAllocator`'s loop
+keeps `cur` and `end` in registers, and its loop-carried chain is a
+negate, an AND, an address add and a second add. `bumpalo`'s loop loads
+and stores its cursor in the chunk footer on every iteration, and the
+instruction stream is the same in the sequential and reset versions. So
+the cause of the 0.65 ns against 0.96 ns difference is not found, and
+the earlier explanation that the remaining gap is the cost of bumping
+upward is not supported by the reset group in runs #6 to #8. It may
+still describe part of the sequential group. This doc does not claim
+either.
+
+The `raw_alloc_reset` ratio against `bumpalo` has been 0.72x to 0.80x
+(runs #6 and #7) and 0.87x to 0.99x (run #8). It reads as parity at N of
+1000 and above, not as a win.
+
+`push_in_arena`: `BumpVec<StackAllocator>` took 2.67 µs at N=10000,
+against 2.78 µs and 3.22 µs before, while `bumpalo`'s `Vec` fell from
+7.64 µs and 8.92 µs to 4.40 µs and `std::Vec` from 6.33 µs and 7.55 µs to
+3.47 µs. The ratio against `bumpalo` narrowed from 0.36x to 0.61x because
+the other two sped up on this runner, not because `BumpVec` slowed.
+
+Combinators. `FallbackAllocator` is 1.02x of `HeapAlloc` and `Segregator`
+0.99x. `Tracked` is 9.5x and `SyncAlloc` uncontended is 2.95x, close to
+run #3 (7.5x and 3.0x) and far from runs #4 to #7 (2.4x to 2.6x and
+1.11x to 1.17x). The `HeapAlloc` baseline got faster (48.8 µs, against 76
+to 94 µs in runs #6 and #7) while `Tracked` (465 µs) and `SyncAlloc` (144
+µs) got slower in absolute time (199 to 224 µs and 85 to 109 µs before).
+Nothing in `tracking.rs`, `sync.rs` or `raw_alloc.rs` changed. Entries
+that issue atomic read-modify-write operations have now swung with the
+runner twice while entries that do not have stayed put. The cause is not
+isolated.
+
+Next run: nothing is pending on the allocator code. A run on the same
+runner type as run #8 would show whether the `Tracked` and `SyncAlloc`
+swing follows the runner.
+
 ## Module plan (catalogued, not built)
 
 Every module from the original foonathan/memory survey has shipped
@@ -1342,8 +1413,9 @@ guess, not a confirmed one.
   (`whole_capacity_is_usable_as_one_allocation`), for 20 in the file.
   Checked in the scratch crate without `criterion` on rustc 1.75: 27
   tests with default features, 73 with every feature, no warnings.
-  Local only: not run under CI or Miri, and the speedup is an estimate
-  until the next bench run.
+  Tests not run under CI or Miri. Run #8, the first bench run on this
+  code, confirmed the effect on `StackAllocator`'s own construction
+  share (see "Benches").
 
 ### `fallback.rs`
 
