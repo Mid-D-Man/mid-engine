@@ -13,11 +13,16 @@ crate-type = ["lib"]
 # dependency: zerocopy, optional, gated, zero-cost when the feature is
 # off, same line as mid-collections' own `ffi` feature (version, feature
 # set and `default-features = false` rationale are in
-# crates/mid-collections/Cargo.toml). Only `derive` and the
-# FromBytes/IntoBytes/Immutable traits are used, in src/ffi.rs.
-zerocopy = { version = "0.8.56", default-features = false, features = ["derive"], optional = true }
+# crates/mid-collections/Cargo.toml). Only the FromBytes/IntoBytes/
+# Immutable traits and their `as_bytes`/`as_mut_bytes` are used, in
+# src/ffi.rs, so `derive` (zerocopy-derive, syn, quote, proc-macro2) is
+# left off here and enabled only for the tests below.
+zerocopy = { version = "0.8.56", default-features = false, optional = true }
 
 [dev-dependencies]
+# Test types in src/ffi.rs derive the zerocopy traits. Unconditional
+# so `cargo test` builds with any feature set; a normal build never sees it.
+zerocopy = { version = "0.8.56", default-features = false, features = ["derive"] }
 # Same choice mid-collections made (crates/mid-collections/Cargo.toml):
 # criterion pulls in clap_builder, which needs edition2024 (root
 # Cargo.toml's comment block, "A FIFTH independent instance"; this is

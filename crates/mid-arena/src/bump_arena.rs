@@ -339,6 +339,8 @@ impl<T> BumpArena<T> {
     /// Allocates `value`, returning a `&mut T` borrowing from `self`,
     /// not from a `&mut self` call -- see this module's doc comment for
     /// why that matters. Never fails; grows the region chain instead.
+    // Arena API: each call hands out a unique `&mut` to a fresh slot.
+    #[allow(clippy::mut_from_ref)]
     pub fn alloc(&self, value: T) -> &mut T {
         // SAFETY: `current` always points at a region allocated by
         // `with_capacity` or `grow` below via `Box::into_raw`, and
@@ -387,6 +389,8 @@ impl<T> BumpArena<T> {
     /// `RegionNode::alloc_slice_fill_with`'s own safety comment) but
     /// not space-optimal, a real, accepted simplification against
     /// `bumpalo`'s more involved guard.
+    // Arena API: each call hands out a unique `&mut` to a fresh slot.
+    #[allow(clippy::mut_from_ref)]
     pub fn alloc_slice_fill_with(&self, n: usize, f: impl FnMut(usize) -> T) -> &mut [T] {
         // SAFETY: same reasoning as `alloc` above.
         let node = unsafe { self.current.get().as_ref() };
@@ -425,6 +429,8 @@ impl<T> BumpArena<T> {
     /// [`alloc`](Self::alloc) cannot avoid, since `alloc` takes `value:
     /// T` by value and the caller has necessarily already constructed
     /// it by the time it arrives.
+    // Arena API: each call hands out a unique `&mut` to a fresh slot.
+    #[allow(clippy::mut_from_ref)]
     pub fn alloc_with(&self, f: impl FnOnce() -> T) -> &mut T {
         // SAFETY: same reasoning as `alloc` above.
         let node = unsafe { self.current.get().as_ref() };

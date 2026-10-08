@@ -25,8 +25,8 @@
 //! `mid_collections::FfiSpan` (`ptr`, `stride`, `count`), so one C
 //! struct covers both. It is a separate type on purpose: depending on
 //! `mid-collections` would add a crate edge, and `ffi_span.rs` there
-//! calls `usize::is_multiple_of`, which needs Rust 1.87, above this
-//! crate's 1.75 floor.
+//! calls `usize::is_multiple_of`, which needs Rust 1.87 and does not
+//! build on rustc 1.75, the toolchain this crate is tested on locally.
 
 use zerocopy::{FromBytes, Immutable, IntoBytes};
 
@@ -292,13 +292,38 @@ mod tests {
         out
     }
 
+    fn read<A>(arena: &A, key: u64, out: &mut [u8]) -> Result<(), FfiArenaError>
+    where
+        A: FfiKeyed,
+        A::Value: IntoBytes + Immutable,
+    {
+        // SAFETY: `out` is a live exclusive slice, valid for `out.len()`
+        // byte writes, and it cannot overlap `arena`, which is borrowed
+        // separately.
+        unsafe { read_value(arena, key, out.as_mut_ptr(), out.len()) }
+    }
+
+    fn write<A>(arena: &mut A, key: u64, src: &[u8]) -> Result<(), FfiArenaError>
+    where
+        A: FfiKeyed,
+        A::Value: FromBytes + IntoBytes,
+    {
+        // SAFETY: `src` is a live shared slice, valid for `src.len()` byte
+        // reads, and it cannot overlap `arena`, which is borrowed
+        // separately.
+        unsafe { write_value(arena, key, src.as_ptr(), src.len()) }
+    }
+
     #[test]
     fn span_layout_is_three_words() {
         assert_eq!(
             core::mem::size_of::<ArenaSpan>(),
             3 * core::mem::size_of::<usize>()
         );
-        assert_eq!(core::mem::align_of::<ArenaSpan>(), core::mem::align_of::<usize>());
+        assert_eq!(
+            core::mem::align_of::<ArenaSpan>(),
+            core::mem::align_of::<usize>()
+        );
     }
 
     #[test]
@@ -324,20 +349,22 @@ mod tests {
         let mut arena = SlotArena::new();
         let key = arena.insert(Pair { a: 7, b: 9 });
         let mut out = [0u8; 8];
-        // SAFETY: `out` is a live 8-byte local, disjoint from the arena.
-        unsafe { read_value(&arena, key.as_ffi(), out.as_mut_ptr(), out.len()) }.unwrap();
+        read(&arena, key.as_ffi(), &mut out).unwrap();
         assert_eq!(out, bytes_of(&Pair { a: 7, b: 9 }));
     }
 
     #[test]
     fn slot_read_accepts_an_unaligned_buffer() {
         let mut arena = SlotArena::new();
-        let key = arena.insert(Pair { a: 0x0102_0304, b: 0x0506_0708 });
+        let pair = Pair {
+            a: 0x0102_0304,
+            b: 0x0506_0708,
+        };
+        let key = arena.insert(pair);
         let mut backing = [0u8; 9];
         // Offset 1 is misaligned for u32 on every real target.
-        // SAFETY: `backing[1..9]` is 8 live bytes, disjoint from the arena.
-        unsafe { read_value(&arena, key.as_ffi(), backing.as_mut_ptr().add(1), 8) }.unwrap();
-        assert_eq!(&backing[1..], &bytes_of(&Pair { a: 0x0102_0304, b: 0x0506_0708 }));
+        read(&arena, key.as_ffi(), &mut backing[1..9]).unwrap();
+        assert_eq!(&backing[1..], &bytes_of(&pair));
         assert_eq!(backing[0], 0);
     }
 
@@ -346,13 +373,14 @@ mod tests {
         let mut arena = SlotArena::new();
         let key = arena.insert(Pair { a: 1, b: 2 });
         let mut out = [0u8; 16];
-        // SAFETY (all calls below): pointers are live locals or null,
-        // which `read_value` rejects before any dereference.
+
+        // SAFETY: a null pointer is rejected before any dereference.
         let null = unsafe { read_value(&arena, key.as_ffi(), core::ptr::null_mut(), 8) };
         assert_eq!(null, Err(FfiArenaError::NullPointer));
-        let short = unsafe { read_value(&arena, key.as_ffi(), out.as_mut_ptr(), 7) };
+
+        let short = read(&arena, key.as_ffi(), &mut out[..7]);
         assert_eq!(short, Err(FfiArenaError::LengthMismatch));
-        let long = unsafe { read_value(&arena, key.as_ffi(), out.as_mut_ptr(), 9) };
+        let long = read(&arena, key.as_ffi(), &mut out[..9]);
         assert_eq!(long, Err(FfiArenaError::LengthMismatch));
         assert_eq!(out, [0u8; 16], "a rejected call must not write");
     }
@@ -362,10 +390,12 @@ mod tests {
         let mut arena = SlotArena::new();
         let key = arena.insert(());
         let mut out = [0u8; 1];
-        // SAFETY: `out` is a live local; ZST is rejected before any copy.
-        let r = unsafe { read_value(&arena, key.as_ffi(), out.as_mut_ptr(), 0) };
+        let r = read(&arena, key.as_ffi(), &mut out[..0]);
         assert_eq!(r, Err(FfiArenaError::ZeroSized));
-        assert_eq!(value_span(&arena, key.as_ffi()), Err(FfiArenaError::ZeroSized));
+        assert_eq!(
+            value_span(&arena, key.as_ffi()),
+            Err(FfiArenaError::ZeroSized)
+        );
     }
 
     #[test]
@@ -375,16 +405,19 @@ mod tests {
         arena.remove(first);
         let mut out = [0u8; 8];
 
-        // SAFETY: `out` is a live 8-byte local, disjoint from the arena.
-        let removed = unsafe { read_value(&arena, first.as_ffi(), out.as_mut_ptr(), 8) };
+        let removed = read(&arena, first.as_ffi(), &mut out);
         assert_eq!(removed, Err(FfiArenaError::StaleKey));
 
         let second = arena.insert(Pair { a: 2, b: 2 });
-        let reused = unsafe { read_value(&arena, first.as_ffi(), out.as_mut_ptr(), 8) };
-        assert_eq!(reused, Err(FfiArenaError::StaleKey), "old generation must not alias the new value");
-        assert!(unsafe { read_value(&arena, second.as_ffi(), out.as_mut_ptr(), 8) }.is_ok());
+        let reused = read(&arena, first.as_ffi(), &mut out);
+        assert_eq!(
+            reused,
+            Err(FfiArenaError::StaleKey),
+            "old generation must not alias the new value"
+        );
+        assert!(read(&arena, second.as_ffi(), &mut out).is_ok());
 
-        let bogus = unsafe { read_value(&arena, u64::MAX, out.as_mut_ptr(), 8) };
+        let bogus = read(&arena, u64::MAX, &mut out);
         assert_eq!(bogus, Err(FfiArenaError::StaleKey));
         assert_eq!(out, bytes_of(&Pair { a: 2, b: 2 }));
     }
@@ -394,8 +427,7 @@ mod tests {
         let mut arena = SlotArena::new();
         let key = arena.insert(Pair { a: 0, b: 0 });
         let src = bytes_of(&Pair { a: 11, b: 22 });
-        // SAFETY: `src` is a live 8-byte local, disjoint from the arena.
-        unsafe { write_value(&mut arena, key.as_ffi(), src.as_ptr(), src.len()) }.unwrap();
+        write(&mut arena, key.as_ffi(), &src).unwrap();
         assert_eq!(arena.get(key), Some(&Pair { a: 11, b: 22 }));
     }
 
@@ -405,18 +437,18 @@ mod tests {
         let key = arena.insert(Pair { a: 5, b: 6 });
         let src = [0xFFu8; 8];
 
-        // SAFETY (all calls below): `src` is a live local; null is
-        // rejected before any dereference.
+        // SAFETY: a null pointer is rejected before any dereference.
         let null = unsafe { write_value(&mut arena, key.as_ffi(), core::ptr::null(), 8) };
         assert_eq!(null, Err(FfiArenaError::NullPointer));
-        let short = unsafe { write_value(&mut arena, key.as_ffi(), src.as_ptr(), 4) };
+
+        let short = write(&mut arena, key.as_ffi(), &src[..4]);
         assert_eq!(short, Err(FfiArenaError::LengthMismatch));
-        let bogus = unsafe { write_value(&mut arena, u64::MAX, src.as_ptr(), 8) };
+        let bogus = write(&mut arena, u64::MAX, &src);
         assert_eq!(bogus, Err(FfiArenaError::StaleKey));
         assert_eq!(arena.get(key), Some(&Pair { a: 5, b: 6 }));
 
         arena.remove(key);
-        let gone = unsafe { write_value(&mut arena, key.as_ffi(), src.as_ptr(), 8) };
+        let gone = write(&mut arena, key.as_ffi(), &src);
         assert_eq!(gone, Err(FfiArenaError::StaleKey));
     }
 
@@ -438,16 +470,15 @@ mod tests {
         let mut arena = CompactSlotArena::new();
         let key = arena.insert(Pair { a: 8, b: 9 });
         let mut out = [0u8; 8];
-        // SAFETY: `out` is a live 8-byte local, disjoint from the arena.
-        unsafe { read_value(&arena, key.as_ffi(), out.as_mut_ptr(), 8) }.unwrap();
+        read(&arena, key.as_ffi(), &mut out).unwrap();
         assert_eq!(out, bytes_of(&Pair { a: 8, b: 9 }));
 
         let src = bytes_of(&Pair { a: 1, b: 2 });
-        unsafe { write_value(&mut arena, key.as_ffi(), src.as_ptr(), 8) }.unwrap();
+        write(&mut arena, key.as_ffi(), &src).unwrap();
         assert_eq!(arena.get(key), Some(&Pair { a: 1, b: 2 }));
 
         arena.remove(key);
-        let stale = unsafe { read_value(&arena, key.as_ffi(), out.as_mut_ptr(), 8) };
+        let stale = read(&arena, key.as_ffi(), &mut out);
         assert_eq!(stale, Err(FfiArenaError::StaleKey));
     }
 
@@ -457,13 +488,12 @@ mod tests {
         let mut arena = UncheckedSlotArena::new();
         let index = arena.insert(Pair { a: 4, b: 5 });
         let mut out = [0u8; 8];
-        // SAFETY: `out` is a live 8-byte local, disjoint from the arena.
-        unsafe { read_value(&arena, u64::from(index), out.as_mut_ptr(), 8) }.unwrap();
+        read(&arena, u64::from(index), &mut out).unwrap();
         assert_eq!(out, bytes_of(&Pair { a: 4, b: 5 }));
 
         // A key with high bits set must not truncate onto a live index.
         let aliased = (1u64 << 32) | u64::from(index);
-        let r = unsafe { read_value(&arena, aliased, out.as_mut_ptr(), 8) };
+        let r = read(&arena, aliased, &mut out);
         assert_eq!(r, Err(FfiArenaError::StaleKey));
     }
 
@@ -525,7 +555,8 @@ mod tests {
             }
             // SAFETY: regions never move and the first region's initialized
             // prefix is never rewritten by `alloc`.
-            let old = unsafe { core::slice::from_raw_parts(first[0].ptr.cast::<u32>(), first[0].count) };
+            let old =
+                unsafe { core::slice::from_raw_parts(first[0].ptr.cast::<u32>(), first[0].count) };
             assert_eq!(old, &[100, 101]);
         }
 

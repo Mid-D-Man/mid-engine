@@ -223,8 +223,10 @@ features) behind the same three functions without touching those files.
   identical (`repr(C)`: `ptr`, `stride`, `count`), so one C struct covers
   both. Depending on `mid-collections` would add a crate edge, and its
   `ffi_span.rs` calls `usize::is_multiple_of`, which needs Rust 1.87 and
-  does not compile on the 1.75 floor. Through that dependency the `ffi`
-  feature could not have been built or tested locally at all.
+  does not compile on rustc 1.75, the toolchain this crate is verified on
+  locally (CI runs stable, so only local runs are affected). Through that
+  dependency the `ffi` feature could not have been built or tested here
+  at all.
 - Copy, not pointer, for slot arenas. `insert` can grow the backing
   `Vec`, so a pointer into a slot is stale after the next insert.
   `read_value` and `write_value` take a plain byte buffer with an exact
@@ -261,10 +263,58 @@ calls.
 **Verification:** run in a scratch mirror of the crate without
 `criterion` (same technique as the other modules, since `cargo test -p
 mid-arena` needs the newer toolchain), rustc 1.75.0, five feature
-combinations, zero warnings. Not run: Miri or AddressSanitizer (no
-nightly component here), and real CI, since no workflow runs `cargo test
--p mid-arena` today. The pointer lifetime argument for `region_spans` is
-checked by hand.
+combinations, zero warnings. Clippy 0.1.75 is clean for every feature
+set with `-D warnings` and `undocumented_unsafe_blocks`, and `ffi.rs` is
+rustfmt clean. `workspace-ci.yml` builds `mid-arena` with default
+features only, so these tests had no CI coverage until
+`.github/workflows/mid-arena-test.yml`, which has not had its first real
+run. Not run: Miri or AddressSanitizer (no nightly component here). The
+pointer lifetime argument for `region_spans` is checked by hand until
+Miri reports.
+
+### `.github/workflows/mid-arena-test.yml`
+**What it does:** `workflow_dispatch` only, per
+`docs/RUST_AND_CRATE_GUIDELINES.md` section 7. Three independent jobs:
+- `run-tests` runs `cargo fmt --check`, clippy with `-D warnings` and
+  `undocumented_unsafe_blocks` over `--lib --tests --examples`, a build
+  of the default (zero dependency) crate and of all features, then
+  `cargo test` for six debug feature sets (default, `ffi`, `bump`,
+  `compact`, `unchecked`, all four) and two release sets (default, all
+  four). A parse step turns the raw log into JSON, and a second step
+  writes the `$GITHUB_STEP_SUMMARY` table with one row per feature set
+  and profile. The fmt, clippy and test steps are `continue-on-error` so
+  the summary is always written, and the test step still exits non-zero
+  through `pipefail`.
+- `miri` runs `cargo +nightly miri test --all-features --lib` twice,
+  under Stacked Borrows (the default) and Tree Borrows, so a failure
+  under only one model shows as such.
+- `asan` runs the same tests with `-Zsanitizer=address` on
+  `x86_64-unknown-linux-gnu`. LeakSanitizer is on by default there.
+
+`workflow_dispatch` runs on the default branch, and `cargo +nightly` is
+explicit in the two nightly jobs because `rust-toolchain.toml` pins
+`stable`.
+
+**Decisions:**
+- Benches are not linted here. They need the newer toolchain, are
+  covered by `bench-vs-c-arena-libs.yml`, and have never been linted with
+  `-D warnings`.
+- A Miri or ASan failure is not hidden. The step outcome and the last 60
+  log lines go to the job summary, and the full log is an artifact.
+- `cargo fmt --check` reports five hunks in `bump_arena.rs`,
+  `compact_slot_arena.rs`, `slot_arena.rs` and `unchecked_slot_arena.rs`
+  that predate this workflow. They are not changed here, so that step
+  fails until each file is next touched.
+
+**Verification:** every `run` block was extracted from the YAML and
+executed verbatim in the scratch mirror (rustc 1.75, clippy 0.1.75,
+rustfmt 1.7.0): 329 tests across the eight sets, every feature set
+clippy clean, and the parser and the summary writer checked against real
+passing and failing `cargo test` logs. The Miri and ASan summary steps
+were checked against fake logs. Not verified: the GitHub Actions side
+(action versions, the `miri` component on `dtolnay/rust-toolchain@nightly`,
+`cargo +nightly miri` on the runner) and whether the code passes Miri or
+AddressSanitizer.
 
 ### `examples/drop_arena_standalone.rs`
 **What it does:** standalone `std::time::Instant` micro-benchmark for
@@ -1292,6 +1342,14 @@ call without a pause budget.
   `Err(AllocErr)` return path is exercised by neither test, a real,
   stated gap rather than a claimed one.
 
+- Clippy denies `mut_from_ref` by default, and `alloc`,
+  `alloc_slice_fill_with` and `alloc_with` return `&mut` from `&self` by
+  design (the module doc explains why). Every `cargo clippy` with `bump`
+  on failed on those three. `workspace-ci.yml` never saw it because it
+  builds default features only. Each now carries
+  `#[allow(clippy::mut_from_ref)]` with a one-line reason. No behavior
+  change.
+
 ### `compact_slot_arena.rs`
 - First draft wrapped every union field write in `unsafe`, following
   `slotmap`'s own file-level `#![allow(unused_unsafe)]` comment
@@ -1387,21 +1445,31 @@ call without a pause budget.
   equivalent built on `mid_collections`' `ffi_span.rs`. Reading that file
   showed `checked_slice` calls `usize::is_multiple_of` (Rust 1.87), and
   its own comment says nothing available had compiled that line. So
-  `mid-collections` with `ffi` does not build on this project's 1.75
-  floor, and a dependency on it would carry that into this crate. This
-  crate takes `zerocopy` directly instead and defines `ArenaSpan` with
-  the same layout. `mid-collections` itself was not touched. Its 1.75
-  gap is a separate item for that crate.
+  `mid-collections` with `ffi` does not build on rustc 1.75, the
+  toolchain this crate is verified on locally, and a dependency on it
+  would carry that into every local run (CI runs stable and is
+  unaffected). This crate takes `zerocopy` directly instead and defines
+  `ArenaSpan` with the same layout. `mid-collections` itself was not
+  touched. The gap only affects local 1.75 runs and is a separate,
+  low-priority item for that crate.
 - First test build warned `unused import: std::vec::Vec` whenever `bump`
   was off, since only the `bump` tests use it. Moved the import into the
   `bump` test module. Zero warnings across all five feature combinations
   after.
-- `mid-collections`' unconditional `zerocopy` dev-dependency was not
-  copied here. Its note found the crate compiled only through feature
-  unification with `mid-ecs`. Here the tests live in a module that only
-  compiles under `ffi`, which already turns the dependency on, and
-  `cargo test --features ffi` on its own passed in the scratch mirror
-  without it.
+- `zerocopy` has `derive` enabled only as an unconditional
+  dev-dependency, the same arrangement as `mid-collections`. The
+  optional dependency carries no features, so a build with `ffi` pulls in
+  only the `zerocopy` runtime crate. Checked with `cargo tree`: one
+  crate, against six with `derive` on (`zerocopy`, `zerocopy-derive`,
+  `proc-macro2`, `quote`, `syn`, `unicode-ident`). Only the tests use the
+  derives, and all 85 tests still pass.
+- Clippy 0.1.75 flagged 13 `undocumented_unsafe_blocks` in the `ffi.rs`
+  tests on its first all-features run, where one `// SAFETY` comment
+  covered several calls. The tests now go through two safe helpers,
+  `read` and `write`, each with one commented `unsafe` block, and the two
+  null-pointer cases keep their own comments. The 17 tests and their
+  assertions are unchanged. `rustfmt` also reformatted six hunks in the
+  file.
 - The scratch mirror resolved `zerocopy` to 0.8.60 (no lockfile is
   committed, and `0.8.56` is a caret requirement). It built and passed on
   rustc 1.75.0 at that version.
