@@ -225,7 +225,12 @@ impl<T> RegionNode<T> {
         }
         // SAFETY: every one of these `n` slots was just written above,
         // contiguous within `self.data`'s own allocation.
-        unsafe { Some(core::slice::from_raw_parts_mut(base.add(start) as *mut T, n)) }
+        unsafe {
+            Some(core::slice::from_raw_parts_mut(
+                base.add(start) as *mut T,
+                n,
+            ))
+        }
     }
 
     /// Bump-allocates one slot, initializes it in place with `f()`,
@@ -1044,10 +1049,13 @@ mod tests {
 
     #[test]
     fn try_with_capacity_and_try_alloc_succeed_on_the_happy_path() {
-        let a: BumpArena<u32> = BumpArena::try_with_capacity(4).expect("real capacity, should not fail");
+        let a: BumpArena<u32> =
+            BumpArena::try_with_capacity(4).expect("real capacity, should not fail");
         let x = a.try_alloc(7).expect("plenty of room, should not fail");
         assert_eq!(*x, 7);
-        let y = a.try_alloc_with(|| 8).expect("plenty of room, should not fail");
+        let y = a
+            .try_alloc_with(|| 8)
+            .expect("plenty of room, should not fail");
         assert_eq!(*y, 8);
         assert_eq!(a.len(), 2);
     }

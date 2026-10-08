@@ -267,10 +267,11 @@ combinations, zero warnings. Clippy 0.1.75 is clean for every feature
 set with `-D warnings` and `undocumented_unsafe_blocks`, and `ffi.rs` is
 rustfmt clean. `workspace-ci.yml` builds `mid-arena` with default
 features only, so these tests had no CI coverage until
-`.github/workflows/mid-arena-test.yml`, which has not had its first real
-run. Not run: Miri or AddressSanitizer (no nightly component here). The
-pointer lifetime argument for `region_spans` is checked by hand until
-Miri reports.
+`.github/workflows/mid-arena-test.yml`. Its first real run (rustc 1.99.0)
+passed all 85 tests under Miri with both Stacked Borrows and Tree
+Borrows, and under AddressSanitizer, so the pointer lifetime argument
+for `region_spans` has now been checked under both borrow models and
+not only by hand.
 
 ### `.github/workflows/mid-arena-test.yml`
 **What it does:** `workflow_dispatch` only, per
@@ -284,7 +285,10 @@ Miri reports.
   writes the `$GITHUB_STEP_SUMMARY` table with one row per feature set
   and profile. The fmt, clippy and test steps are `continue-on-error` so
   the summary is always written, and the test step still exits non-zero
-  through `pipefail`.
+  through `pipefail`. The fmt and clippy output is captured to `fmt.txt`
+  and `clippy.txt`. On failure the summary shows one line per clippy
+  diagnostic with its location, then the first 120 lines of each raw log,
+  and both files go in the artifact.
 - `miri` runs `cargo +nightly miri test --all-features --lib` twice,
   under Stacked Borrows (the default) and Tree Borrows, so a failure
   under only one model shows as such.
@@ -301,20 +305,30 @@ explicit in the two nightly jobs because `rust-toolchain.toml` pins
   `-D warnings`.
 - A Miri or ASan failure is not hidden. The step outcome and the last 60
   log lines go to the job summary, and the full log is an artifact.
-- `cargo fmt --check` reports five hunks in `bump_arena.rs`,
-  `compact_slot_arena.rs`, `slot_arena.rs` and `unchecked_slot_arena.rs`
-  that predate this workflow. They are not changed here, so that step
-  fails until each file is next touched.
+- `cargo fmt --check` reported five hunks in `bump_arena.rs`,
+  `compact_slot_arena.rs`, `slot_arena.rs` and `unchecked_slot_arena.rs`,
+  and four in `benches/vs_arena_crates.rs`, all predating this workflow.
+  They were formatted after run #1.
 
 **Verification:** every `run` block was extracted from the YAML and
 executed verbatim in the scratch mirror (rustc 1.75, clippy 0.1.75,
 rustfmt 1.7.0): 329 tests across the eight sets, every feature set
 clippy clean, and the parser and the summary writer checked against real
 passing and failing `cargo test` logs. The Miri and ASan summary steps
-were checked against fake logs. Not verified: the GitHub Actions side
-(action versions, the `miri` component on `dtolnay/rust-toolchain@nightly`,
-`cargo +nightly miri` on the runner) and whether the code passes Miri or
-AddressSanitizer.
+were checked against fake logs.
+
+**Run #1** (October 8, rustc 1.99.0, resolved `zerocopy` 0.8.61 and
+`bumpalo` 3.20.3): all 329 tests passed. Miri passed all 85 tests under
+Stacked Borrows (12.1 s) and under Tree Borrows (11.6 s). AddressSanitizer
+passed all 85. The run was green overall, and two `continue-on-error`
+steps exited 1 without their output reaching the summary. rustfmt was one
+(the hunks above). The other is most likely clippy on 1.99 flagging
+`x % n == 0` on unsigned integers (`manual_is_multiple_of`), which is not
+confirmed against the log. The capture added after this run makes the
+next run show it. The run also logged two warnings: Node 20 deprecation
+for `checkout@v4`, `cache@v4` and `upload-artifact@v4` (forced to Node
+24, no effect on results), and `ubuntu-latest` moving to Ubuntu 26 on
+October 19, 2026. The other workflows carry the same pins.
 
 ### `examples/drop_arena_standalone.rs`
 **What it does:** standalone `std::time::Instant` micro-benchmark for
@@ -1168,6 +1182,14 @@ call without a pause budget.
   removed, back to the original lazy grow-by-one model. See "Real CI
   benchmark results" → the `#[inline(never)]` section above for the
   full closing writeup — this specific thread is done, not paused.
+- `round % 3 == 0` on a `u32` in the test loop is flagged by clippy's
+  `manual_is_multiple_of` (Rust 1.89 and later). Its suggested
+  `is_multiple_of` needs Rust 1.87 and does not build on rustc 1.75, the
+  local verification toolchain, so the loop now computes `let phase =
+  round % 3;` first, which means the same and satisfies both. This is the
+  likely cause of the clippy step exiting 1 in the first CI run, not
+  confirmed because that log was not visible. One rustfmt hunk (an
+  iterator chain) also reformatted. No behavior change.
 
 ### `bump_arena.rs`
 - First version measured 3.2x slower on insert than `bumpalo`/
@@ -1349,6 +1371,8 @@ call without a pause budget.
   builds default features only. Each now carries
   `#[allow(clippy::mut_from_ref)]` with a one-line reason. No behavior
   change.
+- Two rustfmt hunks reformatted: a `from_raw_parts_mut` call in
+  `alloc_slice_fill_with` and two lines in a test. No behavior change.
 
 ### `compact_slot_arena.rs`
 - First draft wrapped every union field write in `unsafe`, following
@@ -1384,6 +1408,14 @@ call without a pause budget.
 - **Follow-up, same as `slot_arena.rs` above:** confirmed regressed on
   two consecutive real CI runs (6.90 → 8.34 → 9.06 ns/op insert), not
   written up twice here. Reverted in full, same pass.
+- `round % 3 == 0` on a `u32` in the test loop is flagged by clippy's
+  `manual_is_multiple_of` (Rust 1.89 and later). Its suggested
+  `is_multiple_of` needs Rust 1.87 and does not build on rustc 1.75, the
+  local verification toolchain, so the loop now computes `let phase =
+  round % 3;` first, which means the same and satisfies both. This is the
+  likely cause of the clippy step exiting 1 in the first CI run, not
+  confirmed because that log was not visible. One rustfmt hunk (line
+  wrapping) also reformatted. No behavior change.
 
 ### `Cargo.toml` (workspace root)
 - Real CI run #17 failed before reaching the bench at all: workspace
@@ -1439,6 +1471,14 @@ call without a pause budget.
   numbers are for catching qualitative regressions (direction), not
   predicting real-CI magnitude, on top of the `#[inline(never)]`
   finding above. The real number is whatever the next CI run says.
+- `round % 3 == 0` on a `u32` in the test loop is flagged by clippy's
+  `manual_is_multiple_of` (Rust 1.89 and later). Its suggested
+  `is_multiple_of` needs Rust 1.87 and does not build on rustc 1.75, the
+  local verification toolchain, so the loop now computes `let phase =
+  round % 3;` first, which means the same and satisfies both. This is the
+  likely cause of the clippy step exiting 1 in the first CI run, not
+  confirmed because that log was not visible. One rustfmt hunk (line
+  wrapping) also reformatted. No behavior change.
 
 ### `ffi.rs`
 - Dependency choice. The original plan here was a `checked_slice`
@@ -1473,6 +1513,23 @@ call without a pause budget.
 - The scratch mirror resolved `zerocopy` to 0.8.60 (no lockfile is
   committed, and `0.8.56` is a caret requirement). It built and passed on
   rustc 1.75.0 at that version.
+
+### `examples/drop_arena_standalone.rs`
+- `i % 2 == 0` on a `usize` is flagged by clippy's `manual_is_multiple_of`
+  for the same reason as the test loops above. The even-index check is now
+  `(i & 1) == 0`, which means the same. No behavior change.
+
+### `.github/workflows/mid-arena-test.yml`
+- Run #1 showed two steps exiting 1 with no output in the summary. The
+  fmt and clippy steps now `tee` into `fmt.txt` and `clippy.txt`, a new
+  summary step prints the clippy diagnostics one per line with the raw
+  logs under them, and both files join the artifact.
+- The resolved-versions block printed ANSI colour codes into the summary.
+  It now passes `--color never` to `cargo tree`, and the fmt step passes
+  `-- --color never` to rustfmt.
+- The action pins and `ubuntu-latest` are unchanged, matching the other
+  workflows, so the Node 20 and Ubuntu 26 warnings stay until they are
+  changed together.
 
 ### `benches/vs_arena_crates.rs`
 - The original sandbox pass (`std::time::Instant`, not criterion)
@@ -1552,6 +1609,10 @@ call without a pause budget.
   1.51 ns/op figure remains an artifact of the missing `with_capacity`
   call and should not be trusted, but the fix itself is no longer an
   open question.
+- Four rustfmt hunks reformatted (wrapping only, 17 lines added and 4
+  removed). The file does not compile locally because `criterion` needs
+  the newer toolchain, so only rustfmt ran on it. rustfmt does not change
+  meaning.
 
 ## Reproducing these numbers
 

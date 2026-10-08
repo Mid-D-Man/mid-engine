@@ -104,7 +104,7 @@ fn main() {
         let t0 = Instant::now();
         let mut kept = Vec::with_capacity(N / 2);
         for (i, b) in boxes.into_iter().enumerate() {
-            if i % 2 == 0 {
+            if (i & 1) == 0 {
                 arena.drop_box(b);
             } else {
                 kept.push(b);

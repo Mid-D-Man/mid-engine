@@ -115,7 +115,10 @@ fn bench_insert(c: &mut Criterion) {
         b.iter(|| {
             let mut a: atomic_arena::Arena<Payload> = atomic_arena::Arena::new(N);
             for i in 0..N {
-                black_box(a.insert(payload(i)).expect("arena sized exactly for N inserts"));
+                black_box(
+                    a.insert(payload(i))
+                        .expect("arena sized exactly for N inserts"),
+                );
             }
             a
         })
@@ -306,7 +309,11 @@ fn bench_get(c: &mut Criterion) {
     {
         let mut arena: atomic_arena::Arena<Payload> = atomic_arena::Arena::new(N);
         let keys: Vec<_> = (0..N)
-            .map(|i| arena.insert(payload(i)).expect("arena sized exactly for N inserts"))
+            .map(|i| {
+                arena
+                    .insert(payload(i))
+                    .expect("arena sized exactly for N inserts")
+            })
             .collect();
         g.bench_function("atomic-arena", |b| {
             b.iter(|| {
@@ -521,13 +528,19 @@ fn bench_churn(c: &mut Criterion) {
         b.iter(|| {
             let mut a: atomic_arena::Arena<Payload> = atomic_arena::Arena::new(N);
             let keys: Vec<_> = (0..N)
-                .map(|i| a.insert(payload(i)).expect("arena sized exactly for N inserts"))
+                .map(|i| {
+                    a.insert(payload(i))
+                        .expect("arena sized exactly for N inserts")
+                })
                 .collect();
             for &k in keys.iter().step_by(2) {
                 a.remove(k);
             }
             for i in 0..N / 2 {
-                black_box(a.insert(payload(i)).expect("removed half leaves room for N/2 more"));
+                black_box(
+                    a.insert(payload(i))
+                        .expect("removed half leaves room for N/2 more"),
+                );
             }
             a
         })

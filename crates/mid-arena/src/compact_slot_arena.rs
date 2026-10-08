@@ -410,7 +410,8 @@ mod tests {
         for round in 0u32..50 {
             let k = a.insert(round);
             live.push((k, round));
-            if round % 3 == 0 && !live.is_empty() {
+            let phase = round % 3;
+            if phase == 0 && !live.is_empty() {
                 let (dead_key, dead_val) = live.remove(0);
                 assert_eq!(a.remove(dead_key), Some(dead_val));
             }
@@ -481,6 +482,10 @@ mod tests {
             // holds a fresh, live value again, not the old dropped one.
             a.insert(DropCounter(&count));
         } // both remaining live values drop here, count -> 3
-        assert_eq!(count.get(), 3, "must not double-drop the value already removed above");
+        assert_eq!(
+            count.get(),
+            3,
+            "must not double-drop the value already removed above"
+        );
     }
 }

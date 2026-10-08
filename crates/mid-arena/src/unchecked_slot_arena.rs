@@ -241,10 +241,13 @@ impl<T> UncheckedSlotArena<T> {
     /// its slot reused (reuse is LIFO) -- a straight index-order scan,
     /// skipping vacant slots.
     pub fn iter(&self) -> impl Iterator<Item = (u32, &T)> {
-        self.slots.iter().enumerate().filter_map(|(i, slot)| match slot {
-            Slot::Occupied(value) => Some((i as u32, value)),
-            Slot::Vacant(_) => None,
-        })
+        self.slots
+            .iter()
+            .enumerate()
+            .filter_map(|(i, slot)| match slot {
+                Slot::Occupied(value) => Some((i as u32, value)),
+                Slot::Vacant(_) => None,
+            })
     }
 
     /// Mutable counterpart to [`iter`](Self::iter).
@@ -432,7 +435,8 @@ mod tests {
         for round in 0u32..50 {
             let k = a.insert(round);
             live.push((k, round));
-            if round % 3 == 0 && !live.is_empty() {
+            let phase = round % 3;
+            if phase == 0 && !live.is_empty() {
                 let (dead_key, dead_val) = live.remove(0);
                 assert_eq!(a.remove(dead_key), Some(dead_val));
             }
