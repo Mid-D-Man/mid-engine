@@ -57,23 +57,29 @@ jobs:
           {
             echo "### Resolved versions"
             echo '```'
-            cargo tree -p mid-arena --all-features -e normal,dev | grep -E "zerocopy|bumpalo" | sort -u || true
+            cargo tree --color never -p mid-arena --all-features -e normal,dev | grep -E "zerocopy|bumpalo" | sort -u || true
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Check formatting
-        run: cargo fmt -p mid-arena --check
-        continue-on-error: true
-
-      - name: Clippy, every feature set
+        id: fmt
         continue-on-error: true
         run: |
+          set -o pipefail
+          cargo fmt -p mid-arena --check -- --color never 2>&1 | tee fmt.txt
+
+      - name: Clippy, every feature set
+        id: clippy
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          : > clippy.txt
           status=0
           for F in "" ffi bump compact unchecked "bump,compact,unchecked,ffi"; do
-            echo "=== clippy: features [${F:-default}]"
-            cargo clippy -p mid-arena --lib --tests --examples ${F:+--features "$F"} -- \
+            echo "=== clippy: features [${F:-default}]" | tee -a clippy.txt
+            cargo clippy -p mid-arena --lib --tests --examples ${F:+--features "$F"} --color=never -- \
               -D warnings -A clippy::excessive_precision -A clippy::approx_constant -A clippy::float_cmp -A clippy::too_many_arguments \
-              -W clippy::undocumented_unsafe_blocks || status=1
+              -W clippy::undocumented_unsafe_blocks 2>&1 | tee -a clippy.txt || status=1
           done
           exit $status
 
@@ -329,6 +335,40 @@ jobs:
               f.write("\n".join(lines) + "\n")
           PYEOF
 
+      - name: Write format and clippy status to job summary
+        if: always()
+        run: |
+          {
+            echo "## mid-arena fmt and clippy"
+            echo ""
+            for entry in \
+              "rustfmt|${{ steps.fmt.outcome }}|fmt.txt" \
+              "clippy|${{ steps.clippy.outcome }}|clippy.txt"; do
+              IFS='|' read -r name outcome file <<< "$entry"
+              if [ "$outcome" = "success" ]; then
+                echo "### ✅ $name"
+              else
+                echo "### ❌ $name ($outcome)"
+                echo ""
+                if [ "$name" = "clippy" ]; then
+                  echo "Diagnostics, one line each (count, message, location):"
+                  echo ""
+                  echo '```'
+                  awk '/^(warning|error)/ {msg=$0; next} /^ +--> / {print msg " @ " $2; msg=""}' "$file" 2>/dev/null | sort | uniq -c | sort -rn | head -40
+                  echo '```'
+                  echo ""
+                fi
+                echo "<details><summary>First 120 lines of the raw log</summary>"
+                echo ""
+                echo '```'
+                head -n 120 "$file" 2>/dev/null || echo "(no log)"
+                echo '```'
+                echo "</details>"
+              fi
+              echo ""
+            done
+          } >> "$GITHUB_STEP_SUMMARY"
+
       - name: Upload raw log + JSON as artifact
         if: always()
         uses: actions/upload-artifact@v4
@@ -337,6 +377,8 @@ jobs:
           path: |
             mid-arena-test-raw.txt
             mid-arena-test-results.json
+            fmt.txt
+            clippy.txt
           retention-days: 7
 
   miri:
