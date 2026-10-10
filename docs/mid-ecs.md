@@ -3031,7 +3031,83 @@ not enough once `fold` existed.
   mirror; a C-side row write would be a byte-copy write path like
   `resource_write` and deserves its own design. What C *does* get is the point of
   this pass: `..._changed_rows` now reports bulk writes made by the Rust side.
-- **Not benched in Criterion and not compared with bevy.** Only the Ir figures
-  above exist. `archetype_core.rs` and `ecs-vs-bevy-ecs` have no mutable-query
-  group yet.
+- **Benched since, not yet on real CI.** See "Mutable-query benches" below.
 - **Sparse Shell has no ticks**, so there is no `Mut` for it.
+
+### Mutable-query benches
+
+Added after the iterator went in, because the only evidence for the shipped
+design was a sandbox instruction-count probe. Two places, deliberately split the
+way the read-side benches are:
+
+- **`crates/mid-ecs/benches/archetype_core.rs`**, in-crate, any toolchain:
+  `query_static_mut_single_component` and
+  `query2_static_mut_ref_two_components`, each at N = 100 / 1,000 / 10,000 /
+  100,000 with three variants. `for_loop` is what people write (it goes through
+  `next()`), `for_each` goes through the `fold` override, `read_only` is a
+  mutable query that only dereferences immutably, so no row is stamped (the
+  wrapper's own cost). `raw_slice_ceiling` gained `one_field_write` and
+  `two_field_update`, the zero-abstraction floor for the same writes.
+  `scripts/bench_mid_ecs_archetype_core.py` prints the existing group tables
+  automatically (it discovers groups; it has no expected-groups list) plus a
+  closing table of each mutable variant over the shared query at the same N.
+  That table has no pass/fail flags: there is no real-CI baseline yet, and a
+  threshold invented without one would be a guess.
+- **`benches/ecs-vs-bevy-ecs/benches/vs_bevy_ecs.rs`**, the comparison that
+  does not share the in-crate file's layout noise:
+  `mutable_query_single_component` (`Query<(Entity, &mut A)>`) and
+  `mutable_query_iteration` (`Query<(Entity, &mut A, &B)>`), N = 10,000, plain
+  `for` loop on both sides, the write going through each engine's change-tracked
+  `Mut`. `Entity` is in bevy's tuple on purpose: mid-ecs's mutable queries have no
+  entity-free form, so both sides load the same item shape (this differs from
+  `filtered_query_iteration`, which pairs mid-ecs's entity-free shared query with
+  bevy's entity-free one). Setup runs one write pass per engine and asserts the
+  resulting sum outside the timed closure.
+
+**The bevy half is not compiled.** `bevy_macro_utils` 0.19.1 needs a std feature
+(`rwlock_downgrade`) that rustc 1.91.1 does not have, so even a type check stops
+there, the same wall the crate's own header records. What was done instead:
+the bevy_ecs 0.19.1 source was read for every call the new groups make
+(`QueryState::iter_mut(&mut self, &mut World)`, `&mut T` yielding `Mut<T>`,
+`Entity` as query data, tuples implementing `IterQueryData`, `spawn_batch`), and
+all of them match. The mid-ecs half compiles and runs. Confirm the bevy half
+builds on the first real run before trusting its numbers.
+
+**Sandbox result (rustc 1.91.1, short sampling, not authoritative).** The
+in-crate groups run and the parser handles them. The numbers themselves taught
+one thing worth recording, which the instruction-count probe could not:
+
+- At N = 10,000, one column, summing through a `Mut` in a `for` loop
+  (`read_only`) took 28.2 µs. The shared `query_static` summing the same
+  column took 7.1 µs, and a `map(..).sum()` through the same mutable iterator
+  (the `fold` path) took 7.06 µs. Instruction counts had said 12.1 versus 11.1
+  Ir/row, so counts predicted parity and time did not.
+- Probing further, with throwaway variants that are not in the tree: summing
+  `to_bits()` into a `u32` instead of an `f32` took 7.0 µs through the mutable
+  query and **17.3 µs through the shared one**, the reverse of the `f32` pair.
+  Same iterator code on both sides; changing only the accumulator type moved
+  which query was slow, by about 4x, in opposite directions. A loop through
+  the mutable query that did no float work (it only counted rows) took 13.8 µs.
+- Reading: this looks like the layout/inlining sensitivity already recorded for
+  builds #12/#13 (three unrelated benchmarks moving by different amounts in the
+  same run) rather than a cost of `Mut`. The mechanism was not identified (no disassembly
+  was done), so "consistent with" is as far as it goes. The practical
+  consequences: a lone slow variant in `archetype_core.rs` is a layout shift until
+  it repeats, an instruction-count parity does not establish a time parity, and
+  the same-run bevy groups are the number to read, as with every other group.
+- The write variants, for scale and as sandbox figures only: one column at
+  N = 10,000 `for_loop` 16.5-18.3 µs, `for_each` 10.4-11.9 µs, against a raw
+  `one_field_write` floor of 2.8 µs (the raw loop vectorizes; neither iterator
+  here can). Whether bevy's `iter_mut` pays the same is exactly what
+  `mutable_query_single_component` answers.
+
+**What real CI should answer.** (1) Does the bevy half build. (2) The
+`mutable_query_*` mid-ecs/bevy ratios per platform, read the way
+`dense_query_iteration` is: x86_64 may differ from macOS and aarch64. (3) Whether
+`for_each` beats `for_loop` on the same machine by the margin the sandbox shows.
+(4) Whether the in-crate `read_only` ratio is an outlier on CI or consistent.
+
+**Not done.** No C-timed bench (there is no C counterpart to time). No
+`bench-nolto` dispatch of these groups. No bench for `query2_static_mut` (both
+sides mutable) or the `_filtered` forms; the `(&mut A, &B)` shape is the one most
+per-frame updates are. No `Ref<T>` bench because there is no `Ref<T>`.

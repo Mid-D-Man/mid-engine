@@ -88,6 +88,18 @@
 //!   larger tuple construction). Not urgent — `query2_static` is
 //!   already within noise of `bevy_ecs`'s own absolute numbers — but
 //!   not claimed as fully closed either.
+//! - `query_static_mut_single_component` / `query2_static_mut_ref_two_components`:
+//!   the bulk mutable queries (`World::query_static_mut`,
+//!   `World::query2_static_mut_ref`; see `docs/mid-ecs.md`, "Mutable
+//!   queries"), one write per row through `Mut<T>`. Three variants each:
+//!   `for_loop` (what people write, goes through `next()`), `for_each`
+//!   (goes through the `fold` override) and `read_only` (a mutable query
+//!   that only ever dereferences immutably, so no row is stamped changed:
+//!   the cost of the `Mut` wrapper itself). The shared-query groups above
+//!   are the denominators; `scripts/bench_mid_ecs_archetype_core.py`
+//!   prints the ratios. `raw_slice_ceiling`'s `one_field_write` /
+//!   `two_field_update` are the zero-abstraction floor for the same
+//!   writes.
 
 use criterion::{
     black_box, criterion_group, criterion_main, BatchSize, BenchmarkId, Criterion, Throughput,
@@ -185,6 +197,70 @@ fn bench_query2_static_two_components(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_query_static_mut_single_component(c: &mut Criterion) {
+    let mut group = c.benchmark_group("query_static_mut_single_component");
+    for &n in &SIZES {
+        group.throughput(Throughput::Elements(n as u64));
+        let mut world = populated_world(n);
+        group.bench_with_input(BenchmarkId::new("for_loop", n), &n, |b, _| {
+            b.iter(|| {
+                for (_, mut pos) in world.query_static_mut::<Position>() {
+                    pos.x += 1.0;
+                }
+            });
+        });
+        group.bench_with_input(BenchmarkId::new("for_each", n), &n, |b, _| {
+            b.iter(|| {
+                world
+                    .query_static_mut::<Position>()
+                    .for_each(|(_, mut pos)| pos.x += 1.0);
+            });
+        });
+        group.bench_with_input(BenchmarkId::new("read_only", n), &n, |b, _| {
+            b.iter(|| {
+                let mut sum = 0.0f32;
+                for (_, pos) in world.query_static_mut::<Position>() {
+                    sum += pos.x;
+                }
+                black_box(sum);
+            });
+        });
+    }
+    group.finish();
+}
+
+fn bench_query2_static_mut_ref_two_components(c: &mut Criterion) {
+    let mut group = c.benchmark_group("query2_static_mut_ref_two_components");
+    for &n in &SIZES {
+        group.throughput(Throughput::Elements(n as u64));
+        let mut world = populated_world(n);
+        group.bench_with_input(BenchmarkId::new("for_loop", n), &n, |b, _| {
+            b.iter(|| {
+                for (_, mut pos, vel) in world.query2_static_mut_ref::<Position, Velocity>() {
+                    pos.x += vel.dx;
+                }
+            });
+        });
+        group.bench_with_input(BenchmarkId::new("for_each", n), &n, |b, _| {
+            b.iter(|| {
+                world
+                    .query2_static_mut_ref::<Position, Velocity>()
+                    .for_each(|(_, mut pos, vel)| pos.x += vel.dx);
+            });
+        });
+        group.bench_with_input(BenchmarkId::new("read_only", n), &n, |b, _| {
+            b.iter(|| {
+                let mut sum = 0.0f32;
+                for (_, pos, vel) in world.query2_static_mut_ref::<Position, Velocity>() {
+                    sum += pos.x + vel.dx;
+                }
+                black_box(sum);
+            });
+        });
+    }
+    group.finish();
+}
+
 fn bench_structural_churn(c: &mut Criterion) {
     let mut group = c.benchmark_group("structural_churn_insert_remove");
     for &n in &SIZES {
@@ -237,7 +313,7 @@ fn bench_raw_slice_ceiling(c: &mut Criterion) {
     let mut group = c.benchmark_group("raw_slice_ceiling");
     for &n in &SIZES {
         group.throughput(Throughput::Elements(n as u64));
-        let positions: Vec<Position> = (0..n)
+        let mut positions: Vec<Position> = (0..n)
             .map(|_| Position {
                 x: 1.0,
                 y: 2.0,
@@ -270,6 +346,21 @@ fn bench_raw_slice_ceiling(c: &mut Criterion) {
                 black_box(sum);
             });
         });
+        group.bench_with_input(BenchmarkId::new("one_field_write", n), &n, |b, _| {
+            b.iter(|| {
+                for p in positions.iter_mut() {
+                    p.x += 1.0;
+                }
+            });
+        });
+        group.bench_with_input(BenchmarkId::new("two_field_update", n), &n, |b, _| {
+            b.iter(|| {
+                let len = positions.len();
+                for i in 0..len {
+                    positions[i].x += velocities[i].dx;
+                }
+            });
+        });
     }
     group.finish();
 }
@@ -279,6 +370,8 @@ criterion_group!(
     bench_spawn_insert_bundle,
     bench_query_static_single_component,
     bench_query2_static_two_components,
+    bench_query_static_mut_single_component,
+    bench_query2_static_mut_ref_two_components,
     bench_structural_churn,
     bench_raw_slice_ceiling
 );

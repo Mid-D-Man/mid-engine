@@ -82,8 +82,13 @@
 //!   (structural migration, not dense iteration) and has had no
 //!   equivalent root-cause pass yet -- next real target, not assumed to
 //!   have the same cause as the query-iteration gap did.
+//!
+//! Two more groups were added later for the bulk mutable queries:
+//! `mutable_query_single_component` and `mutable_query_iteration` (see
+//! `bench_mutable_query_single_component`, and `docs/mid-ecs.md`, "Mutable
+//! queries" and "Mutable-query benches").
 
-use bevy_ecs::prelude::{Component, World as BevyWorld};
+use bevy_ecs::prelude::{Component, Entity as BevyEntity, World as BevyWorld};
 use bevy_ecs::query::{With as BevyWith, Without as BevyWithout};
 use criterion::{black_box, criterion_group, criterion_main, BatchSize, Criterion};
 use mid_ecs::{With as MidWith, Without as MidWithout, World as MidWorld};
@@ -424,6 +429,166 @@ fn bench_filtered_query_iteration(c: &mut Criterion) {
                 sum += pos.x + vel.dx;
             }
             black_box(sum);
+        });
+    });
+
+    g.finish();
+}
+
+/// Bulk mutable queries (`World::query_static_mut`,
+/// `World::query2_static_mut_ref`, `Mut<T>`; `docs/mid-ecs.md`, "Mutable
+/// queries"), against bevy's `Query<(Entity, &mut A)>` and
+/// `Query<(Entity, &mut A, &B)>`. Two groups:
+/// `mutable_query_single_component` (one write per row) and
+/// `mutable_query_iteration` (`pos.x += vel.dx`, the
+/// `(&mut Position, &Velocity)` shape most per-frame updates are).
+///
+/// Both sides do the same work per row: write through a change-tracked
+/// wrapper (mid-ecs's `Mut` stamps the row's `changed` tick on every
+/// mutable dereference; bevy's `Mut` does the same), in a plain `for`
+/// loop.
+///
+/// `Entity` is in bevy's query on purpose. mid-ecs's mutable queries
+/// always yield the entity (there is no entity-free mutable form), so
+/// bevy's tuple carries it too and both sides load the same item shape.
+/// This differs from `filtered_query_iteration`, which pairs mid-ecs's
+/// entity-free `query2_static_ref_filtered` with bevy's entity-free
+/// query because that form exists for shared access.
+///
+/// Setup runs one write pass on each engine and checks the resulting sum,
+/// outside the timed closure, so a query that silently wrote nothing (or
+/// to the wrong rows) cannot produce a plausible-looking number.
+fn bench_mutable_query_single_component(c: &mut Criterion) {
+    let mut mid_world = MidWorld::new();
+    for _ in 0..N {
+        let e = mid_world.spawn();
+        mid_world.insert_static(
+            e,
+            Position {
+                x: 1.0,
+                y: 2.0,
+                z: 3.0,
+            },
+        );
+    }
+
+    let mut bevy_world = BevyWorld::new();
+    bevy_world.spawn_batch((0..N).map(|_| BevyPosition {
+        x: 1.0,
+        y: 2.0,
+        z: 3.0,
+    }));
+    let mut bevy_query = bevy_world.query::<(BevyEntity, &mut BevyPosition)>();
+
+    for (_, mut pos) in mid_world.query_static_mut::<Position>() {
+        pos.x += 1.0;
+    }
+    for (_, mut pos) in bevy_query.iter_mut(&mut bevy_world) {
+        pos.x += 1.0;
+    }
+    let expected = 2.0 * N as f32;
+    let mid_sum: f32 = mid_world.query_static::<Position>().map(|(_, p)| p.x).sum();
+    let mut bevy_read = bevy_world.query::<&BevyPosition>();
+    let bevy_sum: f32 = bevy_read.iter(&bevy_world).map(|p| p.x).sum();
+    assert!((mid_sum - expected).abs() < 1.0, "mid-ecs wrote {mid_sum}");
+    assert!(
+        (bevy_sum - expected).abs() < 1.0,
+        "bevy_ecs wrote {bevy_sum}"
+    );
+
+    let mut g = c.benchmark_group("mutable_query_single_component");
+
+    g.bench_function("mid-ecs", |b| {
+        b.iter(|| {
+            for (_, mut pos) in mid_world.query_static_mut::<Position>() {
+                pos.x += 1.0;
+            }
+        });
+    });
+
+    g.bench_function("bevy_ecs", |b| {
+        b.iter(|| {
+            for (_, mut pos) in bevy_query.iter_mut(&mut bevy_world) {
+                pos.x += 1.0;
+            }
+        });
+    });
+
+    g.finish();
+}
+
+/// See `bench_mutable_query_single_component` above for the shared design.
+/// This is the `(&mut Position, &Velocity)` shape: `Position` written and
+/// change-tracked, `Velocity` read-only and untouched.
+fn bench_mutable_query_iteration(c: &mut Criterion) {
+    let mut mid_world = MidWorld::new();
+    for _ in 0..N {
+        let e = mid_world.spawn();
+        mid_world.insert_bundle(
+            e,
+            (
+                Position {
+                    x: 1.0,
+                    y: 2.0,
+                    z: 3.0,
+                },
+                Velocity {
+                    dx: 0.1,
+                    dy: 0.2,
+                    dz: 0.3,
+                },
+            ),
+        );
+    }
+
+    let mut bevy_world = BevyWorld::new();
+    bevy_world.spawn_batch((0..N).map(|_| {
+        (
+            BevyPosition {
+                x: 1.0,
+                y: 2.0,
+                z: 3.0,
+            },
+            BevyVelocity {
+                dx: 0.1,
+                dy: 0.2,
+                dz: 0.3,
+            },
+        )
+    }));
+    let mut bevy_query = bevy_world.query::<(BevyEntity, &mut BevyPosition, &BevyVelocity)>();
+
+    for (_, mut pos, vel) in mid_world.query2_static_mut_ref::<Position, Velocity>() {
+        pos.x += vel.dx;
+    }
+    for (_, mut pos, vel) in bevy_query.iter_mut(&mut bevy_world) {
+        pos.x += vel.dx;
+    }
+    let expected = 1.1 * N as f32;
+    let mid_sum: f32 = mid_world.query_static::<Position>().map(|(_, p)| p.x).sum();
+    let mut bevy_read = bevy_world.query::<&BevyPosition>();
+    let bevy_sum: f32 = bevy_read.iter(&bevy_world).map(|p| p.x).sum();
+    assert!((mid_sum - expected).abs() < 1.0, "mid-ecs wrote {mid_sum}");
+    assert!(
+        (bevy_sum - expected).abs() < 1.0,
+        "bevy_ecs wrote {bevy_sum}"
+    );
+
+    let mut g = c.benchmark_group("mutable_query_iteration");
+
+    g.bench_function("mid-ecs", |b| {
+        b.iter(|| {
+            for (_, mut pos, vel) in mid_world.query2_static_mut_ref::<Position, Velocity>() {
+                pos.x += vel.dx;
+            }
+        });
+    });
+
+    g.bench_function("bevy_ecs", |b| {
+        b.iter(|| {
+            for (_, mut pos, vel) in bevy_query.iter_mut(&mut bevy_world) {
+                pos.x += vel.dx;
+            }
         });
     });
 
@@ -1008,6 +1173,8 @@ criterion_group!(
     bench_query_static_single_component,
     bench_dense_query_iteration,
     bench_filtered_query_iteration,
+    bench_mutable_query_single_component,
+    bench_mutable_query_iteration,
     bench_raw_slice_ceiling,
     bench_structural_churn,
     bench_insert_single_component,

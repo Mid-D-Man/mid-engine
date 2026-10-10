@@ -16,6 +16,12 @@
 # see docs/benching-standards.md and the two Iter1/Iter2 doc comments for
 # why that ratio should stay close to 1.0-1.3x, not the ~16-21x it was
 # before the fix this script's own workflow exists to guard against.
+#
+# A second table (appended at the end) reports the bulk mutable queries
+# (World::query_static_mut / query2_static_mut_ref, docs/mid-ecs.md "Mutable
+# queries") against the shared queries at the same N. It carries NO pass/fail
+# flags yet: there is no real-CI baseline for those groups, and a threshold
+# invented without one would be a guess. Add flags once real runs exist.
 
 import re
 import sys
@@ -174,3 +180,65 @@ if shared_ns:
         print(f"> ⚠️ Worst observed ratio this run: {worst_ratio:.2f}× -- above the ~1.28-1.35x currently-observed baseline, worth a look.")
     else:
         print(f"> ✅ Worst observed ratio this run: {worst_ratio:.2f}× -- consistent with the ~1.28-1.35x currently-observed baseline.")
+
+
+# ── Mutable queries against the shared queries ────────────────────────
+# Group labels for variant groups are "<group> — <variant>" (see the id
+# folding above). for_loop goes through the iterator's next(), for_each
+# through its fold override, read_only is a mutable query that never
+# writes (the cost of the Mut wrapper alone, no row stamped).
+MUT_SHAPES = [
+    ('query_static_mut_single_component', 'query_static_single_component',
+     'one column: `query_static_mut` vs `query_static`'),
+    ('query2_static_mut_ref_two_components', 'query2_static_two_components',
+     'two columns: `query2_static_mut_ref` vs `query2_static`'),
+]
+MUT_VARIANTS = ['for_loop', 'for_each', 'read_only']
+
+
+def series(label):
+    return {n: ns for n, _, ns, _ in by_group.get(label, []) if ns}
+
+
+printed_header = False
+for mut_group, shared_group, title in MUT_SHAPES:
+    shared = series(shared_group)
+    variants = {v: series(f'{mut_group} — {v}') for v in MUT_VARIANTS}
+    if not shared or not any(variants.values()):
+        continue
+    if not printed_header:
+        print()
+        print("#### Mutable queries against the shared queries")
+        print()
+        print("Each ratio is the mutable variant's time over the shared query's time at")
+        print("the same N. The shared query only reads; the write variants also store a")
+        print("value and stamp a change tick per row, so a ratio above 1.0x is expected")
+        print("for them. **No pass/fail flags: there is no real-CI baseline for these")
+        print("groups yet.**")
+        print()
+        print("> ⚠️ Compare `for_loop` and `for_each` with care. In the sandbox the same")
+        print("> iterator code changed by up to 4x between two benchmarks that differ only")
+        print("> in the accumulator type, in opposite directions for the shared and the")
+        print("> mutable query. That looks like the layout/inlining sensitivity recorded")
+        print("> in `docs/mid-ecs.md` (builds #12/#13) rather than a cost of `Mut`, though")
+        print("> the mechanism was not identified. Trust a ratio")
+        print("> only when it agrees with `raw_slice_ceiling` and with the")
+        print("> `mutable_query_*` groups in the bevy comparison, and treat a lone")
+        print("> outlier as a layout shift until it repeats.")
+        print()
+        if baseline_drift is not None and baseline_drift > BASELINE_DRIFT_THRESHOLD:
+            print(f"> 🔴 `query_static_single_component` is running {baseline_drift:.1f}× `raw_slice_ceiling`'s floor this run, so the shared denominators below look drifted; read these ratios as unreliable.")
+            print()
+        printed_header = True
+    print(f"**{title}**")
+    print()
+    cols = [v for v in MUT_VARIANTS if variants[v]]
+    print("| N | shared | " + " | ".join(f"{v} | ×" for v in cols) + " |")
+    print("|---|---|" + "---|---|" * len(cols))
+    for n in sorted(shared):
+        cells = []
+        for v in cols:
+            ns = variants[v].get(n)
+            cells.append(f"{ns:,.0f} ns | {ns / shared[n]:.2f}×" if ns else "— | —")
+        print(f"| {n:,} | {shared[n]:,.0f} ns | " + " | ".join(cells) + " |")
+    print()
