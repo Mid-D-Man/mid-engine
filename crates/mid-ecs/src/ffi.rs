@@ -61,6 +61,7 @@ use std::ptr;
 use std::slice;
 
 use crate::archetype::ArchetypeId;
+use crate::commands::CommandQueue;
 use crate::component::ComponentId;
 use crate::resource::{ResourceFfiError, ResourceId};
 use crate::tick::Tick;
@@ -242,6 +243,181 @@ pub unsafe extern "C" fn mid_ecs_world_entity_count(world: *const MidEcsWorld) -
         world.0.entity_count()
     }));
     result.unwrap_or(0)
+}
+
+/// Opaque handle to a deferred-change queue ([`CommandQueue`]). Same
+/// boxed-opaque-handle pattern as [`MidEcsWorld`].
+///
+/// Record spawns and despawns with the `mid_ecs_commands_*` functions
+/// below, then run them against a world with
+/// [`mid_ecs_commands_apply`]. Nothing touches the world until `apply`.
+/// Queuing a component insert from C is not exposed: it is a byte-copy
+/// write into a registered type's column and has its own open design
+/// question (see `docs/mid-ecs.md`, "Commands").
+pub struct MidEcsCommands(CommandQueue);
+
+/// Creates an empty command queue. Never returns NULL. Free it with
+/// [`mid_ecs_commands_free`].
+#[no_mangle]
+pub extern "C" fn mid_ecs_commands_new() -> *mut MidEcsCommands {
+    Box::into_raw(Box::new(MidEcsCommands(CommandQueue::new())))
+}
+
+/// Frees a queue. Anything still queued is dropped unapplied. Safe on
+/// NULL.
+///
+/// # Safety
+/// `commands` must be NULL or a handle from `mid_ecs_commands_new` not
+/// already freed.
+#[no_mangle]
+pub unsafe extern "C" fn mid_ecs_commands_free(commands: *mut MidEcsCommands) {
+    if commands.is_null() {
+        return;
+    }
+    drop(unsafe { Box::from_raw(commands) });
+}
+
+/// Number of commands waiting. `0` on a null `commands`.
+///
+/// # Safety
+/// `commands` must be NULL or a valid handle from
+/// `mid_ecs_commands_new`.
+#[no_mangle]
+pub unsafe extern "C" fn mid_ecs_commands_len(commands: *const MidEcsCommands) -> usize {
+    if commands.is_null() {
+        return 0;
+    }
+    let result = catch_unwind(AssertUnwindSafe(|| unsafe { &*commands }.0.len()));
+    result.unwrap_or(0)
+}
+
+/// Number of spawn commands waiting: how many entities the next
+/// [`mid_ecs_commands_apply`] will return, so the size of the buffer to
+/// give it. `0` on a null `commands`.
+///
+/// # Safety
+/// `commands` must be NULL or a valid handle from
+/// `mid_ecs_commands_new`.
+#[no_mangle]
+pub unsafe extern "C" fn mid_ecs_commands_spawn_count(commands: *const MidEcsCommands) -> usize {
+    if commands.is_null() {
+        return 0;
+    }
+    let result = catch_unwind(AssertUnwindSafe(|| unsafe { &*commands }.0.spawn_count()));
+    result.unwrap_or(0)
+}
+
+/// Drops every waiting command without running it.
+/// `MidEcsStatus::NullPointer` on a null `commands`, else `Ok`.
+///
+/// # Safety
+/// `commands` must be NULL or a valid handle from
+/// `mid_ecs_commands_new`.
+#[no_mangle]
+pub unsafe extern "C" fn mid_ecs_commands_clear(commands: *mut MidEcsCommands) -> i32 {
+    ffi_guard(|| {
+        if commands.is_null() {
+            return MidEcsStatus::NullPointer as i32;
+        }
+        unsafe { &mut *commands }.0.clear();
+        MidEcsStatus::Ok as i32
+    })
+}
+
+/// Queues a spawn. The entity does not exist until
+/// [`mid_ecs_commands_apply`], which returns the spawned entities in the
+/// order their spawns were queued. `MidEcsStatus::NullPointer` on a null
+/// `commands`, else `Ok`.
+///
+/// # Safety
+/// `commands` must be NULL or a valid handle from
+/// `mid_ecs_commands_new`.
+#[no_mangle]
+pub unsafe extern "C" fn mid_ecs_commands_spawn(commands: *mut MidEcsCommands) -> i32 {
+    ffi_guard(|| {
+        if commands.is_null() {
+            return MidEcsStatus::NullPointer as i32;
+        }
+        unsafe { &mut *commands }.0.commands().spawn();
+        MidEcsStatus::Ok as i32
+    })
+}
+
+/// Queues a despawn of the entity packed in `entity`. Whether it is
+/// alive is not checked now, only when the command runs: a dead, stale or
+/// bogus value is then a safe no-op, exactly like
+/// [`mid_ecs_world_despawn`] on one, and never touches a different
+/// entity that has since reused the slot. `MidEcsStatus::NullPointer` on
+/// a null `commands`, else `Ok`.
+///
+/// # Safety
+/// `commands` must be NULL or a valid handle from
+/// `mid_ecs_commands_new`.
+#[no_mangle]
+pub unsafe extern "C" fn mid_ecs_commands_despawn(
+    commands: *mut MidEcsCommands,
+    entity: u64,
+) -> i32 {
+    ffi_guard(|| {
+        if commands.is_null() {
+            return MidEcsStatus::NullPointer as i32;
+        }
+        unsafe { &mut *commands }
+            .0
+            .commands()
+            .despawn(Entity::from_ffi(entity));
+        MidEcsStatus::Ok as i32
+    })
+}
+
+/// Runs every queued command against `world`, in the order queued, and
+/// leaves the queue empty and reusable. Writes the entities its spawns
+/// produced, packed as `uint64_t`, into `out_entities` in spawn order.
+///
+/// `out_capacity` counts **elements, not bytes**. It must be at least
+/// [`mid_ecs_commands_spawn_count`]. If it is not (or `out_entities` is
+/// NULL while spawns are waiting) the result is
+/// `MidEcsStatus::BufferTooSmall` and **nothing is applied**: the queue
+/// and the world are exactly as they were, so call again with a bigger
+/// buffer. This is the same "don't use a partial fill" shape as
+/// [`mid_ecs_world_component_entity_ids`], except that here the call
+/// cannot be repeated freely, so the size is checked before anything
+/// runs. With no spawns waiting, `out_entities` may be NULL.
+///
+/// Returns the number of entities written (`>= 0`) on success, or a
+/// negative `MidEcsStatus`: `NullPointer` (null `commands` or `world`) or
+/// `BufferTooSmall`.
+///
+/// # Safety
+/// `commands` and `world` must be valid, non-null handles from their
+/// `_new` functions. If spawns are waiting, `out_entities` must be valid
+/// for `out_capacity` `uint64_t` elements.
+#[no_mangle]
+pub unsafe extern "C" fn mid_ecs_commands_apply(
+    commands: *mut MidEcsCommands,
+    world: *mut MidEcsWorld,
+    out_entities: *mut u64,
+    out_capacity: usize,
+) -> i32 {
+    ffi_guard(|| {
+        if commands.is_null() || world.is_null() {
+            return MidEcsStatus::NullPointer as i32;
+        }
+        let commands = unsafe { &mut *commands };
+        let world = unsafe { &mut *world };
+        let needed = commands.0.spawn_count();
+        if needed > 0 && (out_entities.is_null() || needed > out_capacity) {
+            return MidEcsStatus::BufferTooSmall as i32;
+        }
+        let spawned = commands.0.apply(&mut world.0);
+        if needed > 0 {
+            let out = unsafe { slice::from_raw_parts_mut(out_entities, needed) };
+            for (slot, entity) in out.iter_mut().zip(&spawned) {
+                *slot = entity.as_ffi();
+            }
+        }
+        spawned.len() as i32
+    })
 }
 
 /// A fixed `#[repr(C)]` component type used only by
@@ -2772,5 +2948,293 @@ mod tests {
         assert!(changed_entities_via_ffi(handle, h, last_run, true).is_empty());
         // SAFETY: freed exactly once.
         unsafe { mid_ecs_world_free(handle) };
+    }
+
+    // ---- command queue ----
+
+    #[test]
+    fn commands_new_free_round_trips_and_free_null_is_a_no_op() {
+        let commands = mid_ecs_commands_new();
+        assert!(!commands.is_null());
+        // SAFETY: `commands` is non-null, just created, not yet freed;
+        // NULL is the documented safe-no-op case.
+        unsafe {
+            assert_eq!(mid_ecs_commands_len(commands), 0);
+            assert_eq!(mid_ecs_commands_spawn_count(commands), 0);
+            mid_ecs_commands_free(commands);
+            mid_ecs_commands_free(std::ptr::null_mut());
+        }
+    }
+
+    #[test]
+    fn commands_spawn_applies_only_at_apply_and_returns_the_entities() {
+        let world = mid_ecs_world_new();
+        let commands = mid_ecs_commands_new();
+        // SAFETY: both handles non-null and not freed for this block; `out`
+        // is valid for the 3 elements the apply may write.
+        unsafe {
+            for _ in 0..3 {
+                assert_eq!(mid_ecs_commands_spawn(commands), MidEcsStatus::Ok as i32);
+            }
+            assert_eq!(mid_ecs_commands_len(commands), 3);
+            assert_eq!(mid_ecs_commands_spawn_count(commands), 3);
+            assert_eq!(mid_ecs_world_entity_count(world), 0, "nothing before apply");
+
+            let mut out = [0u64; 3];
+            assert_eq!(
+                mid_ecs_commands_apply(commands, world, out.as_mut_ptr(), 3),
+                3
+            );
+            assert_eq!(mid_ecs_world_entity_count(world), 3);
+            for e in out {
+                assert!(mid_ecs_world_is_alive(world, e));
+            }
+            assert!(out[0] != out[1] && out[1] != out[2] && out[0] != out[2]);
+            assert_eq!(mid_ecs_commands_len(commands), 0);
+            assert_eq!(mid_ecs_commands_spawn_count(commands), 0);
+
+            mid_ecs_commands_free(commands);
+            mid_ecs_world_free(world);
+        }
+    }
+
+    #[test]
+    fn commands_apply_writes_only_the_spawned_prefix_of_a_roomy_buffer() {
+        let world = mid_ecs_world_new();
+        let commands = mid_ecs_commands_new();
+        // SAFETY: handles non-null and live; `out` valid for 5 elements.
+        unsafe {
+            mid_ecs_commands_spawn(commands);
+            mid_ecs_commands_spawn(commands);
+            let mut out = [u64::MAX; 5];
+            assert_eq!(
+                mid_ecs_commands_apply(commands, world, out.as_mut_ptr(), 5),
+                2
+            );
+            assert!(mid_ecs_world_is_alive(world, out[0]));
+            assert!(mid_ecs_world_is_alive(world, out[1]));
+            assert_eq!(&out[2..], &[u64::MAX; 3], "the rest is untouched");
+            mid_ecs_commands_free(commands);
+            mid_ecs_world_free(world);
+        }
+    }
+
+    #[test]
+    fn commands_apply_with_a_too_small_buffer_applies_nothing_and_a_retry_works() {
+        let world = mid_ecs_world_new();
+        let commands = mid_ecs_commands_new();
+        // SAFETY: handles non-null and live; `out` valid for 5 elements, of
+        // which the calls below are told 2, then 3.
+        unsafe {
+            let victim = mid_ecs_world_spawn(world);
+            for _ in 0..3 {
+                mid_ecs_commands_spawn(commands);
+            }
+            mid_ecs_commands_despawn(commands, victim);
+            assert_eq!(mid_ecs_commands_len(commands), 4);
+            assert_eq!(
+                mid_ecs_commands_spawn_count(commands),
+                3,
+                "spawn_count is the spawns only, not every command"
+            );
+            let mut out = [u64::MAX; 5];
+
+            let status = mid_ecs_commands_apply(commands, world, out.as_mut_ptr(), 2);
+            assert_eq!(status, MidEcsStatus::BufferTooSmall as i32);
+            assert_eq!(mid_ecs_world_entity_count(world), 1, "world untouched");
+            assert!(mid_ecs_world_is_alive(world, victim), "despawn not run");
+            assert_eq!(mid_ecs_commands_len(commands), 4, "queue untouched");
+            assert_eq!(out, [u64::MAX; 5], "buffer untouched");
+
+            assert_eq!(
+                mid_ecs_commands_apply(commands, world, out.as_mut_ptr(), 3),
+                3
+            );
+            assert!(!mid_ecs_world_is_alive(world, victim));
+            assert_eq!(mid_ecs_world_entity_count(world), 3);
+
+            mid_ecs_commands_free(commands);
+            mid_ecs_world_free(world);
+        }
+    }
+
+    #[test]
+    fn commands_apply_null_buffer_is_too_small_with_spawns_and_fine_without() {
+        let world = mid_ecs_world_new();
+        let commands = mid_ecs_commands_new();
+        // SAFETY: handles non-null and live; NULL `out_entities` is the case
+        // under test and is documented as allowed only with no spawns.
+        unsafe {
+            let victim = mid_ecs_world_spawn(world);
+            mid_ecs_commands_spawn(commands);
+            let status = mid_ecs_commands_apply(commands, world, std::ptr::null_mut(), 0);
+            assert_eq!(status, MidEcsStatus::BufferTooSmall as i32);
+            assert_eq!(mid_ecs_world_entity_count(world), 1);
+            // A NULL buffer is never written through, whatever capacity the
+            // caller claims for it.
+            let status = mid_ecs_commands_apply(commands, world, std::ptr::null_mut(), 4);
+            assert_eq!(status, MidEcsStatus::BufferTooSmall as i32);
+            assert_eq!(mid_ecs_world_entity_count(world), 1);
+            assert_eq!(mid_ecs_commands_len(commands), 1, "still queued");
+
+            mid_ecs_commands_clear(commands);
+            mid_ecs_commands_despawn(commands, victim);
+            assert_eq!(
+                mid_ecs_commands_apply(commands, world, std::ptr::null_mut(), 0),
+                0
+            );
+            assert!(!mid_ecs_world_is_alive(world, victim));
+
+            mid_ecs_commands_free(commands);
+            mid_ecs_world_free(world);
+        }
+    }
+
+    #[test]
+    fn commands_despawn_runs_at_apply_and_dead_or_bogus_values_are_a_no_op() {
+        let world = mid_ecs_world_new();
+        let commands = mid_ecs_commands_new();
+        // SAFETY: handles non-null and live for this block.
+        unsafe {
+            let live = mid_ecs_world_spawn(world);
+            let dead = mid_ecs_world_spawn(world);
+            mid_ecs_world_despawn(world, dead);
+            // Queuing is always Ok: liveness is checked when the command runs.
+            assert_eq!(
+                mid_ecs_commands_despawn(commands, live),
+                MidEcsStatus::Ok as i32
+            );
+            assert_eq!(
+                mid_ecs_commands_despawn(commands, dead),
+                MidEcsStatus::Ok as i32
+            );
+            assert_eq!(
+                mid_ecs_commands_despawn(commands, u64::MAX),
+                MidEcsStatus::Ok as i32
+            );
+            assert!(mid_ecs_world_is_alive(world, live), "not before apply");
+            assert_eq!(
+                mid_ecs_commands_apply(commands, world, std::ptr::null_mut(), 0),
+                0
+            );
+            assert!(!mid_ecs_world_is_alive(world, live));
+            assert_eq!(mid_ecs_world_entity_count(world), 0);
+            mid_ecs_commands_free(commands);
+            mid_ecs_world_free(world);
+        }
+    }
+
+    #[test]
+    fn commands_despawn_of_a_stale_handle_spares_the_entity_that_reused_the_slot() {
+        let world = mid_ecs_world_new();
+        let commands = mid_ecs_commands_new();
+        // SAFETY: handles non-null and live for this block.
+        unsafe {
+            let stale = mid_ecs_world_spawn(world);
+            mid_ecs_world_despawn(world, stale);
+            let reuser = mid_ecs_world_spawn(world);
+            assert_ne!(stale, reuser);
+            mid_ecs_commands_despawn(commands, stale);
+            mid_ecs_commands_apply(commands, world, std::ptr::null_mut(), 0);
+            assert!(mid_ecs_world_is_alive(world, reuser));
+            mid_ecs_commands_free(commands);
+            mid_ecs_world_free(world);
+        }
+    }
+
+    #[test]
+    fn commands_apply_returns_the_entities_a_direct_spawn_would_have_made() {
+        // Two identical worlds, each with two freed slots. Applying two
+        // queued spawns to one must hand back the same values as spawning
+        // twice directly in the other: the queue adds no allocator behaviour
+        // of its own, and the buffer is in spawn order.
+        let queued = mid_ecs_world_new();
+        let direct = mid_ecs_world_new();
+        let commands = mid_ecs_commands_new();
+        // SAFETY: handles non-null and live; `out` valid for 2 elements.
+        unsafe {
+            for w in [queued, direct] {
+                let a = mid_ecs_world_spawn(w);
+                let b = mid_ecs_world_spawn(w);
+                mid_ecs_world_despawn(w, a);
+                mid_ecs_world_despawn(w, b);
+            }
+            mid_ecs_commands_spawn(commands);
+            mid_ecs_commands_spawn(commands);
+            let mut out = [0u64; 2];
+            mid_ecs_commands_apply(commands, queued, out.as_mut_ptr(), 2);
+            let first = mid_ecs_world_spawn(direct);
+            let second = mid_ecs_world_spawn(direct);
+            assert_eq!(out, [first, second]);
+            mid_ecs_commands_free(commands);
+            mid_ecs_world_free(queued);
+            mid_ecs_world_free(direct);
+        }
+    }
+
+    #[test]
+    fn commands_clear_drops_pending_unrun_and_a_second_apply_is_empty() {
+        let world = mid_ecs_world_new();
+        let commands = mid_ecs_commands_new();
+        // SAFETY: handles non-null and live for this block.
+        unsafe {
+            mid_ecs_commands_spawn(commands);
+            mid_ecs_commands_spawn(commands);
+            assert_eq!(mid_ecs_commands_clear(commands), MidEcsStatus::Ok as i32);
+            assert_eq!(mid_ecs_commands_len(commands), 0);
+            assert_eq!(mid_ecs_commands_spawn_count(commands), 0);
+            assert_eq!(
+                mid_ecs_commands_apply(commands, world, std::ptr::null_mut(), 0),
+                0
+            );
+            assert_eq!(mid_ecs_world_entity_count(world), 0);
+
+            mid_ecs_commands_spawn(commands);
+            let mut out = [0u64; 1];
+            assert_eq!(
+                mid_ecs_commands_apply(commands, world, out.as_mut_ptr(), 1),
+                1
+            );
+            assert!(
+                mid_ecs_world_is_alive(world, out[0]),
+                "a single spawn is written out too"
+            );
+            assert_eq!(
+                mid_ecs_commands_apply(commands, world, std::ptr::null_mut(), 0),
+                0,
+                "a second apply has nothing left to run"
+            );
+            assert_eq!(mid_ecs_world_entity_count(world), 1);
+            mid_ecs_commands_free(commands);
+            mid_ecs_world_free(world);
+        }
+    }
+
+    #[test]
+    fn commands_null_arguments_are_safe_everywhere() {
+        let null_cmds: *mut MidEcsCommands = std::ptr::null_mut();
+        let null_world: *mut MidEcsWorld = std::ptr::null_mut();
+        let world = mid_ecs_world_new();
+        let commands = mid_ecs_commands_new();
+        let null = MidEcsStatus::NullPointer as i32;
+        // SAFETY: NULL is the documented case for each call; the live
+        // handles are valid and freed at the end.
+        unsafe {
+            assert_eq!(mid_ecs_commands_len(null_cmds), 0);
+            assert_eq!(mid_ecs_commands_spawn_count(null_cmds), 0);
+            assert_eq!(mid_ecs_commands_clear(null_cmds), null);
+            assert_eq!(mid_ecs_commands_spawn(null_cmds), null);
+            assert_eq!(mid_ecs_commands_despawn(null_cmds, 1), null);
+            assert_eq!(
+                mid_ecs_commands_apply(null_cmds, world, std::ptr::null_mut(), 0),
+                null
+            );
+            assert_eq!(
+                mid_ecs_commands_apply(commands, null_world, std::ptr::null_mut(), 0),
+                null
+            );
+            mid_ecs_commands_free(commands);
+            mid_ecs_world_free(world);
+        }
     }
 }

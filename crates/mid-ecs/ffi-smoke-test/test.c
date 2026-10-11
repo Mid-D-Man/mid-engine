@@ -344,6 +344,96 @@ int main(void) {
           "the fixture mutation on a NULL world is MID_ECS_NULL_POINTER");
     mid_ecs_world_free(cw);
 
+    // --- Command queue: spawns and despawns recorded now, applied after ---
+    {
+        MidEcsWorld *qw = mid_ecs_world_new();
+        MidEcsCommands *q = mid_ecs_commands_new();
+        CHECK(q != NULL, "commands_new returns a non-null handle");
+        CHECK(mid_ecs_commands_len(q) == 0 && mid_ecs_commands_spawn_count(q) == 0,
+              "a fresh queue is empty");
+
+        uint64_t keep = mid_ecs_world_spawn(qw);
+        uint64_t doomed = mid_ecs_world_spawn(qw);
+        CHECK(mid_ecs_commands_spawn(q) == MID_ECS_OK
+                  && mid_ecs_commands_spawn(q) == MID_ECS_OK
+                  && mid_ecs_commands_spawn(q) == MID_ECS_OK,
+              "three spawns queue with MID_ECS_OK");
+        CHECK(mid_ecs_commands_despawn(q, doomed) == MID_ECS_OK, "a despawn queues with MID_ECS_OK");
+        CHECK(mid_ecs_commands_len(q) == 4 && mid_ecs_commands_spawn_count(q) == 3,
+              "len counts every command, spawn_count only the spawns");
+        CHECK(mid_ecs_world_entity_count(qw) == 2 && mid_ecs_world_is_alive(qw, doomed),
+              "nothing happens to the world until apply");
+
+        uint64_t out[8];
+        for (int i = 0; i < 8; i++) out[i] = 0xDEADBEEFULL;
+        CHECK(mid_ecs_commands_apply(q, qw, out, 2) == MID_ECS_BUFFER_TOO_SMALL,
+              "apply with a buffer smaller than the spawn count is MID_ECS_BUFFER_TOO_SMALL");
+        CHECK(mid_ecs_world_entity_count(qw) == 2 && mid_ecs_world_is_alive(qw, doomed)
+                  && mid_ecs_commands_len(q) == 4 && out[0] == 0xDEADBEEFULL,
+              "a too-small apply applied nothing: world, queue and buffer are untouched");
+        CHECK(mid_ecs_commands_apply(q, qw, NULL, 0) == MID_ECS_BUFFER_TOO_SMALL,
+              "a NULL buffer with spawns waiting is MID_ECS_BUFFER_TOO_SMALL");
+        CHECK(mid_ecs_commands_apply(q, qw, NULL, 4) == MID_ECS_BUFFER_TOO_SMALL
+                  && mid_ecs_commands_len(q) == 4,
+              "a NULL buffer is never written through, whatever capacity is claimed for it");
+
+        CHECK(mid_ecs_commands_apply(q, qw, out, 8) == 3, "apply returns the number of spawned entities");
+        CHECK(out[3] == 0xDEADBEEFULL, "only the spawned prefix of the buffer is written");
+        CHECK(mid_ecs_world_is_alive(qw, out[0]) && mid_ecs_world_is_alive(qw, out[1])
+                  && mid_ecs_world_is_alive(qw, out[2]),
+              "all three returned entities are alive");
+        CHECK(out[0] != out[1] && out[1] != out[2] && out[0] != out[2],
+              "the returned entities are distinct");
+        CHECK(!mid_ecs_world_is_alive(qw, doomed) && mid_ecs_world_is_alive(qw, keep),
+              "the queued despawn ran and the untouched entity survived");
+        CHECK(mid_ecs_world_entity_count(qw) == 4, "entity_count is 4 after apply (keep + 3 spawned)");
+        CHECK(mid_ecs_commands_len(q) == 0 && mid_ecs_commands_spawn_count(q) == 0,
+              "the queue is empty after apply");
+        CHECK(mid_ecs_commands_apply(q, qw, NULL, 0) == 0,
+              "a second apply with nothing queued returns 0, and a NULL buffer is fine");
+
+        // A queued despawn of a stale handle must not touch the entity that
+        // reused its slot.
+        uint64_t stale = out[0];
+        CHECK(mid_ecs_world_despawn(qw, stale) == MID_ECS_OK, "despawn the first spawned entity directly");
+        uint64_t reuser = mid_ecs_world_spawn(qw);
+        CHECK(reuser != stale, "the slot-reusing entity has a different packed value");
+        CHECK(mid_ecs_commands_despawn(q, stale) == MID_ECS_OK
+                  && mid_ecs_commands_apply(q, qw, NULL, 0) == 0,
+              "a queued despawn of the stale handle applies cleanly");
+        CHECK(mid_ecs_world_is_alive(qw, reuser),
+              "the stale despawn did not kill the entity that reused the slot");
+
+        // Bogus values are queued fine and are a no-op when run.
+        CHECK(mid_ecs_commands_despawn(q, 0xFFFFFFFFFFFFFFFFULL) == MID_ECS_OK
+                  && mid_ecs_commands_apply(q, qw, NULL, 0) == 0,
+              "a bogus packed value queues and runs as a no-op, not a crash");
+
+        // clear drops pending commands unrun.
+        mid_ecs_commands_spawn(q);
+        CHECK(mid_ecs_commands_clear(q) == MID_ECS_OK && mid_ecs_commands_len(q) == 0,
+              "clear empties the queue");
+        size_t before = mid_ecs_world_entity_count(qw);
+        CHECK(mid_ecs_commands_apply(q, qw, NULL, 0) == 0 && mid_ecs_world_entity_count(qw) == before,
+              "a cleared spawn never runs");
+
+        // NULL handles are safe everywhere.
+        CHECK(mid_ecs_commands_len(NULL) == 0 && mid_ecs_commands_spawn_count(NULL) == 0,
+              "len and spawn_count on a NULL queue are 0");
+        CHECK(mid_ecs_commands_spawn(NULL) == MID_ECS_NULL_POINTER
+                  && mid_ecs_commands_despawn(NULL, 1) == MID_ECS_NULL_POINTER
+                  && mid_ecs_commands_clear(NULL) == MID_ECS_NULL_POINTER,
+              "spawn, despawn and clear on a NULL queue are MID_ECS_NULL_POINTER");
+        CHECK(mid_ecs_commands_apply(NULL, qw, NULL, 0) == MID_ECS_NULL_POINTER
+                  && mid_ecs_commands_apply(q, NULL, NULL, 0) == MID_ECS_NULL_POINTER,
+              "apply with a NULL queue or a NULL world is MID_ECS_NULL_POINTER");
+        mid_ecs_commands_free(NULL);
+        CHECK(true, "freeing a NULL queue is a safe no-op");
+
+        mid_ecs_commands_free(q);
+        mid_ecs_world_free(qw);
+    }
+
     printf("\n=== %d check(s) failed ===\n", failures);
     return failures == 0 ? 0 : 1;
 }

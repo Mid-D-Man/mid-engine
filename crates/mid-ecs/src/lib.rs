@@ -7,6 +7,7 @@
 //! mid-net replication from day one.
 
 pub mod archetype;
+pub mod commands;
 pub mod component;
 pub mod ffi;
 pub mod filter;
@@ -28,6 +29,7 @@ pub mod world;
 // history, not because the bug risk still applies now that the type is
 // real.
 pub use archetype::ArchetypeId;
+pub use commands::{CommandQueue, Commands, EntityCommands};
 pub use component::{ComponentId, SparseShell};
 pub use filter::{Or, QueryFilter, With, Without};
 pub use resource::{ResourceFfiError, ResourceId};

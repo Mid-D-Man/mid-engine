@@ -87,6 +87,55 @@ bool mid_ecs_world_is_alive(const MidEcsWorld *world, uint64_t entity);
 // Number of currently-live entities. 0 on a null world.
 size_t mid_ecs_world_entity_count(const MidEcsWorld *world);
 
+// --- Deferred changes (command queue) ---
+//
+// Record spawns and despawns, then run them against a world with
+// mid_ecs_commands_apply. Nothing touches the world until apply. Queuing a
+// component insert from C is not exposed (see docs/mid-ecs.md, "Commands").
+
+typedef struct MidEcsCommands MidEcsCommands;
+
+// Creates an empty queue. Never returns NULL. Free with
+// mid_ecs_commands_free.
+MidEcsCommands *mid_ecs_commands_new(void);
+
+// Frees a queue; anything still queued is dropped unapplied. Safe on NULL.
+void mid_ecs_commands_free(MidEcsCommands *commands);
+
+// Number of commands waiting. 0 on a NULL queue.
+size_t mid_ecs_commands_len(const MidEcsCommands *commands);
+
+// Number of spawn commands waiting: how many entities the next apply
+// returns, so the buffer size to give it. 0 on a NULL queue.
+size_t mid_ecs_commands_spawn_count(const MidEcsCommands *commands);
+
+// Drops every waiting command unrun. MID_ECS_NULL_POINTER on NULL, else
+// MID_ECS_OK.
+int32_t mid_ecs_commands_clear(MidEcsCommands *commands);
+
+// Queues a spawn; the entity exists only after apply, which returns the
+// spawned entities in the order their spawns were queued.
+// MID_ECS_NULL_POINTER on NULL, else MID_ECS_OK.
+int32_t mid_ecs_commands_spawn(MidEcsCommands *commands);
+
+// Queues a despawn of `entity`. Liveness is checked when the command
+// runs, not now: a dead, stale or bogus value is then a safe no-op and
+// never touches a different entity that reused the slot.
+// MID_ECS_NULL_POINTER on NULL, else MID_ECS_OK.
+int32_t mid_ecs_commands_despawn(MidEcsCommands *commands, uint64_t entity);
+
+// Runs every queued command against `world` in the order queued and
+// leaves the queue empty and reusable. Writes the entities its spawns
+// produced into out_entities, in spawn order. out_capacity counts
+// ELEMENTS and must be at least mid_ecs_commands_spawn_count; if it is
+// not (or out_entities is NULL while spawns are waiting) the result is
+// MID_ECS_BUFFER_TOO_SMALL and NOTHING is applied, so call again with a
+// bigger buffer. With no spawns waiting, out_entities may be NULL.
+// Returns the number of entities written (>= 0), or MID_ECS_NULL_POINTER /
+// MID_ECS_BUFFER_TOO_SMALL.
+int32_t mid_ecs_commands_apply(MidEcsCommands *commands, MidEcsWorld *world,
+                               uint64_t *out_entities, size_t out_capacity);
+
 // --- Sparse Shell component-data surface (volatile/toggle components) ---
 
 // Looks up the component_id a Rust type was registered under via the

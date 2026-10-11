@@ -3095,6 +3095,10 @@ one thing worth recording, which the instruction-count probe could not:
   consequences: a lone slow variant in `archetype_core.rs` is a layout shift until
   it repeats, an instruction-count parity does not establish a time parity, and
   the same-run bevy groups are the number to read, as with every other group.
+  **Partly superseded by the CI results below**: on CI the effect is
+  deterministic (4.0x at every N, in both shapes), not random, and it follows
+  the call site, not the accumulator type. The "not a cost of `Mut`" half of
+  this reading still holds, the "lottery" half does not.
 - The write variants, for scale and as sandbox figures only: one column at
   N = 10,000 `for_loop` 16.5-18.3 µs, `for_each` 10.4-11.9 µs, against a raw
   `one_field_write` floor of 2.8 µs (the raw loop vectorizes; neither iterator
@@ -3107,7 +3111,195 @@ one thing worth recording, which the instruction-count probe could not:
 `for_each` beats `for_loop` on the same machine by the margin the sandbox shows.
 (4) Whether the in-crate `read_only` ratio is an outlier on CI or consistent.
 
+**Real CI results (rustc 1.99.0, AMD EPYC 7763, commit 110e0fa).**
+`bench-mid-ecs-archetype-core` #33 and `bench-vs-bevy-ecs` #35.
+
+In-crate, N = 10,000 (the ratios hold at every N from 100 to 100,000):
+
+| | one column | two columns |
+|---|---|---|
+| shared query, sum in a `for` loop | 9.39 µs | 37.4 µs |
+| mutable, write in a `for` loop | 16.3 µs | 20.2 µs |
+| mutable, write through `for_each` | 6.77 µs | 7.06 µs |
+| mutable, read-only sum in a `for` loop | 37.4 µs | 37.4 µs |
+| raw slice, sum / write / update | 9.28 / 3.11 µs | 9.32 µs sum, 4.07 µs update |
+
+Against bevy_ecs, N = 10,000: `mutable_query_single_component` mid-ecs 14.9 µs
+vs bevy 15.7 µs (parity); `mutable_query_iteration` mid-ecs 20.3 µs vs bevy
+11.0 µs (1.85x). The bevy half built and ran first time. Bevy's own two-column
+write (11.0 µs) is faster than its one-column write (15.7 µs), which more work
+cannot explain, so layout noise reaches both sides of that comparison and a
+single run of either ratio should not be over-read.
+
+What follows from it, and what does not:
+
+- **The read-only sum through the mutable iterator is exactly the shared
+  two-column cost** (37.4 µs, ~3.7 ns a row, whatever the column count) and 4x
+  the shared one-column query, which sits at the raw floor. An earlier reading
+  of #35 compared the mutable *write* (14.9 µs) with the shared *read-only sum*
+  (37.4 µs) and suggested the mutable iterator design avoids the chain the shared
+  iterators pay. That was a workload difference, not a design difference: the
+  like-for-like `read_only` loop pays the same chain. **There is no evidence here
+  for porting the `iter_mut` design into `Iter1`/`Iter2`.** If anything the
+  shared one-column iterator is the one to learn from.
+- **The 4x follows the call site, not the iterator.** The same
+  `query_static::<Position>()` loop is 9.39 µs in `archetype_core.rs` and 37.4
+  µs in `vs_bevy_ecs.rs` (#35, `query_static_single_component`), on the same
+  runner in the same week. Whether `next()` is inlined into a given benchmark
+  closure is the leading suspect (a loop-carried `f32` sum has to be kept
+  somewhere across a call), and it is only a suspect: no disassembly of the CI
+  binary exists. The sandbox reproduces a 4x read-only case on x86_64 (a
+  disassemblable one), which is the cheapest place to look.
+- **`for_each` is the fast path**: the write through `for_each` is 6.77 µs and
+  7.06 µs, against 16.3 µs and 20.2 µs through a `for` loop (2.4x and 2.9x), and
+  against 37.4 µs for the read-only sum in a `for` loop (5.5x and 5.3x). `fold`
+  runs a whole archetype in one call with no per-row `next()`, which is the
+  presumed reason; it was not confirmed in the disassembly.
+- The mutable `for_loop` against the raw write floor: 16.3 µs vs 3.11 µs (one
+  column), 20.2 µs vs 4.07 µs (two). The raw loops vectorise and neither
+  iterator can, which is most of that gap, so it is not a number to chase on
+  its own; the bevy comparison above is the yardstick, and it says parity on
+  one column.
+
 **Not done.** No C-timed bench (there is no C counterpart to time). No
 `bench-nolto` dispatch of these groups. No bench for `query2_static_mut` (both
 sides mutable) or the `_filtered` forms; the `(&mut A, &B)` shape is the one most
 per-frame updates are. No `Ref<T>` bench because there is no `Ref<T>`.
+
+### Commands: `commands.rs` (`CommandQueue`, `Commands`, `EntityCommands`)
+
+Built because a query holds `&World` for the life of its iterator, so no
+spawn, despawn, insert or remove can run inside the loop that finds the
+entities to change. This records those changes and runs them after.
+Gap-list item 2 against bevy_ecs. The C counterpart covers queued spawns
+and despawns only, see "The C counterpart" below.
+
+**What it is.** `CommandQueue` owns an ordered `Vec` of commands.
+`CommandQueue::commands()` gives a `Commands` to record onto,
+`Commands::spawn`/`spawn_bundle`/`entity` give an `EntityCommands` whose
+methods chain, and `CommandQueue::apply(&mut World)` runs everything
+first-queued-first, leaves the queue empty and reusable, and returns the
+entities its spawns produced, in spawn order. Covered: spawn, spawn with
+a bundle, despawn, `insert_static`/`remove_static`,
+`insert_bundle`/`remove_bundle`, `insert_resource`/`remove_resource`,
+and `queue(closure)` on both `Commands` and `EntityCommands` for anything
+else (Sparse Shell inserts included).
+
+**Each command is exactly the `World` method it names.** Not a new set of
+semantics. A command aimed at a dead entity does nothing, and
+`insert_static` of a component the entity already has is a no-op (the
+first value stays, as in `World::insert_static`). The second one was
+found by a failing test: the first draft asserted a later insert
+overwrites an earlier one, and it does not.
+
+**Decision: deferred spawn targets a slot, not a reserved entity.**
+`spawn()` cannot return a real `Entity`, because nothing is allocated
+until `apply`. It returns an `EntityCommands` aimed at "the nth entity
+this queue spawns", and `apply` hands back the real entities. The
+alternative is bevy's: reserve the entity id immediately through `&self`
+so `spawn()` can return it. Here that means making
+`GenerationalIndexAllocator::allocate` work without `&mut` (an atomic
+cursor over the free list, plus a flush step that creates the archetype
+row), a change to `mid-collections`, a foundational crate, for a benefit
+that only appears once systems hold `&World` and a command buffer at the
+same time, and there is no scheduler yet. Slots need no allocator
+change, and the move is additive later (an `EntityCommands::id()` is a
+new method, nothing existing breaks). The bevy side of this comparison
+is from knowledge of bevy_ecs, not from reading `Mid-D-Man/bevy` this
+pass.
+
+**Decision: safe, boxed closures, not a byte buffer.** bevy's queue
+stores commands inline in one byte buffer with function-pointer
+metadata, which needs `unsafe`. The workspace denies `unsafe_code`, and
+`iter_mut.rs` held to zero `unsafe`, so this keeps to safe Rust.
+Removals and despawns carry no payload (removals are a monomorphised
+function pointer), so they do not allocate. An insert or a bundle boxes
+one closure, which is where the component value lives, so each insert
+allocates once. No benchmark exists for this yet; the allocation is the
+first thing to measure against bevy's `Commands` before deciding the
+byte buffer is worth its `unsafe`.
+
+**Decision: `Commands` is separate from `CommandQueue`.** With no
+`SystemParam` yet, one type would do. Splitting now means the later
+`SystemParam` wraps `Commands` and nothing is renamed.
+
+**Not required of the closures: `Send`.** `World` does not require
+`Send` of its components, so the queue does not either. Moving a queue
+across threads is a decision for when parallel iteration exists.
+
+**Panic behaviour.** If a command panics during `apply`, the commands
+after it are dropped unrun, the queue is left empty and reusable with
+slot numbering reset, and the panic propagates. Covered by a test.
+
+**Tests (29 in `commands.rs`, 356 default lib tests with the FFI ones below; 1 new doctest, 3 total).** Ordering
+(insert-then-remove vs remove-then-insert), chaining, interleaved spawns
+each getting their own inserts, spawn-with-bundle and further commands on
+its target, bundle insert/remove, dead-entity and
+despawned-earlier-in-the-queue no-ops (including that a recycled slot
+does not pick up the dead entity's insert), the two iteration patterns
+this exists for (despawn while iterating, spawn while iterating), queue
+reuse, slot numbering restarting after `apply` and after `clear`,
+`clear`, dropping a queue unapplied, resources, `queue` closures seeing
+earlier effects, a Sparse Shell insert through `EntityCommands::queue`,
+the panic case, and that an inserted component counts as `Added` to a
+`ChangeTracker` that predates the `apply`.
+
+**Mutation testing (8 mutants, all caught).** Reversed apply order (15
+tests fail); slot index off by one (3); `apply` not resetting the spawn
+counter (3); `clear` not resetting it (caught only after a test fix, see
+below); a spawn not incrementing the counter (3); despawn skipped (4);
+removal made a no-op (3); a bundle spawn not recorded as a slot (2). The
+`clear` mutant survived the first draft of its test: the test called
+`apply` straight after `clear`, and `apply` resets the counter itself, so
+the reset in `clear` could not be seen. The test now queues a spawn
+straight after `clear`, with no `apply` between.
+
+**Verified on a fresh clone of main (rustc 1.91.1, sandbox only).** fmt
+clean on the new files; 356 lib tests pass (361 with `scratch-arena`);
+doctests pass; the C smoke test passes against both the `.so` and the `.a`
+and is clean under valgrind. Not run on real CI.
+
+**The C counterpart.** `MidEcsCommands`, an opaque handle like
+`MidEcsWorld`: `mid_ecs_commands_new/free/len/spawn_count/clear`,
+`mid_ecs_commands_spawn`, `mid_ecs_commands_despawn(commands, entity)` and
+`mid_ecs_commands_apply(commands, world, out_entities, out_capacity)`.
+`CommandQueue::spawn_count` was added to the Rust side for it, and is public.
+
+- **`apply` checks the buffer before it runs anything.** It returns the number
+  of entities written, or `BufferTooSmall` when `out_capacity` is below
+  `spawn_count` (or `out_entities` is NULL while spawns wait). In that case
+  nothing is applied: queue, world and buffer are exactly as they were, so the
+  caller sizes a buffer and calls again. This is the shape of
+  `mid_ecs_world_component_entity_ids`, except that apply is destructive and a
+  partial fill could not be retried, so the size is checked first. A NULL
+  buffer is never written through, whatever capacity the caller claims for it.
+  With no spawns waiting the buffer may be NULL.
+- **Despawn is always accepted at queue time.** Liveness is checked when the
+  command runs, where a dead, stale or bogus value is a no-op; a stale handle
+  never touches the entity that reused its slot (a test and a C check cover
+  it).
+- **Slots are not exposed.** The entities come back in spawn order from
+  `apply`. Nothing in C could address a slot yet, because there is no queued
+  insert to aim at one.
+- **Tests.** 10 Rust-level (`commands_*` in `ffi.rs`) and 28 new C checks
+  (101 to 129), run against both libraries, valgrind clean. Seven mutants, all
+  caught: the capacity check removed (1 test), the NULL-buffer check removed
+  (caught as a crash when the null pointer is dereferenced), `spawn_count`
+  returning `len` (1), `clear` a no-op (2), output written in reverse (1),
+  despawn aimed at the wrong entity (3), and the written prefix off by one (1).
+  Three of them first survived because the tests were too weak: nothing passed
+  a NULL buffer with a non-zero capacity, no Rust test mixed spawns with other
+  commands to tell `spawn_count` from `len`, and no single-spawn test checked
+  the entity written out. All three tests were added.
+
+**Not done.**
+- **Queuing a component insert from C.** A byte-copy write into a column of a
+  registered type, like `write_resource_bytes`, and needs its own design (it is
+  the same open question the mutable queries left).
+- Reserved entity ids (above), `spawn_batch`, an `Entity`-returning
+  `spawn()`.
+- A benchmark of `Commands` against bevy's, and of the per-insert box.
+- Dedicated Sparse Shell methods (`queue(closure)` covers them).
+- `RemovedComponents`, hooks and events: despawn and remove through a
+  command behave exactly as through the `World` method, with no extra
+  notification.
