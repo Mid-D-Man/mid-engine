@@ -3161,6 +3161,71 @@ What follows from it, and what does not:
   its own; the bevy comparison above is the yardstick, and it says parity on
   one column.
 
+**Call-site investigation: what the slow `for` loop does (x86_64 assembly,
+sandbox, rustc 1.91.1).** Done to find out why the same loop is 4x apart between
+two call sites. A throwaway probe (not in the tree) put each loop shape in its
+own `#[inline(never)]` function, timed it on 10,000 rows, and emitted the
+assembly. The criterion closures themselves cannot be read: they are inlined
+into one `benches` function of tens of thousands of lines.
+
+| loop, 10,000 rows | µs |
+|---|---|
+| shared one column, `for`, sum | 28.7 |
+| mutable one column, `for`, read-only sum | 28.9 |
+| mutable one column, `for_each`, sum | 7.2 |
+| mutable one column, `for`, write | 16.0 |
+| mutable one column, `for_each`, write | 11.1 |
+| shared two columns, `for`, sum | 13.2 |
+| mutable two columns, `for`, read-only sum | 32.1 |
+
+That reproduces the CI pattern on x86_64: the `for` sum is about 4x the
+`for_each` sum (0.72 ns a row, the chain-bound floor), and the shared
+one-column loop that is 9.4 µs inside `archetype_core.rs` is 28.7 µs on its own,
+so what it costs depends on the function around it. (The shared two-column loop
+read 13.2 µs here and 10.1 µs on a rerun, so single figures are good to roughly
+30%.)
+
+*What the slow loop is.* In the mutable one-column read-sum loop the hot path
+is fully inlined, but the accumulator and the iterator's cursor and end both
+live **on the stack**: every row does `movss` from memory, `addss`, `movss`
+back, and a load, increment and store of the cursor. Those are loop-carried
+dependencies through store-forwarding, about 4x the register-resident chain.
+The only call in the loop is the out-of-line, deliberately `#[cold]
+#[inline(never)]` `advance`. On x86_64 System V every `xmm` register is
+caller-saved, so an `f32` accumulator cannot be kept in a register across a
+call, and `advance(&mut self)` takes the iterator's address, so its state has to
+be in memory too. LLVM did not just spill around the cold call; it kept both in
+memory for the whole loop. `fold`/`for_each` has no per-row call path, so its sum
+sits in a register (13 unrolled `addss` in the assembly), which is the fast case.
+
+*Whether this explains "x86_64 only".* The parked 4x gap reads 1.11x on macOS
+and 1.05x on ARM. On AArch64 the low halves of `d8`-`d15` are callee-saved, which
+would let an `f32` accumulator survive a call. That is reasoning from the
+calling convention, **not tested**: there was no ARM machine here.
+
+*Experiment, not applied.* Changing the three `IterMut*::advance` functions from
+`#[cold] #[inline(never)]` to `#[inline(always)]`, one scratch build:
+
+| loop, 10,000 rows | before | after |
+|---|---|---|
+| mutable one column, `for`, read-only sum | 28.9 | 11.7 |
+| mutable one column, `for`, write | 16.0 | 10.9 |
+| mutable two columns `(Mut<A>, &B)`, `for`, sum | 32.1 | 29.3 |
+
+The one-column loop gets close to its floor. The two-column loop does not move:
+its inlined body still contains indirect calls and panic paths, and its sum is
+still on the stack (`movss 4(%rsp)`). So inlining `advance` is a partial fix,
+and a full one for the two-column shapes needs `advance` rebuilt so that no call
+is left inside the loop at all, which is a design change, not an attribute.
+
+*Why none of it is in the tree.* It was measured in the sandbox only, and this
+file already records an `advance()` change to `Iter1`/`Iter2` that looked fine
+in the sandbox and regressed on CI (#29/#30); `iter.rs` also records
+`#[inline(always)]` tried on `Iter1::next`. Performance work is paused until the
+ECS is feature-complete, so this stays a documented candidate. **When it resumes:
+the lead is "no call inside the `for` loop", checked in assembly on x86_64
+first, then on CI, then the ARM runner.**
+
 **Not done.** No C-timed bench (there is no C counterpart to time). No
 `bench-nolto` dispatch of these groups. No bench for `query2_static_mut` (both
 sides mutable) or the `_filtered` forms; the `(&mut A, &B)` shape is the one most
