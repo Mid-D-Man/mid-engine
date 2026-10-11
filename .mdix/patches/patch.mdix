@@ -1,0 +1,19 @@
+// Brought to u by MidManStudio
+
+@CONFIG(
+  version  -> "1.0.0"
+  features -> "quickfuncs,data"
+)
+
+@QUICKFUNCS(
+  ~delete_file<object>(_path) {
+    return { path = _path }
+  }
+)
+
+@DATA(
+  delete_files::
+    delete_file("crates/mid-ecs/src/diag_inline.rs")
+    delete_file("crates/mid-ecs/src/diag_query2_unchecked.rs")
+    delete_file(".github/mid-ecs-ffi-test-template.html")
+)
