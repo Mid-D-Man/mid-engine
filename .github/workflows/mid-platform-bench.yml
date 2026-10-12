@@ -31,6 +31,11 @@
 # what actually proves it.
 #
 # Run: Actions -> "mid-platform — bench sync primitives" -> Run workflow
+# Also runs benches/hash_bench.rs (Phase 3 hasher: hash::FixedHasher vs
+# rustc-hash 1.1.0 vs std's SipHash) ONCE, under default features only --
+# unlike sync_bench.rs there's no std/no_std split to sweep, hash.rs is pure
+# core arithmetic with a single code path in both configurations.
+#
 # DO NOT add push/pull_request triggers.
 
 name: mid-platform — bench sync primitives
@@ -112,6 +117,13 @@ jobs:
             2>&1 | tee bench-mid-platform-nostd-raw.txt
           echo "Bench exit code (no_std fallback): $?" >> "$GITHUB_STEP_SUMMARY"
 
+      - name: Run benchmarks (hash -- single configuration, no std/no_std split)
+        run: |
+          set -o pipefail
+          cargo bench -p mid-platform --bench hash_bench -- --color never \
+            2>&1 | tee bench-mid-platform-hash-raw.txt
+          echo "Bench exit code (hash): $?" >> "$GITHUB_STEP_SUMMARY"
+
       - name: Surface bench diagnostics
         if: always()
         run: |
@@ -128,6 +140,12 @@ jobs:
             echo '```'
             grep -E 'took zero time|Unable to complete|Warning:|panicked|Completed [0-9]+ iterations' \
               bench-mid-platform-nostd-raw.txt | head -60 || echo "(none found)"
+            echo '```'
+            echo ""
+            echo "**hash run:**"
+            echo '```'
+            grep -E 'took zero time|Unable to complete|Warning:|panicked|Completed [0-9]+ iterations' \
+              bench-mid-platform-hash-raw.txt | head -60 || echo "(none found)"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -153,7 +171,12 @@ jobs:
             grep -B 1 "time:" bench-mid-platform-nostd-raw.txt | grep -v "^--$" || echo "(no results parsed -- see raw log)"
             echo '```'
             echo ""
-            echo "<details><summary>Full raw output (both runs)</summary>"
+            echo "#### hash (hash::FixedHasher vs rustc-hash 1.1.0 vs std SipHash)"
+            echo '```'
+            grep -B 1 "time:" bench-mid-platform-hash-raw.txt | grep -v "^--$" || echo "(no results parsed -- see raw log)"
+            echo '```'
+            echo ""
+            echo "<details><summary>Full raw output (all runs)</summary>"
             echo ""
             echo "_Build output (compiler warnings, \`Compiling\`/\`Finished\` lines) is_"
             echo "_stripped below to stay clear of GitHub's 1024k step-summary limit --_"
@@ -182,6 +205,17 @@ jobs:
             fi
             echo '```'
             echo ""
+            echo "**hash:**"
+            echo '```'
+            if grep -q 'Finished `bench` profile' bench-mid-platform-hash-raw.txt; then
+              awk '/Finished `bench` profile/{f=1} f' bench-mid-platform-hash-raw.txt | head -c 900000
+            else
+              echo "(Compilation never finished -- showing the full raw log, including build errors.)"
+              echo ""
+              head -c 900000 bench-mid-platform-hash-raw.txt
+            fi
+            echo '```'
+            echo ""
             echo "</details>"
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -193,5 +227,6 @@ jobs:
           path: |
             bench-mid-platform-std-raw.txt
             bench-mid-platform-nostd-raw.txt
+            bench-mid-platform-hash-raw.txt
             target/criterion
           retention-days: 30
