@@ -24,6 +24,7 @@
   - [sync::LazyLock](crates/mid-platform/lazy-lock.md)
   - [sync::Barrier](crates/mid-platform/barrier.md)
   - [sync::Arc / Weak](crates/mid-platform/arc.md)
+  - [hash](crates/mid-platform/hash.md)
 - [mid-net](crates/mid-net.md)
 - [mid-ecs](crates/mid-ecs.md)
 - [mid-geom](crates/mid-geom.md)

@@ -2,14 +2,23 @@
 name        = "mid-platform"
 version     = "0.0.1"
 edition     = "2021"
-description = "Platform-agnostic primitives for mid-engine (Mutex/RwLock/Once/OnceLock/LazyLock/Barrier/Arc/atomics/cells), bevy_platform-shaped but hand-rolled and dependency-free -- see docs/mid-platform.md"
+description = "Platform-agnostic primitives for mid-engine (Mutex/RwLock/Once/OnceLock/LazyLock/Barrier/Arc/atomics/cells/FxHash-style hasher), bevy_platform-shaped but hand-rolled and dependency-free -- see docs/mid-platform.md"
 
 [lib]
-name       = "mid_platform"
-# Closes half the FFI gap docs/mid-platform.md's "Fixes and Problems" named:
-# a cdylib/staticlib for src/ffi.rs's Once/Barrier surface to actually link
-# against. Matches mid-ecs's/mid-net's own [lib] shape exactly.
-crate-type = ["lib", "cdylib", "staticlib"]
+name = "mid_platform"
+# NOT ["lib", "cdylib", "staticlib"] here, unlike mid-ecs's/mid-net's own
+# [lib] shape -- tried that first, it broke `cargo build -p mid-platform
+# --no-default-features` in CI (real failure, Build #3): a cdylib/staticlib
+# is a final linked artifact needing a #[panic_handler] and unwind support,
+# neither of which exist (or should exist) in the no_std fallback path, and
+# Cargo has no way to make `crate-type` conditional on a feature within one
+# manifest. mid-ecs/mid-net never hit this because neither is no_std-capable
+# in the first place. Fix: keep crate-type as plain `["lib"]` here (works
+# for every configuration, matching this crate's pre-FFI state), and build
+# the cdylib the FFI smoke test actually needs on demand, only under
+# default features, via `cargo rustc --crate-type cdylib` -- see
+# .github/workflows/mid-platform-test.yml's own comment on that step.
+crate-type = ["lib"]
 
 [features]
 default = ["std"]
@@ -40,9 +49,19 @@ alloc   = []
 # included, before building ANY target from it).
 criterion = { workspace = true }
 spin = "0.10.0"
+# Phase 3 hasher's comparison baseline AND parity-test reference (src/hash.rs's
+# own tests, benches/hash_bench.rs): the real published crate whose algorithm
+# `hash::FxHasher` is, read directly from its crates.io source (1.1.0, not
+# 2.x -- 2.x switched to a different algorithm). Same dev-dependency-only
+# discipline as `spin` above, never promoted to [dependencies].
+rustc-hash = "1.1.0"
 
 [[bench]]
 name    = "sync_bench"
+harness = false
+
+[[bench]]
+name    = "hash_bench"
 harness = false
 
 [lints]

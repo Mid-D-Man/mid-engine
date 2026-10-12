@@ -8,7 +8,7 @@
 // source by eye: see test.c, run against both libmid_platform.so and
 // libmid_platform.a with real gcc.
 //
-// Scope: Once and Barrier only -- Mutex/RwLock/OnceLock/LazyLock all need
+// Scope: Once, Barrier, and the fixed hasher -- Mutex/RwLock/OnceLock/LazyLock all need
 // an opaque guard handle design (something a C caller explicitly unlocks,
 // since C has no destructors) that hasn't been built yet. See ffi.rs's own
 // doc comment for the full reasoning.
@@ -81,6 +81,19 @@ int32_t mid_platform_once_call(MidPlatformOnce *once, MidPlatformOnceFn f, void 
 // Returns true if mid_platform_once_call has completed successfully at
 // least once on this once. false on a NULL once.
 bool mid_platform_once_is_completed(const MidPlatformOnce *once);
+
+// --- Hash ---
+
+// Hashes len bytes at data with the deterministic fixed hasher (fast,
+// non-cryptographic, for trusted keys only -- not HashDoS-resistant) and
+// writes the 64-bit result to *out. Same bytes -> same result on every run
+// and platform. Hashes raw bytes only. data may be NULL only when len is 0.
+// Returns MID_PLATFORM_NULL_POINTER for a NULL out, or NULL data with a
+// non-zero len; MID_PLATFORM_OK otherwise.
+int32_t mid_platform_fixed_hash_bytes(const uint8_t *data, size_t len, uint64_t *out);
+
+// Hashes one uint64_t with the same hasher. Pure; cannot fail.
+uint64_t mid_platform_fixed_hash_u64(uint64_t value);
 
 #ifdef __cplusplus
 }

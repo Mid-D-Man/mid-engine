@@ -1,12 +1,13 @@
 //! C-compatible FFI exports for mid-platform.
 //!
-//! Scope for this pass: `Once` and `Barrier` only. Both cross the FFI
-//! boundary cleanly because neither ever hands a caller a *borrowed*
+//! Scope so far: `Once`, `Barrier`, and the fixed hasher
+//! (`mid_platform_fixed_hash_*`). All three cross the FFI boundary
+//! cleanly because none of them ever hands a caller a *borrowed*
 //! guard object that has to be explicitly, correctly paired with a
 //! later release call: `Barrier::wait` returns a plain `bool` by value,
-//! and `Once::call_once` just runs a callback and returns `()` — nothing
-//! for a C caller to hold onto, nothing that can be freed too early or
-//! used after its data went away.
+//! `Once::call_once` just runs a callback and returns `()`, and the hasher
+//! is a pure function of its input — nothing for a C caller to hold onto,
+//! nothing that can be freed too early or used after its data went away.
 //!
 //! `Mutex`, `RwLock`, `OnceLock`, and `LazyLock` are deliberately **not**
 //! covered here — every one of them hands back a live reference (a
@@ -49,9 +50,11 @@
 //!   `Box::from_raw`), matching `mid-ecs`'s own `MidEcsWorld` handle
 //!   pattern exactly.
 
+use core::hash::{BuildHasher, Hasher};
 use std::ffi::c_void;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
+use crate::hash::FixedHasher;
 use crate::sync::{Barrier, Once};
 
 /// Status codes. `mid_platform_barrier_wait` and
@@ -238,10 +241,115 @@ pub unsafe extern "C" fn mid_platform_once_is_completed(once: *const MidPlatform
     result.unwrap_or(false)
 }
 
+// ============================================================================
+// Hash
+// ============================================================================
+
+/// Hashes `len` bytes starting at `data` with the deterministic
+/// [`FixedHasher`] (see `hash.rs` — fast and non-cryptographic, for
+/// trusted keys only, not HashDoS-resistant) and writes the 64-bit result
+/// to `*out`. The same bytes always give the same result, on every run and
+/// every platform. This hashes the raw bytes only; it is *not* the same
+/// value Rust's `Hash` impl for `str`/`[u8]` produces (those also mix in a
+/// length prefix or terminator).
+///
+/// `data` may be NULL only when `len` is `0` (an empty input is valid).
+/// Returns `MidPlatformStatus::NullPointer` for a NULL `out`, or a NULL
+/// `data` with a non-zero `len`; `MidPlatformStatus::Ok` otherwise.
+///
+/// # Safety
+/// `out` must be NULL or valid for one `u64` write. `data`, if non-NULL,
+/// must be valid for reads of `len` bytes.
+#[no_mangle]
+pub unsafe extern "C" fn mid_platform_fixed_hash_bytes(
+    data: *const u8,
+    len: usize,
+    out: *mut u64,
+) -> i32 {
+    ffi_guard(|| {
+        if out.is_null() || (data.is_null() && len > 0) {
+            return MidPlatformStatus::NullPointer as i32;
+        }
+        let bytes: &[u8] = if len == 0 {
+            &[]
+        } else {
+            // SAFETY: `data` is non-null here and this function's own
+            // `# Safety` contract requires it valid for `len` byte reads.
+            unsafe { std::slice::from_raw_parts(data, len) }
+        };
+        let mut hasher = FixedHasher.build_hasher();
+        hasher.write(bytes);
+        // SAFETY: `out` is non-null here and this function's own
+        // `# Safety` contract requires it valid for one `u64` write.
+        unsafe { *out = hasher.finish() };
+        MidPlatformStatus::Ok as i32
+    })
+}
+
+/// Hashes one `u64` with the deterministic [`FixedHasher`]. Pure
+/// arithmetic on its argument — no pointers, nothing that can fail or
+/// panic, so no status code and no `catch_unwind` (same reasoning
+/// `mid_platform_barrier_new`/`mid_platform_once_new` already apply to
+/// themselves).
+#[no_mangle]
+pub extern "C" fn mid_platform_fixed_hash_u64(value: u64) -> u64 {
+    let mut hasher = FixedHasher.build_hasher();
+    hasher.write_u64(value);
+    hasher.finish()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicU32, Ordering};
+
+    // --- Hash ---
+
+    #[test]
+    fn hash_bytes_matches_the_rust_side_fixed_hasher() {
+        let data = b"mid-engine";
+        let mut out = 0u64;
+        // SAFETY: `data` is valid for `data.len()` bytes, `out` for one u64.
+        let status = unsafe { mid_platform_fixed_hash_bytes(data.as_ptr(), data.len(), &mut out) };
+        assert_eq!(status, MidPlatformStatus::Ok as i32);
+        let mut expected = FixedHasher.build_hasher();
+        expected.write(data);
+        assert_eq!(out, expected.finish());
+    }
+
+    #[test]
+    fn hash_bytes_empty_input_with_null_data_is_valid() {
+        let mut out = 0u64;
+        // SAFETY: NULL data with len 0 is the documented valid empty input.
+        let status = unsafe { mid_platform_fixed_hash_bytes(std::ptr::null(), 0, &mut out) };
+        assert_eq!(status, MidPlatformStatus::Ok as i32);
+        assert_eq!(out, FixedHasher.build_hasher().finish());
+    }
+
+    #[test]
+    fn hash_bytes_null_out_or_null_data_with_length_is_null_pointer() {
+        let data = [1u8, 2, 3];
+        let mut out = 0u64;
+        // SAFETY: exercising the documented NULL-pointer error paths.
+        unsafe {
+            assert_eq!(
+                mid_platform_fixed_hash_bytes(data.as_ptr(), data.len(), std::ptr::null_mut()),
+                MidPlatformStatus::NullPointer as i32
+            );
+            assert_eq!(
+                mid_platform_fixed_hash_bytes(std::ptr::null(), 3, &mut out),
+                MidPlatformStatus::NullPointer as i32
+            );
+        }
+    }
+
+    #[test]
+    fn hash_u64_matches_the_rust_side_fixed_hasher() {
+        let mut expected = FixedHasher.build_hasher();
+        expected.write_u64(42);
+        assert_eq!(mid_platform_fixed_hash_u64(42), expected.finish());
+        assert_ne!(mid_platform_fixed_hash_u64(42), mid_platform_fixed_hash_u64(43));
+    }
 
     // --- Barrier ---
 

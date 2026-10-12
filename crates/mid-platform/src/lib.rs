@@ -17,9 +17,13 @@
 //! [`sync::MutexGuard`], [`sync::Arc`] / [`sync::Weak`], [`sync::RwLock`] /
 //! [`sync::RwLockReadGuard`] / [`sync::RwLockWriteGuard`], [`sync::Once`] /
 //! [`sync::OnceLock`] / [`sync::OnceState`], [`sync::LazyLock`], and
-//! [`sync::Barrier`] / [`sync::BarrierWaitResult`]. A fast hasher and a
-//! `HashMap`/`HashSet` are Phase 3 — separate, later decisions, not an
-//! oversight.
+//! [`sync::Barrier`] / [`sync::BarrierWaitResult`].
+//!
+//! **Phase 3, started:** [`hash::FxHasher`] / [`hash::FixedHasher`] — an
+//! independent copy of `mid_collections::FxHasher`'s own algorithm, see
+//! `docs/mid-platform.md`, "Why a second, independent `FxHasher`."
+//! `HashMap`/`HashSet` are still a separate, later decision — see
+//! `docs/mid-platform.md`, "Build order," Phase 3.
 //!
 //! Every lock type here works identically whether the `std` feature (on by
 //! default) is enabled or not: with `std`, it's a thin pass-through to
@@ -41,11 +45,13 @@ extern crate alloc;
 extern crate std;
 
 pub mod cell;
+pub mod hash;
 pub mod sync;
 
 /// C-compatible FFI exports. `std`-only — see this module's own doc
-/// comment for why (a linkable `cdylib`/`staticlib` needs a real OS
-/// underneath it regardless). First pass covers `Once`/`Barrier` only;
+/// comment for why (a linkable `cdylib` needs a real OS underneath it
+/// regardless; built on demand, not declared in `Cargo.toml` — see that
+/// file's own `[lib]` comment). Covers `Once`, `Barrier`, and the fixed hasher;
 /// `Mutex`/`RwLock`/`OnceLock`/`LazyLock` are open work — see
 /// `docs/mid-platform.md`, "Fixes and Problems."
 #[cfg(feature = "std")]

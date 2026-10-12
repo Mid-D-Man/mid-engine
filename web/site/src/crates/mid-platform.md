@@ -18,9 +18,10 @@ the crate.
 - [`sync::LazyLock`](mid-platform/lazy-lock.md)
 - [`sync::Barrier`](mid-platform/barrier.md) — `BarrierWaitResult`
 - [`sync::Arc` / `Weak`](mid-platform/arc.md) — plain re-export of `alloc::sync`
+- [`hash`](mid-platform/hash.md) — `FxHasher`, `FixedHasher`, `fixed_hash_one`
 
-**Status:** Phase 1 and Phase 2 both done (see `docs/mid-platform.md`). A
-fast hasher and a `HashMap`/`HashSet` are a separate, later decision, not
-started. C FFI: `Once` and `Barrier` are callable from C today (see their
+**Status:** Phase 1 and Phase 2 both done, and the Phase 3 fast hasher
+(see `docs/mid-platform.md`). A `HashMap`/`HashSet` is the open half of
+Phase 3 — a separate decision, not started. C FFI: `Once` and `Barrier` are callable from C today (see their
 own module pages); `Mutex`/`RwLock`/`OnceLock`/`LazyLock` are open work —
 see `docs/mid-platform.md`, "Fixes and Problems."

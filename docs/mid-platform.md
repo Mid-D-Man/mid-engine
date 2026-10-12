@@ -39,7 +39,7 @@ which only exist for platforms bevy supports that mid-engine doesn't.
 | Dependency | What it's for in `bevy_platform` | Needed for mid-engine's real targets? | Verdict |
 |---|---|---|---|
 | `spin` | `Mutex`/`RwLock`/`Once`/`Barrier`/`LazyLock` fallback impls when `std` is off | Only the *mechanism* (spin-locking), not the crate itself | **Hand-roll.** `mid-alloc::sync::SpinLock` already proves the exact algorithm works, tested under real threads. mid-platform gets its own independent copy of the same shape (see "Why not just depend on mid-alloc" below) rather than a Cargo dependency on either `spin` or `mid-alloc`. |
-| `foldhash` | The actual hash algorithm behind `DefaultHasher`/`RandomState`/`FixedState` in `hash.rs` | Yes, if we want a fast general-purpose hasher at all | **Hand-roll**, deferred to its own phase — a fold/multiply-based hash is well-trodden ground (FxHash-style algorithms are ~30 lines), but it deserves its own benchmarked pass, not a rushed one bolted onto this crate's first slice. |
+| `foldhash` | The actual hash algorithm behind `DefaultHasher`/`RandomState`/`FixedState` in `hash.rs` | Yes, if we want a fast general-purpose hasher at all | **Hand-rolled — done (Phase 3, `hash.rs`).** A fold/multiply-based hash is well-trodden ground (FxHash-style algorithms are ~30 lines); built as its own benchmarked pass rather than bolted onto an earlier slice, see "Why a second, independent `FxHasher`" below. Deliberately no `RandomState` equivalent — see "hash.rs" under Modules. |
 | `hashbrown` | The actual `HashMap`/`HashSet`/`HashTable` implementation (`collections/hash_map.rs` is 1,292 lines, `hash_set.rs` 1,083 — real API-surface work on top of the raw table, not a thin wrapper) | Only if we want a `std`-HashMap-equivalent API at all | **Hardest one — separate decision, not answered by this doc.** Reimplementing a correct, reasonably fast open-addressing hash table (SIMD group matching, tombstone-free Robin-Hood-style probing, raw-entry API) from scratch is a materially bigger undertaking than anything else on this list — closer in scope to a second `mid-ptr`-sized project than a one-file port. Not attempted in this pass. |
 | `portable-atomic` | Atomic types on platforms lacking a native width (8/16/32/64/ptr) | **No** — only pulled in via `[target.'cfg(not(all(target_has_atomic = "8", "16", "32", "64", "ptr")))'.dependencies]`; x86_64, aarch64, and wasm32 (with atomics) all have full native width support | **Not needed at all.** `mid_platform::sync::atomic` can be a pure re-export of `core::sync::atomic` — verified directly against `sync/atomic.rs`'s own `#[cfg(target_has_atomic = "N")]` gating, not assumed. |
 | `portable-atomic-util` | `Arc`/`Weak` built on `portable-atomic` when the platform lacks pointer-width atomics | **No**, same reasoning as above (`[target.'cfg(not(target_has_atomic = "ptr"))'.dependencies]`) | **Not needed.** `mid_platform::sync::Arc`/`Weak` can be a pure re-export of `alloc::sync::{Arc, Weak}`. |
@@ -64,6 +64,48 @@ already validated under real multi-threaded stress tests. Not a blind
 duplication — grounded in code this same workspace already proved works,
 just kept as an independent copy so each crate's dependency count stays
 honest.
+
+## Why a second, independent `FxHasher`
+
+`mid-collections` already has a working FxHash-style hasher
+(`crates/mid-collections/src/fx_hash.rs`: `FxHasher`, `FxBuildHasher`) —
+the same fold/multiply algorithm this crate's Phase 3 was always going to
+need. Same question `SpinLock` raised, same answer: `mid-platform` gets its
+own independent copy rather than a Cargo dependency in either direction.
+`mid-collections` is documented as a no-engine-deps layer-0 crate too
+(`web/site/src/dependency-order.md`), so neither crate sits below the other;
+a dependency either way would break the "layer-0, no in-workspace
+dependency" premise this crate was prioritized on, for a ~30-line algorithm
+that's cheaper to copy than to couple.
+
+The copy is deliberately close to the original, not a redesign: same
+multiplier, same rotate-5/xor/wrapping-multiply step, same 8/4/2/1-byte
+`write` chunking, same sign-extension of narrow signed integer writes.
+Two real differences, both intentional:
+- `core::hash` instead of `std::hash`, so the module is usable under the
+  `no_std` configuration with no feature split at all (`mid-collections`'s
+  copy imports `std::hash`, though both traits live in `core` — a one-line
+  fix there if it's ever wanted, not touched in this pass).
+- `FxHasher::with_seed(u64)`, so `FixedHasher` can start from a fixed
+  non-zero state (`bevy_platform::hash::FixedHasher`'s own role) instead of
+  zero.
+
+Naming: this crate follows `bevy_platform`'s names (`FixedHasher`,
+`fixed_hash_one`), matching every other module here.
+`mid-collections`'s `FxBuildHasher = BuildHasherDefault<FxHasher>` is a
+different, already-established public name for the analogous thing in that
+crate — not renamed or aliased to match, since changing an existing public
+API wasn't asked for. Disclosed drift, same class as the doc-location and
+versioning drift already noted elsewhere in this project.
+
+**Open, not decided here:** whether `mid-collections` should eventually
+switch to this crate's hasher (a dependency in the other direction, which
+`mid-collections` doesn't have today) or keep its own copy forever, the
+way `mid-alloc` keeps its `SpinLock`. Nothing forces the question until a
+second consumer of one hasher actually wants a single source of truth.
+Also spotted while checking, not fixed (out of scope): `fx_hash.rs`'s top
+comment still names `crates/chemistry_core/src/fx_hash.rs` — a stale path
+from where it was copied.
 
 ## Build order
 
@@ -93,12 +135,29 @@ See "Modules" below for what each file actually does and why:
 - `thread::sleep` — std path trivial; no_std fallback busy-spins on `Instant`, needs the `mid-time`-consolidation decision below settled first
 - `future::block_on` — the busy-spin fallback itself is simple and zero-dep; mainly blocked on deciding whether `mid-platform` re-exports `mid-time`'s `Instant` or grows its own
 
-**Phase 3 (separate decision, not scoped here):** `hash.rs`'s fast-hasher
-algorithm (deserves a benchmarked pass of its own) and the `collections::hash_map`/
-`hash_set` question (depend on `hashbrown` directly, since reimplementing it is a
-project-sized undertaking on its own — or accept a slower, simpler hand-rolled
-map and measure whether it actually matters for mid-engine's real workloads).
-Not decided in this doc.
+**Phase 3, hasher half (done):** `hash.rs` — `FxHasher`, `FixedHasher`,
+`fixed_hash_one`. Benchmarked against `rustc-hash` 1.1.0 and std's SipHash
+(`benches/hash_bench.rs`, first run pending). No `RandomState` equivalent,
+on purpose — see "hash.rs" under Modules.
+
+**Phase 3, `HashMap`/`HashSet` half (open — needs an explicit decision, not
+started):** `collections::hash_map`/`hash_set`. The options on the table,
+none chosen:
+1. A `std` passthrough only — `HashMap`/`HashSet` aliases over
+   `std::collections` with `FixedHasher` as the default hasher, and no
+   `no_std` fallback at all yet. Smallest, matches how every other type in
+   this crate is built `std`-first; leaves the `no_std` configuration
+   without a map until something needs one.
+2. Depend on `hashbrown` directly (what `bevy_platform` itself does).
+   Breaks this crate's zero-dependency premise, for the one thing on the
+   list that's genuinely hard to hand-roll well.
+3. A deliberately simple, safe, hand-rolled open-addressing map for the
+   `no_std` path — slower than `hashbrown`, far easier to get right with no
+   compiler in the working environment, measured against real workloads
+   before anyone decides whether the gap matters.
+4. A from-scratch SwissTable/`hashbrown`-equivalent — the "second
+   `mid-ptr`-sized project" the dependency table above already names.
+   Not recommended without a compiler and fuzzing in the loop.
 
 **Not planned at all right now:** `dirs::*`, the `web`/async-executor features,
 `serde`, `rayon`, `collections::aligned_vec` — all trigger-based deferrals per
@@ -215,11 +274,49 @@ real-multi-thread test (10 threads, barrier reused across two generations,
 confirms exactly one leader per round and that the generation counter
 actually unblocks the next round).
 
+### `hash.rs`
+
+**What it does:** `FxHasher`, `FixedHasher` (a deterministic `BuildHasher`
+for it), and `fixed_hash_one`. No `std`/`no_std` split — pure `core`
+integer arithmetic, one code path in every configuration.
+
+**Decisions:**
+- Independent copy of `mid-collections`'s `FxHasher`, not a dependency —
+  see "Why a second, independent `FxHasher`" above.
+- **No `RandomState`/HashDoS-resistant equivalent**, unlike
+  `bevy_platform::hash`. Two reasons: FxHash's diffusion is weak by design,
+  so randomizing the seed only defeats a *precomputed* attack, not an
+  attacker who can observe outputs or timing — a false sense of security
+  for an algorithm that never tried to be DoS-resistant; and getting real
+  OS entropy with zero dependencies, under a `no_std` fallback that may
+  have no OS to ask, is a separate hard problem not worth solving for it.
+  A caller who needs HashDoS resistance should use `std`'s own
+  `RandomState`/SipHash. This hasher is for trusted engine-internal keys
+  (spatial-hash cells, entity ids), the same category `mid-collections`'s
+  copy already targets.
+- `FixedHasher` starts from `0x9E37_79B9_7F4A_7C15` (the 64-bit golden-ratio
+  constant) rather than zero — a well-known odd constant, not a value the
+  implementation depends on for any particular property.
+- Matches `rustc-hash` 1.1.0 (read from its crates.io source) bit-for-bit
+  on 64-bit targets from a zero seed, except for negative `i8`/`i16`/`i32`:
+  `rustc-hash` zero-extends those, this sign-extends them (inherited from
+  `mid-collections`). Unlike `rustc-hash`, this uses a `u64` state on every
+  target, so its output is identical on 32-bit and 64-bit (wasm32 vs
+  native) — `rustc-hash`'s isn't.
+- `bevy_platform`'s `Hashed<V, S>`, `PassHash`/`NoOpHash` are not built —
+  not needed by anything yet, trigger-based like everything else deferred
+  here.
+
+**Tests:** in-file — determinism, seed sensitivity, a real parity test
+against the published `rustc-hash` 1.1.0 crate (a dev-dependency; covers
+every `write` tail length 0–15 bytes plus each integer width), and a test
+pinning the one known divergence (negative narrow signed ints).
+
 ### `ffi.rs`
 
-**What it does:** C-compatible FFI exports. `std`-only. `Once`/`Barrier`
-only — see "Fixes and Problems" below for the full reasoning on scope and
-what's still open.
+**What it does:** C-compatible FFI exports. `std`-only. `Once`, `Barrier`,
+and the fixed hasher — see "Fixes and Problems" below for the full
+reasoning on scope and what's still open.
 
 **Decisions:**
 - Every convention (status enum shape, `ffi_guard`/`catch_unwind`, opaque
@@ -284,12 +381,23 @@ Historical numbers age fast (a future change to either implementation
 makes this paragraph stale) — treat this as "confirmed once, on Build #1,"
 not a promise every future run reproduces exactly these figures.
 
+`benches/hash_bench.rs` (Phase 3) — `FixedHasher` against `rustc-hash`
+1.1.0 and std's default SipHash `RandomState`: raw hashing for `u64`, short
+string, and 256-byte keys, plus each hasher as the `BuildHasher` of a real
+`std::collections::HashMap` (insert + lookup). Runs once, under default
+features — no `std`/`no_std` split to sweep. Since parity with `rustc-hash`
+is already asserted bit-for-bit by `hash.rs`'s own tests, any real gap
+between those two rows is codegen, not algorithm. **Not yet run** — no
+numbers exist for this bench yet; same honesty as `sync_bench.rs` had
+before its own first dispatch.
+
 ## CI and Workflows
 
 - `.github/workflows/mid-platform-bench.yml` — `benches/sync_bench.rs`,
-  run twice (default features, then `--no-default-features`), bash-grep
-  summary pattern (see `docs/benching-standards.md`). `workflow_dispatch`
-  only. Adding `criterion` as a dev-dependency gives this crate the same
+  run twice (default features, then `--no-default-features`), plus
+  `benches/hash_bench.rs` once (default features only — no feature split
+  for `hash.rs`), bash-grep summary pattern (see
+  `docs/benching-standards.md`). `workflow_dispatch` only. Adding `criterion` as a dev-dependency gives this crate the same
   edition2024-via-`clap_builder` MSRV wall `mid-collections`'s and
   `mid-arena`'s own bench dev-dependencies already carry — see
   `docs/workspace-cargo.md`, "MSRV / toolchain walls" — so `cargo test -p
@@ -324,11 +432,13 @@ boundary," and letting that stay unaddressed indefinitely is exactly what
 happened with `mid-ptr` (see `docs/mid-ptr.md`'s own Fixes and Problems);
 not repeating that here.
 
-`Cargo.toml`'s `[lib]` now declares `crate-type = ["lib", "cdylib",
-"staticlib"]`, and `src/ffi.rs` (`std`-only — a linkable `cdylib` needs a
-real OS underneath it regardless) covers `Once` and `Barrier`:
+`src/ffi.rs` (`std`-only — a linkable `cdylib` needs a real OS underneath
+it regardless) covers `Once`, `Barrier`, and the fixed hasher:
 `mid_platform_once_{new,free,call,is_completed}`,
-`mid_platform_barrier_{new,free,wait}`. Real, hand-written C header and a
+`mid_platform_barrier_{new,free,wait}`,
+`mid_platform_fixed_hash_{bytes,u64}` (added with Phase 3's hasher, per the
+"build FFI as each piece lands" rule — a pure function of its input, so no
+guard/handle problem at all). Real, hand-written C header and a
 real C program compiled with gcc and run against the actual compiled
 `libmid_platform.so` — `ffi-smoke-test/mid_platform.h`,
 `ffi-smoke-test/test.c` — wired into `mid-platform-test.yml`, same pattern
@@ -336,6 +446,24 @@ real C program compiled with gcc and run against the actual compiled
 check spawns four real `pthread`s, not just single-threaded calls, so the
 smoke test exercises `Barrier` under genuine multi-thread contention
 through the actual C ABI, not only Rust-side.
+
+**Real mistake, caught and fixed (Build #3):** `Cargo.toml`'s `[lib]`
+originally declared `crate-type = ["lib", "cdylib", "staticlib"]`
+unconditionally, matching `mid-ecs`'s/`mid-net`'s own `[lib]` shape — this
+broke `cargo build -p mid-platform --no-default-features` in real CI: a
+`cdylib`/`staticlib` is a final linked artifact needing a `#[panic_handler]`
+and unwind support, neither of which exist (or should exist) in the
+no_std fallback path, and Cargo has no way to make `crate-type`
+conditional on a feature within one manifest. `mid-ecs`/`mid-net` never
+hit this because neither is no_std-capable in the first place —
+mid-platform is the first crate in this workspace to need cdylib output
+*and* have a real no_std configuration at the same time. Fixed by keeping
+`crate-type = ["lib"]` (works for every configuration, matching this
+crate's pre-FFI state) and building the cdylib the smoke test actually
+needs on demand, only under default features, via `cargo rustc -p
+mid-platform --lib --crate-type cdylib` in
+`mid-platform-test.yml`'s own FFI smoke test step, instead of declaring it
+in the manifest at all.
 
 **Still open, deliberately not attempted in this same pass:** `Mutex`,
 `RwLock`, `OnceLock`, `LazyLock`. Every one of them hands back a live,

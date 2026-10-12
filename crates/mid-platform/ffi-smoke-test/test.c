@@ -86,6 +86,29 @@ int main(void) {
     CHECK(leader_count == 1, "exactly one real pthread is leader across a real rendezvous");
     mid_platform_barrier_free(barrier);
 
+    // --- Hash ---
+    const uint8_t bytes_a[] = {1, 2, 3, 4, 5, 6, 7, 8, 9};
+    const uint8_t bytes_b[] = {1, 2, 3, 4, 5, 6, 7, 8, 10};
+    uint64_t hash_a1 = 0, hash_a2 = 0, hash_b = 0, hash_empty = 0;
+    CHECK(mid_platform_fixed_hash_bytes(bytes_a, sizeof bytes_a, &hash_a1) == MID_PLATFORM_OK,
+          "fixed_hash_bytes returns MID_PLATFORM_OK");
+    CHECK(mid_platform_fixed_hash_bytes(bytes_a, sizeof bytes_a, &hash_a2) == MID_PLATFORM_OK,
+          "fixed_hash_bytes returns MID_PLATFORM_OK on a repeat call");
+    CHECK(hash_a1 == hash_a2, "the same bytes hash to the same value every call");
+    CHECK(mid_platform_fixed_hash_bytes(bytes_b, sizeof bytes_b, &hash_b) == MID_PLATFORM_OK,
+          "fixed_hash_bytes returns MID_PLATFORM_OK for different bytes");
+    CHECK(hash_a1 != hash_b, "different bytes hash to different values");
+    CHECK(mid_platform_fixed_hash_bytes(NULL, 0, &hash_empty) == MID_PLATFORM_OK,
+          "NULL data with len 0 is a valid empty input");
+    CHECK(mid_platform_fixed_hash_bytes(NULL, 4, &hash_empty) == MID_PLATFORM_NULL_POINTER,
+          "NULL data with a non-zero len returns MID_PLATFORM_NULL_POINTER");
+    CHECK(mid_platform_fixed_hash_bytes(bytes_a, sizeof bytes_a, NULL) == MID_PLATFORM_NULL_POINTER,
+          "NULL out returns MID_PLATFORM_NULL_POINTER");
+    CHECK(mid_platform_fixed_hash_u64(42) == mid_platform_fixed_hash_u64(42),
+          "hash_u64 is deterministic");
+    CHECK(mid_platform_fixed_hash_u64(42) != mid_platform_fixed_hash_u64(43),
+          "hash_u64 distinguishes different values");
+
     printf("\n=== %d check(s) failed ===\n", failures);
     return failures == 0 ? 0 : 1;
 }
