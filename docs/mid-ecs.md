@@ -3368,3 +3368,131 @@ and is clean under valgrind. Not run on real CI.
 - `RemovedComponents`, hooks and events: despawn and remove through a
   command behave exactly as through the `World` method, with no extra
   notification.
+
+### Multi-term queries: `query_data.rs` (`QueryData`, `Has`, `World::query_data`)
+
+Gap-list item 1 against bevy_ecs: queries over three or more components,
+plus `Option<&T>`, `Has<T>` and `Entity` terms. Before this, the widest
+Archetype Core query was `query2_static` (two components, no optional
+terms). Archetype Core only, read-only. Mutable terms, `Ref<T>` and
+`Added`/`Changed` terms are not part of this pass, see "Not done" below.
+
+**What it is.** `World::query_data::<Q>()` and
+`World::query_data_filtered::<Q, F>()`, where `Q` is one term or a tuple of
+up to twelve, and `F` is any `QueryFilter` (`With`, `Without`, `Or`, tuples
+of them). The item shape is a type instead of a method name:
+`(Entity, &A, &B, &C)` is a three-component query,
+`(&A, Option<&B>, Has<C>)` visits every archetype with an `A` and reports,
+per row, `B` if the archetype has it and whether it has a `C`. Tuples nest.
+
+| term | item | archetype must contain `T`? |
+|---|---|---|
+| `Entity` | `Entity` | no |
+| `&T` | `&T` | yes |
+| `Option<&T>` | `Option<&T>` | no, `None` where it is absent |
+| `Has<T>` | `bool` | no, `false` where it is absent |
+
+**Where it lives.** `query_data.rs` holds the sealed `QueryData` trait,
+`Has<T>`, the impls for the four terms and the tuple macro.
+`archetype/iter_data.rs` holds `TableView` (a read-only view of one
+archetype handed to the terms), the generic `IterData` iterator and
+`Archetypes::iter_data_filtered`. The two `World` methods are in
+`query.rs`. `lib.rs` re-exports `QueryData` and `Has`.
+
+**A correction to the plan.** The handover that proposed this item called it
+"extending the tuple macros in `filter.rs`". That was wrong: the tuple macros
+in `filter.rs` implement `QueryFilter`, which only decides whether an archetype
+matches. Query item shapes were hand-written iterators (`Iter1`, `Iter2` and
+their `Ref` and mutable forms). Adding `Iter3`..`Iter8` by hand cannot give
+`Option<&T>` or `Has<T>`, because every mix of terms would need its own
+iterator, so this is a new trait and one generic iterator, not a macro
+extension.
+
+**Decisions, with reasons.**
+- **A separate iterator, not a change to `Iter1`/`Iter2`.** Their `next()`
+  bodies are held byte-for-byte fixed for the LTO inline budget (header of
+  `iter.rs`), and optimization is paused. `iter_mut.rs` made the same choice.
+  The existing `query_static`/`query2_static` paths are untouched.
+- **Resolve once per archetype, index per row.** On entering an archetype each
+  term turns into the thing it reads rows from (`&[T]`, `Option<&[T]>`, a
+  `bool`, `&[Entity]`); a row is then slice indexing. The row count served is
+  the table's entity count clamped to every column slice held, so indexing can
+  not go out of bounds. Zero `unsafe`: the slices come from a safe
+  `downcast_ref`.
+- **Only `&T` terms narrow which archetypes are visited.** `Option<&T>` and
+  `Has<T>` are decided per archetype and never remove one. The required ids go
+  through the same `matched_filtered` the other queries use, so archetypes and
+  rows come out in the same order as `query2_static` for the same components
+  (asserted by a test).
+- **Presence is the archetype's signature, not whether a column object
+  exists.** A signature can list a component whose column the table has not
+  created yet (columns appear on the first row). `Option<&T>` and `Has<T>`
+  read the signature; `&T` falls back to an empty slice for a missing column,
+  and such a table has no rows anyway.
+- **Unseen types never register anything.** If the Archetype Core has never
+  seen `T`: `&T` makes the whole query empty (no archetype is visited),
+  `Option<&T>` is always `None`, `Has<T>` is always `false`. Asking spends no
+  `ComponentId`, the contract `filter.rs` already documents. A test checks
+  `existing_component_id` is still `None` afterwards.
+- **A query with no `&T` term visits every archetype, the empty one included.**
+  `World::spawn` places every entity in the empty archetype, so
+  `query_data::<Entity>()` enumerates every live entity, componentless ones
+  too, like bevy's `Query<Entity>`.
+- **Twelve terms, not eight.** Bundles and filters stop at eight. A query
+  spends terms on `Entity`, `Option` and `Has` as well as components, so the
+  limit is higher, and tuples nest for anything beyond it. It is one line in
+  the macro invocations to change.
+- **Duplicate `&T` terms are allowed.** `(&A, &A)` yields the same reference
+  twice; both are shared reads.
+- **`Q: 'a` on the two methods.** `IterData<'w, Q>` stores `Q::Fetch<'w>`, so
+  naming it needs `Q` to outlive the borrow. It costs callers nothing: the
+  elided lifetime in `query_data::<(&A, &B)>()` is inferred and always
+  satisfiable. The first draft without it was a compile error (E0311).
+- **Name.** `query_data` follows bevy's `QueryData`. Rename freely: it is two
+  method names and a re-export.
+
+**The C counterpart: nothing new, on purpose.** A tuple of item types cannot
+cross a C ABI, and the existing calls already carry everything it needs. A
+three-component query is `mid_ecs_world_archetypes_matching_static` with
+`with_ids` holding all three, then `mid_ecs_world_static_component_raw_span`
+(and `_entity_ids`) per archetype per component. `Option<&T>` and `Has<T>` are
+the status of that same `raw_span` call on an archetype from the list: `OK`
+means present, `NOT_FOUND` means absent. Two new C checks pin both patterns on
+the filter fixture (`Health`, `FlagA`, `FlagB`): the three-component query
+returns exactly e3's row with hp 3 / FlagA 30 / FlagB 300 in step, and the
+optional pass over `{Health}` finds 2 rows with a `FlagA` (20 + 30), 1
+without, and 1 with a `FlagB`.
+
+**Tests, from the sandbox (rustc 1.91.1; real CI not yet run).**
+- 18 tests in `query_data.rs` and 2 in `archetype/iter_data.rs`, 1 doctest,
+  2 C checks. Default lib tests 356 to 376 (361 to 381 with `scratch-arena`),
+  doctests 3 to 4, C checks 129 to 131, the C program clean under `-Wall
+  -Wextra` against both `libmid_ecs.so` and `libmid_ecs.a` and under valgrind.
+- **Mutation testing: 17 of 18 mutants caught.** Caught: `Option` never
+  `Some`, `Option` `Some` even when absent, `Has` inverted, `Has` always
+  true, `Option` and `Has` made to narrow, an `Entity` row off by one, `&T`
+  / `Option` / tuple fetch ignoring the row, `contains` always true, the
+  filter ignored, the row counter not reset on a new archetype, the last row
+  skipped, and the first archetype's rows skipped. Two survived the first
+  test set, `&T` not pushing its id into the required list and
+  `is_satisfiable` always true, because both only change *which archetypes
+  are visited*, and an archetype without the column yields no rows, so items
+  can't show it. The two tests in `iter_data.rs` look at the matched-archetype
+  list itself and kill both. The one survivor is an equivalent mutant: the
+  `&T` row-count clamp against a column shorter than its table, which the
+  table invariant makes unobservable. It stays as a defensive bound.
+
+**Not done.**
+- **Mutable terms (`&mut T`, `Mut<T>`) in a tuple.** `iter_mut.rs` gets two
+  disjoint columns of one archetype from `SparseSet::get_disjoint_mut`; whether
+  that generalises to an arbitrary mixed tuple with tick stamping, still in
+  safe code, is the next design question for this API.
+- `Ref<T>`, and `Added`/`Changed` combined with `With`/`Without`/`Or` in one
+  call (gap-list item 3).
+- **No benchmark, and no performance claim.** `next()` pays a per-row check on
+  the current archetype's slices on top of the indexing, and the earlier call-
+  site investigation (see "Mutable-query benches") showed that what a loop
+  costs depends on the function around it, so nothing is assumed about it
+  until it is measured. Optimization is paused.
+- No `size_hint`, no cached matched-archetype list (`QueryState`-style):
+  every call walks the archetypes once.

@@ -14,6 +14,11 @@ typedef struct {
     uint32_t hp;
 } FfiHealthC;
 
+// Mirrors the filter fixture's FfiFlagA / FfiFlagB: #[repr(C)] { v: u32 }.
+typedef struct {
+    uint32_t v;
+} FfiFlagC;
+
 static int failures = 0;
 
 #define CHECK(cond, msg) do { \
@@ -205,6 +210,58 @@ int main(void) {
     WALK(w_h, 1, NULL, 0, ao_ab, 0);
     CHECK(all_ok && (int32_t)archetypes_seen == no_any_of_seen,
           "an empty any_of list (non-NULL pointer, zero length) is still 'no constraint'");
+
+    // --- Three components plus optional terms, from the same calls ---
+    // Rust's World::query_data::<(Entity, &Health, &FlagA, &FlagB)> is
+    // `with = {Health, FlagA, FlagB}` here. Its Option<&FlagA> and
+    // Has<FlagB> terms are a per-archetype status check: raw_span is
+    // MID_ECS_OK when the archetype's signature holds the component and
+    // MID_ECS_NOT_FOUND when it does not. There is no dedicated C function
+    // for this: an item tuple cannot cross a C ABI, and these calls already
+    // carry everything it needs.
+    {
+        uint32_t w_hab[] = { h, fa, fb };
+        uint32_t ids3[16];
+        int32_t n3 = mid_ecs_world_archetypes_matching_static(fw, w_hab, 3, NULL, 0, NULL, 0, ids3, 16);
+        uint32_t rows3 = 0, sum_h3 = 0, sum_fa3 = 0, sum_fb3 = 0;
+        bool ok3 = (n3 == 1);
+        for (int32_t i = 0; i < n3; i++) {
+            MidEcsFfiSpan hs, as, bs;
+            if (mid_ecs_world_static_component_raw_span(fw, ids3[i], h, &hs) != MID_ECS_OK ||
+                mid_ecs_world_static_component_raw_span(fw, ids3[i], fa, &as) != MID_ECS_OK ||
+                mid_ecs_world_static_component_raw_span(fw, ids3[i], fb, &bs) != MID_ECS_OK) { ok3 = false; continue; }
+            if (hs.count != as.count || hs.count != bs.count) ok3 = false;
+            for (size_t r = 0; r < hs.count; r++) {
+                sum_h3 += ((const FfiHealthC *)hs.ptr)[r].hp;
+                sum_fa3 += ((const FfiFlagC *)as.ptr)[r].v;
+                sum_fb3 += ((const FfiFlagC *)bs.ptr)[r].v;
+                rows3++;
+            }
+        }
+        CHECK(ok3 && rows3 == 1 && sum_h3 == 3 && sum_fa3 == 30 && sum_fb3 == 300,
+              "three-component query, with {Health, FlagA, FlagB}: one archetype, e3's row, hp 3 / FlagA 30 / FlagB 300 in step");
+
+        uint32_t ids_o[16];
+        int32_t no = mid_ecs_world_archetypes_matching_static(fw, w_h, 1, NULL, 0, NULL, 0, ids_o, 16);
+        uint32_t total_o = 0, some_a = 0, none_a = 0, sum_a = 0, has_b = 0;
+        bool ok_o = (no == 4);
+        for (int32_t i = 0; i < no; i++) {
+            MidEcsFfiSpan hs, as, bs;
+            if (mid_ecs_world_static_component_raw_span(fw, ids_o[i], h, &hs) != MID_ECS_OK) { ok_o = false; continue; }
+            int32_t a_status = mid_ecs_world_static_component_raw_span(fw, ids_o[i], fa, &as);
+            int32_t b_status = mid_ecs_world_static_component_raw_span(fw, ids_o[i], fb, &bs);
+            if ((a_status != MID_ECS_OK && a_status != MID_ECS_NOT_FOUND) ||
+                (b_status != MID_ECS_OK && b_status != MID_ECS_NOT_FOUND)) { ok_o = false; continue; }
+            for (size_t r = 0; r < hs.count; r++) {
+                total_o++;
+                if (a_status == MID_ECS_OK) { some_a++; sum_a += ((const FfiFlagC *)as.ptr)[r].v; }
+                else { none_a++; }
+                if (b_status == MID_ECS_OK) { has_b++; }
+            }
+        }
+        CHECK(ok_o && total_o == 3 && some_a == 2 && none_a == 1 && sum_a == 50 && has_b == 1,
+              "Option<FlagA> / Has<FlagB> over {Health}: raw_span OK = present, NOT_FOUND = absent; 2 rows with FlagA (20+30), 1 without, 1 with FlagB");
+    }
 
     CHECK(mid_ecs_world_archetypes_matching_static(fw, NULL, 0, NULL, 0, NULL, 0, NULL, 0) == 6,
           "three empty lists (NULL, 0) match every archetype, the empty one included");

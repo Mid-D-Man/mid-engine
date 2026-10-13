@@ -19,6 +19,7 @@
 
 use crate::archetype::ArchetypeId;
 use crate::filter::QueryFilter;
+use crate::query_data::QueryData;
 use crate::tick::{ChangeTracker, Mut, Tick};
 use crate::world::{Entity, World};
 
@@ -192,6 +193,68 @@ impl World {
         &self,
     ) -> impl Iterator<Item = (&A, &B)> + '_ {
         self.archetypes.iter2_ref_filtered::<A, B, F>()
+    }
+
+    // ── Multi-term queries ────────────────────────────────────────────
+    //
+    // The general form of `query_static`/`query2_static`: the item shape
+    // is a type (`QueryData`), so any number of components, plus
+    // `Option<&T>`, `Has<T>` and `Entity` terms, in one call. Archetype
+    // Core only, read-only. Implemented in `archetype/iter_data.rs`,
+    // deliberately not on `Iter1`/`Iter2`; see `query_data.rs` and
+    // `docs/mid-ecs.md`, "Multi-term queries", for the design.
+
+    /// Iterates every row of every archetype that holds all of `Q`'s
+    /// `&T` components, yielding `Q`'s item for it: the multi-term
+    /// counterpart of [`Self::query_static`] and [`Self::query2_static`].
+    /// `Q` is a term or a tuple of terms (see [`QueryData`]): `Entity`,
+    /// `&T`, `Option<&T>`, [`Has<T>`](crate::Has).
+    ///
+    /// ```
+    /// use mid_ecs::{Entity, Has, World};
+    ///
+    /// struct Pos(f32);
+    /// struct Vel(f32);
+    /// struct Hp(u32);
+    /// struct Frozen;
+    ///
+    /// let mut world = World::new();
+    /// let runner = world.spawn();
+    /// world.insert_static(runner, Pos(0.0));
+    /// world.insert_static(runner, Vel(2.0));
+    /// world.insert_static(runner, Hp(10));
+    /// let statue = world.spawn();
+    /// world.insert_static(statue, Pos(5.0));
+    /// world.insert_static(statue, Vel(0.0));
+    /// world.insert_static(statue, Frozen);
+    /// let rock = world.spawn();
+    /// world.insert_static(rock, Pos(9.0)); // no Vel: not visited
+    ///
+    /// let mut seen: Vec<(Entity, f32, Option<u32>, bool)> = world
+    ///     .query_data::<(Entity, &Pos, &Vel, Option<&Hp>, Has<Frozen>)>()
+    ///     .map(|(e, pos, _vel, hp, frozen)| (e, pos.0, hp.map(|h| h.0), frozen))
+    ///     .collect();
+    /// seen.sort_by(|a, b| a.1.total_cmp(&b.1));
+    /// assert_eq!(seen, vec![(runner, 0.0, Some(10), false), (statue, 5.0, None, true)]);
+    /// ```
+    ///
+    /// Archetypes are visited in the same dense order, and rows in the
+    /// same row order, as [`Self::query2_static_ref`] uses for the same
+    /// two components. Which archetypes are visited is decided once, when
+    /// the query is created; a term never costs anything per row beyond
+    /// indexing its slice.
+    pub fn query_data<'a, Q: QueryData + 'a>(&'a self) -> impl Iterator<Item = Q::Item<'a>> + 'a {
+        self.archetypes.iter_data_filtered::<Q, ()>()
+    }
+
+    /// [`Self::query_data`] restricted to archetypes satisfying `F`
+    /// (`With`, `Without`, `Or`, tuples of them: see `filter.rs`). The
+    /// filter is evaluated once per archetype when the query is created,
+    /// not per row.
+    pub fn query_data_filtered<'a, Q: QueryData + 'a, F: QueryFilter>(
+        &'a self,
+    ) -> impl Iterator<Item = Q::Item<'a>> + 'a {
+        self.archetypes.iter_data_filtered::<Q, F>()
     }
 
     // ── Bulk mutable queries ────────────────────────────────────────
