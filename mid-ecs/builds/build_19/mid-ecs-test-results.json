@@ -1,0 +1,2567 @@
+{
+  "build": "19",
+  "branch": "main",
+  "commit": "ca9fcd7f",
+  "date": "",
+  "rust_version": "rustc 1.99.0 (b940084d7 2026-09-28)",
+  "crate": "mid-ecs",
+  "summary": {
+    "total": 422,
+    "passed": 422,
+    "failed": 0,
+    "ignored": 0,
+    "duration_s": 0.02
+  },
+  "suites": [
+    {
+      "name": "mid-collections",
+      "passed": 54,
+      "failed": 0,
+      "ignored": 0,
+      "duration_s": 0.0,
+      "tests": [
+        {
+          "name": "ffi_span::tests::checked_slice_empty_input_gives_empty_slice_not_an_error",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "ffi_span::tests::checked_slice_mut_actually_allows_writes_through",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "ffi_span::tests::checked_slice_mut_null_pointer_is_an_error_not_a_crash",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "ffi_span::tests::checked_slice_null_pointer_is_an_error_not_a_crash",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "ffi_span::tests::checked_slice_rejects_a_non_exact_multiple_length",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "ffi_span::tests::checked_slice_round_trips_real_data",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "ffi_span::tests::ffi_buf_error_display_does_not_panic",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "ffi_span::tests::ffi_span_empty_has_null_ptr_and_zero_count",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "generational_index::tests::allocate_returns_distinct_indices_when_nothing_freed",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "ffi_span::tests::ffi_span_from_empty_slice_is_the_empty_sentinel",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "generational_index::tests::allocated_handle_is_alive",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "ffi_span::tests::ffi_span_from_slice_reports_correct_stride_and_count",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "generational_index::tests::as_ffi_from_ffi_round_trips",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "generational_index::tests::deallocate_never_issued_handle_returns_false",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "generational_index::tests::deallocate_then_not_alive",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "generational_index::tests::as_ffi_round_trips_after_reuse_with_a_different_generation",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "generational_index::tests::deallocate_already_dead_returns_false_not_panic",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "generational_index::tests::default_matches_new",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "generational_index::tests::first_allocated_index_is_zero",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "generational_index::tests::implements_sparse_set_index",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "generational_index::tests::free_list_reuse_order_is_lifo",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "generational_index::tests::from_ffi_on_a_bogus_value_is_safe_and_reads_as_not_alive",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "generational_index::tests::generation_climbs_by_one_on_every_transition",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "generational_index::tests::is_alive_out_of_range_index_is_false_not_panic",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "generational_index::tests::reallocate_reuses_freed_slot_with_bumped_generation",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "generational_index::tests::slot_count_tracks_total_slots_not_just_live",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "generational_index::tests::starts_empty",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "generational_index::tests::usable_as_a_real_sparse_set_key",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "generational_index::tests::many_allocate_deallocate_cycles_stay_consistent",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "sparse_set::tests::clear_empties_and_resets_all_sparse_slots",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "sparse_set::tests::debug_impl_does_not_panic_and_lists_entries",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "sparse_set::tests::default_matches_new",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "sparse_set::tests::get_disjoint_mut_after_a_swap_remove_still_resolves_correctly",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "sparse_set::tests::get_disjoint_mut_returns_both_in_either_dense_order",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "sparse_set::tests::get_disjoint_mut_same_key_twice_returns_single_reference_not_two",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "sparse_set::tests::get_disjoint_mut_actually_gives_independently_mutable_references",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "sparse_set::tests::get_disjoint_mut_missing_key_or_keys_returns_none_for_each",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "sparse_set::tests::get_missing_key_returns_none",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "sparse_set::tests::get_mut_actually_mutates",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "sparse_set::tests::index_zero_is_a_valid_key",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "sparse_set::tests::insert_on_existing_key_replaces_and_returns_old",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "sparse_set::tests::keys_matches_iter_and_values_pairwise",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "sparse_set::tests::remove_last_element",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "sparse_set::tests::insert_then_get",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "sparse_set::tests::reinsert_after_remove_reuses_the_freed_sparse_slot",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "sparse_set::tests::remove_first_element_repeatedly_drains_correctly",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "sparse_set::tests::remove_middle_element_swaps_and_fixes_up_the_moved_key",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "sparse_set::tests::remove_missing_key_returns_none_and_changes_nothing",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "sparse_set::tests::values_and_values_mut_are_contiguous_no_gaps",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "sparse_set::tests::starts_empty",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "sparse_set::tests::values_slice_matches_values_iterator_exactly",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "sparse_set::tests::values_slice_on_empty_set_is_an_empty_slice_not_a_panic",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "sparse_set::tests::works_with_a_non_u32_key_type",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "sparse_set::tests::sparse_grows_lazily_for_large_sparse_indices",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        }
+      ]
+    },
+    {
+      "name": "mid-ecs",
+      "passed": 368,
+      "failed": 0,
+      "ignored": 0,
+      "duration_s": 0.02,
+      "tests": [
+        {
+          "name": "archetype::tests::archetype_id_as_u32_from_u32_round_trips",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "archetype::iter_data::tests::a_ref_term_for_an_unseen_type_visits_no_archetype_at_all",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "archetype::iter_data::tests::only_ref_terms_narrow_which_archetypes_are_visited",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "archetype::tests::archetypes_matching_any_of_requires_at_least_one",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "archetype::tests::archetypes_matching_requires_all_of_with_and_none_of_without",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "archetype::tests::archetypes_matching_edge_cases",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "archetype::tests::archetypes_matching_empty_any_of_is_no_constraint_not_match_nothing",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "archetype::tests::archetypes_matching_with_both_lists_empty_is_every_archetype",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "archetype::tests::archetypes_with_finds_every_archetype_containing_the_component",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "archetype::tests::archetypes_matching_with_only_equals_archetypes_with",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "archetype::tests::archetypes_with_is_empty_for_an_unregistered_component",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "archetype::tests::despawn_removes_entity_and_fixes_up_the_swapped_entity",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "archetype::tests::edge_cache_routes_different_entities_from_the_same_source_to_the_same_target",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "archetype::tests::entity_ids_on_a_never_registered_component_id_is_none",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "archetype::tests::entity_ids_correlate_with_raw_span_in_dense_order",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "archetype::tests::entity_ids_is_some_and_empty_after_every_entity_migrates_away",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "archetype::tests::entity_ids_on_an_archetype_that_does_not_have_this_component_is_none",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "archetype::tests::get_mut_actually_mutates",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "archetype::tests::entity_ids_still_correlate_after_a_swap_remove_during_migration",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "archetype::tests::insert_then_get",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "archetype::tests::insert_same_component_twice_is_a_no_op",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "archetype::tests::insert_three_components_preserves_all_previous",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "archetype::tests::insert_two_components_sequentially_preserves_the_first",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "archetype::tests::lookup_ffi_id_resolves_a_registered_name",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "archetype::tests::raw_span_and_entity_ids_are_empty_not_none_for_a_column_less_intermediate_archetype",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "archetype::tests::many_entities_many_migrations_stay_consistent",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "archetype::tests::raw_span_is_some_and_empty_after_every_entity_migrates_away",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "archetype::tests::raw_span_on_a_never_registered_component_id_is_none",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "archetype::tests::raw_span_is_still_none_for_a_signature_without_the_component",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "archetype::tests::raw_span_on_an_archetype_that_does_not_have_this_component_is_none",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "archetype::tests::register_ffi_is_idempotent_for_the_same_type",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "archetype::tests::register_ffi_then_raw_span_reflects_attached_values",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "archetype::tests::remove_all_components_returns_entity_to_the_empty_archetype",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "archetype::tests::remove_missing_component_returns_none",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "archetype::tests::remove_never_registered_component_returns_none_not_panic",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "archetype::tests::remove_returns_the_value_and_migrates_correctly",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "archetype::tests::spawn_gives_a_location_in_the_empty_archetype",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "archetype::tests::swap_remove_during_migration_fixes_up_the_swapped_entitys_row",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "commands::tests::a_command_after_an_earlier_despawn_does_nothing",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "commands::tests::a_panicking_command_drops_the_rest_and_leaves_the_queue_usable",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": "thread 'commands::tests::a_panicking_command_drops_the_rest_and_leaves_the_queue_usable' (3588) panicked at crates/mid-ecs/src/commands.rs:747:25:\nboom"
+        },
+        {
+          "name": "commands::tests::apply_with_no_spawns_returns_an_empty_vec",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "commands::tests::apply_leaves_the_queue_empty_and_reusable",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "commands::tests::bundle_insert_and_remove_on_an_existing_entity",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "commands::tests::clear_drops_pending_commands_unrun_and_restarts_slot_numbering",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "commands::tests::chained_inserts_reach_the_spawned_entity",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "commands::tests::commands_on_a_dead_entity_do_nothing",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "commands::tests::custom_world_command_sees_earlier_effects",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "commands::tests::commands_run_first_queued_first",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "commands::tests::custom_entity_command_reaches_sparse_shell",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "archetype::tests::despawn_never_spawned_entity_is_a_safe_no_op",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "commands::tests::despawn_an_existing_entity",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "commands::tests::despawn_while_iterating_a_query",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "commands::tests::dropping_a_queue_does_not_apply_it",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "commands::tests::entity_commands_despawn_works_on_existing_and_spawned_targets",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "commands::tests::inserting_a_component_the_entity_already_has_keeps_the_first_value",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "commands::tests::insert_and_remove_on_an_existing_entity",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "commands::tests::inserted_components_count_as_added_to_a_tracker_that_predates_apply",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "commands::tests::interleaved_spawns_each_get_their_own_inserts",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "commands::tests::new_queue_is_empty",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "commands::tests::nothing_happens_until_apply",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "commands::tests::resource_commands",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "commands::tests::slot_numbering_restarts_after_apply",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "commands::tests::spawn_count_matches_what_apply_returns",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "commands::tests::spawn_bundle_attaches_every_component",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "commands::tests::spawn_bundle_target_accepts_further_commands",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "commands::tests::spawn_count_resets_on_clear",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "commands::tests::spawn_while_iterating_a_query",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "commands::tests::spawn_returns_the_real_entities_in_order",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "component::tests::component_id_as_u32_from_u32_round_trips",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "component::tests::component_id_is_stable_and_distinct_per_type",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "component::tests::default_matches_new",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "component::tests::entity_ids_correlate_with_raw_span_in_dense_order",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "component::tests::entity_ids_before_register_ffi_is_none_even_if_the_type_is_in_use",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "component::tests::entity_ids_on_a_never_registered_component_id_is_none",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "component::tests::get_missing_component_type_returns_none",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "component::tests::entity_ids_still_correlate_after_a_swap_remove_reshuffle",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "component::tests::get_mut_actually_mutates",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "component::tests::get_unattached_component_on_a_known_type_returns_none",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "component::tests::has_reflects_attachment",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "component::tests::insert_replaces_existing_component_and_returns_old",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "component::tests::insert_then_get",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "component::tests::lookup_ffi_id_on_an_unregistered_name_is_none",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "component::tests::multiple_component_types_on_the_same_entity_are_independent",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "component::tests::register_ffi_before_any_insert_gives_entity_ids_some_empty",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "component::tests::lookup_ffi_id_resolves_a_registered_name",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "component::tests::raw_span_before_register_ffi_is_none_even_if_the_type_is_in_use",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "component::tests::raw_span_on_a_never_registered_component_id_is_none",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "component::tests::register_ffi_before_any_insert_still_gives_a_valid_empty_span",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "component::tests::register_ffi_is_idempotent_for_the_same_type",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "component::tests::register_ffi_then_raw_span_reflects_all_attached_values",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "component::tests::remove_entity_from_all_clears_every_component_type",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "component::tests::remove_returns_value_and_clears_it",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "component::tests::remove_missing_returns_none_not_panic",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "component::tests::remove_entity_from_all_does_not_touch_other_entities",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "ffi::tests::archetypes_with_static_component_query_then_fill_through_the_c_surface",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "ffi::tests::added_and_changed_rows_match_the_typed_queries_step_by_step",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "ffi::tests::archetypes_with_static_component_on_unregistered_id_is_zero_not_an_error",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "ffi::tests::bogus_packed_entity_is_safe_and_reads_as_not_alive",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "ffi::tests::change_fixture_scripted_sequence_matches_what_test_c_asserts",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "ffi::tests::bulk_mut_query_writes_are_visible_to_the_c_changed_rows",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "ffi::tests::change_rows_not_found_and_zero_row_cases",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "ffi::tests::change_rows_buffer_idiom",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "ffi::tests::change_rows_null_world_is_a_null_pointer_error",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "ffi::tests::change_tick_functions_round_trip_and_handle_null",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "ffi::tests::commands_apply_null_buffer_is_too_small_with_spawns_and_fine_without",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "ffi::tests::commands_apply_returns_the_entities_a_direct_spawn_would_have_made",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "ffi::tests::change_rows_survive_migration_into_another_archetype",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "ffi::tests::commands_apply_with_a_too_small_buffer_applies_nothing_and_a_retry_works",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "ffi::tests::commands_clear_drops_pending_unrun_and_a_second_apply_is_empty",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "ffi::tests::commands_apply_writes_only_the_spawned_prefix_of_a_roomy_buffer",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "ffi::tests::commands_despawn_of_a_stale_handle_spares_the_entity_that_reused_the_slot",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "ffi::tests::commands_new_free_round_trips_and_free_null_is_a_no_op",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "ffi::tests::commands_despawn_runs_at_apply_and_dead_or_bogus_values_are_a_no_op",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "ffi::tests::commands_null_arguments_are_safe_everywhere",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "ffi::tests::commands_spawn_applies_only_at_apply_and_returns_the_entities",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "ffi::tests::component_entity_ids_buffer_too_small_is_a_real_error_not_a_partial_fill",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "ffi::tests::component_raw_span_and_entity_ids_correlate_through_the_c_surface",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "ffi::tests::component_raw_span_and_entity_ids_on_never_registered_id_is_not_found",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "ffi::tests::component_raw_span_null_pointer_cases",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "ffi::tests::despawn_already_dead_returns_not_alive_not_panic",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "ffi::tests::every_enumerated_archetype_resolves_including_zero_row_intermediates",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "ffi::tests::free_null_is_a_safe_no_op",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "ffi::tests::lookup_ffi_component_id_on_null_world_or_name_is_invalid_sentinel",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "ffi::tests::lookup_ffi_component_id_on_unregistered_name_is_invalid_sentinel",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "ffi::tests::ffi_enumeration_matches_the_typed_filtered_queries",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "ffi::tests::lookup_ffi_component_id_resolves_a_registered_name",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "ffi::tests::change_rows_stay_aligned_with_entity_ids_after_a_swap_remove",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "ffi::tests::matching_static_any_of_matches_the_typed_or_filter",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "ffi::tests::lookup_ffi_static_component_id_uses_an_independent_namespace_from_sparse_shell",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "ffi::tests::matching_static_bogus_and_contradictory_ids_are_empty_not_errors",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "ffi::tests::null_world_functions_return_safe_defaults_not_crash",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "ffi::tests::matching_static_buffer_idiom",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "ffi::tests::matching_static_enumerates_the_expected_archetypes",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "ffi::tests::matching_static_null_pointer_cases",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "ffi::tests::resource_lookup_resolves_registered_names_and_rejects_the_rest",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "ffi::tests::resource_functions_null_and_unknown_id_cases",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "ffi::tests::resource_remove_then_span_and_second_remove",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "ffi::tests::resource_span_reads_the_inserted_value_and_is_empty_for_an_absent_one",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "ffi::tests::resource_write_updates_in_place_and_the_old_span_sees_it",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "ffi::tests::resource_write_inserts_an_absent_resource",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "ffi::tests::resource_write_size_mismatch_changes_nothing",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "ffi::tests::spawn_despawn_is_alive_round_trip_through_ffi",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "ffi::tests::static_component_raw_span_and_entity_ids_correlate_through_the_c_surface",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "ffi::tests::stale_packed_entity_after_reuse_correctly_reads_as_not_alive",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "ffi::tests::static_component_raw_span_and_entity_ids_on_never_registered_id_is_not_found",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "ffi::tests::world_new_free_round_trips",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "filter::tests::eight_member_or_compiles_and_evaluates",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "filter::tests::an_unregistered_with_member_poisons_a_tuple_but_an_unregistered_without_does_not",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "filter::tests::get_state_never_registers",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "filter::tests::contradictory_filter_matches_nothing",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "filter::tests::eight_member_tuple_compiles_and_evaluates",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "filter::tests::nested_or_inside_or",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "filter::tests::one_element_tuple_behaves_like_its_member",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "filter::tests::one_member_or_behaves_like_its_member",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "filter::tests::or_can_wrap_an_unregistered_component_and_still_match_via_the_other_member",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "filter::tests::or_composes_inside_a_tuple_with_and_semantics_at_the_outer_level",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "filter::tests::nested_tuples_compose",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "filter::tests::or_get_state_never_registers",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "filter::tests::or_matches_if_any_member_matches",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "filter::tests::or_of_without_matches_if_either_is_absent",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "filter::tests::unregistered_component_with_matches_nothing_without_matches_everything",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "filter::tests::tuple_requires_every_member_to_match",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "filter::tests::unit_filter_matches_everything",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "filter::tests::with_matches_only_signatures_containing_the_component",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "filter::tests::without_matches_only_signatures_lacking_the_component",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "hash::tests::dense_id_hash_has_no_low_bit_collisions_for_consecutive_ids",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "hash::tests::dense_id_map_roundtrips",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "hash::tests::hash_impl_for_derived_newtype_reaches_write_u32",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "hash::tests::type_id_map_roundtrips_distinct_types",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "hash::tests::type_id_hash_is_deterministic_and_type_sensitive",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "hash::tests::type_id_hasher_fallback_paths_are_deterministic",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "query::tests::bypass_change_detection_writes_without_marking",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "query::tests::bulk_writes_stay_attached_to_their_entity_through_a_swap_remove",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "query::tests::contradictory_filter_yields_nothing",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "query::tests::filter_on_a_sparse_shell_only_type_matches_nothing",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "query::tests::filtering_on_a_component_the_query_already_fetches",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "query::tests::filtered_results_follow_structural_changes",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "query::tests::filtered_query_on_an_unregistered_query_component_is_empty",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "query::tests::for_each_and_for_loop_agree_across_archetypes",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "query::tests::mixed_mutability_query_advances_position_and_marks_only_position",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "query::tests::mut_api_reports_per_row_state_against_a_tracker",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "query::tests::mut_iterators_keep_going_after_an_archetype_with_no_rows",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "query::tests::mut_queries_tolerate_zero_row_intermediate_archetypes",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "query::tests::mut_queries_visit_what_the_shared_queries_visit_in_the_same_order",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "query::tests::or_filter_works_end_to_end_through_query_static_filtered",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "query::tests::query2_empty_when_one_side_was_never_registered",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "query::tests::mut_queries_on_a_never_registered_component_are_empty",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "query::tests::query2_excludes_a_despawned_entity_even_if_it_had_both",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "query::tests::filters_tolerate_empty_intermediate_archetypes_left_by_insert_bundle",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "query::tests::query2_returns_matching_component_references",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "query::tests::query2_static_empty_when_one_side_was_never_registered",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "query::tests::query2_static_excludes_a_despawned_entity_even_if_it_had_both",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "query::tests::query2_static_filtered_applies_the_filter_and_returns_both_components",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "query::tests::query2_static_ref_returns_matching_component_references",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "query::tests::query2_static_ref_filtered_matches_the_entity_carrying_variant",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "query::tests::query2_static_ref_empty_when_one_side_was_never_registered",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "query::tests::query2_static_ref_unchecked_always_empty_when_one_side_was_never_registered",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "query::tests::query2_static_returns_matching_component_references",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "query::tests::query2_static_ref_unchecked_always_matches_the_real_query2_static_ref",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "query::tests::query2_static_yields_only_entities_with_both_components",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "query::tests::query_excludes_despawned_entities",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "query::tests::query_iterates_every_entity_with_the_component",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "query::tests::query2_yields_only_entities_with_both_components",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "query::tests::query_and_query_static_are_genuinely_independent_storage",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "query::tests::query_on_never_inserted_type_is_empty",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "query::tests::query_static_excludes_despawned_entities",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "query::tests::query_static_filtered_tuple_combines_with_and_without",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "query::tests::query_static_filtered_with_keeps_only_archetypes_containing_the_component",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "query::tests::query_static_filtered_without_drops_archetypes_containing_the_component",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "query::tests::query_static_filtered_yields_the_real_component_values",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "query::tests::query_static_finds_the_component_across_multiple_distinct_archetypes",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "query::tests::query_static_iterates_every_entity_with_the_component",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "query::tests::query_static_on_never_inserted_type_is_empty",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "query::tests::query_static_mut_updates_values_in_place",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "query::tests::query_static_mut_filtered_matches_the_shared_filtered_query_exactly",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "query::tests::query_static_ref_filtered_matches_the_entity_carrying_variant",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "query::tests::query_static_ref_yields_the_same_values_as_query_static",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "query::tests::reading_through_mut_does_not_mark_changed",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "query::tests::unit_filter_is_identical_to_the_unfiltered_query_including_order",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "query::tests::two_mutable_components_are_marked_independently",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "query_data::tests::a_ref_term_for_a_type_the_core_has_never_seen_makes_the_query_empty",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "query::tests::with_and_without_partition_the_unfiltered_result",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "query::tests::with_on_a_never_registered_component_matches_nothing_without_matches_everything",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "query::tests::writing_through_mut_marks_exactly_the_written_rows",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "query_data::tests::entity_only_query_enumerates_every_live_entity_componentless_ones_included",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "query_data::tests::an_archetype_emptied_by_despawn_yields_nothing_and_is_reusable",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "query_data::tests::duplicate_ref_terms_return_the_same_row_twice",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "query_data::tests::an_exhausted_iterator_stays_exhausted",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "query_data::tests::option_and_has_for_an_unseen_type_are_none_and_false_and_register_nothing",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "query_data::tests::option_term_is_some_where_present_none_where_absent_and_never_narrows",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "query_data::tests::rows_stay_aligned_after_a_component_migrates_an_entity_out",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "query_data::tests::rows_stay_aligned_after_middle_entities_are_despawned",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "query_data::tests::same_items_in_the_same_order_as_query2_static",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "query_data::tests::single_non_tuple_terms_work",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "query_data::tests::three_component_query_yields_exactly_the_entities_holding_all_three",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "query_data::tests::large_query_sums_match_what_was_inserted",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "query_data::tests::has_term_reports_archetype_presence_per_row",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "query_data::tests::twelve_term_tuples_and_nested_tuples_work",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "query_data::tests::filtered_queries_compose_with_with_without_and_or",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "resource::tests::distinct_types_do_not_collide",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "query_data::tests::zero_sized_components_work_as_ref_and_has_terms",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "resource::tests::ffi_remove_reports_unknown_and_absent_distinctly",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "resource::tests::ffi_span_reflects_the_typed_value",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "resource::tests::ffi_write_inserts_when_absent_and_is_visible_to_the_typed_api",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "resource::tests::ffi_write_rejects_a_wrong_size_and_an_unknown_id_without_changing_anything",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "query_data::tests::zero_row_archetypes_left_behind_are_visited_and_yield_nothing",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "resource::tests::insert_replaces_and_returns_the_previous_value",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "resource::tests::ffi_write_updates_in_place_so_an_earlier_span_stays_valid",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "resource::tests::register_ffi_is_idempotent_and_ids_are_dense",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "resource::tests::insert_get_and_get_mut",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "resource::tests::remove_returns_the_value_and_clears_it",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "resource::tests::values_are_dropped_exactly_once",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "scratch::tests::heap_scratch_multiple_live_allocations",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "scratch::tests::heap_scratch_drop_without_downcast",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "sync::tests::a_type_starts_unmarked",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "scratch::tests::heap_scratch_roundtrip",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "scratch::tests::heap_scratch_wrong_type",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "sync::tests::mark_then_is_marked_round_trips",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "sync::tests::marking_does_not_require_prior_ffi_or_storage_registration",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "sync::tests::marking_one_type_does_not_mark_another",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "sync::tests::unmark_on_a_never_marked_type_is_a_safe_no_op",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "sync::tests::unmark_removes_the_mark",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "sync::tests::marking_is_idempotent",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tick::tests::a_component_older_than_the_trackers_last_run_is_not_newer",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tick::tests::component_ticks_changed_can_move_independently_of_added",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tick::tests::fresh_tracker_at_tick_zero_sees_nothing_before_any_increment",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tick::tests::is_newer_than_basic_ordering",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tick::tests::change_tracker_starts_at_zero_and_update_advances_it",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tick::tests::component_ticks_is_added_only_true_right_after_insertion",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tick::tests::mut_debug_shows_the_value_not_the_ticks",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tick::tests::mut_reads_do_not_mark_and_writes_do",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tick::tests::is_newer_than_handles_u32_wraparound",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "transform::tests::global_transform_and_global_transform_lwc_are_genuinely_distinct_archetype_families",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "transform::tests::global_transform_default_is_identity",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tick::tests::mut_set_changed_and_bypass",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "transform::tests::global_transform_derefs_to_underlying_affine3",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "transform::tests::global_transform_from_affine3_round_trips",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "transform::tests::global_transform_get_static_after_insert_returns_the_real_value",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "transform::tests::global_transform_identity_matches_affine3_identity",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "transform::tests::global_transform_lwc_from_daffine3_round_trips",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "transform::tests::global_transform_lwc_default_is_identity",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "transform::tests::global_transform_lwc_identity_matches_daffine3_identity",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "transform::tests::global_transform_lwc_to_view_relative_at_origin_matches_a_plain_cast",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "transform::tests::world_can_insert_and_query_static_global_transform",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "transform::tests::global_transform_lwc_to_view_relative_preserves_the_small_offset",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "transform::tests::world_can_insert_and_query_static_global_transform_lwc",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "world::tests::a_fresh_tracker_sees_every_component_already_present_as_added_and_changed",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "world::tests::a_read_only_get_static_never_marks_changed",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "world::tests::a_type_can_be_a_resource_and_a_component_at_once",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "world::tests::component_entity_ids_on_never_registered_id_is_none",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "world::tests::component_entity_ids_correlate_with_raw_span_through_world",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "world::tests::component_raw_span_on_never_registered_id_is_none",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "world::tests::after_update_a_tracker_no_longer_sees_old_insertions_only_new_ones",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "world::tests::default_matches_new",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "world::tests::despawn_does_not_touch_other_entities_components",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "world::tests::despawn_does_not_touch_other_entities_static_components",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "world::tests::despawn_removes_all_attached_components",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "world::tests::despawn_removes_static_components_too",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "world::tests::despawn_stale_handle_after_slot_reuse_does_not_touch_the_new_occupant",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "world::tests::despawn_then_not_alive",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "world::tests::different_types_in_different_systems_never_panics",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "world::tests::display_shows_index_and_generation",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "world::tests::entity_as_ffi_from_ffi_round_trips",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "world::tests::entity_from_ffi_after_reuse_correctly_rejects_the_stale_packed_value",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "world::tests::get_component_on_dead_entity_returns_none",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "world::tests::ffi_resource_write_and_read_round_trip_through_the_world",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "world::tests::get_static_component_on_dead_entity_returns_none",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "world::tests::get_static_mut_marks_changed_but_not_added",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "world::tests::get_static_mut_actually_mutates",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "world::tests::implements_sparse_set_index",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "world::tests::insert_bundle_attaches_every_element",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "world::tests::insert_bundle_migrates_existing_archetype_components",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "world::tests::insert_bundle_no_ops_if_entity_already_has_any_element",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "world::tests::insert_bundle_on_dead_entity_is_a_safe_no_op",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "world::tests::insert_bundle_reaches_the_same_archetype_as_sequential_single_inserts",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "world::tests::insert_bundle_then_remove_bundle_round_trips",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "world::tests::despawn_twice_is_a_safe_no_op",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "world::tests::insert_on_dead_entity_is_a_safe_no_op",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "world::tests::insert_static_on_dead_entity_is_a_safe_no_op",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "world::tests::insert_static_then_get_static",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "world::tests::insert_static_migration_preserves_every_entitys_values",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "world::tests::insert_static_two_components_preserves_both",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "world::tests::insert_then_get_component",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "world::tests::lookup_ffi_component_id_round_trips_through_world",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "world::tests::many_spawn_despawn_cycles_keep_entity_count_consistent",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "world::tests::migration_moves_values_and_drops_each_exactly_once",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "world::tests::new_world_is_empty",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "world::tests::new_world_starts_at_tick_one_and_increment_advances_it",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "world::tests::query_added_and_changed_are_empty_for_a_never_registered_type",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "world::tests::query_static_after_bulk_insert_bundle_does_not_panic",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "world::tests::register_ffi_static_component_then_span_reflects_attached_values",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "world::tests::remove_bundle_is_none_if_any_element_was_never_registered",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "world::tests::remove_bundle_detaches_every_element_and_returns_them",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "world::tests::remove_bundle_migrates_a_surviving_archetype_component",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "world::tests::remove_bundle_migrates_a_surviving_component_to_the_new_archetype",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "world::tests::lookup_ffi_static_component_id_round_trips_through_world",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "world::tests::register_ffi_component_then_span_reflects_attached_values",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "world::tests::remove_bundle_no_ops_if_entity_is_missing_any_element",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "world::tests::remove_bundle_on_dead_entity_is_none",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "world::tests::remove_static_returns_value_and_clears_it",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "world::tests::remove_static_hands_back_the_value_undropped",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "world::tests::remove_static_returns_the_value_and_migrates_survivors",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "world::tests::removing_an_unrelated_component_also_preserves_survivor_ticks",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "world::tests::resources_are_untouched_by_entity_lifecycle",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "world::tests::respawned_slot_gives_a_distinguishable_entity",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "world::tests::reused_slot_does_not_inherit_the_old_entitys_components",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "world::tests::repeated_use_with_the_same_system_never_panics",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "world::tests::resources_insert_get_mutate_remove_through_the_world",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "world::tests::reused_slot_does_not_inherit_the_old_entitys_static_components",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "world::tests::sparse_and_static_ffi_registrations_use_independent_name_spaces",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "world::tests::spawn_bundle_drops_values_exactly_once",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "world::tests::spawn_bundle_and_spawn_then_insert_bundle_reach_the_same_archetype",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "world::tests::spawn_bundle_gives_distinct_entities_and_correct_count",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "world::tests::spawn_bundle_is_alive_and_holds_every_value",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "world::tests::spawn_bundle_repeated_calls_share_one_archetype_and_dont_corrupt_rows",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "world::tests::spawn_gives_a_live_entity",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "world::tests::spawn_returns_distinct_entities",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "world::tests::stale_handle_cannot_read_the_live_entity_now_sharing_its_index",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "world::tests::stale_handle_cannot_read_the_live_entitys_static_component",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "world::tests::spawn_bundle_then_remove_bundle_round_trips",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "world::tests::static_and_sparse_shell_storage_are_independent",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "world::tests::static_component_entity_ids_on_never_registered_id_is_none",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "world::tests::static_component_raw_span_on_never_registered_id_is_none",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "world::tests::static_component_entity_ids_correlate_with_raw_span_through_world",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "world::tests::structural_migration_preserves_ticks_of_surviving_components",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "world::tests::ticks_stay_row_aligned_through_a_structural_migration_swap_remove",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "world::tests::ticks_stay_row_aligned_when_a_despawn_swaps_a_mutated_entity_into_the_freed_slot",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "world::tests::with_capacity_does_not_change_observable_behavior",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        }
+      ]
+    }
+  ]
+}
