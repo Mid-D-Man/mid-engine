@@ -401,6 +401,105 @@ int main(void) {
           "the fixture mutation on a NULL world is MID_ECS_NULL_POINTER");
     mid_ecs_world_free(cw);
 
+    // --- Writing component data from C: raw_span_mut (bulk) and write (one row) ---
+    MidEcsWorld *ww = mid_ecs_test_write_fixture_world_new();
+    uint32_t w_health = mid_ecs_world_lookup_ffi_static_component_id(ww, "FfiHealthStatic");
+    uint32_t w_flag_a = mid_ecs_world_lookup_ffi_static_component_id(ww, "FfiFlagA");
+    uint32_t w_flag_b = mid_ecs_world_lookup_ffi_static_component_id(ww, "FfiFlagB");
+    CHECK(w_health != MID_ECS_INVALID_ID && w_flag_a != MID_ECS_INVALID_ID && w_flag_b != MID_ECS_INVALID_ID,
+          "write fixture: FfiHealthStatic / FfiFlagA / FfiFlagB resolve");
+    uint32_t w_arch[8];
+    int32_t w_arch_n = mid_ecs_world_archetypes_matching_static(ww, &w_health, 1, NULL, 0, NULL, 0, w_arch, 8);
+    CHECK(w_arch_n == 2, "write fixture: two archetypes hold Health ({Health} and {Health, FlagA})");
+    uint32_t w_plain = MID_ECS_INVALID_ID, w_flagged = MID_ECS_INVALID_ID;
+    for (int32_t i = 0; i < w_arch_n; i++) {
+        MidEcsFfiSpan probe;
+        if (mid_ecs_world_static_component_raw_span(ww, w_arch[i], w_health, &probe) == MID_ECS_OK) {
+            if (probe.count == 2) w_plain = w_arch[i];
+            if (probe.count == 1) w_flagged = w_arch[i];
+        }
+    }
+    CHECK(w_plain != MID_ECS_INVALID_ID && w_flagged != MID_ECS_INVALID_ID, "the two archetypes told apart by row count (2 and 1)");
+
+    uint32_t w_last_run = mid_ecs_world_change_tick(ww);
+    mid_ecs_world_increment_change_tick(ww);
+    uint32_t w_rows[8];
+    CHECK(mid_ecs_world_static_component_changed_rows(ww, w_plain, w_health, w_last_run, NULL, 0) == 0
+              && mid_ecs_world_static_component_changed_rows(ww, w_flagged, w_health, w_last_run, NULL, 0) == 0,
+          "before any write, nothing is changed since last_run");
+
+    // Bulk: a writable span over the {Health} column.
+    MidEcsFfiSpanMut w_span = { NULL, 0, 0 };
+    CHECK(mid_ecs_world_static_component_raw_span_mut(ww, w_plain, w_health, &w_span) == MID_ECS_OK
+              && w_span.count == 2 && w_span.stride == sizeof(FfiHealthC) && w_span.ptr != NULL,
+          "raw_span_mut on {Health}: a writable span of 2 rows, stride 4");
+    for (size_t r = 0; r < w_span.count; r++) {
+        ((FfiHealthC *)(w_span.ptr + r * w_span.stride))->hp += 100;
+    }
+    MidEcsFfiSpan w_read;
+    CHECK(mid_ecs_world_static_component_raw_span(ww, w_plain, w_health, &w_read) == MID_ECS_OK
+              && (const uint8_t *)w_read.ptr == (const uint8_t *)w_span.ptr
+              && ((const FfiHealthC *)w_read.ptr)[0].hp == 101 && ((const FfiHealthC *)w_read.ptr)[1].hp == 103,
+          "writes through the writable span show in the read-only span (same memory): hp 101 and 103");
+    CHECK(mid_ecs_world_static_component_changed_rows(ww, w_plain, w_health, w_last_run, w_rows, 8) == 2
+              && w_rows[0] == 0 && w_rows[1] == 1
+              && mid_ecs_world_static_component_changed_rows(ww, w_flagged, w_health, w_last_run, NULL, 0) == 0,
+          "raw_span_mut stamps the whole acquired column changed (rows 0, 1) and no other archetype");
+    CHECK(mid_ecs_world_static_component_added_rows(ww, w_plain, w_health, w_last_run, NULL, 0) == 0,
+          "...as changed, not added");
+
+    // Precise: one entity's value, one row stamped.
+    uint64_t w_flagged_ids[4], w_plain_ids[4];
+    CHECK(mid_ecs_world_static_component_entity_ids(ww, w_flagged, w_health, w_flagged_ids, 4) == 1
+              && mid_ecs_world_static_component_entity_ids(ww, w_plain, w_health, w_plain_ids, 4) == 2,
+          "entity ids for the two archetypes: one entity and two entities");
+    uint32_t hp_222 = 222;
+    CHECK(mid_ecs_world_static_component_write(ww, w_flagged_ids[0], w_health, (const uint8_t *)&hp_222, sizeof hp_222) == MID_ECS_OK,
+          "write: copy hp 222 into the {Health, FlagA} entity");
+    MidEcsFfiSpan w_read2;
+    CHECK(mid_ecs_world_static_component_raw_span(ww, w_flagged, w_health, &w_read2) == MID_ECS_OK
+              && ((const FfiHealthC *)w_read2.ptr)[0].hp == 222
+              && ((const FfiHealthC *)w_read.ptr)[0].hp == 101,
+          "the written value reads back as 222 and the other archetype is untouched");
+    CHECK(mid_ecs_world_static_component_changed_rows(ww, w_flagged, w_health, w_last_run, w_rows, 8) == 1 && w_rows[0] == 0,
+          "write stamps exactly that one row changed");
+
+    // Errors: nothing written, nothing stamped.
+    MidEcsFfiSpanMut w_none = { NULL, 0, 0 };
+    uint32_t hp_77 = 77;
+    CHECK(mid_ecs_world_static_component_raw_span_mut(ww, w_flagged, w_flag_a, &w_none) == MID_ECS_NOT_WRITABLE
+              && mid_ecs_world_static_component_write(ww, w_flagged_ids[0], w_flag_a, (const uint8_t *)&hp_77, 4) == MID_ECS_NOT_WRITABLE,
+          "a component registered read-only is MID_ECS_NOT_WRITABLE, for both raw_span_mut and write");
+    CHECK(mid_ecs_world_static_component_raw_span_mut(ww, w_plain, 9999, &w_none) == MID_ECS_NOT_FOUND
+              && mid_ecs_world_static_component_raw_span_mut(ww, 9999, w_health, &w_none) == MID_ECS_NOT_FOUND
+              && mid_ecs_world_static_component_raw_span_mut(ww, 0, w_health, &w_none) == MID_ECS_NOT_FOUND
+              && mid_ecs_world_static_component_raw_span_mut(ww, w_plain, w_flag_b, &w_none) == MID_ECS_NOT_FOUND,
+          "raw_span_mut: unregistered id, unknown archetype, signature lacking the component: MID_ECS_NOT_FOUND");
+    CHECK(mid_ecs_world_static_component_write(ww, w_plain_ids[0], w_flag_b, (const uint8_t *)&hp_77, 4) == MID_ECS_NOT_FOUND
+              && mid_ecs_world_static_component_write(ww, w_plain_ids[0], 9999, (const uint8_t *)&hp_77, 4) == MID_ECS_NOT_FOUND,
+          "write: an alive entity without the component, or an unregistered id, is MID_ECS_NOT_FOUND");
+    CHECK(mid_ecs_world_static_component_write(ww, w_plain_ids[0], w_health, (const uint8_t *)&hp_77, 3) == MID_ECS_SIZE_MISMATCH
+              && mid_ecs_world_static_component_write(ww, w_plain_ids[0], w_health, (const uint8_t *)&hp_77, 5) == MID_ECS_SIZE_MISMATCH
+              && mid_ecs_world_static_component_write(ww, w_plain_ids[0], w_health, NULL, 0) == MID_ECS_SIZE_MISMATCH,
+          "write: a length other than the type's size (3, 5, or NULL with 0) is MID_ECS_SIZE_MISMATCH");
+    CHECK(mid_ecs_world_static_component_write(ww, 0xFFFFFFFFFFFFFFFFull, w_health, (const uint8_t *)&hp_77, 4) == MID_ECS_NOT_ALIVE,
+          "write: a bogus entity value is MID_ECS_NOT_ALIVE");
+    CHECK(mid_ecs_world_static_component_raw_span_mut(NULL, w_plain, w_health, &w_none) == MID_ECS_NULL_POINTER
+              && mid_ecs_world_static_component_raw_span_mut(ww, w_plain, w_health, NULL) == MID_ECS_NULL_POINTER
+              && mid_ecs_world_static_component_write(NULL, w_plain_ids[0], w_health, (const uint8_t *)&hp_77, 4) == MID_ECS_NULL_POINTER
+              && mid_ecs_world_static_component_write(ww, w_plain_ids[0], w_health, NULL, 4) == MID_ECS_NULL_POINTER,
+          "NULL world, NULL out-span, or NULL bytes with a length is MID_ECS_NULL_POINTER");
+    CHECK(((const FfiHealthC *)w_read.ptr)[0].hp == 101 && ((const FfiHealthC *)w_read.ptr)[1].hp == 103
+              && ((const FfiHealthC *)w_read2.ptr)[0].hp == 222
+              && mid_ecs_world_static_component_changed_rows(ww, w_flagged, w_health, w_last_run, NULL, 0) == 1,
+          "none of the failed calls changed a value or stamped a row");
+
+    // A write to a despawned entity is NOT_ALIVE and never reaches the slot's next occupant.
+    CHECK(mid_ecs_world_despawn(ww, w_flagged_ids[0]) == MID_ECS_OK
+              && mid_ecs_world_static_component_write(ww, w_flagged_ids[0], w_health, (const uint8_t *)&hp_77, 4) == MID_ECS_NOT_ALIVE,
+          "write to a despawned entity is MID_ECS_NOT_ALIVE");
+    mid_ecs_world_free(ww);
+
     // --- Command queue: spawns and despawns recorded now, applied after ---
     {
         MidEcsWorld *qw = mid_ecs_world_new();

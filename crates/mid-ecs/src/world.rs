@@ -37,7 +37,7 @@ use std::fmt;
 use mid_collections::{FfiSpan, GenerationalIndex, GenerationalIndexAllocator, SparseSetIndex};
 use zerocopy::{FromBytes, Immutable, IntoBytes, KnownLayout};
 
-use crate::archetype::{ArchetypeId, Archetypes, Bundle};
+use crate::archetype::{ArchetypeId, Archetypes, Bundle, ComponentFfiError, FfiSpanMut};
 use crate::component::{ComponentId, SparseShell};
 use crate::hash::TypeIdMap;
 use crate::resource::{ResourceFfiError, ResourceId, Resources};
@@ -568,6 +568,75 @@ impl World {
         component_id: ComponentId,
     ) -> Option<FfiSpan> {
         self.archetypes.raw_span(archetype_id, component_id)
+    }
+
+    /// [`Self::register_ffi_static_component`], and additionally lets C
+    /// *write* the type: [`Self::static_component_raw_span_mut`] and
+    /// [`Self::write_static_component_bytes`] work on it. `T: FromBytes`
+    /// is the extra bound: C writes raw bytes, and `FromBytes` is the
+    /// proof that every bit pattern is a valid `T`, so no C write can
+    /// create an invalid Rust value. Idempotent. Registering read-only
+    /// first and writable later upgrades the type; registering it
+    /// read-only after it was writable does not downgrade it.
+    ///
+    /// # Panics
+    /// If `name` was already registered for a different component type.
+    pub fn register_ffi_static_component_writable<T>(&mut self, name: &'static str) -> ComponentId
+    where
+        T: 'static + FromBytes + IntoBytes + Immutable + KnownLayout,
+    {
+        self.storage_claims.claim::<T>(StorageKind::Archetype);
+        self.archetypes.register_ffi_writable::<T>(name)
+    }
+
+    /// A *writable* span over `component_id`'s column in `archetype_id`'s
+    /// table: [`Self::static_component_raw_span`]'s mutable counterpart,
+    /// for components registered with
+    /// [`Self::register_ffi_static_component_writable`].
+    ///
+    /// Every row of that column is stamped changed at the world's current
+    /// tick *when the span is handed out* (not added: the values already
+    /// existed), the same moment [`Self::get_static_mut`] stamps. C cannot
+    /// say which rows it wrote through a raw pointer, so this can
+    /// over-report, and it can never miss a write. For a few rows, use
+    /// [`Self::write_static_component_bytes`], which stamps exactly the
+    /// row it writes.
+    ///
+    /// Errors: [`ComponentFfiError::UnknownId`] under the conditions
+    /// `static_component_raw_span` answers `None`;
+    /// [`ComponentFfiError::NotWritable`] for a component registered
+    /// read-only. Nothing is stamped on an error.
+    pub fn static_component_raw_span_mut(
+        &mut self,
+        archetype_id: ArchetypeId,
+        component_id: ComponentId,
+    ) -> Result<FfiSpanMut, ComponentFfiError> {
+        self.archetypes
+            .raw_span_mut(archetype_id, component_id, self.change_tick)
+    }
+
+    /// Copies `bytes` in as `entity`'s `component_id` value and stamps
+    /// exactly that row changed (not added) at the current tick: the
+    /// precise counterpart of [`Self::static_component_raw_span_mut`].
+    /// `bytes` is copied, so it needs no alignment and is not retained;
+    /// its length must be exactly the registered type's size.
+    ///
+    /// Errors, checked in this order: [`ComponentFfiError::NotAlive`],
+    /// [`ComponentFfiError::UnknownId`] (never registered),
+    /// [`ComponentFfiError::NotWritable`], [`ComponentFfiError::SizeMismatch`],
+    /// [`ComponentFfiError::Absent`] (alive, but without this component).
+    /// Nothing is written or stamped on an error.
+    pub fn write_static_component_bytes(
+        &mut self,
+        entity: Entity,
+        component_id: ComponentId,
+        bytes: &[u8],
+    ) -> Result<(), ComponentFfiError> {
+        if !self.is_alive(entity) {
+            return Err(ComponentFfiError::NotAlive);
+        }
+        self.archetypes
+            .write_row_bytes(entity, component_id, bytes, self.change_tick)
     }
 
     /// Entity-correlation counterpart to

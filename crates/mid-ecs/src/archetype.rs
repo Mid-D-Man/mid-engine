@@ -109,6 +109,9 @@ type FfiSpanAccessor = fn(&dyn Any) -> FfiSpan;
 // sibling cannot. Nothing had to be made more visible to move them there.
 mod iter;
 pub(crate) use iter::{Iter1, Iter1Ref, Iter2, Iter2Ref};
+mod ffi_write;
+pub use ffi_write::{ComponentFfiError, FfiSpanMut};
+use ffi_write::FfiWriter;
 mod iter_data;
 pub(crate) use iter_data::TableAccess;
 mod iter_mut;
@@ -527,6 +530,10 @@ pub(crate) struct Archetypes {
     /// same name exactly (`component.rs`), same reasoning: most types
     /// will never have an entry here, which is the point.
     ffi_accessors: HashMap<ComponentId, FfiSpanAccessor>,
+    /// Populated only for component types registered *writable* via
+    /// [`Self::register_ffi_writable`] (`archetype/ffi_write.rs`): the
+    /// subset of `ffi_accessors` that C may also write to.
+    ffi_writers: HashMap<ComponentId, FfiWriter>,
     /// The FFI-facing counterpart to Rust's own `TypeId`-based lookup —
     /// mirrors `SparseShell::ffi_names` exactly. A *separate* name
     /// space from `SparseShell`'s own, matching this whole struct's
@@ -552,6 +559,7 @@ impl Archetypes {
             component_ids: TypeIdMap::default(),
             next_component_id: 0,
             ffi_accessors: HashMap::new(),
+            ffi_writers: HashMap::new(),
             ffi_names: HashMap::new(),
         }
     }

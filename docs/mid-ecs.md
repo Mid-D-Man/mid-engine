@@ -2763,12 +2763,13 @@ was set to is not reported; this is `is_newer_than`'s existing behaviour).
 an error; the NULL-buffer-queries-count and `BufferTooSmall` (nothing written)
 idioms are the same as every other enumeration.
 
-**Not covered.** Archetype Core only, because the Sparse Shell has no ticks. C
-cannot mutate an archetype-tracked component (the spans are read-only), so
-`changed_rows` reports changes made by the Rust side of a mixed-language
-program; the C tests get a Rust-side "frame of game code" through a test-only
-fixture pair, `mid_ecs_test_change_fixture_world_new` and
-`mid_ecs_test_change_fixture_mutate`. Still single-component, and still not
+**Not covered.** Archetype Core only, because the Sparse Shell has no ticks.
+When this shipped C could not mutate an archetype-tracked component (the spans
+were read-only), so `changed_rows` reported only changes made by the Rust side
+of a mixed-language program; the C tests got a Rust-side "frame of game code"
+through a test-only fixture pair, `mid_ecs_test_change_fixture_world_new` and
+`mid_ecs_test_change_fixture_mutate`. C can write now, and those writes show in
+`changed_rows` too: see "Writing component data from C" below. Still single-component, and still not
 composable with `With`/`Without`/`Or` in one call (a caller composes them
 itself: enumerate with `archetypes_matching_static`, then call the row
 function per archetype).
@@ -3027,10 +3028,11 @@ not enough once `fold` existed.
   still single-component and still separate paths.
 - **No three-component or entity-free forms, no `Option<&T>`/`Has<T>`.**
 - **No C counterpart, deliberately, the one exception to shipping FFI with each
-  feature.** The spans are read-only, so there is no bulk mutable query to
-  mirror; a C-side row write would be a byte-copy write path like
-  `resource_write` and deserves its own design. What C *does* get is the point of
-  this pass: `..._changed_rows` now reports bulk writes made by the Rust side.
+  feature.** The spans were read-only, so there was no bulk mutable query to
+  mirror; a C-side write path was a byte-copy design like `resource_write` that
+  deserved its own pass, and got one: "Writing component data from C" below.
+  What C got from *this* pass is `..._changed_rows` reporting bulk writes made
+  by the Rust side.
 - **Benched since, not yet on real CI.** See "Mutable-query benches" below.
 - **Sparse Shell has no ticks**, so there is no `Mut` for it.
 
@@ -3635,3 +3637,115 @@ write through it would skip the change ticks).
 - No `size_hint`, no cached matched-archetype list; every call walks the
   archetypes once.
 - No benchmark (above).
+
+### Writing component data from C (`raw_span_mut`, `write`, `FfiSpanMut`)
+
+The open question the mutable queries left: the C span pointer is `const`, and a
+plain write through it would skip the change ticks, so a `Changed` consumer
+would miss it. Two C functions now write Archetype Core component data and keep
+the ticks honest.
+
+| | Rust (`World`) | C |
+|---|---|---|
+| opt a type in | `register_ffi_static_component_writable::<T>(name)` | (Rust side only) |
+| bulk, one column | `static_component_raw_span_mut(archetype, component) -> Result<FfiSpanMut, _>` | `mid_ecs_world_static_component_raw_span_mut(world, archetype_id, component_id, out_span)` |
+| precise, one row | `write_static_component_bytes(entity, component, bytes) -> Result<(), _>` | `mid_ecs_world_static_component_write(world, entity, component_id, bytes, len)` |
+
+`FfiSpanMut` is `FfiSpan` with a `*mut u8` (`MidEcsFfiSpanMut` in C), same
+`stride`/`count`/empty-sentinel meaning. `ComponentFfiError` is the Rust-side
+error (`UnknownId`, `NotWritable`, `NotAlive`, `Absent`, `SizeMismatch`). In C
+a new status, `MID_ECS_NOT_WRITABLE` (-7), is appended to the enum; every
+existing code is unchanged.
+
+**Where it lives.** `archetype/ffi_write.rs` (a child module of `archetype`,
+which sees `Archetype` and `Table`) holds both types, the writer registry and
+the three `Archetypes` methods. `world.rs` has the three `World` methods,
+`ffi.rs` the two `extern "C"` functions, the status mapping and a test fixture,
+and `ffi-smoke-test/` the header and the C checks.
+
+**Decisions, with reasons.**
+- **Only types registered *writable* can be written, and that registration
+  requires `zerocopy::FromBytes`.** C writes raw bytes. `FromBytes` is the proof
+  that every bit pattern is a valid value of the type, so nothing C writes can
+  create an invalid Rust value (a `bool` holding 2, an enum with no such
+  variant). Resources already work exactly this way (`register_ffi_resource`).
+  The existing read-only registration is unchanged. Registering read-only first
+  and writable later upgrades the type; registering read-only after it was
+  writable does not downgrade it. A component registered read-only answers
+  `NOT_WRITABLE`, not `NOT_FOUND`, so a caller can tell "you may not" from
+  "there is nothing there".
+- **Bulk: the whole column is stamped changed when the span is handed out.** C
+  cannot say which rows it writes through a raw pointer, so the only stamp that
+  can never miss a write is every row. It is the same moment
+  `World::get_static_mut` stamps (on access, not on write), it stamps `changed`
+  and not `added` (the values already existed), and it can over-report: a
+  `Changed` consumer may see rows C left alone. The writes belong in the tick
+  the span was obtained in; a write after `increment_change_tick` is not
+  stamped with the new tick.
+- **Precise: a per-entity byte copy that stamps exactly that row.** This is
+  the tool for sparse writes, so over-reporting is a choice, not a limit.
+- **No "write now, mark rows later" call.** It would have been the precise
+  bulk option, and it was rejected: a caller who forgets to mark gets a
+  `Changed` that silently misses writes, which is exactly the failure this
+  design exists to prevent. Bulk is conservative, per-row is exact, and there
+  is no third mode to get wrong.
+- **The Rust core is safe code.** The byte views are zerocopy's `as_mut_bytes`
+  and `read_from_bytes`, the span's pointer comes from `as_mut_bytes`, and a
+  failed write leaves nothing stamped. The raw pointers exist only in the
+  returned `FfiSpanMut`; the two `extern "C"` wrappers (already in the file that
+  allows `unsafe`) are the only code that touches them.
+- **`write` checks liveness through `World::is_alive` before it looks at the
+  entity's row.** The entity-location table is keyed by slot, so a stale handle
+  whose slot was reused would otherwise write into the new occupant. A test
+  pins it from both Rust and C.
+- **Errors are checked in a documented order:** `NotAlive`, `UnknownId`,
+  `NotWritable`, `SizeMismatch`, `Absent`. Nothing is written or stamped on any
+  of them. In C, `UnknownId` and `Absent` both map to `NOT_FOUND`.
+- **`FfiSpanMut` lives in mid-ecs.** `mid-collections` is untouched; moving the
+  type there is a one-line change if another crate wants it.
+
+**Same invalidation contract as the read-only span:** valid until the next call
+that changes that archetype's storage (spawn, despawn, insert, remove, applying
+a command queue), and never past `count` elements of `stride` bytes.
+
+**Tests, from the sandbox (rustc 1.91.1; real CI not yet run).**
+- 14 core tests (`archetype/ffi_write.rs`) and 7 FFI tests (`ffi.rs`, driving the
+  real `extern "C"` functions and writing through the raw pointer), plus 20 C
+  checks. Default lib tests 408 to 429 (413 to 434 with `scratch-arena`), the
+  `ffi::` tests 52 to 59, C checks 131 to 151. The C program is clean under
+  `-Wall -Wextra` against both `libmid_ecs.so` and `libmid_ecs.a`, and under
+  valgrind.
+- Covered: the span pointing at the live column with the registered stride and
+  count (and at the same memory as the read-only span); every row stamped
+  changed, not added, and only in the acquired archetype and component; a
+  read-only registration refused by both paths; every unknown-id case; an
+  emptied column and a never-populated, columnless archetype both answering an
+  empty span; the upgrade and no-downgrade registration rules; one row's value
+  and stamp; a multi-field struct and a zero-sized component through both
+  paths; rows staying aligned after a swap-remove; a dead entity and a stale
+  handle that must not reach the slot's new occupant; the error order, and
+  that no error writes or stamps anything.
+- **Mutation testing: 23 of 23 mutants caught.** Stamping skipped, stamping
+  `added` or both, stamping tick zero, stamping or writing row 0, no row stamp,
+  the size check removed or reordered, the value never stored, the span's stride
+  or count off by one, no writer registered, the not-writable and unregistered
+  errors swapped, a columnless archetype treated as an error, the world-level
+  tick and liveness checks removed, the FFI status mapping altered, `NULL` with
+  length 0 rejected, and the out-pointer null check removed (caught by a
+  `SIGSEGV`, the crash the check exists to prevent). One mutant was first built
+  wrongly (it did not compile) and was redone.
+- Two things the mutation pass found in the tests themselves and fixed before
+  this shipped: a test that claimed to cover a columnless archetype asserted on
+  the populated one, and the error order was documented but not tested.
+
+**Not done.**
+- **Inserting a component C's entity does not have.** `write` on an entity
+  without the component is `NOT_FOUND`: adding one is a structural change (a
+  new archetype, a column push from bytes), a different design from overwriting
+  a value that exists. It is also what a queued component insert in the command
+  queue would need.
+- **A C-side mutable *query*** (a row iterator with automatic stamping).
+  `raw_span_mut` is the bulk form: C iterates the span itself.
+- **The Sparse Shell.** Its spans stay read-only; it has no ticks, so there is
+  nothing to stamp, and a writable registration for it was not asked for.
+- **No benchmark.** Optimization is paused.

@@ -29,7 +29,7 @@ pub mod world;
 // that was caught); kept as a note for anyone re-deriving this crate's
 // history, not because the bug risk still applies now that the type is
 // real.
-pub use archetype::ArchetypeId;
+pub use archetype::{ArchetypeId, ComponentFfiError, FfiSpanMut};
 pub use commands::{CommandQueue, Commands, EntityCommands};
 pub use component::{ComponentId, SparseShell};
 pub use filter::{Or, QueryFilter, With, Without};

@@ -60,7 +60,7 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::ptr;
 use std::slice;
 
-use crate::archetype::ArchetypeId;
+use crate::archetype::{ArchetypeId, ComponentFfiError, FfiSpanMut};
 use crate::commands::CommandQueue;
 use crate::component::ComponentId;
 use crate::resource::{ResourceFfiError, ResourceId};
@@ -103,8 +103,14 @@ pub enum MidEcsStatus {
     /// with a buffer sized to hold at least that many elements.
     BufferTooSmall = -5,
     /// A write's byte length isn't exactly the size of the registered
-    /// resource type. Nothing was written.
+    /// resource or component type. Nothing was written.
     SizeMismatch = -6,
+    /// The component is registered for FFI, but read-only: only a type
+    /// registered with `register_ffi_static_component_writable` (which
+    /// requires `zerocopy::FromBytes`, so no byte pattern C writes can be
+    /// an invalid value) can be written from C. Nothing was written or
+    /// stamped.
+    NotWritable = -7,
 }
 
 fn ffi_guard(f: impl FnOnce() -> i32) -> i32 {
@@ -447,7 +453,7 @@ pub struct MidEcsTestHealth {
 /// with both storage systems is a real footgun it exists specifically
 /// to catch, and the test fixture itself wasn't exempt from that just
 /// because it's test-only code.
-#[derive(zerocopy::IntoBytes, zerocopy::Immutable, zerocopy::KnownLayout)]
+#[derive(zerocopy::FromBytes, zerocopy::IntoBytes, zerocopy::Immutable, zerocopy::KnownLayout)]
 #[repr(C)]
 pub struct MidEcsTestHealthStatic {
     pub hp: u32,
@@ -499,7 +505,7 @@ pub struct MidEcsTestFlagA {
 }
 
 /// See [`MidEcsTestFlagA`].
-#[derive(zerocopy::IntoBytes, zerocopy::Immutable, zerocopy::KnownLayout)]
+#[derive(zerocopy::FromBytes, zerocopy::IntoBytes, zerocopy::Immutable, zerocopy::KnownLayout)]
 #[repr(C)]
 pub struct MidEcsTestFlagB {
     pub v: u32,
@@ -640,6 +646,34 @@ pub unsafe extern "C" fn mid_ecs_test_change_fixture_mutate(world: *mut MidEcsWo
             .insert_static(fresh, MidEcsTestHealthStatic { hp: 4 });
         MidEcsStatus::Ok as i32
     })
+}
+
+/// **Test-fixture only, like [`mid_ecs_test_fixture_world_new`].** A world
+/// for exercising writing component data from a pure C program (C cannot
+/// call the generic `register_ffi_static_component_writable`):
+/// `"FfiHealthStatic"` registered *writable*, `"FfiFlagA"` registered
+/// *read-only*, and `"FfiFlagB"` registered writable but held by no
+/// entity. Three entities, spawned in this order: `{Health 1}`,
+/// `{Health 2, FlagA 20}`, `{Health 3}`. So two archetypes hold `Health`:
+/// `{Health}` (the first and third entity, 2 rows) and `{Health, FlagA}`
+/// (the second, 1 row). The change tick is advanced once after building,
+/// so a tracker that has just read the tick sees nothing changed. Never
+/// returns NULL.
+#[no_mangle]
+pub extern "C" fn mid_ecs_test_write_fixture_world_new() -> *mut MidEcsWorld {
+    let mut world = World::new();
+    world.register_ffi_static_component_writable::<MidEcsTestHealthStatic>("FfiHealthStatic");
+    world.register_ffi_static_component::<MidEcsTestFlagA>("FfiFlagA");
+    world.register_ffi_static_component_writable::<MidEcsTestFlagB>("FfiFlagB");
+    let first = world.spawn();
+    world.insert_static(first, MidEcsTestHealthStatic { hp: 1 });
+    let second = world.spawn();
+    world.insert_static(second, MidEcsTestHealthStatic { hp: 2 });
+    world.insert_static(second, MidEcsTestFlagA { v: 20 });
+    let third = world.spawn();
+    world.insert_static(third, MidEcsTestHealthStatic { hp: 3 });
+    world.increment_change_tick();
+    Box::into_raw(Box::new(MidEcsWorld(world)))
 }
 
 /// A sentinel `component_id`/`archetype_id` value meaning "not found" —
@@ -1176,9 +1210,10 @@ pub unsafe extern "C" fn mid_ecs_world_static_component_added_rows(
 /// As [`mid_ecs_world_static_component_added_rows`], for rows whose
 /// value was inserted *or* last mutated through Rust's
 /// `World::get_static_mut` after `last_run` (the C counterpart of
-/// `World::query_changed`). C itself cannot mutate archetype-tracked
-/// components (the spans are read-only), so this reports changes made by
-/// the Rust side of a mixed-language program.
+/// `World::query_changed`). It reports changes made by the Rust side of a
+/// mixed-language program and by C itself, through
+/// [`mid_ecs_world_static_component_raw_span_mut`] and
+/// [`mid_ecs_world_static_component_write`].
 ///
 /// # Safety
 /// As [`mid_ecs_world_static_component_added_rows`].
@@ -1202,6 +1237,120 @@ pub unsafe extern "C" fn mid_ecs_world_static_component_changed_rows(
             out_capacity,
         )
     }
+}
+
+fn component_status(error: ComponentFfiError) -> i32 {
+    match error {
+        ComponentFfiError::UnknownId | ComponentFfiError::Absent => MidEcsStatus::NotFound as i32,
+        ComponentFfiError::NotWritable => MidEcsStatus::NotWritable as i32,
+        ComponentFfiError::NotAlive => MidEcsStatus::NotAlive as i32,
+        ComponentFfiError::SizeMismatch => MidEcsStatus::SizeMismatch as i32,
+    }
+}
+
+/// Writable counterpart of [`mid_ecs_world_static_component_raw_span`]:
+/// writes a span over `component_id`'s column within `archetype_id`'s
+/// table into `*out_span`, with a non-const `ptr`, so C can write the
+/// values in place. Only components registered *writable* on the Rust side
+/// (`World::register_ffi_static_component_writable`, which requires the
+/// type to accept any bit pattern) can be handed out this way.
+///
+/// **Change stamping.** Every row of that column is stamped *changed* (not
+/// added) at the world's current tick at the moment this call returns, the
+/// same moment `World::get_static_mut` stamps. C cannot say which rows it
+/// then writes through a raw pointer, so this can over-report (a `Changed`
+/// consumer sees rows you left alone) and can never miss a write. To write
+/// a few rows and mark only those, use
+/// [`mid_ecs_world_static_component_write`]. Do the writes in the same
+/// tick: a write made after `mid_ecs_world_increment_change_tick` is not
+/// stamped with the new tick.
+///
+/// Returns `MidEcsStatus::Ok`, `NullPointer`, `NotFound` under exactly the
+/// conditions [`mid_ecs_world_static_component_raw_span`] returns it, or
+/// `NotWritable` for a component registered read-only. Nothing is stamped
+/// on an error. A real archetype with no rows is `Ok` with `count == 0`
+/// and a NULL `ptr`.
+///
+/// Same invalidation contract as the read-only span: valid until the next
+/// call that changes that archetype's storage (spawn, despawn, an insert
+/// or remove, applying a command queue). Never write past `count` elements
+/// of `stride` bytes, and never keep the pointer across such a call.
+///
+/// # Safety
+/// `world` and `out_span` must both be non-null; `world` a valid handle
+/// from `mid_ecs_world_new`, `out_span` valid for one `FfiSpanMut` write.
+#[no_mangle]
+pub unsafe extern "C" fn mid_ecs_world_static_component_raw_span_mut(
+    world: *mut MidEcsWorld,
+    archetype_id: u32,
+    component_id: u32,
+    out_span: *mut FfiSpanMut,
+) -> i32 {
+    ffi_guard(|| {
+        if world.is_null() || out_span.is_null() {
+            return MidEcsStatus::NullPointer as i32;
+        }
+        let world = unsafe { &mut *world };
+        match world.0.static_component_raw_span_mut(
+            ArchetypeId::from_u32(archetype_id),
+            ComponentId::from_u32(component_id),
+        ) {
+            Ok(span) => {
+                unsafe { ptr::write(out_span, span) };
+                MidEcsStatus::Ok as i32
+            }
+            Err(error) => component_status(error),
+        }
+    })
+}
+
+/// Copies `len` bytes from `bytes` in as `entity`'s `component_id` value
+/// and stamps exactly that row *changed* (not added) at the world's
+/// current tick: the precise counterpart of
+/// [`mid_ecs_world_static_component_raw_span_mut`], for writing a few rows
+/// without marking the rest. `len` must be exactly the registered type's
+/// size (the span's `stride`). Bytes are copied, so `bytes` needs no
+/// particular alignment and is not retained. Works on components
+/// registered *writable* on the Rust side only.
+///
+/// Returns `MidEcsStatus::Ok`, `NullPointer`, `NotAlive` (a dead or stale
+/// entity; it never reaches a different entity that reused the slot),
+/// `NotFound` (the component id was never registered for FFI, or the
+/// entity is alive but does not have it), `NotWritable` (registered
+/// read-only), or `SizeMismatch`, checked in that order. Nothing is
+/// written or stamped on an error.
+///
+/// # Safety
+/// `world` must be a valid, non-null handle from `mid_ecs_world_new`.
+/// `bytes` must be NULL only if `len` is 0, otherwise valid for reading
+/// `len` bytes.
+#[no_mangle]
+pub unsafe extern "C" fn mid_ecs_world_static_component_write(
+    world: *mut MidEcsWorld,
+    entity: u64,
+    component_id: u32,
+    bytes: *const u8,
+    len: usize,
+) -> i32 {
+    ffi_guard(|| {
+        if world.is_null() || (bytes.is_null() && len > 0) {
+            return MidEcsStatus::NullPointer as i32;
+        }
+        let world = unsafe { &mut *world };
+        let bytes: &[u8] = if len == 0 {
+            &[]
+        } else {
+            unsafe { slice::from_raw_parts(bytes, len) }
+        };
+        match world.0.write_static_component_bytes(
+            Entity::from_ffi(entity),
+            ComponentId::from_u32(component_id),
+            bytes,
+        ) {
+            Ok(()) => MidEcsStatus::Ok as i32,
+            Err(error) => component_status(error),
+        }
+    })
 }
 
 fn resource_status(error: ResourceFfiError) -> i32 {
@@ -3236,5 +3385,348 @@ mod tests {
             mid_ecs_commands_free(commands);
             mid_ecs_world_free(world);
         }
+    }
+
+    // ---- writing component data from C ----
+
+    /// The write fixture, decoded the way a C caller would: component ids by
+    /// name, its two `Health` archetypes told apart by row count, and the
+    /// entities in each.
+    struct WriteFixture {
+        world: *mut MidEcsWorld,
+        health: u32,
+        flag_a: u32,
+        flag_b: u32,
+        /// `{Health}`: two rows.
+        plain: u32,
+        plain_entities: Vec<u64>,
+        /// `{Health, FlagA}`: one row.
+        flagged: u32,
+        flagged_entity: u64,
+    }
+
+    fn write_fixture() -> WriteFixture {
+        let world = mid_ecs_test_write_fixture_world_new();
+        let health = static_id(world, "FfiHealthStatic");
+        let flag_a = static_id(world, "FfiFlagA");
+        let flag_b = static_id(world, "FfiFlagB");
+        let archetypes = matching_ids(world, &[health], &[]);
+        assert_eq!(archetypes.len(), 2);
+        let (mut plain, mut flagged) = (None, None);
+        for archetype in archetypes {
+            let mut span = empty_span();
+            // SAFETY: `world` is live, `span` is valid.
+            let status = unsafe {
+                mid_ecs_world_static_component_raw_span(world, archetype, health, &mut span)
+            };
+            assert_eq!(status, MidEcsStatus::Ok as i32);
+            match span.count {
+                2 => plain = Some(archetype),
+                1 => flagged = Some(archetype),
+                other => panic!("unexpected row count {other}"),
+            }
+        }
+        let (plain, flagged) = (plain.unwrap(), flagged.unwrap());
+        WriteFixture {
+            world,
+            health,
+            flag_a,
+            flag_b,
+            plain,
+            plain_entities: entity_ids_of(world, plain, health),
+            flagged,
+            flagged_entity: entity_ids_of(world, flagged, health)[0],
+        }
+    }
+
+    fn hp_values(world: *mut MidEcsWorld) -> Vec<u32> {
+        let mut v: Vec<u32> = rust_side(world)
+            .query_static::<MidEcsTestHealthStatic>()
+            .map(|(_, h)| h.hp)
+            .collect();
+        v.sort_unstable();
+        v
+    }
+
+    fn sorted(mut v: Vec<u64>) -> Vec<u64> {
+        v.sort_unstable();
+        v
+    }
+
+    fn tick_now_and_advance(world: *mut MidEcsWorld) -> u32 {
+        // SAFETY: `world` is a live handle.
+        let last_run = unsafe { mid_ecs_world_change_tick(world) };
+        // SAFETY: `world` is a live handle.
+        unsafe { mid_ecs_world_increment_change_tick(world) };
+        last_run
+    }
+
+    #[test]
+    fn raw_span_mut_writes_land_and_stamp_exactly_the_acquired_column() {
+        let f = write_fixture();
+        let last_run = tick_now_and_advance(f.world);
+        assert!(changed_entities_via_ffi(f.world, f.health, last_run, false).is_empty());
+
+        let mut span = FfiSpanMut::empty();
+        // SAFETY: `f.world` is live, `span` is valid for one write.
+        let status = unsafe {
+            mid_ecs_world_static_component_raw_span_mut(f.world, f.plain, f.health, &mut span)
+        };
+        assert_eq!(status, MidEcsStatus::Ok as i32);
+        assert_eq!((span.stride, span.count), (4, 2));
+        assert!(!span.ptr.is_null());
+        for row in 0..span.count {
+            // SAFETY: `row < span.count`; the span points at
+            // `MidEcsTestHealthStatic` elements `stride` bytes apart, a
+            // type registered writable because every bit pattern is valid.
+            unsafe {
+                (*(span.ptr.add(row * span.stride) as *mut MidEcsTestHealthStatic)).hp += 100;
+            }
+        }
+        // The two `{Health}` rows (1 and 3) changed; the `{Health, FlagA}`
+        // row (2) did not.
+        assert_eq!(hp_values(f.world), vec![2, 101, 103]);
+        assert_eq!(
+            changed_entities_via_ffi(f.world, f.health, last_run, false),
+            sorted(f.plain_entities.clone())
+        );
+        // Stamped changed, not added.
+        assert!(changed_entities_via_ffi(f.world, f.health, last_run, true).is_empty());
+        // SAFETY: freed exactly once.
+        unsafe { mid_ecs_world_free(f.world) };
+    }
+
+    #[test]
+    fn raw_span_mut_and_the_read_only_span_point_at_the_same_memory() {
+        let f = write_fixture();
+        let mut shared = empty_span();
+        let mut exclusive = FfiSpanMut::empty();
+        // SAFETY: `f.world` is live, both spans are valid for one write.
+        unsafe {
+            assert_eq!(
+                mid_ecs_world_static_component_raw_span(f.world, f.plain, f.health, &mut shared),
+                MidEcsStatus::Ok as i32
+            );
+            assert_eq!(
+                mid_ecs_world_static_component_raw_span_mut(
+                    f.world,
+                    f.plain,
+                    f.health,
+                    &mut exclusive
+                ),
+                MidEcsStatus::Ok as i32
+            );
+            mid_ecs_world_free(f.world);
+        }
+        assert_eq!(exclusive.ptr as *const u8, shared.ptr);
+        assert_eq!(
+            (exclusive.stride, exclusive.count),
+            (shared.stride, shared.count)
+        );
+    }
+
+    #[test]
+    fn raw_span_mut_statuses_and_nothing_stamped_on_an_error() {
+        let f = write_fixture();
+        let last_run = tick_now_and_advance(f.world);
+        let mut span = FfiSpanMut::empty();
+        let mut call = |archetype: u32, component: u32| -> i32 {
+            // SAFETY: `f.world` is live, `span` is valid for one write.
+            unsafe {
+                mid_ecs_world_static_component_raw_span_mut(
+                    f.world, archetype, component, &mut span,
+                )
+            }
+        };
+        let ok = MidEcsStatus::Ok as i32;
+        let not_found = MidEcsStatus::NotFound as i32;
+        // Registered read-only: not writable, wherever it is.
+        assert_eq!(call(f.flagged, f.flag_a), MidEcsStatus::NotWritable as i32);
+        assert_eq!(call(f.plain, f.flag_a), MidEcsStatus::NotWritable as i32);
+        // Never registered / no such archetype / signature lacks it.
+        assert_eq!(call(f.plain, 9999), not_found);
+        assert_eq!(call(9999, f.health), not_found);
+        assert_eq!(call(0, f.health), not_found);
+        // Registered writable, but held by no entity anywhere.
+        assert_eq!(call(f.plain, f.flag_b), not_found);
+        // Nothing was stamped by any of that.
+        assert!(changed_entities_via_ffi(f.world, f.health, last_run, false).is_empty());
+        // Null handle / null out-pointer.
+        let mut other = FfiSpanMut::empty();
+        // SAFETY: NULL is the documented rejected case for each.
+        unsafe {
+            assert_eq!(
+                mid_ecs_world_static_component_raw_span_mut(
+                    std::ptr::null_mut(),
+                    f.plain,
+                    f.health,
+                    &mut other
+                ),
+                MidEcsStatus::NullPointer as i32
+            );
+            assert_eq!(
+                mid_ecs_world_static_component_raw_span_mut(
+                    f.world,
+                    f.plain,
+                    f.health,
+                    std::ptr::null_mut()
+                ),
+                MidEcsStatus::NullPointer as i32
+            );
+        }
+        // And a good call still works afterwards.
+        assert_eq!(call(f.plain, f.health), ok);
+        // SAFETY: freed exactly once.
+        unsafe { mid_ecs_world_free(f.world) };
+    }
+
+    #[test]
+    fn write_copies_a_value_in_and_stamps_exactly_that_row() {
+        let f = write_fixture();
+        let last_run = tick_now_and_advance(f.world);
+
+        // From a deliberately unaligned buffer: the bytes are copied.
+        let buf = [0u8, 222, 0, 0, 0, 0];
+        // SAFETY: `f.world` is live; `buf[1..5]` is valid for 4 bytes.
+        let status = unsafe {
+            mid_ecs_world_static_component_write(
+                f.world,
+                f.flagged_entity,
+                f.health,
+                buf[1..5].as_ptr(),
+                4,
+            )
+        };
+        assert_eq!(status, MidEcsStatus::Ok as i32);
+        assert_eq!(hp_values(f.world), vec![1, 3, 222]);
+        assert_eq!(
+            changed_entities_via_ffi(f.world, f.health, last_run, false),
+            vec![f.flagged_entity]
+        );
+        assert!(changed_entities_via_ffi(f.world, f.health, last_run, true).is_empty());
+        // SAFETY: freed exactly once.
+        unsafe { mid_ecs_world_free(f.world) };
+    }
+
+    #[test]
+    fn write_statuses_and_nothing_written_or_stamped_on_an_error() {
+        let f = write_fixture();
+        let last_run = tick_now_and_advance(f.world);
+        let value = 77u32.to_ne_bytes();
+        let write = |entity: u64, component: u32, bytes: *const u8, len: usize| -> i32 {
+            // SAFETY: `f.world` is live; `bytes` is NULL only with `len == 0`
+            // or valid for `len` bytes at every call site below.
+            unsafe { mid_ecs_world_static_component_write(f.world, entity, component, bytes, len) }
+        };
+        let victim = f.plain_entities[0];
+
+        // Read-only component, even on an entity that has it.
+        assert_eq!(
+            write(f.flagged_entity, f.flag_a, value.as_ptr(), 4),
+            MidEcsStatus::NotWritable as i32
+        );
+        // Never registered; alive but without the (writable) component.
+        assert_eq!(
+            write(victim, 9999, value.as_ptr(), 4),
+            MidEcsStatus::NotFound as i32
+        );
+        assert_eq!(
+            write(victim, f.flag_b, value.as_ptr(), 4),
+            MidEcsStatus::NotFound as i32
+        );
+        // Wrong lengths, including NULL with 0.
+        for len in [3usize, 5] {
+            assert_eq!(
+                write(victim, f.health, value.as_ptr(), len),
+                MidEcsStatus::SizeMismatch as i32
+            );
+        }
+        assert_eq!(
+            write(victim, f.health, std::ptr::null(), 0),
+            MidEcsStatus::SizeMismatch as i32
+        );
+        // A bogus handle that never came from a real spawn.
+        assert_eq!(
+            write(u64::MAX, f.health, value.as_ptr(), 4),
+            MidEcsStatus::NotAlive as i32
+        );
+        // NULL bytes with a non-zero length, and a NULL world.
+        assert_eq!(
+            write(victim, f.health, std::ptr::null(), 4),
+            MidEcsStatus::NullPointer as i32
+        );
+        // SAFETY: NULL world is the documented rejected case.
+        unsafe {
+            assert_eq!(
+                mid_ecs_world_static_component_write(
+                    std::ptr::null_mut(),
+                    victim,
+                    f.health,
+                    value.as_ptr(),
+                    4
+                ),
+                MidEcsStatus::NullPointer as i32
+            );
+        }
+        assert_eq!(hp_values(f.world), vec![1, 2, 3]);
+        assert!(changed_entities_via_ffi(f.world, f.health, last_run, false).is_empty());
+        // SAFETY: freed exactly once.
+        unsafe { mid_ecs_world_free(f.world) };
+    }
+
+    #[test]
+    fn write_to_a_dead_or_stale_entity_is_not_alive_and_never_reaches_the_slot_reuser() {
+        let f = write_fixture();
+        let doomed = f.plain_entities[0];
+        // SAFETY: `f.world` is live.
+        let (despawn, reused) = unsafe {
+            let despawn = mid_ecs_world_despawn(f.world, doomed);
+            (despawn, mid_ecs_world_spawn(f.world))
+        };
+        assert_eq!(despawn, MidEcsStatus::Ok as i32);
+        assert_ne!(reused, doomed);
+        rust_side(f.world)
+            .insert_static(Entity::from_ffi(reused), MidEcsTestHealthStatic { hp: 50 });
+        let last_run = tick_now_and_advance(f.world);
+
+        let value = 9u32.to_ne_bytes();
+        // SAFETY: `f.world` is live, `value` is valid for 4 bytes.
+        let status = unsafe {
+            mid_ecs_world_static_component_write(f.world, doomed, f.health, value.as_ptr(), 4)
+        };
+        assert_eq!(status, MidEcsStatus::NotAlive as i32);
+        // The entity that took the slot is untouched and unstamped.
+        assert_eq!(
+            rust_side(f.world)
+                .get_static::<MidEcsTestHealthStatic>(Entity::from_ffi(reused))
+                .map(|h| h.hp),
+            Some(50)
+        );
+        assert!(changed_entities_via_ffi(f.world, f.health, last_run, false).is_empty());
+        // SAFETY: freed exactly once.
+        unsafe { mid_ecs_world_free(f.world) };
+    }
+
+    #[test]
+    fn component_status_maps_every_error() {
+        let ok = |e| component_status(e);
+        assert_eq!(
+            ok(ComponentFfiError::UnknownId),
+            MidEcsStatus::NotFound as i32
+        );
+        assert_eq!(ok(ComponentFfiError::Absent), MidEcsStatus::NotFound as i32);
+        assert_eq!(
+            ok(ComponentFfiError::NotWritable),
+            MidEcsStatus::NotWritable as i32
+        );
+        assert_eq!(
+            ok(ComponentFfiError::NotAlive),
+            MidEcsStatus::NotAlive as i32
+        );
+        assert_eq!(
+            ok(ComponentFfiError::SizeMismatch),
+            MidEcsStatus::SizeMismatch as i32
+        );
+        assert_eq!(MidEcsStatus::NotWritable as i32, -7);
     }
 }

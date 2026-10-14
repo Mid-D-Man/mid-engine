@@ -36,6 +36,7 @@ extern "C" {
 #define MID_ECS_NOT_FOUND       -4
 #define MID_ECS_BUFFER_TOO_SMALL -5
 #define MID_ECS_SIZE_MISMATCH  -6
+#define MID_ECS_NOT_WRITABLE   -7
 
 // Sentinel component_id/archetype_id meaning "not found" -- returned by
 // the lookup_ffi_* functions below. Not 0: 0 is a real, valid id for
@@ -59,6 +60,16 @@ typedef struct MidEcsFfiSpan {
     size_t stride;
     size_t count;
 } MidEcsFfiSpan;
+
+// The writable sibling of MidEcsFfiSpan, from the *_raw_span_mut functions:
+// the same shape with a non-const ptr, so you can write the values in
+// place. Same stride / count / empty-sentinel meaning (ptr NULL, count 0).
+// Only components registered writable on the Rust side hand one out.
+typedef struct MidEcsFfiSpanMut {
+    uint8_t *ptr;
+    size_t stride;
+    size_t count;
+} MidEcsFfiSpanMut;
 
 // Creates a new, empty World. Never returns NULL.
 MidEcsWorld *mid_ecs_world_new(void);
@@ -291,11 +302,49 @@ uint32_t mid_ecs_world_increment_change_tick(MidEcsWorld *world);
 // changes that component's storage.
 int32_t mid_ecs_world_static_component_added_rows(const MidEcsWorld *world, uint32_t archetype_id, uint32_t component_id, uint32_t last_run, uint32_t *out_rows, size_t out_capacity);
 
-// As above, for rows whose value was inserted OR last mutated (through
-// Rust's World::get_static_mut) after last_run. C cannot mutate
-// archetype-tracked components itself (the spans are read-only), so this
-// reports changes made by the Rust side of a mixed-language program.
+// As above, for rows whose value was inserted OR last mutated after
+// last_run: through Rust's World::get_static_mut or bulk mutable queries, or
+// from C through mid_ecs_world_static_component_raw_span_mut and
+// mid_ecs_world_static_component_write below.
 int32_t mid_ecs_world_static_component_changed_rows(const MidEcsWorld *world, uint32_t archetype_id, uint32_t component_id, uint32_t last_run, uint32_t *out_rows, size_t out_capacity);
+
+// --- Writing component data from C ---
+//
+// The read-only spans above stay read-only. A component type can be
+// written from C only if its Rust type was registered WRITABLE
+// (World::register_ffi_static_component_writable), which requires the type
+// to accept any bit pattern, so nothing C writes can be an invalid value.
+// Two ways to write, for two needs:
+//   * raw_span_mut (bulk): a writable span over one archetype's column.
+//     C cannot tell Rust which rows it then writes through a raw pointer,
+//     so EVERY row of that column is stamped changed (not added) at the
+//     world's current tick when the call returns. That can over-report
+//     (a Changed consumer sees rows you left alone) and never misses a
+//     write. Do the writes in the same tick.
+//   * write (precise): copies one value into one entity's component and
+//     stamps exactly that row. Use it for a few rows.
+
+// Writable counterpart of mid_ecs_world_static_component_raw_span: writes a
+// span over component_id's column in archetype_id's table to *out_span.
+// MID_ECS_OK; MID_ECS_NULL_POINTER; MID_ECS_NOT_FOUND under exactly the
+// conditions raw_span returns it; MID_ECS_NOT_WRITABLE if the component was
+// registered read-only. Nothing is stamped on an error. An archetype with
+// no rows is OK with count 0 and a NULL ptr. Same invalidation contract as
+// the read-only span: valid until the next call that changes that
+// archetype's storage (spawn, despawn, insert/remove, applying a command
+// queue). Never write past count elements of stride bytes.
+int32_t mid_ecs_world_static_component_raw_span_mut(MidEcsWorld *world, uint32_t archetype_id, uint32_t component_id, MidEcsFfiSpanMut *out_span);
+
+// Copies len bytes from bytes in as entity's component_id value and stamps
+// exactly that row changed (not added) at the current tick. len must equal
+// the type's size exactly (the span's stride). bytes is copied, so it needs
+// no particular alignment; it may be NULL only when len is 0. Statuses,
+// checked in this order: MID_ECS_NULL_POINTER; MID_ECS_NOT_ALIVE (dead,
+// bogus or stale entity: it never reaches a different entity that reused
+// the slot); MID_ECS_NOT_FOUND (component never registered for FFI, or the
+// entity is alive without it); MID_ECS_NOT_WRITABLE; MID_ECS_SIZE_MISMATCH.
+// Nothing is written or stamped on an error.
+int32_t mid_ecs_world_static_component_write(MidEcsWorld *world, uint64_t entity, uint32_t component_id, const uint8_t *bytes, size_t len);
 
 // --- Test fixture (see ffi.rs's own doc comment on this function) ---
 
@@ -345,6 +394,15 @@ MidEcsWorld *mid_ecs_test_change_fixture_world_new(void);
 // mid_ecs_world_increment_change_tick first. MID_ECS_NOT_FOUND if no
 // entity has hp == 2 (not that fixture, or already run).
 int32_t mid_ecs_test_change_fixture_mutate(MidEcsWorld *world);
+
+// NOT a real part of the public API. A world for exercising writes from C:
+// "FfiHealthStatic" registered WRITABLE (`{ uint32_t hp; }`), "FfiFlagA"
+// registered READ-ONLY (`{ uint32_t v; }`), and "FfiFlagB" registered
+// writable but held by no entity. Three entities: {Health 1},
+// {Health 2, FlagA 20}, {Health 3}. So two archetypes hold Health:
+// {Health} (entities 1 and 3, two rows) and {Health, FlagA} (entity 2, one
+// row). The tick is advanced once after building. Never returns NULL.
+MidEcsWorld *mid_ecs_test_write_fixture_world_new(void);
 
 #ifdef __cplusplus
 }
