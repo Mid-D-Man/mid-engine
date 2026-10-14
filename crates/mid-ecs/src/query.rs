@@ -19,7 +19,7 @@
 
 use crate::archetype::ArchetypeId;
 use crate::filter::QueryFilter;
-use crate::query_data::QueryData;
+use crate::query_data::{QueryData, ReadOnlyQueryData};
 use crate::tick::{ChangeTracker, Mut, Tick};
 use crate::world::{Entity, World};
 
@@ -197,12 +197,15 @@ impl World {
 
     // ── Multi-term queries ────────────────────────────────────────────
     //
-    // The general form of `query_static`/`query2_static`: the item shape
-    // is a type (`QueryData`), so any number of components, plus
-    // `Option<&T>`, `Has<T>` and `Entity` terms, in one call. Archetype
-    // Core only, read-only. Implemented in `archetype/iter_data.rs`,
-    // deliberately not on `Iter1`/`Iter2`; see `query_data.rs` and
-    // `docs/mid-ecs.md`, "Multi-term queries", for the design.
+    // The general form of `query_static`/`query2_static`/the `_mut`
+    // queries: the item shape is a type (`QueryData`), so any number of
+    // components, plus `Option<&T>`, `Has<T>`, `Entity`, `Mut<T>` and
+    // `Option<Mut<T>>` terms, in one call. Archetype Core only.
+    // `query_data` takes `&self` and read-only terms; `query_data_mut`
+    // takes `&mut self` and any terms. Implemented in
+    // `archetype/iter_data.rs`, deliberately not on `Iter1`/`Iter2`; see
+    // `query_data.rs` and `docs/mid-ecs.md`, "Multi-term queries" and
+    // "Mutable terms in `query_data`", for the design.
 
     /// Iterates every row of every archetype that holds all of `Q`'s
     /// `&T` components, yielding `Q`'s item for it: the multi-term
@@ -243,7 +246,22 @@ impl World {
     /// two components. Which archetypes are visited is decided once, when
     /// the query is created; a term never costs anything per row beyond
     /// indexing its slice.
-    pub fn query_data<'a, Q: QueryData + 'a>(&'a self) -> impl Iterator<Item = Q::Item<'a>> + 'a {
+    ///
+    /// This takes `&self`, so only read-only terms are accepted
+    /// ([`ReadOnlyQueryData`]); a [`Mut`] term is a compile error here and
+    /// belongs to [`Self::query_data_mut`]:
+    ///
+    /// ```compile_fail,E0277
+    /// use mid_ecs::{Mut, World};
+    ///
+    /// struct Hp(u32);
+    ///
+    /// let world = World::new();
+    /// let _ = world.query_data::<Mut<Hp>>();
+    /// ```
+    pub fn query_data<'a, Q: ReadOnlyQueryData + 'a>(
+        &'a self,
+    ) -> impl Iterator<Item = Q::Item<'a>> + 'a {
         self.archetypes.iter_data_filtered::<Q, ()>()
     }
 
@@ -251,10 +269,81 @@ impl World {
     /// (`With`, `Without`, `Or`, tuples of them: see `filter.rs`). The
     /// filter is evaluated once per archetype when the query is created,
     /// not per row.
-    pub fn query_data_filtered<'a, Q: QueryData + 'a, F: QueryFilter>(
+    pub fn query_data_filtered<'a, Q: ReadOnlyQueryData + 'a, F: QueryFilter>(
         &'a self,
     ) -> impl Iterator<Item = Q::Item<'a>> + 'a {
         self.archetypes.iter_data_filtered::<Q, F>()
+    }
+
+    /// [`Self::query_data`] with write access: `Q` may contain [`Mut`] and
+    /// `Option<Mut>` terms next to the read-only ones. Takes `&mut self`,
+    /// so nothing else can touch the world while the iterator is alive.
+    ///
+    /// A `Mut` term stamps its row changed only when it is actually
+    /// written through, exactly as [`Self::query_static_mut`] does, so
+    /// [`Self::query_changed`] sees the writes made here.
+    ///
+    /// ```
+    /// use mid_ecs::{Mut, World};
+    ///
+    /// struct Pos(f32);
+    /// struct Vel(f32);
+    /// struct Frozen;
+    ///
+    /// let mut world = World::new();
+    /// let runner = world.spawn();
+    /// world.insert_static(runner, Pos(0.0));
+    /// world.insert_static(runner, Vel(2.0));
+    /// let statue = world.spawn();
+    /// world.insert_static(statue, Pos(5.0));
+    /// world.insert_static(statue, Vel(2.0));
+    /// world.insert_static(statue, Frozen);
+    ///
+    /// // Integrate Pos by Vel, except where there is a Frozen marker.
+    /// for (mut pos, vel, frozen) in
+    ///     world.query_data_mut::<(Mut<Pos>, &Vel, Option<&Frozen>)>()
+    /// {
+    ///     if frozen.is_none() {
+    ///         pos.0 += vel.0;
+    ///     }
+    /// }
+    ///
+    /// assert_eq!(world.get_static::<Pos>(runner).map(|p| p.0), Some(2.0));
+    /// assert_eq!(world.get_static::<Pos>(statue).map(|p| p.0), Some(5.0));
+    /// ```
+    ///
+    /// # Panics
+    /// If `Q` reads and writes, or writes twice, the same component type:
+    /// `(&A, Mut<A>)`, `(Mut<A>, Mut<A>)`, `(Mut<A>, Option<&A>)`. Raised
+    /// when the query is created, whether or not any row holds an `A`.
+    /// Reading a component through several terms is fine, and
+    /// [`Has<T>`](crate::Has) and `Entity` never conflict with anything.
+    ///
+    /// ```should_panic
+    /// use mid_ecs::{Mut, World};
+    ///
+    /// struct Hp(u32);
+    ///
+    /// let mut world = World::new();
+    /// let e = world.spawn();
+    /// world.insert_static(e, Hp(1));
+    /// let _ = world.query_data_mut::<(&Hp, Mut<Hp>)>();
+    /// ```
+    pub fn query_data_mut<'a, Q: QueryData + 'a>(
+        &'a mut self,
+    ) -> impl Iterator<Item = Q::Item<'a>> + 'a {
+        self.query_data_mut_filtered::<Q, ()>()
+    }
+
+    /// [`Self::query_data_mut`] restricted to archetypes satisfying `F`.
+    ///
+    /// # Panics
+    /// Under the same conditions as [`Self::query_data_mut`].
+    pub fn query_data_mut_filtered<'a, Q: QueryData + 'a, F: QueryFilter>(
+        &'a mut self,
+    ) -> impl Iterator<Item = Q::Item<'a>> + 'a {
+        let this_run = self.change_tick();
+        self.archetypes.iter_data_mut_filtered::<Q, F>(this_run)
     }
 
     // ── Bulk mutable queries ────────────────────────────────────────

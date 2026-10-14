@@ -33,7 +33,7 @@ pub use archetype::ArchetypeId;
 pub use commands::{CommandQueue, Commands, EntityCommands};
 pub use component::{ComponentId, SparseShell};
 pub use filter::{Or, QueryFilter, With, Without};
-pub use query_data::{Has, QueryData};
+pub use query_data::{Has, QueryData, ReadOnlyQueryData};
 pub use resource::{ResourceFfiError, ResourceId};
 pub use tick::{ChangeTracker, Mut, Tick};
 pub use transform::{GlobalTransform, GlobalTransformLWC};

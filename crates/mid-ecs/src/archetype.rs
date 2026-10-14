@@ -110,7 +110,7 @@ type FfiSpanAccessor = fn(&dyn Any) -> FfiSpan;
 mod iter;
 pub(crate) use iter::{Iter1, Iter1Ref, Iter2, Iter2Ref};
 mod iter_data;
-pub(crate) use iter_data::TableView;
+pub(crate) use iter_data::TableAccess;
 mod iter_mut;
 
 /// Dense identifier for one archetype (one exact component-type set).

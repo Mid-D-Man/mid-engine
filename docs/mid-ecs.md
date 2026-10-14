@@ -3483,10 +3483,9 @@ without, and 1 with a `FlagB`.
   table invariant makes unobservable. It stays as a defensive bound.
 
 **Not done.**
-- **Mutable terms (`&mut T`, `Mut<T>`) in a tuple.** `iter_mut.rs` gets two
-  disjoint columns of one archetype from `SparseSet::get_disjoint_mut`; whether
-  that generalises to an arbitrary mixed tuple with tick stamping, still in
-  safe code, is the next design question for this API.
+- **Mutable terms (`&mut T`, `Mut<T>`) in a tuple.** Done in the next pass: see
+  "Mutable terms in `query_data`" below. (Not by generalising
+  `SparseSet::get_disjoint_mut`, which only pairs two keys.)
 - `Ref<T>`, and `Added`/`Changed` combined with `With`/`Without`/`Or` in one
   call (gap-list item 3).
 - **No benchmark, and no performance claim.** `next()` pays a per-row check on
@@ -3496,3 +3495,143 @@ without, and 1 with a `FlagB`.
   until it is measured. Optimization is paused.
 - No `size_hint`, no cached matched-archetype list (`QueryState`-style):
   every call walks the archetypes once.
+
+### Mutable terms in `query_data` (`Mut<T>`, `Option<Mut<T>>`, `World::query_data_mut`)
+
+The follow-up the previous section left open: write access in the same
+tuples. `Mut<T>` and `Option<Mut<T>>` are new `QueryData` terms, and
+`World::query_data_mut::<Q>()` / `query_data_mut_filtered::<Q, F>()` take
+`&mut self` and accept any terms, mutable or not:
+
+```rust
+for (mut pos, vel, frozen) in world.query_data_mut::<(Mut<Pos>, &Vel, Option<&Frozen>)>() {
+    if frozen.is_none() { pos.0 += vel.0; }
+}
+```
+
+| term | item | archetype must contain `T`? | access |
+|---|---|---|---|
+| `Mut<T>` | `Mut<T>` | yes | write |
+| `Option<Mut<T>>` | `Option<Mut<T>>` | no, `None` where it is absent | write |
+
+`Mut<T>` is the crate's existing change-tracked wrapper: a write through it
+stamps the row changed, a read does not, so `query_changed` and
+`Mut::is_changed` see what a `query_data_mut` call wrote, exactly as they see
+`query_static_mut`.
+
+**What changed in the code.** `query_data.rs` gained the two terms, the
+`ReadOnlyQueryData` marker, the hidden `AccessEntry` and `MutFetch`, and the
+trait grew `collect_access` and changed two signatures (`init_fetch` takes a
+`&mut TableAccess`, `fetch` takes `&mut Fetch`). In `archetype/iter_data.rs`
+`TableView` became `TableAccess` (two modes, below) and `IterDataMut` is the
+exclusive iterator beside `IterData`. `iter_mut.rs` changed one word: `select`
+is now `pub(super)`. `query.rs` has the two new methods, and `query_data`'s
+bound went from `QueryData` to `ReadOnlyQueryData`. That is source-compatible
+for every read-only caller, and a `compile_fail,E0277` doctest pins that a
+`Mut` term is rejected on a shared `&World`.
+
+**Decisions, with reasons.**
+- **One trait with a read-only marker, not a second trait.** `QueryData` stays
+  the single term trait and `ReadOnlyQueryData` (implemented by `Entity`,
+  `&T`, `Option<&T>`, `Has<T>` and tuples of them) is what `query_data(&self)`
+  requires: the same split bevy has. A parallel trait would have duplicated
+  the four read terms and the tuple macro, and everything still to come
+  (`Ref<T>`, `Added`/`Changed` terms, access sets for a scheduler) wants one
+  term trait. `collect_access`, which every term uses to declare what it
+  reads and writes, is the seed of the access-set primitives gap-list item 4
+  needs; nothing about it is public yet.
+- **No raw `&mut T` term.** A raw write would skip the change ticks and a
+  `Changed` query would miss it. Only `Mut<T>`, which stamps on an actual
+  write, is offered.
+- **Conflicting access panics when the query is created.** One query may read
+  a component through any number of terms, or write it through exactly one
+  `Mut` term and nothing else. `(&A, Mut<A>)`, `(Mut<A>, Mut<A>)`,
+  `(Mut<A>, Option<&A>)` and the like panic, naming the type, whether or not
+  any row holds an `A`: it is a fact about the query's type. Checked by
+  `TypeId`, not by registered id, so it does not depend on what the world has
+  seen (two *different* unseen types do not conflict, and a test pins that).
+  `Has<T>` and `Entity` read no data and never conflict. It is a run-time
+  check because stable Rust cannot compare the types inside a tuple. This
+  matches the existing `iter2_mut_filtered`, which already asserts its two
+  types differ.
+- **Zero `unsafe`, with a plan instead of `get_disjoint_mut`.**
+  `SparseSet::get_disjoint_mut` only pairs two keys, and a tuple of up to
+  twelve terms needs an arbitrary number of borrows. Instead, when the
+  exclusive iterator enters an archetype it makes one pass over
+  `columns.iter_mut()` and one over `ticks.iter_mut()`. `iter_mut` yields every
+  column exactly once, so each one can go to exactly one place: kept shared
+  and copied to every reader if the query only reads it, or moved whole into a
+  slot that a single `Mut` term takes it from if the query writes it. Which is
+  which comes from a per-query plan (`(component, written)`), built once from
+  the terms' declarations after the conflict check.
+- **Handing out `&mut` rows in safe code.** A `Mut` term holds its value and
+  tick slices and, per row, takes them out of its fetch with `mem::take`,
+  splits the first element off with `split_first_mut` and puts the rest back:
+  `slice::IterMut` without the `unsafe`. That makes `fetch` order-dependent, so
+  the trait now documents the contract (rows `0, 1, 2, ..` of an archetype, in
+  order, once each, below `clamp_len`), which both iterators keep. Read terms
+  still index by row.
+- **`TableAccess` has two modes.** *Shared* (the read-only iterator) looks
+  columns up in the table on demand, as before. *Exclusive* holds the slots
+  the plan assigned. One object is reused across archetypes, so entering one
+  allocates nothing once the first has sized its slot lists. Asking for a
+  column the plan did not give, or one already taken, yields `None`, which the
+  terms turn into an empty slice, the same defensive shape as a missing lazy
+  column.
+- **Archetype selection is one helper for both iterators** (`plan_matches`),
+  so pruning is decided in one place and tested through it.
+
+**Tests, from the sandbox (rustc 1.91.1; real CI not yet run).**
+- 32 new tests (30 in `query_data.rs`, 2 in `archetype/iter_data.rs`) and 3
+  new doctests (a worked example, a `should_panic`, the `compile_fail`).
+  Default lib tests 376 to 408 (381 to 413 with `scratch-arena`), doctests 4
+  to 7. The 20 earlier `query_data` and `iter_data` tests passed unchanged on
+  the refactored trait before any new test was written.
+- Covered: writes landing; mixing `Mut` with `Entity`, `Option`, `Has`;
+  `Option<Mut<T>>` writing where present, `None` elsewhere, never narrowing;
+  several `Mut` terms in one query; stamps only on the rows and components
+  actually written; a read through `Mut` not stamping; agreement with
+  `query_static_mut` in rows, values and stamps; alignment after despawn and
+  migration; several archetypes in one query; zero-sized `Mut`; unseen types;
+  filters; the same order as the read-only query; an iterator dropped early; an
+  emptied archetype reused; 300 rows over several archetypes; twelve mixed terms
+  with four `Mut`; nine conflicting shapes (including nested tuples, an unseen
+  type, and no row of that type anywhere) plus the panic message naming the type;
+  and the shapes that must *not* conflict.
+- **Mutation testing: 22 of 24 mutants caught.** Caught: the tick cursor not
+  advanced; stamping with the wrong tick; the conflict check disabled, needing
+  both to write, or comparing ids instead of types; the plan marking everything
+  or nothing as written; the slot and tick lists not cleared between archetypes;
+  shared and exclusive swapped; the signature or entity slice left empty; an
+  empty plan; the filter ignored; `Option<Mut>` present when absent;
+  `Mut` not required, always satisfiable, or `Option<Mut>` required; and
+  each term declaring the wrong access (`Mut` none, `&T` as a write, `Option<&T>`
+  none, `Has` as a read). The two survivors are equivalent mutants: the plan
+  letting a write not win over a read of the same component (conflict
+  checking already rejects every such mix, so it cannot arise), and the `Mut`
+  row-count clamp (the table invariant makes it unobservable, like the `&T`
+  one before it). Pruning for `Mut` terms cannot be seen through items for the
+  same reason as before, so `iter_data.rs` tests the matched list directly.
+
+**Performance: not measured, and one thing to expect.** The header of
+`iter_mut.rs` records that its first hand-written version kept one cursor per
+column and measured 19 Ir/row for one column and 41 for four, which is why it
+uses one nested `Zip` with a single shared row index instead. This iterator is
+the per-term-cursor layout for its `Mut` terms (two `mem::take` and
+`split_first_mut` steps each), so expect it to be slower than
+`query_static_mut` until it is benchmarked. Optimization is paused, so nothing
+is claimed or changed.
+
+**The C counterpart: nothing new.** Mutation from C is still the open design
+question the mutable queries left (the span pointer is `const`, and a plain
+write through it would skip the change ticks).
+
+**Not done.**
+- `Ref<T>`, and `Added`/`Changed` as terms or combined with `With`/`Without`/`Or`
+  in one call (gap-list item 3).
+- A public access-set type and a `SystemParam`-style trait (item 4): the hidden
+  `AccessEntry` is only the seed.
+- `par_iter`, which needs item 4.
+- No `size_hint`, no cached matched-archetype list; every call walks the
+  archetypes once.
+- No benchmark (above).

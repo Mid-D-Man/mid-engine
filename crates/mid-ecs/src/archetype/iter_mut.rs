@@ -46,7 +46,7 @@ use crate::world::Entity;
 /// The matching archetypes, mutably, in dense order. `matched` must be in
 /// dense order (as `matched_filtered` produces it); each archetype is
 /// taken when its id is the next one wanted.
-fn select<'a>(
+pub(super) fn select<'a>(
     archetypes: &'a mut mid_collections::SparseSet<ArchetypeId, Archetype>,
     matched: Vec<ArchetypeId>,
 ) -> impl Iterator<Item = &'a mut Archetype> + 'a {
