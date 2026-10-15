@@ -661,6 +661,32 @@ impl World {
             .insert_row_bytes(entity, component_id, bytes, self.change_tick)
     }
 
+    /// Detaches `component_id` from `entity` and drops its value: the
+    /// id-driven counterpart of [`Self::remove_static`], which needs the
+    /// type, for components registered with
+    /// [`Self::register_ffi_static_component_writable`] (so "writable"
+    /// means C may write, insert and remove it). The entity migrates into
+    /// the archetype for its smaller component set; its other values and
+    /// their ticks come across untouched. Nothing is stamped: there is no
+    /// change notification for removals.
+    ///
+    /// Errors, checked in this order: [`ComponentFfiError::NotAlive`],
+    /// [`ComponentFfiError::UnknownId`], [`ComponentFfiError::NotWritable`],
+    /// [`ComponentFfiError::Absent`] (alive, but without this component).
+    /// Nothing changes on an error. A structural change: it invalidates
+    /// every span previously handed out for the entity's old and new
+    /// archetype.
+    pub fn remove_static_by_id(
+        &mut self,
+        entity: Entity,
+        component_id: ComponentId,
+    ) -> Result<(), ComponentFfiError> {
+        if !self.is_alive(entity) {
+            return Err(ComponentFfiError::NotAlive);
+        }
+        self.archetypes.remove_row(entity, component_id)
+    }
+
     /// Copies `bytes` in as `entity`'s `component_id` value and stamps
     /// exactly that row changed (not added) at the current tick: the
     /// precise counterpart of [`Self::static_component_raw_span_mut`].

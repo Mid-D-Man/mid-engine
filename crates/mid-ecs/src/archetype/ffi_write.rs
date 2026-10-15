@@ -39,7 +39,9 @@ use std::mem::size_of;
 
 use zerocopy::{FromBytes, Immutable, IntoBytes, KnownLayout};
 
-use super::{Archetype, ArchetypeId, Archetypes, Table};
+use super::{
+    ensure_column, ensure_ticks, Archetype, ArchetypeId, Archetypes, EntityLocation, Table,
+};
 use crate::component::ComponentId;
 use crate::tick::Tick;
 use crate::world::Entity;
@@ -87,7 +89,9 @@ impl FfiSpanMut {
 /// [`crate::World::write_static_component_bytes`]: `NotAlive`,
 /// `UnknownId`, `NotWritable`, `SizeMismatch`, `Absent`; and for
 /// [`crate::World::insert_static_bytes`]: `NotAlive`, `UnknownId`,
-/// `NotWritable`, `SizeMismatch`, `AlreadyPresent`.
+/// `NotWritable`, `SizeMismatch`, `AlreadyPresent`; and for
+/// [`crate::World::remove_static_by_id`]: `NotAlive`, `UnknownId`,
+/// `NotWritable`, `Absent`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ComponentFfiError {
     /// The component was never registered with
@@ -101,7 +105,8 @@ pub enum ComponentFfiError {
     /// The entity is not alive: never spawned here, already despawned, or
     /// a stale handle whose slot was reused.
     NotAlive,
-    /// The entity is alive but does not currently have this component.
+    /// The entity is alive but does not currently have this component
+    /// (a write or a removal had nothing to act on).
     Absent,
     /// A write's byte length is not exactly the registered type's size.
     /// Nothing was written or stamped.
@@ -348,6 +353,108 @@ impl Archetypes {
             // The entity has no tracked location: not alive as far as the
             // Archetype Core is concerned.
             Err(ComponentFfiError::NotAlive)
+        }
+    }
+
+    /// Moves `entity` into the archetype for its signature without
+    /// `component_id`, carrying every other column's value (and ticks)
+    /// across, and *drops* the removed value. `false` if `entity` has no
+    /// tracked location or does not have the component.
+    ///
+    /// This is the migration of [`Self::remove`] with its one type-specific
+    /// line replaced by the type-erased `Column::swap_remove_and_drop`, so
+    /// it needs no `T`. It is a deliberate sibling rather than a refactor of
+    /// `remove`, which is benchmarked and left byte-for-byte as it was; the
+    /// differential test `remove_by_id_matches_the_typed_remove_step_for_step`
+    /// keeps the two in step.
+    pub(crate) fn remove_dropping(&mut self, entity: Entity, component_id: ComponentId) -> bool {
+        let Some(&from_location) = self.locations.get(entity) else {
+            return false;
+        };
+        let from_id = from_location.archetype_id;
+        let Some(from) = self.archetypes.get(from_id) else {
+            return false;
+        };
+        if !from.component_ids.contains(&component_id) {
+            return false;
+        }
+
+        let to_id = self.edge_for_remove(from_id, component_id);
+        let (from_archetype, to_archetype) = self.get_two_mut(from_id, to_id);
+
+        for (comp, column) in from_archetype.table.columns.iter_mut() {
+            if comp == component_id {
+                column.swap_remove_and_drop(from_location.row);
+                from_archetype
+                    .table
+                    .ticks
+                    .get_mut(comp)
+                    .expect("ensure_ticks always keeps ticks alongside its column")
+                    .swap_remove(from_location.row);
+                continue;
+            }
+            ensure_column(&mut to_archetype.table.columns, comp, || {
+                column.new_same_type()
+            });
+            ensure_ticks(&mut to_archetype.table.ticks, comp);
+            let dest = to_archetype
+                .table
+                .columns
+                .get_mut(comp)
+                .expect("just ensured present");
+            column.move_row_to(from_location.row, &mut **dest);
+            let moved_ticks = from_archetype
+                .table
+                .ticks
+                .get_mut(comp)
+                .expect("ensure_ticks always keeps ticks alongside its column")
+                .swap_remove(from_location.row);
+            to_archetype
+                .table
+                .ticks
+                .get_mut(comp)
+                .expect("just ensured present")
+                .push(moved_ticks);
+        }
+        let old_last = from_archetype.table.entities.len() - 1;
+        from_archetype.table.entities.swap_remove(from_location.row);
+        let swapped_entity = (from_location.row != old_last)
+            .then(|| from_archetype.table.entities[from_location.row]);
+
+        let new_row = to_archetype.table.entities.len();
+        to_archetype.table.entities.push(entity);
+
+        self.locations.insert(
+            entity,
+            EntityLocation {
+                archetype_id: to_id,
+                row: new_row,
+            },
+        );
+        if let Some(swapped) = swapped_entity {
+            self.fix_up_row_after_swap(swapped, from_location.row);
+        }
+        true
+    }
+
+    /// Detaches `component_id` from `entity` for the FFI: the id-driven
+    /// counterpart of `World::remove_static`, for components registered
+    /// writable. Needs no bytes and stamps nothing (there is no change
+    /// notification for removals). `entity` must already be known alive,
+    /// for the same stale-handle reason as [`Self::write_row_bytes`].
+    /// Errors, in order: `UnknownId`, `NotWritable`, `Absent`. A
+    /// structural change: it invalidates every span previously handed out
+    /// for the entity's old and new archetype.
+    pub(crate) fn remove_row(
+        &mut self,
+        entity: Entity,
+        component_id: ComponentId,
+    ) -> Result<(), ComponentFfiError> {
+        self.write_size(component_id)?;
+        if self.remove_dropping(entity, component_id) {
+            Ok(())
+        } else {
+            Err(ComponentFfiError::Absent)
         }
     }
 }
@@ -908,5 +1015,301 @@ mod tests {
             w.static_component_write_size(ComponentId::from_u32(9999)),
             Err(ComponentFfiError::UnknownId)
         );
+    }
+
+    // ── Removing a component ─────────────────────────────────────────
+
+    #[test]
+    fn remove_by_id_detaches_one_component_and_keeps_every_other_value_and_tick() {
+        let mut w = World::new();
+        let hp = w.register_ffi_static_component_writable::<Hp>("Hp");
+        w.register_ffi_static_component_writable::<Pair>("Pair");
+        let e = w.spawn();
+        w.insert_static(e, Hp(1));
+        w.insert_static(e, Pair { a: 3, b: 4 });
+        w.increment_change_tick();
+        let mut t = ChangeTracker::new();
+        t.update(&w);
+        w.increment_change_tick();
+
+        assert_eq!(w.remove_static_by_id(e, hp), Ok(()));
+        w.increment_change_tick();
+        assert!(!w.has_static::<Hp>(e));
+        assert_eq!(w.get_static::<Pair>(e), Some(&Pair { a: 3, b: 4 }));
+        assert!(w.is_alive(e));
+        // The survivor was moved, not re-stamped.
+        assert!(w.query_changed::<Pair>(&t).next().is_none());
+        assert!(w.query_added::<Pair>(&t).next().is_none());
+    }
+
+    #[test]
+    fn removing_the_last_component_leaves_a_live_entity_that_can_be_given_one_again() {
+        let mut w = World::new();
+        let hp = w.register_ffi_static_component_writable::<Hp>("Hp");
+        let e = w.spawn();
+        w.insert_static(e, Hp(5));
+        assert_eq!(w.remove_static_by_id(e, hp), Ok(()));
+        assert!(w.is_alive(e) && !w.has_static::<Hp>(e));
+        assert_eq!(w.remove_static_by_id(e, hp), Err(ComponentFfiError::Absent));
+        assert_eq!(w.insert_static_bytes(e, hp, &6u32.to_ne_bytes()), Ok(()));
+        assert_eq!(w.get_static::<Hp>(e), Some(&Hp(6)));
+    }
+
+    #[test]
+    fn remove_by_id_errors_are_checked_in_the_documented_order_and_change_nothing() {
+        let mut w = World::new();
+        let rw = w.register_ffi_static_component_writable::<Hp>("Hp");
+        let ro = w.register_ffi_static_component::<Ro>("Ro");
+        let e = w.spawn();
+        w.insert_static(e, Hp(1));
+        let nope = ComponentId::from_u32(9999);
+
+        let dead = w.spawn();
+        w.despawn(dead);
+        // NotAlive beats everything.
+        assert_eq!(
+            w.remove_static_by_id(dead, nope),
+            Err(ComponentFfiError::NotAlive)
+        );
+        // UnknownId beats NotWritable / Absent.
+        assert_eq!(
+            w.remove_static_by_id(e, nope),
+            Err(ComponentFfiError::UnknownId)
+        );
+        // NotWritable beats Absent (`e` has no Ro).
+        assert_eq!(
+            w.remove_static_by_id(e, ro),
+            Err(ComponentFfiError::NotWritable)
+        );
+        // A read-only component the entity *has* is still not removable.
+        w.insert_static(e, Ro(9));
+        assert_eq!(
+            w.remove_static_by_id(e, ro),
+            Err(ComponentFfiError::NotWritable)
+        );
+        assert_eq!(w.get_static::<Ro>(e), Some(&Ro(9)));
+        // Absent last.
+        let bare = w.spawn();
+        assert_eq!(
+            w.remove_static_by_id(bare, rw),
+            Err(ComponentFfiError::Absent)
+        );
+        assert_eq!(w.get_static::<Hp>(e), Some(&Hp(1)));
+    }
+
+    #[test]
+    fn remove_by_id_rejects_stale_handles_and_never_reaches_a_reused_slot() {
+        let mut w = World::new();
+        let hp = w.register_ffi_static_component_writable::<Hp>("Hp");
+        let gone = w.spawn();
+        w.insert_static(gone, Hp(1));
+        w.despawn(gone);
+        let reused = w.spawn();
+        w.insert_static(reused, Hp(50));
+        assert_ne!(gone, reused);
+        assert_eq!(
+            w.remove_static_by_id(gone, hp),
+            Err(ComponentFfiError::NotAlive)
+        );
+        assert_eq!(w.get_static::<Hp>(reused), Some(&Hp(50)));
+    }
+
+    #[test]
+    fn remove_by_id_from_a_middle_row_keeps_every_other_row_aligned() {
+        let (mut w, es, id, _) = tracked_hp(5);
+        let pair = w.register_ffi_static_component_writable::<Pair>("Pair");
+        for (i, e) in es.iter().enumerate() {
+            w.insert_static_bytes(*e, pair, Pair { a: i as u16, b: 0 }.as_bytes())
+                .unwrap();
+        }
+        assert_eq!(w.remove_static_by_id(es[2], id), Ok(()));
+        for (i, e) in es.iter().enumerate() {
+            assert_eq!(
+                w.get_static::<Hp>(*e),
+                (i != 2).then_some(&Hp(i as u32 + 1))
+            );
+            assert_eq!(w.get_static::<Pair>(*e), Some(&Pair { a: i as u16, b: 0 }));
+        }
+    }
+
+    #[test]
+    fn remove_by_id_handles_a_zero_sized_component() {
+        let mut w = World::new();
+        let unit = w.register_ffi_static_component_writable::<Unit>("Unit");
+        let e = w.spawn();
+        w.insert_static(e, Unit);
+        assert_eq!(w.remove_static_by_id(e, unit), Ok(()));
+        assert!(!w.has_static::<Unit>(e));
+        assert_eq!(
+            w.remove_static_by_id(e, unit),
+            Err(ComponentFfiError::Absent)
+        );
+    }
+
+    #[test]
+    fn remove_dropping_drops_the_removed_value_exactly_once_and_nothing_else() {
+        use std::cell::Cell;
+        use std::rc::Rc;
+
+        struct Guard(Rc<Cell<u32>>);
+        impl Drop for Guard {
+            fn drop(&mut self) {
+                self.0.set(self.0.get() + 1);
+            }
+        }
+        struct Other(Rc<Cell<u32>>);
+        impl Drop for Other {
+            fn drop(&mut self) {
+                self.0.set(self.0.get() + 100);
+            }
+        }
+
+        let drops = Rc::new(Cell::new(0));
+        let mut w = World::new();
+        let e = w.spawn();
+        w.insert_static(e, Guard(drops.clone()));
+        w.insert_static(e, Other(drops.clone()));
+        let guard_id = w.archetypes.existing_component_id::<Guard>().unwrap();
+        assert_eq!(drops.get(), 0);
+        assert!(w.archetypes.remove_dropping(e, guard_id));
+        // Guard dropped once (+1); Other moved with the entity, not dropped.
+        assert_eq!(drops.get(), 1);
+        assert!(w.has_static::<Other>(e));
+        // Nothing left to remove.
+        assert!(!w.archetypes.remove_dropping(e, guard_id));
+        assert_eq!(drops.get(), 1);
+        drop(w);
+        // Dropping the world drops the survivor.
+        assert_eq!(drops.get(), 101);
+    }
+
+    /// The type-erased removal must do exactly what the typed
+    /// `World::remove_static` does, because it repeats that migration by
+    /// hand. Twin worlds, the same pseudo-random sequence of removals,
+    /// re-insertions and tick advances applied through the typed path to
+    /// one and the id-driven path to the other: every step must agree on
+    /// whether it did anything, and afterwards both worlds must hold the
+    /// same entities, components, values, iteration order and change
+    /// stamps.
+    #[test]
+    fn remove_by_id_matches_the_typed_remove_step_for_step() {
+        fn build() -> (World, Vec<Entity>) {
+            let mut w = World::new();
+            w.register_ffi_static_component_writable::<Hp>("Hp");
+            w.register_ffi_static_component_writable::<Pair>("Pair");
+            w.register_ffi_static_component_writable::<Unit>("Unit");
+            let mut es = Vec::new();
+            for i in 0..24u32 {
+                let e = w.spawn();
+                if i % 2 == 0 {
+                    w.insert_static(e, Hp(i));
+                }
+                if i % 3 == 0 {
+                    w.insert_static(
+                        e,
+                        Pair {
+                            a: i as u16,
+                            b: (i * 2) as u16,
+                        },
+                    );
+                }
+                if i % 5 == 0 {
+                    w.insert_static(e, Unit);
+                }
+                es.push(e);
+            }
+            w.increment_change_tick();
+            (w, es)
+        }
+        type Snapshot = Vec<(Entity, Option<Hp>, Option<Pair>, bool)>;
+        fn snapshot(w: &World) -> Snapshot {
+            w.query_data::<(
+                Entity,
+                Option<&Hp>,
+                Option<&Pair>,
+                crate::query_data::Has<Unit>,
+            )>()
+            .map(|(e, hp, pair, unit)| (e, hp.copied(), pair.copied(), unit))
+            .collect()
+        }
+
+        let (mut typed, es) = build();
+        let (mut erased, es_b) = build();
+        assert_eq!(es, es_b);
+        let mut t_typed = ChangeTracker::new();
+        t_typed.update(&typed);
+        let mut t_erased = ChangeTracker::new();
+        t_erased.update(&erased);
+        typed.increment_change_tick();
+        erased.increment_change_tick();
+        let ids = [
+            erased.lookup_ffi_static_component_id("Hp").unwrap(),
+            erased.lookup_ffi_static_component_id("Pair").unwrap(),
+            erased.lookup_ffi_static_component_id("Unit").unwrap(),
+        ];
+        assert_eq!(snapshot(&typed), snapshot(&erased));
+
+        let mut state = 0x9E37_79B9_7F4A_7C15u64;
+        let mut next = move || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state
+        };
+        let (mut removed, mut reinserted) = (0, 0);
+        for _ in 0..400 {
+            let e = es[(next() % es.len() as u64) as usize];
+            let which = (next() % 3) as usize;
+            match next() % 5 {
+                // Remove, through each path.
+                0..=2 => {
+                    let did_typed = match which {
+                        0 => typed.remove_static::<Hp>(e).is_some(),
+                        1 => typed.remove_static::<Pair>(e).is_some(),
+                        _ => typed.remove_static::<Unit>(e).is_some(),
+                    };
+                    let did_erased = erased.remove_static_by_id(e, ids[which]).is_ok();
+                    assert_eq!(did_typed, did_erased);
+                    removed += usize::from(did_typed);
+                }
+                // Put one back, the same typed way in both worlds.
+                3 => {
+                    for w in [&mut typed, &mut erased] {
+                        match which {
+                            0 => w.insert_static(e, Hp(7)),
+                            1 => w.insert_static(e, Pair { a: 7, b: 7 }),
+                            _ => w.insert_static(e, Unit),
+                        };
+                    }
+                    reinserted += 1;
+                }
+                // Advance the tick, so stamps differ across steps.
+                _ => {
+                    typed.increment_change_tick();
+                    erased.increment_change_tick();
+                }
+            }
+            assert_eq!(snapshot(&typed), snapshot(&erased));
+        }
+        // The run really exercised both paths.
+        assert!(removed > 40 && reinserted > 20, "{removed} {reinserted}");
+
+        let stamps = |w: &World, t: &ChangeTracker| {
+            (
+                w.query_changed::<Hp>(t)
+                    .map(|(e, h)| (e, *h))
+                    .collect::<Vec<_>>(),
+                w.query_added::<Hp>(t)
+                    .map(|(e, h)| (e, *h))
+                    .collect::<Vec<_>>(),
+                w.query_changed::<Pair>(t)
+                    .map(|(e, p)| (e, *p))
+                    .collect::<Vec<_>>(),
+                w.query_added::<Pair>(t)
+                    .map(|(e, p)| (e, *p))
+                    .collect::<Vec<_>>(),
+            )
+        };
+        assert_eq!(stamps(&typed, &t_typed), stamps(&erased, &t_erased));
     }
 }

@@ -3865,8 +3865,114 @@ header and the C checks. `ComponentFfiError` gains `AlreadyPresent`.
   separate design: it has to validate a list of ids and sizes as a unit.
 - **Reserved entity ids / an `Entity`-returning queued spawn.** Slots address
   the queued spawns, but the real entity is still only known after apply.
-- **Removing a component from C.** A queued or direct `remove` is the mirror of
-  this and needs no bytes; it was not asked for.
+- **Removing a component from C.** Built in the next pass: "Removing a component
+  from C" below, direct and queued.
 - **The Sparse Shell**, as for writes.
 - **No benchmark.** Each queued insert boxes one closure and copies its bytes
   into a `Vec`. Optimization is paused.
+
+### Removing a component from C (`remove`, queued removes, `remove_dropping`)
+
+The mirror of insert, which finishes the C-side family of component changes:
+`write` overwrites a value, `insert` attaches one, `remove` detaches one, each
+direct and (for insert and remove) queued.
+
+| | Rust | C |
+|---|---|---|
+| detach now | `World::remove_static_by_id(entity, component)` | `mid_ecs_world_static_component_remove(world, entity, component_id)` |
+| queue it | `EntityCommands::remove_static_by_id(component)` | `mid_ecs_commands_static_component_remove(commands, world, entity, component_id)` |
+
+No new status code: `ComponentFfiError::Absent` already maps to `NOT_FOUND`.
+
+**Where it lives.** `archetype/ffi_write.rs` holds `Archetypes::remove_dropping`
+(the migration) and `remove_row` (the FFI checks around it). `world.rs` and
+`commands.rs` have the Rust methods, `ffi.rs` the two `extern "C"` functions,
+and `ffi-smoke-test/` the header and C checks. `archetype.rs` changed only by
+a doc comment on `remove` and a one-line reorder of two `use` statements that
+rustfmt wanted from the previous pass.
+
+**Decisions, with reasons.**
+- **"Writable" now means C may write, insert *and* remove the component.**
+  Removal needs no bytes, so `FromBytes` is not what makes it safe, but it is
+  still a modification: a type deliberately registered read-only (engine state C
+  must not disturb) should not be removable either. A read-only component is
+  `NOT_WRITABLE`, even on an entity that has it, and stays.
+- **A type-erased sibling of `Archetypes::remove`, not a refactor of it.**
+  `remove<T>` needs `T` for exactly one line (taking the value out of its
+  `Vec<T>`); the migration around it is type-independent, and
+  `Column::swap_remove_and_drop` already exists type-erased. The tidy fix is to
+  make `remove` generic over that one step. `remove` is benchmarked, though
+  (`remove_single`, `structural_churn`), and optimization is paused, so this pass
+  leaves it byte-for-byte as it was and adds `remove_dropping` beside it: the
+  same migration with `swap_remove_and_drop` in place of the downcast. The
+  duplication is real, so it is pinned (next item) and cross-referenced from a
+  doc comment on `remove`, so a change to one points at the other.
+- **A differential test keeps the two in step.** `remove_by_id_matches_the_typed_remove_step_for_step`
+  builds two identical worlds (24 entities over several archetypes, three
+  component types including a zero-sized one), applies 400 pseudo-random steps
+  (removals, re-insertions, tick advances) through the typed `remove_static` to
+  one and the id-driven path to the other, and asserts after every step that both
+  report the same outcome and hold the same entities, components, values and
+  iteration order, and at the end the same `Added`/`Changed` stamps. It asserts
+  the run really exercised both paths (at least 40 removals and 20 re-inserts).
+  A separate test drops a counting guard through `remove_dropping` and checks it
+  is dropped exactly once and the entity's other component is moved, not dropped.
+- **A removal stamps nothing.** There is no change notification for removals
+  (`RemovedComponents` is gap-list item 6). The entity's other values arrive with
+  their ticks untouched, as they do through `remove_static`.
+- **Removing the last component leaves the entity alive, with none.** A
+  removal never despawns.
+- **Queued removes follow the queued inserts' rule.** The component's
+  registration is checked when queued, against a world you pass in, which is only
+  read and not retained, so `NOT_FOUND` and `NOT_WRITABLE` come back on the call
+  that caused them and a failed call queues nothing. Whether the entity is alive
+  and still has the component is checked when the command runs: a dead or stale
+  entity (which never reaches a different entity that reused the slot), an entity
+  without the component, or a world that does not know it, is a no-op, and none
+  of those can panic. Queue order is preserved: a removal followed by an insert
+  of the same component leaves the new value, an insert followed by a removal
+  leaves it absent.
+- **No `_spawned` form.** A freshly spawned entity has nothing to remove until
+  an insert has run, and removing what an earlier queued insert on the same slot
+  added is better left unqueued.
+- **Error order:** `NotAlive`, `UnknownId`, `NotWritable`, `Absent`. Nothing
+  changes on any error.
+- **A structural change invalidates spans,** as every spawn, despawn, insert and
+  remove already does.
+
+**Tests, from the sandbox (rustc 1.91.1; real CI not yet run).**
+- 8 core tests (`archetype/ffi_write.rs`, including the differential and drop
+  tests), 2 command-queue tests (`commands.rs`), 5 FFI tests (`ffi.rs`, driving
+  the real `extern "C"` functions), plus 14 C checks. Default lib tests 449 to 464
+  (454 to 469 with `scratch-arena`), the `ffi::` tests 66 to 71, C checks 170 to
+  184. The C program is clean under `-Wall -Wextra` against both
+  `libmid_ecs.so` and `libmid_ecs.a`, and under valgrind.
+- Covered: one component detached while the entity's others keep their values
+  and are not re-stamped; the last component removed and a new one attached
+  afterwards; the error order, including a read-only component the entity *has*;
+  stale handles that must not reach a slot's new occupant; a middle row removed
+  from with every other row staying aligned; a zero-sized component; and, from
+  C, every status for both forms, that a failed queue call queues nothing, that
+  removal and insert apply in queue order, and the no-op cases at apply (a
+  dead entity, a component the entity lacks, a world that never heard of it).
+- **Mutation testing: 15 of 15 mutants caught.** The value not removed, the
+  removed column's ticks not removed, the moved ticks not carried across, the
+  swapped entity not fixed up, the entity placed at the wrong row or left in
+  its old archetype, the presence check removed, the destination ticks not
+  ensured, the registration/writable check removed, an absent component reported
+  as success, the world's liveness check removed, the queued command doing
+  nothing, the FFI queue-time validation removed, and both `NULL` checks removed
+  (caught by crashes). Two of them, the removed column's ticks and the entity's
+  row, were caught by the differential test and by no other: the targeted unit
+  tests missed both.
+
+**Not done.**
+- **Bundle forms from C.** Inserting or removing several components as one
+  structural change (Rust's `insert_bundle` / `remove_bundle`, one migration
+  instead of one per component). It needs a list of ids and sizes validated as a
+  unit, and an all-or-nothing rule for the removal side. This is what remains of
+  the family.
+- **Reserved entity ids / an `Entity`-returning queued spawn.** Slots address
+  the queued spawns, but the real entity is still only known after apply.
+- **The Sparse Shell.**
+- **No benchmark.** A queued removal boxes one closure. Optimization is paused.

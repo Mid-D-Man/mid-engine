@@ -647,6 +647,102 @@ int main(void) {
         mid_ecs_world_free(iw);
     }
 
+    // --- Removing a component from C: remove (direct) and the queued form ---
+    {
+        MidEcsWorld *rw = mid_ecs_test_write_fixture_world_new();
+        uint32_t r_health = mid_ecs_world_lookup_ffi_static_component_id(rw, "FfiHealthStatic");
+        uint32_t r_flag_a = mid_ecs_world_lookup_ffi_static_component_id(rw, "FfiFlagA");
+        uint32_t r_flag_b = mid_ecs_world_lookup_ffi_static_component_id(rw, "FfiFlagB");
+        uint32_t r_arch[8];
+        int32_t r_n = mid_ecs_world_archetypes_matching_static(rw, &r_health, 1, NULL, 0, NULL, 0, r_arch, 8);
+        uint64_t all[8];
+        int32_t found = 0;
+        for (int32_t i = 0; i < r_n; i++) {
+            uint64_t ids[8];
+            int32_t c = mid_ecs_world_static_component_entity_ids(rw, r_arch[i], r_health, ids, 8);
+            for (int32_t r = 0; r < c && found < 8; r++) all[found++] = ids[r];
+        }
+        CHECK(found == 3, "remove fixture: three entities hold Health");
+        uint64_t e1 = all[0], e2 = all[1], e3 = all[2];
+        uint32_t r_last_run = mid_ecs_world_change_tick(rw);
+        mid_ecs_world_increment_change_tick(rw);
+        uint32_t seen = 0, e2_hp = 0, e3_hp = 0, v5 = 5;
+        CHECK(u32_of(rw, r_health, e2, &e2_hp) && u32_of(rw, r_health, e3, &e3_hp),
+              "remove fixture: the other two entities' hp read back");
+
+        CHECK(mid_ecs_world_static_component_remove(rw, e1, r_health) == MID_ECS_OK
+                  && !u32_of(rw, r_health, e1, &seen) && mid_ecs_world_is_alive(rw, e1),
+              "remove: the entity's Health is gone and the entity is still alive");
+        {
+            uint32_t h_arch[8];
+            int32_t h_n = mid_ecs_world_archetypes_matching_static(rw, &r_health, 1, NULL, 0, NULL, 0, h_arch, 8);
+            int32_t stamped = 0;
+            for (int32_t i = 0; i < h_n; i++) {
+                stamped += mid_ecs_world_static_component_changed_rows(rw, h_arch[i], r_health, r_last_run, NULL, 0);
+            }
+            CHECK(stamped == 0 && u32_of(rw, r_health, e2, &seen) && seen == e2_hp
+                      && u32_of(rw, r_health, e3, &seen) && seen == e3_hp,
+                  "the survivors are intact, and a removal stamps nothing");
+        }
+        CHECK(mid_ecs_world_static_component_remove(rw, e1, r_health) == MID_ECS_NOT_FOUND
+                  && mid_ecs_world_static_component_remove(rw, e1, r_flag_b) == MID_ECS_NOT_FOUND
+                  && mid_ecs_world_static_component_remove(rw, e1, 9999) == MID_ECS_NOT_FOUND,
+              "remove: an entity without the component, or an unregistered id, is MID_ECS_NOT_FOUND");
+
+        uint64_t flagged = 0;
+        {
+            uint32_t fa_arch[8];
+            int32_t fa_n = mid_ecs_world_archetypes_matching_static(rw, &r_flag_a, 1, NULL, 0, NULL, 0, fa_arch, 8);
+            uint64_t ids[4];
+            CHECK(fa_n == 1 && mid_ecs_world_static_component_entity_ids(rw, fa_arch[0], r_flag_a, ids, 4) == 1,
+                  "remove fixture: exactly one entity holds the read-only FlagA");
+            flagged = ids[0];
+        }
+        CHECK(mid_ecs_world_static_component_remove(rw, flagged, r_flag_a) == MID_ECS_NOT_WRITABLE
+                  && u32_of(rw, r_flag_a, flagged, &seen) && seen == 20,
+              "remove: a read-only component is MID_ECS_NOT_WRITABLE even on the entity that has it, and stays");
+        CHECK(mid_ecs_world_static_component_remove(rw, 0xFFFFFFFFFFFFFFFFull, r_health) == MID_ECS_NOT_ALIVE
+                  && mid_ecs_world_despawn(rw, e3) == MID_ECS_OK
+                  && mid_ecs_world_static_component_remove(rw, e3, r_health) == MID_ECS_NOT_ALIVE,
+              "remove: a bogus or despawned entity is MID_ECS_NOT_ALIVE");
+        CHECK(mid_ecs_world_static_component_remove(NULL, e2, r_health) == MID_ECS_NULL_POINTER
+                  && u32_of(rw, r_health, e2, &seen) && seen == e2_hp,
+              "remove: a NULL world is MID_ECS_NULL_POINTER and nothing is removed");
+
+        // Queued: remove Health from e2, then give the same entity a FlagB, in order.
+        MidEcsCommands *rq = mid_ecs_commands_new();
+        CHECK(mid_ecs_commands_static_component_remove(rq, rw, e2, r_health) == MID_ECS_OK
+                  && mid_ecs_commands_static_component_insert(rq, rw, e2, r_flag_b, (const uint8_t *)&v5, 4) == MID_ECS_OK
+                  && mid_ecs_commands_len(rq) == 2
+                  && u32_of(rw, r_health, e2, &seen) && !u32_of(rw, r_flag_b, e2, &seen),
+              "queue: a removal and an insert are recorded, and nothing has happened yet");
+        CHECK(mid_ecs_commands_apply(rq, rw, NULL, 0) == 0
+                  && !u32_of(rw, r_health, e2, &seen)
+                  && u32_of(rw, r_flag_b, e2, &seen) && seen == 5,
+              "apply: e2 lost its Health and gained FlagB 5, in queue order");
+
+        // Queue-time errors queue nothing.
+        CHECK(mid_ecs_commands_static_component_remove(rq, rw, e2, r_flag_a) == MID_ECS_NOT_WRITABLE
+                  && mid_ecs_commands_static_component_remove(rq, rw, e2, 9999) == MID_ECS_NOT_FOUND
+                  && mid_ecs_commands_static_component_remove(NULL, rw, e2, r_flag_b) == MID_ECS_NULL_POINTER
+                  && mid_ecs_commands_static_component_remove(rq, NULL, e2, r_flag_b) == MID_ECS_NULL_POINTER
+                  && mid_ecs_commands_len(rq) == 0,
+              "queued remove errors (read-only, unknown id, NULL) queue nothing");
+
+        // A queued removal that no longer applies is a no-op at apply.
+        CHECK(mid_ecs_commands_static_component_remove(rq, rw, e2, r_health) == MID_ECS_OK
+                  && mid_ecs_commands_apply(rq, rw, NULL, 0) == 0
+                  && u32_of(rw, r_flag_b, e2, &seen) && seen == 5,
+              "a queued removal of a component the entity no longer has is a no-op when applied");
+        CHECK(mid_ecs_commands_static_component_remove(rq, rw, e2, r_flag_b) == MID_ECS_OK
+                  && mid_ecs_world_despawn(rw, e2) == MID_ECS_OK
+                  && mid_ecs_commands_apply(rq, rw, NULL, 0) == 0
+                  && !mid_ecs_world_is_alive(rw, e2),
+              "a queued removal from an entity despawned before apply is a no-op");
+        mid_ecs_commands_free(rq);
+        mid_ecs_world_free(rw);
+    }
+
     // --- Command queue: spawns and despawns recorded now, applied after ---
     {
         MidEcsWorld *qw = mid_ecs_world_new();

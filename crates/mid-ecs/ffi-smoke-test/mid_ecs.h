@@ -314,9 +314,10 @@ int32_t mid_ecs_world_static_component_changed_rows(const MidEcsWorld *world, ui
 // --- Writing component data from C ---
 //
 // The read-only spans above stay read-only. A component type can be
-// written from C only if its Rust type was registered WRITABLE
-// (World::register_ffi_static_component_writable), which requires the type
-// to accept any bit pattern, so nothing C writes can be an invalid value.
+// written, inserted or removed from C only if its Rust type was registered
+// WRITABLE (World::register_ffi_static_component_writable), which requires
+// the type to accept any bit pattern, so nothing C writes can be an invalid
+// value.
 // Two ways to write, for two needs:
 //   * raw_span_mut (bulk): a writable span over one archetype's column.
 //     C cannot tell Rust which rows it then writes through a raw pointer,
@@ -392,6 +393,37 @@ int32_t mid_ecs_commands_static_component_insert(MidEcsCommands *commands, const
 // MID_ECS_NOT_FOUND for a spawn_index not below the number of spawns queued
 // so far (checked after the component checks).
 int32_t mid_ecs_commands_static_component_insert_spawned(MidEcsCommands *commands, const MidEcsWorld *world, size_t spawn_index, uint32_t component_id, const uint8_t *bytes, size_t len);
+
+// --- Removing a component from C ---
+//
+// The mirror of insert. Same rule: only components registered WRITABLE can be
+// removed (a read-only registration is MID_ECS_NOT_WRITABLE, even on an
+// entity that has the component). Needs no bytes. The value is dropped, the
+// entity moves to the archetype for its smaller component set, and its
+// other values and their change stamps come across untouched. A removal
+// stamps nothing: there is no change notification for removals. Removing an
+// entity's last component leaves it alive with no components. A structural
+// change, so every span previously handed out for the entity's old and new
+// archetype is invalidated.
+
+// Detaches component_id from entity and drops its value. Statuses, checked in
+// this order: MID_ECS_NULL_POINTER; MID_ECS_NOT_ALIVE (dead, bogus or stale
+// entity); MID_ECS_NOT_FOUND (component never registered for FFI, or the
+// entity is alive but does not have it); MID_ECS_NOT_WRITABLE. Nothing
+// changes on an error.
+int32_t mid_ecs_world_static_component_remove(MidEcsWorld *world, uint64_t entity, uint32_t component_id);
+
+// The queued form: records a removal from an existing entity, applied by
+// mid_ecs_commands_apply in the order queued. `world` is only READ, now, to
+// check that component_id is registered writable; it is not retained.
+// Whether the entity is alive and still has the component is checked when
+// the command runs: a dead or stale entity (never a different entity that
+// reused the slot), an entity without the component, or a world that does not
+// know it, makes the command a no-op then. There is no _spawned form: a new
+// entity has nothing to remove until an insert has run. Returns MID_ECS_OK
+// (queued), MID_ECS_NULL_POINTER, MID_ECS_NOT_FOUND (component never
+// registered for FFI) or MID_ECS_NOT_WRITABLE. Nothing is queued on an error.
+int32_t mid_ecs_commands_static_component_remove(MidEcsCommands *commands, const MidEcsWorld *world, uint64_t entity, uint32_t component_id);
 
 // --- Test fixture (see ffi.rs's own doc comment on this function) ---
 

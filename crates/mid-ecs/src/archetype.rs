@@ -110,8 +110,8 @@ type FfiSpanAccessor = fn(&dyn Any) -> FfiSpan;
 mod iter;
 pub(crate) use iter::{Iter1, Iter1Ref, Iter2, Iter2Ref};
 mod ffi_write;
-pub use ffi_write::{ComponentFfiError, FfiSpanMut};
 use ffi_write::FfiWriter;
+pub use ffi_write::{ComponentFfiError, FfiSpanMut};
 mod iter_data;
 pub(crate) use iter_data::TableAccess;
 mod iter_mut;
@@ -1105,6 +1105,11 @@ impl Archetypes {
     /// column's value across and returning the removed component's
     /// value. `None` if `entity` has no tracked location, or doesn't
     /// actually have this component.
+    ///
+    /// `Archetypes::remove_dropping` (in `archetype/ffi_write.rs`) repeats
+    /// this migration without needing `T`, for the FFI; the differential
+    /// test `remove_by_id_matches_the_typed_remove_step_for_step` keeps the
+    /// two in step, so a change here needs the same change there.
     pub(crate) fn remove<T: 'static>(
         &mut self,
         entity: Entity,

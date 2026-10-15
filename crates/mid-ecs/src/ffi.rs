@@ -260,14 +260,16 @@ pub unsafe extern "C" fn mid_ecs_world_entity_count(world: *const MidEcsWorld) -
 /// Opaque handle to a deferred-change queue ([`CommandQueue`]). Same
 /// boxed-opaque-handle pattern as [`MidEcsWorld`].
 ///
-/// Record spawns, despawns and component inserts with the
+/// Record spawns, despawns and component inserts and removals with the
 /// `mid_ecs_commands_*` functions below, then run them against a world
 /// with [`mid_ecs_commands_apply`]. Nothing touches the world until
 /// `apply`. A queued insert
 /// ([`mid_ecs_commands_static_component_insert`], or
 /// [`mid_ecs_commands_static_component_insert_spawned`] for an entity a
 /// queued spawn will produce) is a byte copy for a component registered
-/// writable; see `docs/mid-ecs.md`, "Inserting a component from C".
+/// writable; a queued removal is
+/// [`mid_ecs_commands_static_component_remove`]. See `docs/mid-ecs.md`,
+/// "Inserting a component from C" and "Removing a component from C".
 pub struct MidEcsCommands(CommandQueue);
 
 /// Creates an empty command queue. Never returns NULL. Free it with
@@ -500,6 +502,52 @@ pub unsafe extern "C" fn mid_ecs_commands_static_component_insert_spawned(
             }
             None => MidEcsStatus::NotFound as i32,
         }
+    })
+}
+
+/// Queues a removal of `component_id` from the existing entity packed in
+/// `entity`: the queued form of [`mid_ecs_world_static_component_remove`],
+/// for a component registered *writable*.
+///
+/// `world` is read only to check, now, that `component_id` is registered
+/// writable; it is not retained and nothing in it changes. Whether `entity`
+/// is alive, and still has the component, is checked when the command runs:
+/// a dead or stale entity (which never reaches a different entity that
+/// reused the slot), an entity without the component, or a world that does
+/// not know it, makes the command a no-op then. There is no `_spawned`
+/// form: a freshly spawned entity has nothing to remove until an insert
+/// has run.
+///
+/// Returns `MidEcsStatus::Ok` (queued), `NullPointer`, `NotFound`
+/// (component id never registered for FFI) or `NotWritable`. Nothing is
+/// queued on an error.
+///
+/// # Safety
+/// `commands` must be a valid handle from `mid_ecs_commands_new` and
+/// `world` a valid handle from `mid_ecs_world_new`, both non-null.
+#[no_mangle]
+pub unsafe extern "C" fn mid_ecs_commands_static_component_remove(
+    commands: *mut MidEcsCommands,
+    world: *const MidEcsWorld,
+    entity: u64,
+    component_id: u32,
+) -> i32 {
+    ffi_guard(|| {
+        if commands.is_null() || world.is_null() {
+            return MidEcsStatus::NullPointer as i32;
+        }
+        let commands = unsafe { &mut *commands };
+        let world = unsafe { &*world };
+        let component = ComponentId::from_u32(component_id);
+        if let Err(error) = world.0.static_component_write_size(component) {
+            return component_status(error);
+        }
+        commands
+            .0
+            .commands()
+            .entity(Entity::from_ffi(entity))
+            .remove_static_by_id(component);
+        MidEcsStatus::Ok as i32
     })
 }
 
@@ -1525,6 +1573,45 @@ pub unsafe extern "C" fn mid_ecs_world_static_component_insert(
             Entity::from_ffi(entity),
             ComponentId::from_u32(component_id),
             bytes,
+        ) {
+            Ok(()) => MidEcsStatus::Ok as i32,
+            Err(error) => component_status(error),
+        }
+    })
+}
+
+/// Detaches `component_id` from `entity` and drops its value: the
+/// id-driven `World::remove_static`, for a component registered *writable*
+/// on the Rust side ("writable" means C may write, insert and remove it).
+/// The entity moves into the archetype for its smaller component set; its
+/// other values, and their change stamps, come across untouched. Nothing is
+/// stamped by a removal: there is no change notification for them.
+///
+/// This is a structural change: every span previously handed out for the
+/// entity's old and new archetype is invalidated.
+///
+/// Returns `MidEcsStatus::Ok`, `NullPointer`, `NotAlive` (a dead or stale
+/// entity), `NotFound` (the component id was never registered for FFI, or
+/// the entity is alive but does not have the component) or `NotWritable`
+/// (registered read-only), checked in that order. Nothing changes on an
+/// error.
+///
+/// # Safety
+/// `world` must be a valid, non-null handle from `mid_ecs_world_new`.
+#[no_mangle]
+pub unsafe extern "C" fn mid_ecs_world_static_component_remove(
+    world: *mut MidEcsWorld,
+    entity: u64,
+    component_id: u32,
+) -> i32 {
+    ffi_guard(|| {
+        if world.is_null() {
+            return MidEcsStatus::NullPointer as i32;
+        }
+        let world = unsafe { &mut *world };
+        match world.0.remove_static_by_id(
+            Entity::from_ffi(entity),
+            ComponentId::from_u32(component_id),
         ) {
             Ok(()) => MidEcsStatus::Ok as i32,
             Err(error) => component_status(error),
@@ -4292,6 +4379,212 @@ mod tests {
                     .count(),
                 0
             );
+            mid_ecs_commands_free(commands);
+            mid_ecs_world_free(other);
+            mid_ecs_world_free(f.world);
+        }
+    }
+
+    // ---- removing a component from C ----
+
+    #[test]
+    fn remove_detaches_a_component_and_leaves_everything_else_intact() {
+        let f = write_fixture();
+        let last_run = tick_now_and_advance(f.world);
+        let victim = f.plain_entities[0];
+        // SAFETY: `f.world` is live.
+        let status = unsafe { mid_ecs_world_static_component_remove(f.world, victim, f.health) };
+        assert_eq!(status, MidEcsStatus::Ok as i32);
+        // Its Health is gone, the entity is not, and nobody else changed.
+        assert!(rust_side(f.world)
+            .get_static::<MidEcsTestHealthStatic>(Entity::from_ffi(victim))
+            .is_none());
+        // SAFETY: `f.world` is live.
+        assert!(unsafe { mid_ecs_world_is_alive(f.world, victim) });
+        assert_eq!(hp_values(f.world), vec![2, 3]);
+        // A removal stamps nothing, and the survivors were moved, not re-stamped.
+        assert!(changed_entities_via_ffi(f.world, f.health, last_run, false).is_empty());
+        // SAFETY: freed exactly once.
+        unsafe { mid_ecs_world_free(f.world) };
+    }
+
+    #[test]
+    fn remove_statuses_and_nothing_removed_on_an_error() {
+        let f = write_fixture();
+        let victim = f.plain_entities[0];
+        let remove = |entity: u64, component: u32| -> i32 {
+            // SAFETY: `f.world` is live.
+            unsafe { mid_ecs_world_static_component_remove(f.world, entity, component) }
+        };
+        // Read-only, even on the entity that has it; never registered;
+        // registered writable but this entity does not have it.
+        assert_eq!(
+            remove(f.flagged_entity, f.flag_a),
+            MidEcsStatus::NotWritable as i32
+        );
+        assert_eq!(remove(victim, 9999), MidEcsStatus::NotFound as i32);
+        assert_eq!(remove(victim, f.flag_b), MidEcsStatus::NotFound as i32);
+        // A bogus handle.
+        assert_eq!(remove(u64::MAX, f.health), MidEcsStatus::NotAlive as i32);
+        // A NULL world.
+        // SAFETY: NULL is the documented rejected case.
+        unsafe {
+            assert_eq!(
+                mid_ecs_world_static_component_remove(std::ptr::null_mut(), victim, f.health),
+                MidEcsStatus::NullPointer as i32
+            );
+        }
+        // Nothing was removed by any of that.
+        assert_eq!(hp_values(f.world), vec![1, 2, 3]);
+        assert!(rust_side(f.world)
+            .get_static::<MidEcsTestFlagA>(Entity::from_ffi(f.flagged_entity))
+            .is_some());
+        // Removing it twice: the second time there is nothing to remove.
+        assert_eq!(remove(victim, f.health), MidEcsStatus::Ok as i32);
+        assert_eq!(remove(victim, f.health), MidEcsStatus::NotFound as i32);
+        // SAFETY: freed exactly once.
+        unsafe { mid_ecs_world_free(f.world) };
+    }
+
+    #[test]
+    fn remove_from_a_stale_handle_is_not_alive_and_never_reaches_the_slot_reuser() {
+        let f = write_fixture();
+        let doomed = f.plain_entities[0];
+        // SAFETY: `f.world` is live.
+        let reused = unsafe {
+            assert_eq!(
+                mid_ecs_world_despawn(f.world, doomed),
+                MidEcsStatus::Ok as i32
+            );
+            mid_ecs_world_spawn(f.world)
+        };
+        rust_side(f.world)
+            .insert_static(Entity::from_ffi(reused), MidEcsTestHealthStatic { hp: 50 });
+        // SAFETY: `f.world` is live.
+        let status = unsafe { mid_ecs_world_static_component_remove(f.world, doomed, f.health) };
+        assert_eq!(status, MidEcsStatus::NotAlive as i32);
+        assert_eq!(
+            rust_side(f.world)
+                .get_static::<MidEcsTestHealthStatic>(Entity::from_ffi(reused))
+                .map(|h| h.hp),
+            Some(50)
+        );
+        // SAFETY: freed exactly once.
+        unsafe { mid_ecs_world_free(f.world) };
+    }
+
+    #[test]
+    fn queued_remove_applies_in_order_with_inserts_and_validates_when_queued() {
+        let f = write_fixture();
+        let victim = f.plain_entities[0];
+        let value = 5u32.to_ne_bytes();
+        let commands = mid_ecs_commands_new();
+        // SAFETY: both handles are live; `value` is valid for 4 bytes.
+        unsafe {
+            // Remove Health, then give the same entity a FlagB, in order.
+            assert_eq!(
+                mid_ecs_commands_static_component_remove(commands, f.world, victim, f.health),
+                MidEcsStatus::Ok as i32
+            );
+            assert_eq!(
+                mid_ecs_commands_static_component_insert(
+                    commands,
+                    f.world,
+                    victim,
+                    f.flag_b,
+                    value.as_ptr(),
+                    4
+                ),
+                MidEcsStatus::Ok as i32
+            );
+            assert_eq!(mid_ecs_commands_len(commands), 2);
+            // Nothing has happened yet.
+            assert_eq!(hp_values(f.world), vec![1, 2, 3]);
+            assert_eq!(flag_b_of(f.world, victim), None);
+            assert_eq!(
+                mid_ecs_commands_apply(commands, f.world, std::ptr::null_mut(), 0),
+                0
+            );
+            assert_eq!(hp_values(f.world), vec![2, 3]);
+            assert_eq!(flag_b_of(f.world, victim), Some(5));
+
+            // Queue-time errors, each queueing nothing.
+            let before = mid_ecs_commands_len(commands);
+            assert_eq!(
+                mid_ecs_commands_static_component_remove(commands, f.world, victim, f.flag_a),
+                MidEcsStatus::NotWritable as i32
+            );
+            assert_eq!(
+                mid_ecs_commands_static_component_remove(commands, f.world, victim, 9999),
+                MidEcsStatus::NotFound as i32
+            );
+            assert_eq!(
+                mid_ecs_commands_static_component_remove(
+                    std::ptr::null_mut(),
+                    f.world,
+                    victim,
+                    f.health
+                ),
+                MidEcsStatus::NullPointer as i32
+            );
+            assert_eq!(
+                mid_ecs_commands_static_component_remove(
+                    commands,
+                    std::ptr::null(),
+                    victim,
+                    f.health
+                ),
+                MidEcsStatus::NullPointer as i32
+            );
+            assert_eq!(mid_ecs_commands_len(commands), before);
+            mid_ecs_commands_free(commands);
+            mid_ecs_world_free(f.world);
+        }
+    }
+
+    #[test]
+    fn queued_removes_that_no_longer_apply_are_no_ops_at_apply() {
+        let f = write_fixture();
+        let (dead, lacks) = (f.plain_entities[0], f.plain_entities[1]);
+        let commands = mid_ecs_commands_new();
+        // SAFETY: all handles are live.
+        unsafe {
+            // Valid when queued: a live entity, and a writable component the
+            // other entity does not have.
+            assert_eq!(
+                mid_ecs_commands_static_component_remove(commands, f.world, dead, f.health),
+                MidEcsStatus::Ok as i32
+            );
+            assert_eq!(
+                mid_ecs_commands_static_component_remove(commands, f.world, lacks, f.flag_b),
+                MidEcsStatus::Ok as i32
+            );
+            // ...then the first entity dies before apply.
+            assert_eq!(
+                mid_ecs_world_despawn(f.world, dead),
+                MidEcsStatus::Ok as i32
+            );
+            assert_eq!(
+                mid_ecs_commands_apply(commands, f.world, std::ptr::null_mut(), 0),
+                0
+            );
+            assert!(!mid_ecs_world_is_alive(f.world, dead));
+            // The entity without FlagB kept everything it had.
+            assert_eq!(hp_values(f.world), vec![2, 3]);
+
+            // A queue validated against this world, applied to one that has
+            // never heard of the component: a no-op, not a panic.
+            let other = mid_ecs_world_new();
+            let victim = mid_ecs_world_spawn(other);
+            assert_eq!(
+                mid_ecs_commands_static_component_remove(commands, f.world, victim, f.health),
+                MidEcsStatus::Ok as i32
+            );
+            assert_eq!(
+                mid_ecs_commands_apply(commands, other, std::ptr::null_mut(), 0),
+                0
+            );
+            assert!(mid_ecs_world_is_alive(other, victim));
             mid_ecs_commands_free(commands);
             mid_ecs_world_free(other);
             mid_ecs_world_free(f.world);

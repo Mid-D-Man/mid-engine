@@ -38,7 +38,8 @@
 //!   entity that is no longer alive does nothing, and `insert_static` of a
 //!   component the entity already has is a no-op (the first value stays).
 //! - **Byte inserts.** [`EntityCommands::insert_static_bytes`] is the
-//!   type-erased insert for components registered writable for the FFI; a
+//!   type-erased insert (and [`EntityCommands::remove_static_by_id`] the
+//!   type-erased removal) for components registered writable for the FFI; a
 //!   queued spawn can be addressed by index with
 //!   [`Commands::queued_spawn`].
 //! - **Spawning.** [`Commands::spawn`] cannot hand back a real [`Entity`]:
@@ -311,6 +312,23 @@ impl EntityCommands<'_> {
             self.target,
             Box::new(move |world, entity| {
                 let _ = world.insert_static_bytes(entity, component_id, &bytes);
+            }),
+        ));
+        self
+    }
+
+    /// Queues [`World::remove_static_by_id`]: detaches the `component_id`
+    /// component for a component registered writable
+    /// ([`World::register_ffi_static_component_writable`]). Like
+    /// [`Self::insert_static_bytes`], nothing is checked until the command
+    /// runs: if it then fails (the entity has been despawned, no longer
+    /// has the component, or the id is unknown to the world it runs
+    /// against) it does nothing.
+    pub fn remove_static_by_id(&mut self, component_id: ComponentId) -> &mut Self {
+        self.queue.push(Command::OnEntity(
+            self.target,
+            Box::new(move |world, entity| {
+                let _ = world.remove_static_by_id(entity, component_id);
             }),
         ));
         self
@@ -939,5 +957,52 @@ mod tests {
         queue.apply(&mut world);
         assert!(!world.is_alive(dead));
         assert_eq!(world.get_static::<Hp>(present), Some(&Hp(1)));
+    }
+
+    #[test]
+    fn a_queued_byte_remove_runs_at_apply_in_order_with_inserts() {
+        let (mut world, hp, mana) = byte_world();
+        let e = world.spawn();
+        world.insert_static(e, Hp(1));
+        let mut queue = CommandQueue::new();
+        queue
+            .commands()
+            .entity(e)
+            .insert_static_bytes(mana, &8u32.to_ne_bytes())
+            .remove_static_by_id(hp)
+            // Insert then remove the same component: it ends up absent.
+            .insert_static_bytes(hp, &9u32.to_ne_bytes())
+            .remove_static_by_id(hp);
+        assert_eq!(
+            world.get_static::<Hp>(e),
+            Some(&Hp(1)),
+            "nothing before apply"
+        );
+        queue.apply(&mut world);
+        assert_eq!(world.get_static::<Hp>(e), None);
+        assert_eq!(world.get_static::<Mana>(e), Some(&Mana(8)));
+    }
+
+    #[test]
+    fn a_queued_byte_remove_that_no_longer_applies_does_nothing_and_never_panics() {
+        let (mut world, hp, mana) = byte_world();
+        let dead = world.spawn();
+        world.insert_static(dead, Hp(1));
+        let lacks = world.spawn();
+        world.insert_static(lacks, Hp(2));
+        let mut queue = CommandQueue::new();
+        {
+            let mut commands = queue.commands();
+            commands.entity(dead).remove_static_by_id(hp);
+            // `lacks` has Hp but not Mana; and an id this world never issued.
+            commands.entity(lacks).remove_static_by_id(mana);
+            commands
+                .entity(lacks)
+                .remove_static_by_id(ComponentId::from_u32(9999));
+        }
+        world.despawn(dead);
+        queue.apply(&mut world);
+        assert!(!world.is_alive(dead));
+        assert_eq!(world.get_static::<Hp>(lacks), Some(&Hp(2)));
     }
 }
