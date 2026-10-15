@@ -3345,9 +3345,10 @@ and is clean under valgrind. Not run on real CI.
   command runs, where a dead, stale or bogus value is a no-op; a stale handle
   never touches the entity that reused its slot (a test and a C check cover
   it).
-- **Slots are not exposed.** The entities come back in spawn order from
-  `apply`. Nothing in C could address a slot yet, because there is no queued
-  insert to aim at one.
+- **Slots were not exposed in this pass.** The entities come back in spawn
+  order from `apply`. Nothing in C could address a slot yet, because there was
+  no queued insert to aim at one. There is now: see "Inserting a component from
+  C" below (`Commands::queued_spawn`, `..._insert_spawned`).
 - **Tests.** 10 Rust-level (`commands_*` in `ffi.rs`) and 28 new C checks
   (101 to 129), run against both libraries, valgrind clean. Seven mutants, all
   caught: the capacity check removed (1 test), the NULL-buffer check removed
@@ -3360,9 +3361,9 @@ and is clean under valgrind. Not run on real CI.
   the entity written out. All three tests were added.
 
 **Not done.**
-- **Queuing a component insert from C.** A byte-copy write into a column of a
-  registered type, like `write_resource_bytes`, and needs its own design (it is
-  the same open question the mutable queries left).
+- **Queuing a component insert from C.** Built later, see "Inserting a
+  component from C" below. (When this shipped it was an open design question:
+  a byte-copy write into a registered type, like `write_resource_bytes`.)
 - Reserved entity ids (above), `spawn_batch`, an `Entity`-returning
   `spawn()`.
 - A benchmark of `Commands` against bevy's, and of the per-insert box.
@@ -3742,10 +3743,130 @@ a command queue), and never past `count` elements of `stride` bytes.
 - **Inserting a component C's entity does not have.** `write` on an entity
   without the component is `NOT_FOUND`: adding one is a structural change (a
   new archetype, a column push from bytes), a different design from overwriting
-  a value that exists. It is also what a queued component insert in the command
-  queue would need.
+  a value that exists. Built in the next pass: "Inserting a component from C"
+  below, direct and queued.
 - **A C-side mutable *query*** (a row iterator with automatic stamping).
   `raw_span_mut` is the bulk form: C iterates the span itself.
 - **The Sparse Shell.** Its spans stay read-only; it has no ticks, so there is
   nothing to stamp, and a writable registration for it was not asked for.
 - **No benchmark.** Optimization is paused.
+
+### Inserting a component from C (`insert`, queued inserts, `queued_spawn`)
+
+`write` overwrites a value an entity already has; on an entity without the
+component it answers `NOT_FOUND`. Attaching one is a structural change (the
+entity migrates to a different archetype), so it needed its own design, and
+the command queue needed the same thing: a C caller could queue spawns and
+despawns but never give a queued entity any components. Three C functions now
+cover it, and one Rust method makes the third possible.
+
+| | Rust | C |
+|---|---|---|
+| attach now | `World::insert_static_bytes(entity, component, bytes)` | `mid_ecs_world_static_component_insert(world, entity, component_id, bytes, len)` |
+| queue it | `EntityCommands::insert_static_bytes(component, bytes)` | `mid_ecs_commands_static_component_insert(commands, world, entity, component_id, bytes, len)` |
+| queue it onto a queued spawn | `Commands::queued_spawn(index) -> Option<EntityCommands>` | `mid_ecs_commands_static_component_insert_spawned(commands, world, spawn_index, component_id, bytes, len)` |
+
+Also `World::static_component_write_size(component) -> Result<usize, _>`, the
+size every write and insert must have. In C a new status,
+`MID_ECS_ALREADY_PRESENT` (-8), is appended; existing codes are unchanged.
+
+**Where it lives.** `archetype/ffi_write.rs` grows a type-erased inserter in
+the writer registry and `Archetypes::insert_row_bytes` / `write_size`;
+`world.rs` has the two `World` methods; `commands.rs` has `queued_spawn` and
+`EntityCommands::insert_static_bytes`; `ffi.rs` has the three `extern "C"`
+functions, the status and the queue-time check; `ffi-smoke-test/` has the
+header and the C checks. `ComponentFfiError` gains `AlreadyPresent`.
+
+**Decisions, with reasons.**
+- **The same gate as writes, and the same code path as `insert_static`.** Only
+  components registered writable (`FromBytes`) can be inserted, for the reason
+  they can be written: C supplies raw bytes. The registered writer now also
+  holds `insert_of::<T>`, which builds a `T` with `read_from_bytes` and calls
+  `Archetypes::insert::<T>`, the function `insert_static` calls. So the
+  migration, the preservation of the entity's other values and their ticks, and
+  the stamping (added *and* changed at the current tick) are the existing,
+  already-tested behaviour, not a second implementation.
+- **`ALREADY_PRESENT`, where Rust's `insert_static` is a silent no-op.**
+  Mirroring the no-op would mean a C caller who passed bytes could not tell they
+  were discarded. Nothing is written and the first value stays, exactly as in
+  Rust; the status says so, and points at `write` to overwrite.
+- **Queued inserts are validated when queued, against a world you pass in.** A
+  queue has no world of its own, and a failure at apply time is invisible
+  (`apply` returns the spawn count). `world` is only *read* to check that the
+  component is registered writable and `len` is its size; it is not retained
+  and nothing in it changes. That puts `NOT_FOUND`, `NOT_WRITABLE` and
+  `SIZE_MISMATCH` on the call that caused them, and a failed call queues
+  nothing.
+- **What can only be known at apply time is a no-op, as for every command.**
+  Whether the entity is alive is checked when the command runs (the same
+  precedent as `mid_ecs_commands_despawn`): a dead or stale entity, an entity
+  that already has the component (the first value stays), or a world that does
+  not know the component makes the command do nothing. None of these can
+  panic, which matters because a panic mid-apply drops every remaining
+  command. The last case is the one place silence remains: applying a queue to
+  a different world than the one it was validated against is a caller error with
+  no channel to report it.
+- **Spawn slots become addressable, through a Rust method that keeps the
+  invariant.** `Target::Slot` stays private because a slot only resolves if its
+  spawn was queued first (`resolve` indexes the spawned list). `queued_spawn(index)`
+  returns `None` unless `index` is below the spawn count, so a queued command
+  can never name a slot that will not exist; the C function reports that as
+  `NOT_FOUND`. One apply can now spawn an entity and give it components, in
+  order, which is what a command queue is for.
+- **`insert_static_bytes` copies the bytes when queued** and, like every
+  command, does exactly what the `World` method it names does when it runs.
+- **Error order is documented and tested.** `insert`: `NotAlive`, `UnknownId`,
+  `NotWritable`, `SizeMismatch`, `AlreadyPresent`. Queued: `NullPointer`, then
+  the component checks, then (for the spawned form) the slot. Nothing is
+  written, stamped or queued on any error.
+- **A structural change invalidates spans**, as every spawn, despawn, insert and
+  remove already does. `static_component_write_size` is public because the FFI
+  queue check needs it and it is a fact about the registration; C already
+  learns the size from a span's `stride`.
+
+**Tests, from the sandbox (rustc 1.91.1; real CI not yet run).**
+- 8 core tests (`archetype/ffi_write.rs`), 5 command-queue tests
+  (`commands.rs`), 7 FFI tests (`ffi.rs`, driving the real `extern "C"`
+  functions), plus 19 C checks. Default lib tests 429 to 449 (434 to 454 with
+  `scratch-arena`), the `ffi::` tests 59 to 66, C checks 151 to 170. The C
+  program is clean under `-Wall -Wextra` against both `libmid_ecs.so` and
+  `libmid_ecs.a`, and under valgrind.
+- Covered: an inserted value stamped added and changed while the entity's
+  existing value arrives intact and un-restamped; an entity with no components
+  at all; the inserted component then being writable and spannable; the
+  already-present case keeping the first value and stamping nothing; the error
+  order; stale handles that must not reach a slot's new occupant; a middle row
+  inserted into with every other row staying aligned; a zero-sized component;
+  `write_size`; `queued_spawn` in range, out of range, and after `clear`; byte
+  inserts onto queued spawns given out of order and onto existing entities,
+  nothing happening before apply; the bytes being copied at queue time; queued
+  inserts that no longer apply (dead entity, already present, an unknown id, a
+  wrong length, a world that never heard of the component) doing nothing and not
+  panicking; and, from C, every status for both queued forms and that a failed
+  queue call queues nothing.
+- **Mutation testing: 20 of 20 mutants caught.** The already-present and size
+  checks removed or reordered, the registered size off by one, the not-writable
+  error swapped, the insert stamping tick zero (at both the core and the world
+  level), the inserter inserting nothing, the world's liveness check removed,
+  `queued_spawn` off by one and always slot 0, the queued insert overwriting
+  instead, the status mapping altered, the queue-time size and registration
+  checks ignored, the spawned form always using slot 0 or accepting a missing
+  slot, `NULL` with length 0 rejected, the empty-bytes queue copy, and the
+  queued insert's world null check removed (caught by a crash).
+- One failure on the first C run was a wrong assumption in the test, not the
+  code: it took the second enumerated `Health` entity to hold hp 2, but archetype
+  order makes it hp 3. The test now compares against the value it read first.
+
+**Not done.**
+- **Inserting several components in one structural change from C.** Each insert
+  is one migration, so giving an entity `k` components through this API passes
+  through `k - 1` intermediate archetypes, as `insert_static` does. A
+  bundle-by-ids insert (Rust's `insert_bundle`, one migration) is the fix and a
+  separate design: it has to validate a list of ids and sizes as a unit.
+- **Reserved entity ids / an `Entity`-returning queued spawn.** Slots address
+  the queued spawns, but the real entity is still only known after apply.
+- **Removing a component from C.** A queued or direct `remove` is the mirror of
+  this and needs no bytes; it was not asked for.
+- **The Sparse Shell**, as for writes.
+- **No benchmark.** Each queued insert boxes one closure and copies its bytes
+  into a `Vec`. Optimization is paused.

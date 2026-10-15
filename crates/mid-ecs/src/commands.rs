@@ -37,6 +37,10 @@
 //!   names does when called at that point, no more. A command aimed at an
 //!   entity that is no longer alive does nothing, and `insert_static` of a
 //!   component the entity already has is a no-op (the first value stays).
+//! - **Byte inserts.** [`EntityCommands::insert_static_bytes`] is the
+//!   type-erased insert for components registered writable for the FFI; a
+//!   queued spawn can be addressed by index with
+//!   [`Commands::queued_spawn`].
 //! - **Spawning.** [`Commands::spawn`] cannot hand back a real [`Entity`]:
 //!   nothing is allocated until `apply`. It returns an [`EntityCommands`]
 //!   that targets the entity the spawn will produce, so
@@ -53,6 +57,7 @@
 //!   does not require `Send` of its components.
 
 use crate::archetype::Bundle;
+use crate::component::ComponentId;
 use crate::world::{Entity, World};
 
 /// What a queued command acts on.
@@ -228,6 +233,21 @@ impl Commands<'_> {
         }
     }
 
+    /// Targets the entity the `index`th spawn queued since this queue was
+    /// last applied or cleared will produce, counting from 0 in the order
+    /// the spawns were queued, so changes can be queued onto it later than
+    /// the [`EntityCommands`] [`Self::spawn`] returned. `None` if fewer
+    /// than `index + 1` spawns are queued: a slot only resolves once its
+    /// spawn is queued, which is what lets a queued command always find its
+    /// entity. This is the way for a caller that cannot hold on to an
+    /// `EntityCommands` (a C caller) to address a queued spawn.
+    pub fn queued_spawn(&mut self, index: usize) -> Option<EntityCommands<'_>> {
+        (index < self.queue.spawns).then(|| EntityCommands {
+            queue: self.queue,
+            target: Target::Slot(index),
+        })
+    }
+
     /// Queues [`World::despawn`].
     pub fn despawn(&mut self, entity: Entity) {
         self.queue.push(Command::Despawn(Target::Entity(entity)));
@@ -270,6 +290,27 @@ impl EntityCommands<'_> {
             self.target,
             Box::new(move |world, entity| {
                 world.insert_static(entity, component);
+            }),
+        ));
+        self
+    }
+
+    /// Queues [`World::insert_static_bytes`]: attaches the
+    /// `component_id` component, built from a *copy* of `bytes` taken now,
+    /// for a component registered writable
+    /// ([`World::register_ffi_static_component_writable`]). Nothing is
+    /// checked until the command runs, because a queue has no world: if it
+    /// then fails (the entity has been despawned, already has the
+    /// component, or the id is unknown to the world it runs against) it
+    /// does nothing, like every other command. A caller that wants those
+    /// errors up front checks them against a world first
+    /// ([`World::static_component_write_size`]).
+    pub fn insert_static_bytes(&mut self, component_id: ComponentId, bytes: &[u8]) -> &mut Self {
+        let bytes = bytes.to_vec();
+        self.queue.push(Command::OnEntity(
+            self.target,
+            Box::new(move |world, entity| {
+                let _ = world.insert_static_bytes(entity, component_id, &bytes);
             }),
         ));
         self
@@ -781,5 +822,122 @@ mod tests {
         world.increment_change_tick();
         tracker.update(&world);
         assert_eq!(world.query_added::<Health>(&tracker).count(), 0);
+    }
+
+    // ── Byte inserts and queued-spawn addressing ─────────────────────
+
+    use zerocopy::{FromBytes, Immutable, IntoBytes, KnownLayout};
+
+    #[derive(Debug, Clone, Copy, PartialEq, FromBytes, IntoBytes, Immutable, KnownLayout)]
+    #[repr(C)]
+    struct Hp(u32);
+
+    #[derive(Debug, Clone, Copy, PartialEq, FromBytes, IntoBytes, Immutable, KnownLayout)]
+    #[repr(C)]
+    struct Mana(u32);
+
+    fn byte_world() -> (World, ComponentId, ComponentId) {
+        let mut world = World::new();
+        let hp = world.register_ffi_static_component_writable::<Hp>("Hp");
+        let mana = world.register_ffi_static_component_writable::<Mana>("Mana");
+        (world, hp, mana)
+    }
+
+    #[test]
+    fn queued_spawn_targets_the_nth_queued_spawn_and_is_none_beyond_them() {
+        let mut queue = CommandQueue::new();
+        {
+            let mut commands = queue.commands();
+            assert!(commands.queued_spawn(0).is_none());
+            commands.spawn();
+            commands.spawn();
+            assert!(commands.queued_spawn(0).is_some());
+            assert!(commands.queued_spawn(1).is_some());
+            assert!(commands.queued_spawn(2).is_none());
+            assert!(commands.queued_spawn(usize::MAX).is_none());
+        }
+        queue.clear();
+        assert!(queue.commands().queued_spawn(0).is_none());
+    }
+
+    #[test]
+    fn byte_inserts_on_queued_spawns_give_each_entity_its_own_components_in_order() {
+        let (mut world, hp, mana) = byte_world();
+        let mut queue = CommandQueue::new();
+        {
+            let mut commands = queue.commands();
+            commands.spawn();
+            commands.spawn();
+            commands
+                .queued_spawn(1)
+                .unwrap()
+                .insert_static_bytes(hp, &20u32.to_ne_bytes());
+            commands
+                .queued_spawn(0)
+                .unwrap()
+                .insert_static_bytes(hp, &10u32.to_ne_bytes())
+                .insert_static_bytes(mana, &5u32.to_ne_bytes());
+        }
+        assert_eq!(world.entity_count(), 0, "nothing before apply");
+        let spawned = queue.apply(&mut world);
+        assert_eq!(spawned.len(), 2);
+        assert_eq!(world.get_static::<Hp>(spawned[0]), Some(&Hp(10)));
+        assert_eq!(world.get_static::<Mana>(spawned[0]), Some(&Mana(5)));
+        assert_eq!(world.get_static::<Hp>(spawned[1]), Some(&Hp(20)));
+        assert_eq!(world.get_static::<Mana>(spawned[1]), None);
+    }
+
+    #[test]
+    fn a_byte_insert_onto_an_existing_entity_runs_at_apply_not_before() {
+        let (mut world, hp, _) = byte_world();
+        let e = world.spawn();
+        let mut queue = CommandQueue::new();
+        queue
+            .commands()
+            .entity(e)
+            .insert_static_bytes(hp, &7u32.to_ne_bytes());
+        assert_eq!(world.get_static::<Hp>(e), None);
+        queue.apply(&mut world);
+        assert_eq!(world.get_static::<Hp>(e), Some(&Hp(7)));
+    }
+
+    #[test]
+    fn a_byte_insert_copies_its_bytes_when_queued() {
+        let (mut world, hp, _) = byte_world();
+        let e = world.spawn();
+        let mut bytes = 5u32.to_ne_bytes();
+        let mut queue = CommandQueue::new();
+        queue.commands().entity(e).insert_static_bytes(hp, &bytes);
+        bytes = 99u32.to_ne_bytes();
+        let _ = bytes;
+        queue.apply(&mut world);
+        assert_eq!(world.get_static::<Hp>(e), Some(&Hp(5)));
+    }
+
+    #[test]
+    fn a_byte_insert_that_no_longer_applies_does_nothing_and_never_panics() {
+        let (mut world, hp, _) = byte_world();
+        let dead = world.spawn();
+        let present = world.spawn();
+        world.insert_static(present, Hp(1));
+        let mut queue = CommandQueue::new();
+        {
+            let mut commands = queue.commands();
+            commands
+                .entity(dead)
+                .insert_static_bytes(hp, &2u32.to_ne_bytes());
+            commands
+                .entity(present)
+                .insert_static_bytes(hp, &2u32.to_ne_bytes());
+            // An id this world never issued, and a wrong length.
+            commands
+                .entity(present)
+                .insert_static_bytes(ComponentId::from_u32(9999), &2u32.to_ne_bytes());
+            commands.entity(present).insert_static_bytes(hp, &[1, 2, 3]);
+        }
+        world.despawn(dead);
+        queue.apply(&mut world);
+        assert!(!world.is_alive(dead));
+        assert_eq!(world.get_static::<Hp>(present), Some(&Hp(1)));
     }
 }

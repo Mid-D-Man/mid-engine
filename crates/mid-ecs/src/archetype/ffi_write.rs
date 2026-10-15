@@ -82,9 +82,12 @@ impl FfiSpanMut {
     }
 }
 
-/// Why an id-based (FFI-facing) component write did not happen. Checked
-/// in this order for [`crate::World::write_static_component_bytes`]:
-/// `NotAlive`, `UnknownId`, `NotWritable`, `SizeMismatch`, `Absent`.
+/// Why an id-based (FFI-facing) component write or insert did not
+/// happen. Checked in this order for
+/// [`crate::World::write_static_component_bytes`]: `NotAlive`,
+/// `UnknownId`, `NotWritable`, `SizeMismatch`, `Absent`; and for
+/// [`crate::World::insert_static_bytes`]: `NotAlive`, `UnknownId`,
+/// `NotWritable`, `SizeMismatch`, `AlreadyPresent`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ComponentFfiError {
     /// The component was never registered with
@@ -103,6 +106,12 @@ pub enum ComponentFfiError {
     /// A write's byte length is not exactly the registered type's size.
     /// Nothing was written or stamped.
     SizeMismatch,
+    /// An insert onto an entity that already has the component. Nothing
+    /// was written: `World::insert_static` is a no-op there too (the first
+    /// value stays), and this says so out loud, because a caller who
+    /// handed over bytes would otherwise assume they were stored. Use the
+    /// write path to overwrite.
+    AlreadyPresent,
 }
 
 /// Type-erased write operations for one writable component type, built
@@ -112,6 +121,7 @@ pub(super) struct FfiWriter {
     size: usize,
     span_mut: fn(&mut dyn Any) -> FfiSpanMut,
     write_row: fn(&mut dyn Any, usize, &[u8]) -> bool,
+    insert: fn(&mut Archetypes, Entity, ComponentId, &[u8], Tick) -> bool,
 }
 
 fn span_mut_of<T>(column: &mut dyn Any) -> FfiSpanMut
@@ -154,6 +164,26 @@ where
     }
 }
 
+/// Builds a `T` from `bytes` and inserts it as `entity`'s new component:
+/// the type-erased `World::insert_static`. `false` when `bytes` is not
+/// exactly `size_of::<T>()` long, or `Archetypes::insert` declines (the
+/// entity is untracked or already has the component).
+fn insert_of<T>(
+    archetypes: &mut Archetypes,
+    entity: Entity,
+    component_id: ComponentId,
+    bytes: &[u8],
+    tick: Tick,
+) -> bool
+where
+    T: 'static + FromBytes + IntoBytes + Immutable + KnownLayout,
+{
+    let Ok(value) = T::read_from_bytes(bytes) else {
+        return false;
+    };
+    archetypes.insert(entity, component_id, value, tick)
+}
+
 impl Archetypes {
     /// Opts `T` into FFI span exposure under `name` *and* into writes from
     /// C: the read-only registration ([`Self::register_ffi`]) plus a
@@ -174,6 +204,7 @@ impl Archetypes {
             size: size_of::<T>(),
             span_mut: span_mut_of::<T>,
             write_row: write_row_of::<T>,
+            insert: insert_of::<T>,
         });
         id
     }
@@ -268,6 +299,56 @@ impl Archetypes {
             stamp.changed = this_run;
         }
         Ok(())
+    }
+
+    /// The byte size a write or insert of `component_id` must have, if it
+    /// is registered writable. Lets a caller (the FFI command queue) check
+    /// registration and size without an entity.
+    pub(crate) fn write_size(&self, component_id: ComponentId) -> Result<usize, ComponentFfiError> {
+        if !self.ffi_accessors.contains_key(&component_id) {
+            return Err(ComponentFfiError::UnknownId);
+        }
+        self.ffi_writers
+            .get(&component_id)
+            .map(|writer| writer.size)
+            .ok_or(ComponentFfiError::NotWritable)
+    }
+
+    /// Builds the component from `bytes` and attaches it to `entity`,
+    /// migrating the entity into the archetype for its larger component
+    /// set, stamped added *and* changed at `this_run`: the byte-driven
+    /// counterpart of `World::insert_static`. `entity` must already be
+    /// known alive (the caller, `World`, checks, for the same stale-handle
+    /// reason as [`Self::write_row_bytes`]). Nothing happens on any error.
+    ///
+    /// Any span previously handed out for the entity's old or new
+    /// archetype is invalidated: this is a structural change.
+    pub(crate) fn insert_row_bytes(
+        &mut self,
+        entity: Entity,
+        component_id: ComponentId,
+        bytes: &[u8],
+        this_run: Tick,
+    ) -> Result<(), ComponentFfiError> {
+        let size = self.write_size(component_id)?;
+        if bytes.len() != size {
+            return Err(ComponentFfiError::SizeMismatch);
+        }
+        if self.has(entity, component_id) {
+            return Err(ComponentFfiError::AlreadyPresent);
+        }
+        let insert = self
+            .ffi_writers
+            .get(&component_id)
+            .map(|writer| writer.insert)
+            .expect("write_size just found the writer");
+        if insert(self, entity, component_id, bytes, this_run) {
+            Ok(())
+        } else {
+            // The entity has no tracked location: not alive as far as the
+            // Archetype Core is concerned.
+            Err(ComponentFfiError::NotAlive)
+        }
     }
 }
 
@@ -665,6 +746,167 @@ mod tests {
         assert_eq!(
             w.write_static_component_bytes(bare, rw, &right),
             Err(ComponentFfiError::Absent)
+        );
+    }
+
+    // ── Inserting a missing component ────────────────────────────────
+
+    #[test]
+    fn insert_bytes_attaches_a_missing_component_stamped_added_and_changed() {
+        let mut w = World::new();
+        let hp = w.register_ffi_static_component_writable::<Hp>("Hp");
+        w.register_ffi_static_component_writable::<Pair>("Pair");
+        let e = w.spawn();
+        w.insert_static(e, Pair { a: 1, b: 2 });
+        w.increment_change_tick();
+        let mut t = ChangeTracker::new();
+        t.update(&w);
+        w.increment_change_tick();
+
+        assert_eq!(w.insert_static_bytes(e, hp, &7u32.to_ne_bytes()), Ok(()));
+        w.increment_change_tick();
+        assert_eq!(w.get_static::<Hp>(e), Some(&Hp(7)));
+        // The value it already had came across the migration intact...
+        assert_eq!(w.get_static::<Pair>(e), Some(&Pair { a: 1, b: 2 }));
+        // ...the new one is both added and changed...
+        assert_eq!(added_hp(&w, &t), vec![7]);
+        assert_eq!(changed_hp(&w, &t), vec![7]);
+        // ...and the old one was moved, not re-stamped.
+        assert!(w.query_added::<Pair>(&t).next().is_none());
+        assert!(w.query_changed::<Pair>(&t).next().is_none());
+    }
+
+    #[test]
+    fn insert_bytes_works_on_an_entity_with_no_components_at_all() {
+        let mut w = World::new();
+        let hp = w.register_ffi_static_component_writable::<Hp>("Hp");
+        let e = w.spawn();
+        assert_eq!(w.insert_static_bytes(e, hp, &3u32.to_ne_bytes()), Ok(()));
+        assert_eq!(w.get_static::<Hp>(e), Some(&Hp(3)));
+        // The component is now a normal tracked one: writable and spannable.
+        assert_eq!(
+            w.write_static_component_bytes(e, hp, &4u32.to_ne_bytes()),
+            Ok(())
+        );
+        let arch = archetype_with_rows(&w, hp);
+        assert_eq!(w.static_component_raw_span_mut(arch, hp).unwrap().count, 1);
+        assert_eq!(w.get_static::<Hp>(e), Some(&Hp(4)));
+    }
+
+    #[test]
+    fn insert_bytes_on_a_present_component_reports_it_and_keeps_the_first_value() {
+        let (mut w, es, id, t) = tracked_hp(2);
+        assert_eq!(
+            w.insert_static_bytes(es[0], id, &99u32.to_ne_bytes()),
+            Err(ComponentFfiError::AlreadyPresent)
+        );
+        w.increment_change_tick();
+        assert_eq!(w.get_static::<Hp>(es[0]), Some(&Hp(1)));
+        assert!(changed_hp(&w, &t).is_empty());
+        assert!(added_hp(&w, &t).is_empty());
+    }
+
+    #[test]
+    fn insert_errors_are_checked_in_the_documented_order() {
+        let mut w = World::new();
+        let rw = w.register_ffi_static_component_writable::<Hp>("Hp");
+        let ro = w.register_ffi_static_component::<Ro>("Ro");
+        let e = w.spawn();
+        w.insert_static(e, Hp(1));
+        let wrong = [1u8, 2, 3];
+        let right = 1u32.to_ne_bytes();
+        let nope = ComponentId::from_u32(9999);
+
+        let dead = w.spawn();
+        w.despawn(dead);
+        // NotAlive beats everything.
+        assert_eq!(
+            w.insert_static_bytes(dead, nope, &wrong),
+            Err(ComponentFfiError::NotAlive)
+        );
+        // UnknownId beats NotWritable / SizeMismatch / AlreadyPresent.
+        assert_eq!(
+            w.insert_static_bytes(e, nope, &wrong),
+            Err(ComponentFfiError::UnknownId)
+        );
+        // NotWritable beats SizeMismatch.
+        assert_eq!(
+            w.insert_static_bytes(e, ro, &wrong),
+            Err(ComponentFfiError::NotWritable)
+        );
+        // SizeMismatch beats AlreadyPresent.
+        assert_eq!(
+            w.insert_static_bytes(e, rw, &wrong),
+            Err(ComponentFfiError::SizeMismatch)
+        );
+        assert_eq!(
+            w.insert_static_bytes(e, rw, &right),
+            Err(ComponentFfiError::AlreadyPresent)
+        );
+        // None of that attached anything.
+        assert!(!w.has_static::<Ro>(e));
+    }
+
+    #[test]
+    fn insert_bytes_rejects_stale_handles_and_never_reaches_a_reused_slot() {
+        let mut w = World::new();
+        let hp = w.register_ffi_static_component_writable::<Hp>("Hp");
+        let gone = w.spawn();
+        w.despawn(gone);
+        let reused = w.spawn();
+        assert_ne!(gone, reused);
+        assert_eq!(
+            w.insert_static_bytes(gone, hp, &9u32.to_ne_bytes()),
+            Err(ComponentFfiError::NotAlive)
+        );
+        assert!(!w.has_static::<Hp>(reused));
+    }
+
+    #[test]
+    fn insert_bytes_into_a_middle_row_leaves_every_other_row_aligned() {
+        let (mut w, es, _, _) = tracked_hp(5);
+        let pair = w.register_ffi_static_component_writable::<Pair>("Pair");
+        let new = Pair {
+            a: 0xAAAA,
+            b: 0xBBBB,
+        };
+        assert_eq!(w.insert_static_bytes(es[2], pair, new.as_bytes()), Ok(()));
+        for (i, e) in es.iter().enumerate() {
+            assert_eq!(w.get_static::<Hp>(*e), Some(&Hp(i as u32 + 1)));
+            assert_eq!(w.get_static::<Pair>(*e), (i == 2).then_some(&new));
+        }
+    }
+
+    #[test]
+    fn insert_bytes_accepts_a_zero_sized_component() {
+        let mut w = World::new();
+        let unit = w.register_ffi_static_component_writable::<Unit>("Unit");
+        let e = w.spawn();
+        assert_eq!(w.insert_static_bytes(e, unit, &[]), Ok(()));
+        assert!(w.has_static::<Unit>(e));
+        assert_eq!(
+            w.insert_static_bytes(e, unit, &[]),
+            Err(ComponentFfiError::AlreadyPresent)
+        );
+    }
+
+    #[test]
+    fn write_size_reports_the_registered_size_or_why_not() {
+        let mut w = World::new();
+        let hp = w.register_ffi_static_component_writable::<Hp>("Hp");
+        let pair = w.register_ffi_static_component_writable::<Pair>("Pair");
+        let unit = w.register_ffi_static_component_writable::<Unit>("Unit");
+        let ro = w.register_ffi_static_component::<Ro>("Ro");
+        assert_eq!(w.static_component_write_size(hp), Ok(4));
+        assert_eq!(w.static_component_write_size(pair), Ok(4));
+        assert_eq!(w.static_component_write_size(unit), Ok(0));
+        assert_eq!(
+            w.static_component_write_size(ro),
+            Err(ComponentFfiError::NotWritable)
+        );
+        assert_eq!(
+            w.static_component_write_size(ComponentId::from_u32(9999)),
+            Err(ComponentFfiError::UnknownId)
         );
     }
 }

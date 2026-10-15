@@ -26,6 +26,29 @@ static int failures = 0;
     else { printf("ok:   %s\n", msg); } \
 } while (0)
 
+// The first 4 bytes (a uint32_t) of `component`'s value for `entity`, found
+// the way any C caller finds it: through the archetypes that hold the
+// component. Returns 1 and sets *out if the entity has it, else 0.
+static int u32_of(const MidEcsWorld *world, uint32_t component, uint64_t entity, uint32_t *out) {
+    uint32_t archetypes[8];
+    int32_t n = mid_ecs_world_archetypes_matching_static(world, &component, 1, NULL, 0, NULL, 0, archetypes, 8);
+    for (int32_t i = 0; i < n; i++) {
+        uint64_t ids[8];
+        MidEcsFfiSpan span;
+        int32_t count = mid_ecs_world_static_component_entity_ids(world, archetypes[i], component, ids, 8);
+        if (count < 0 || mid_ecs_world_static_component_raw_span(world, archetypes[i], component, &span) != MID_ECS_OK) {
+            continue;
+        }
+        for (int32_t r = 0; r < count; r++) {
+            if (ids[r] == entity) {
+                *out = *(const uint32_t *)((const uint8_t *)span.ptr + (size_t)r * span.stride);
+                return 1;
+            }
+        }
+    }
+    return 0;
+}
+
 int main(void) {
     printf("=== mid-ecs FFI: real C program, real gcc, real link against libmid_ecs.so ===\n\n");
 
@@ -499,6 +522,130 @@ int main(void) {
               && mid_ecs_world_static_component_write(ww, w_flagged_ids[0], w_health, (const uint8_t *)&hp_77, 4) == MID_ECS_NOT_ALIVE,
           "write to a despawned entity is MID_ECS_NOT_ALIVE");
     mid_ecs_world_free(ww);
+
+    // --- Inserting a component from C: insert (direct) and the queued forms ---
+    {
+        MidEcsWorld *iw = mid_ecs_test_write_fixture_world_new();
+        uint32_t i_health = mid_ecs_world_lookup_ffi_static_component_id(iw, "FfiHealthStatic");
+        uint32_t i_flag_a = mid_ecs_world_lookup_ffi_static_component_id(iw, "FfiFlagA");
+        uint32_t i_flag_b = mid_ecs_world_lookup_ffi_static_component_id(iw, "FfiFlagB");
+        uint32_t i_arch[8];
+        int32_t i_n = mid_ecs_world_archetypes_matching_static(iw, &i_health, 1, NULL, 0, NULL, 0, i_arch, 8);
+        uint64_t e1 = 0, e2 = 0, e3 = 0;
+        {
+            uint64_t all[8];
+            int32_t found = 0;
+            for (int32_t i = 0; i < i_n; i++) {
+                uint64_t ids[8];
+                int32_t c = mid_ecs_world_static_component_entity_ids(iw, i_arch[i], i_health, ids, 8);
+                for (int32_t r = 0; r < c && found < 8; r++) all[found++] = ids[r];
+            }
+            CHECK(found == 3, "insert fixture: three entities hold Health");
+            e1 = all[0]; e2 = all[1]; e3 = all[2];
+        }
+        uint32_t i_last_run = mid_ecs_world_change_tick(iw);
+        mid_ecs_world_increment_change_tick(iw);
+        uint32_t seen = 0, v41 = 41, v77 = 77;
+        uint32_t e2_hp = 0;
+        CHECK(u32_of(iw, i_health, e2, &e2_hp), "insert fixture: the second Health entity's hp reads back");
+        CHECK(mid_ecs_world_archetypes_matching_static(iw, &i_flag_b, 1, NULL, 0, NULL, 0, i_arch, 8) == 0
+                  && !u32_of(iw, i_flag_b, e1, &seen),
+              "before any insert, no archetype holds FlagB");
+
+        // Direct insert.
+        CHECK(mid_ecs_world_static_component_insert(iw, e1, i_flag_b, (const uint8_t *)&v41, sizeof v41) == MID_ECS_OK
+                  && u32_of(iw, i_flag_b, e1, &seen) && seen == 41,
+              "insert: FlagB 41 is attached to an entity that had none, and reads back");
+        {
+            uint32_t fb_arch[8];
+            int32_t fb_n = mid_ecs_world_archetypes_matching_static(iw, &i_flag_b, 1, NULL, 0, NULL, 0, fb_arch, 8);
+            CHECK(fb_n == 1
+                      && mid_ecs_world_static_component_changed_rows(iw, fb_arch[0], i_flag_b, i_last_run, NULL, 0) == 1
+                      && mid_ecs_world_static_component_added_rows(iw, fb_arch[0], i_flag_b, i_last_run, NULL, 0) == 1,
+                  "the inserted value is stamped both added and changed");
+        }
+        {
+            uint32_t h_arch[8];
+            int32_t h_n = mid_ecs_world_archetypes_matching_static(iw, &i_health, 1, NULL, 0, NULL, 0, h_arch, 8);
+            int32_t restamped = 0;
+            for (int32_t i = 0; i < h_n; i++) {
+                restamped += mid_ecs_world_static_component_changed_rows(iw, h_arch[i], i_health, i_last_run, NULL, 0);
+            }
+            CHECK(h_n >= 2 && restamped == 0 && u32_of(iw, i_health, e1, &seen) && seen == 1,
+                  "the entity's existing Health moved with it, intact and not re-stamped");
+        }
+
+        // Direct-insert errors: nothing inserted, nothing changed.
+        CHECK(mid_ecs_world_static_component_insert(iw, e1, i_flag_b, (const uint8_t *)&v77, 4) == MID_ECS_ALREADY_PRESENT
+                  && mid_ecs_world_static_component_insert(iw, e2, i_health, (const uint8_t *)&v77, 4) == MID_ECS_ALREADY_PRESENT
+                  && u32_of(iw, i_flag_b, e1, &seen) && seen == 41
+                  && u32_of(iw, i_health, e2, &seen) && seen == e2_hp,
+              "insert of a component the entity already has is MID_ECS_ALREADY_PRESENT and the first value stays");
+        CHECK(mid_ecs_world_static_component_insert(iw, e2, i_flag_a, (const uint8_t *)&v77, 4) == MID_ECS_NOT_WRITABLE
+                  && mid_ecs_world_static_component_insert(iw, e2, 9999, (const uint8_t *)&v77, 4) == MID_ECS_NOT_FOUND,
+              "insert: a read-only component is MID_ECS_NOT_WRITABLE, an unregistered id MID_ECS_NOT_FOUND");
+        CHECK(mid_ecs_world_static_component_insert(iw, e2, i_flag_b, (const uint8_t *)&v77, 3) == MID_ECS_SIZE_MISMATCH
+                  && mid_ecs_world_static_component_insert(iw, e2, i_flag_b, (const uint8_t *)&v77, 5) == MID_ECS_SIZE_MISMATCH
+                  && mid_ecs_world_static_component_insert(iw, e2, i_flag_b, NULL, 0) == MID_ECS_SIZE_MISMATCH,
+              "insert: a length other than the type's size (3, 5, or NULL with 0) is MID_ECS_SIZE_MISMATCH");
+        CHECK(mid_ecs_world_static_component_insert(iw, 0xFFFFFFFFFFFFFFFFull, i_flag_b, (const uint8_t *)&v77, 4) == MID_ECS_NOT_ALIVE
+                  && mid_ecs_world_despawn(iw, e3) == MID_ECS_OK
+                  && mid_ecs_world_static_component_insert(iw, e3, i_flag_b, (const uint8_t *)&v77, 4) == MID_ECS_NOT_ALIVE,
+              "insert: a bogus or despawned entity is MID_ECS_NOT_ALIVE");
+        CHECK(mid_ecs_world_static_component_insert(NULL, e2, i_flag_b, (const uint8_t *)&v77, 4) == MID_ECS_NULL_POINTER
+                  && mid_ecs_world_static_component_insert(iw, e2, i_flag_b, NULL, 4) == MID_ECS_NULL_POINTER
+                  && !u32_of(iw, i_flag_b, e2, &seen),
+              "insert: NULL world, or NULL bytes with a length, is MID_ECS_NULL_POINTER and e2 still has no FlagB");
+
+        // Queued: spawn two entities and give them components in one apply, plus one existing entity.
+        MidEcsCommands *iq = mid_ecs_commands_new();
+        uint32_t v10 = 10, v20 = 20, v99 = 99;
+        CHECK(mid_ecs_commands_spawn(iq) == MID_ECS_OK && mid_ecs_commands_spawn(iq) == MID_ECS_OK
+                  && mid_ecs_commands_spawn_count(iq) == 2,
+              "queue: two spawns");
+        CHECK(mid_ecs_commands_static_component_insert_spawned(iq, iw, 1, i_flag_b, (const uint8_t *)&v20, 4) == MID_ECS_OK
+                  && mid_ecs_commands_static_component_insert_spawned(iq, iw, 0, i_flag_b, (const uint8_t *)&v10, 4) == MID_ECS_OK
+                  && mid_ecs_commands_static_component_insert(iq, iw, e2, i_flag_b, (const uint8_t *)&v99, 4) == MID_ECS_OK
+                  && mid_ecs_commands_len(iq) == 5,
+              "queue: inserts onto spawn slots 1 and 0 and onto an existing entity are queued (5 commands)");
+        CHECK(!u32_of(iw, i_flag_b, e2, &seen) && mid_ecs_world_entity_count(iw) == 2,
+              "nothing has touched the world before apply");
+        uint64_t spawned[2] = { 0, 0 };
+        CHECK(mid_ecs_commands_apply(iq, iw, spawned, 2) == 2
+                  && u32_of(iw, i_flag_b, spawned[0], &seen) && seen == 10
+                  && u32_of(iw, i_flag_b, spawned[1], &seen) && seen == 20
+                  && u32_of(iw, i_flag_b, e2, &seen) && seen == 99
+                  && mid_ecs_commands_len(iq) == 0,
+              "apply: the spawned entities got FlagB 10 and 20 (by slot), the existing one 99, and the queue is empty");
+
+        // Queue-time errors queue nothing.
+        CHECK(mid_ecs_commands_static_component_insert(iq, iw, e2, i_flag_a, (const uint8_t *)&v10, 4) == MID_ECS_NOT_WRITABLE
+                  && mid_ecs_commands_static_component_insert(iq, iw, e2, 9999, (const uint8_t *)&v10, 4) == MID_ECS_NOT_FOUND
+                  && mid_ecs_commands_static_component_insert(iq, iw, e2, i_flag_b, (const uint8_t *)&v10, 3) == MID_ECS_SIZE_MISMATCH
+                  && mid_ecs_commands_static_component_insert_spawned(iq, iw, 0, i_flag_b, (const uint8_t *)&v10, 4) == MID_ECS_NOT_FOUND
+                  && mid_ecs_commands_static_component_insert_spawned(iq, iw, (size_t)-1, i_flag_b, (const uint8_t *)&v10, 4) == MID_ECS_NOT_FOUND
+                  && mid_ecs_commands_len(iq) == 0,
+              "queued insert errors (not writable, unknown id, wrong length, no such spawn slot) queue nothing");
+        CHECK(mid_ecs_commands_static_component_insert(NULL, iw, e2, i_flag_b, (const uint8_t *)&v10, 4) == MID_ECS_NULL_POINTER
+                  && mid_ecs_commands_static_component_insert(iq, NULL, e2, i_flag_b, (const uint8_t *)&v10, 4) == MID_ECS_NULL_POINTER
+                  && mid_ecs_commands_static_component_insert(iq, iw, e2, i_flag_b, NULL, 4) == MID_ECS_NULL_POINTER
+                  && mid_ecs_commands_static_component_insert_spawned(iq, NULL, 0, i_flag_b, (const uint8_t *)&v10, 4) == MID_ECS_NULL_POINTER
+                  && mid_ecs_commands_len(iq) == 0,
+              "queued insert: NULL commands, world or bytes is MID_ECS_NULL_POINTER and queues nothing");
+
+        // A queued insert that no longer applies is a no-op at apply.
+        CHECK(mid_ecs_commands_static_component_insert(iq, iw, e2, i_health, (const uint8_t *)&v77, 4) == MID_ECS_OK
+                  && mid_ecs_commands_apply(iq, iw, NULL, 0) == 0
+                  && u32_of(iw, i_health, e2, &seen) && seen == e2_hp,
+              "a queued insert of a component the entity already has is a no-op when applied (hp unchanged)");
+        CHECK(mid_ecs_commands_static_component_insert(iq, iw, spawned[0], i_flag_b, (const uint8_t *)&v77, 4) == MID_ECS_OK
+                  && mid_ecs_world_despawn(iw, spawned[0]) == MID_ECS_OK
+                  && mid_ecs_commands_apply(iq, iw, NULL, 0) == 0
+                  && !mid_ecs_world_is_alive(iw, spawned[0]),
+              "a queued insert onto an entity despawned before apply is a no-op");
+        mid_ecs_commands_free(iq);
+        mid_ecs_world_free(iw);
+    }
 
     // --- Command queue: spawns and despawns recorded now, applied after ---
     {

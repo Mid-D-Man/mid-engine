@@ -615,6 +615,52 @@ impl World {
             .raw_span_mut(archetype_id, component_id, self.change_tick)
     }
 
+    /// The byte size every write or insert of `component_id` must have:
+    /// the registered type's size, the `stride` of its spans. For a
+    /// component registered with
+    /// [`Self::register_ffi_static_component_writable`] only:
+    /// [`ComponentFfiError::UnknownId`] if it was never registered for
+    /// FFI, [`ComponentFfiError::NotWritable`] if it was registered
+    /// read-only.
+    pub fn static_component_write_size(
+        &self,
+        component_id: ComponentId,
+    ) -> Result<usize, ComponentFfiError> {
+        self.archetypes.write_size(component_id)
+    }
+
+    /// Attaches a `component_id` component, built from `bytes`, to
+    /// `entity`: the byte-driven counterpart of [`Self::insert_static`],
+    /// for components registered with
+    /// [`Self::register_ffi_static_component_writable`] (the `FromBytes`
+    /// bound is what makes building a value from arbitrary bytes sound).
+    /// The entity migrates into the archetype for its larger component
+    /// set, and the new value is stamped added and changed at the current
+    /// tick. `bytes` is copied, needs no alignment, and its length must be
+    /// exactly [`Self::static_component_write_size`].
+    ///
+    /// Unlike `insert_static`, which is a silent no-op when the entity
+    /// already has the component, this reports it as
+    /// [`ComponentFfiError::AlreadyPresent`] (nothing is written; use
+    /// [`Self::write_static_component_bytes`] to overwrite). Errors,
+    /// checked in this order: [`ComponentFfiError::NotAlive`],
+    /// [`ComponentFfiError::UnknownId`], [`ComponentFfiError::NotWritable`],
+    /// [`ComponentFfiError::SizeMismatch`], `AlreadyPresent`. A structural
+    /// change: it invalidates every span previously handed out for the
+    /// entity's old and new archetype.
+    pub fn insert_static_bytes(
+        &mut self,
+        entity: Entity,
+        component_id: ComponentId,
+        bytes: &[u8],
+    ) -> Result<(), ComponentFfiError> {
+        if !self.is_alive(entity) {
+            return Err(ComponentFfiError::NotAlive);
+        }
+        self.archetypes
+            .insert_row_bytes(entity, component_id, bytes, self.change_tick)
+    }
+
     /// Copies `bytes` in as `entity`'s `component_id` value and stamps
     /// exactly that row changed (not added) at the current tick: the
     /// precise counterpart of [`Self::static_component_raw_span_mut`].

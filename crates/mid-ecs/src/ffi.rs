@@ -111,6 +111,12 @@ pub enum MidEcsStatus {
     /// an invalid value) can be written from C. Nothing was written or
     /// stamped.
     NotWritable = -7,
+    /// An insert onto an entity that already has the component. Nothing
+    /// was written: `World::insert_static` is a no-op there too, and this
+    /// says so, because a caller who handed over bytes would otherwise
+    /// assume they were stored. Use `mid_ecs_world_static_component_write`
+    /// to overwrite.
+    AlreadyPresent = -8,
 }
 
 fn ffi_guard(f: impl FnOnce() -> i32) -> i32 {
@@ -254,12 +260,14 @@ pub unsafe extern "C" fn mid_ecs_world_entity_count(world: *const MidEcsWorld) -
 /// Opaque handle to a deferred-change queue ([`CommandQueue`]). Same
 /// boxed-opaque-handle pattern as [`MidEcsWorld`].
 ///
-/// Record spawns and despawns with the `mid_ecs_commands_*` functions
-/// below, then run them against a world with
-/// [`mid_ecs_commands_apply`]. Nothing touches the world until `apply`.
-/// Queuing a component insert from C is not exposed: it is a byte-copy
-/// write into a registered type's column and has its own open design
-/// question (see `docs/mid-ecs.md`, "Commands").
+/// Record spawns, despawns and component inserts with the
+/// `mid_ecs_commands_*` functions below, then run them against a world
+/// with [`mid_ecs_commands_apply`]. Nothing touches the world until
+/// `apply`. A queued insert
+/// ([`mid_ecs_commands_static_component_insert`], or
+/// [`mid_ecs_commands_static_component_insert_spawned`] for an entity a
+/// queued spawn will produce) is a byte copy for a component registered
+/// writable; see `docs/mid-ecs.md`, "Inserting a component from C".
 pub struct MidEcsCommands(CommandQueue);
 
 /// Creates an empty command queue. Never returns NULL. Free it with
@@ -373,6 +381,125 @@ pub unsafe extern "C" fn mid_ecs_commands_despawn(
             .commands()
             .despawn(Entity::from_ffi(entity));
         MidEcsStatus::Ok as i32
+    })
+}
+
+/// What a queued insert can be checked for *now*: that `component_id` is
+/// registered writable in `world` and `len` is its size. The queue itself
+/// has no world, so this is the only way to hand a caller these errors at
+/// the call that caused them rather than silently when the command runs.
+fn check_queued_insert(
+    world: &World,
+    component_id: ComponentId,
+    len: usize,
+) -> Result<(), ComponentFfiError> {
+    if len != world.static_component_write_size(component_id)? {
+        return Err(ComponentFfiError::SizeMismatch);
+    }
+    Ok(())
+}
+
+/// Queues an insert of a `component_id` component, built from a *copy* of
+/// `len` bytes at `bytes`, onto the existing entity packed in `entity`: the
+/// queued form of [`mid_ecs_world_static_component_insert`], for a
+/// component registered *writable*.
+///
+/// `world` is read only to check, now, that `component_id` is registered
+/// writable and `len` is the registered size; it is not retained, and
+/// nothing in it changes. Whether `entity` is alive is not checked now,
+/// only when the command runs (as for [`mid_ecs_commands_despawn`]): a
+/// dead or stale entity, an entity that already has the component (the
+/// first value stays), or a world that does not know the component, makes
+/// the command a no-op then, and it never reaches a different entity that
+/// reused the slot.
+///
+/// Returns `MidEcsStatus::Ok` (queued), `NullPointer`, `NotFound`
+/// (component id never registered for FFI), `NotWritable` or
+/// `SizeMismatch`. Nothing is queued on an error.
+///
+/// # Safety
+/// `commands` must be a valid handle from `mid_ecs_commands_new` and
+/// `world` a valid handle from `mid_ecs_world_new`, both non-null.
+/// `bytes` must be NULL only if `len` is 0, otherwise valid for reading
+/// `len` bytes.
+#[no_mangle]
+pub unsafe extern "C" fn mid_ecs_commands_static_component_insert(
+    commands: *mut MidEcsCommands,
+    world: *const MidEcsWorld,
+    entity: u64,
+    component_id: u32,
+    bytes: *const u8,
+    len: usize,
+) -> i32 {
+    ffi_guard(|| {
+        if commands.is_null() || world.is_null() || (bytes.is_null() && len > 0) {
+            return MidEcsStatus::NullPointer as i32;
+        }
+        let commands = unsafe { &mut *commands };
+        let world = unsafe { &*world };
+        let component = ComponentId::from_u32(component_id);
+        if let Err(error) = check_queued_insert(&world.0, component, len) {
+            return component_status(error);
+        }
+        let bytes: &[u8] = if len == 0 {
+            &[]
+        } else {
+            unsafe { slice::from_raw_parts(bytes, len) }
+        };
+        commands
+            .0
+            .commands()
+            .entity(Entity::from_ffi(entity))
+            .insert_static_bytes(component, bytes);
+        MidEcsStatus::Ok as i32
+    })
+}
+
+/// As [`mid_ecs_commands_static_component_insert`], onto the entity the
+/// `spawn_index`th queued spawn will produce (counting from 0, in the
+/// order [`mid_ecs_commands_spawn`] was called since the last apply or
+/// clear; [`mid_ecs_commands_spawn_count`] is how many there are), so one
+/// apply can create an entity *and* give it components. The inserts run
+/// after that spawn, in the order they were queued.
+///
+/// Returns the same statuses, plus `NotFound` for a `spawn_index` that is
+/// not below the number of spawns queued so far (checked after the
+/// component checks). Nothing is queued on an error.
+///
+/// # Safety
+/// As [`mid_ecs_commands_static_component_insert`].
+#[no_mangle]
+pub unsafe extern "C" fn mid_ecs_commands_static_component_insert_spawned(
+    commands: *mut MidEcsCommands,
+    world: *const MidEcsWorld,
+    spawn_index: usize,
+    component_id: u32,
+    bytes: *const u8,
+    len: usize,
+) -> i32 {
+    ffi_guard(|| {
+        if commands.is_null() || world.is_null() || (bytes.is_null() && len > 0) {
+            return MidEcsStatus::NullPointer as i32;
+        }
+        let commands = unsafe { &mut *commands };
+        let world = unsafe { &*world };
+        let component = ComponentId::from_u32(component_id);
+        if let Err(error) = check_queued_insert(&world.0, component, len) {
+            return component_status(error);
+        }
+        let bytes: &[u8] = if len == 0 {
+            &[]
+        } else {
+            unsafe { slice::from_raw_parts(bytes, len) }
+        };
+        let mut queue = commands.0.commands();
+        match queue.queued_spawn(spawn_index) {
+            Some(mut target) => {
+                target.insert_static_bytes(component, bytes);
+                MidEcsStatus::Ok as i32
+            }
+            None => MidEcsStatus::NotFound as i32,
+        }
     })
 }
 
@@ -1245,6 +1372,7 @@ fn component_status(error: ComponentFfiError) -> i32 {
         ComponentFfiError::NotWritable => MidEcsStatus::NotWritable as i32,
         ComponentFfiError::NotAlive => MidEcsStatus::NotAlive as i32,
         ComponentFfiError::SizeMismatch => MidEcsStatus::SizeMismatch as i32,
+        ComponentFfiError::AlreadyPresent => MidEcsStatus::AlreadyPresent as i32,
     }
 }
 
@@ -1343,6 +1471,57 @@ pub unsafe extern "C" fn mid_ecs_world_static_component_write(
             unsafe { slice::from_raw_parts(bytes, len) }
         };
         match world.0.write_static_component_bytes(
+            Entity::from_ffi(entity),
+            ComponentId::from_u32(component_id),
+            bytes,
+        ) {
+            Ok(()) => MidEcsStatus::Ok as i32,
+            Err(error) => component_status(error),
+        }
+    })
+}
+
+/// Attaches a `component_id` component, built from `len` bytes at `bytes`,
+/// to `entity`: the byte-driven `World::insert_static` for a component
+/// registered *writable* on the Rust side. The entity moves into the
+/// archetype for its larger component set, and the new value is stamped
+/// both *added* and *changed* at the world's current tick. `len` must be
+/// exactly the registered type's size (the span's `stride`). Bytes are
+/// copied, so `bytes` needs no particular alignment and is not retained.
+///
+/// This is a structural change: every span previously handed out for the
+/// entity's old and new archetype is invalidated.
+///
+/// Returns `MidEcsStatus::Ok`, `NullPointer`, `NotAlive` (a dead or stale
+/// entity), `NotFound` (the component id was never registered for FFI),
+/// `NotWritable` (registered read-only), `SizeMismatch`, or
+/// `AlreadyPresent` (the entity already has the component, which is left
+/// untouched: use [`mid_ecs_world_static_component_write`] to overwrite),
+/// checked in that order. Nothing is written or stamped on an error.
+///
+/// # Safety
+/// `world` must be a valid, non-null handle from `mid_ecs_world_new`.
+/// `bytes` must be NULL only if `len` is 0, otherwise valid for reading
+/// `len` bytes.
+#[no_mangle]
+pub unsafe extern "C" fn mid_ecs_world_static_component_insert(
+    world: *mut MidEcsWorld,
+    entity: u64,
+    component_id: u32,
+    bytes: *const u8,
+    len: usize,
+) -> i32 {
+    ffi_guard(|| {
+        if world.is_null() || (bytes.is_null() && len > 0) {
+            return MidEcsStatus::NullPointer as i32;
+        }
+        let world = unsafe { &mut *world };
+        let bytes: &[u8] = if len == 0 {
+            &[]
+        } else {
+            unsafe { slice::from_raw_parts(bytes, len) }
+        };
+        match world.0.insert_static_bytes(
             Entity::from_ffi(entity),
             ComponentId::from_u32(component_id),
             bytes,
@@ -3728,5 +3907,394 @@ mod tests {
             MidEcsStatus::SizeMismatch as i32
         );
         assert_eq!(MidEcsStatus::NotWritable as i32, -7);
+        assert_eq!(
+            ok(ComponentFfiError::AlreadyPresent),
+            MidEcsStatus::AlreadyPresent as i32
+        );
+        assert_eq!(MidEcsStatus::AlreadyPresent as i32, -8);
+    }
+
+    // ---- inserting a component from C ----
+
+    fn flag_b_of(world: *mut MidEcsWorld, entity: u64) -> Option<u32> {
+        rust_side(world)
+            .get_static::<MidEcsTestFlagB>(Entity::from_ffi(entity))
+            .map(|f| f.v)
+    }
+
+    #[test]
+    fn insert_attaches_a_missing_component_stamped_added_and_changed() {
+        let f = write_fixture();
+        let last_run = tick_now_and_advance(f.world);
+        let victim = f.plain_entities[0];
+        let bytes = 41u32.to_ne_bytes();
+        // SAFETY: `f.world` is live; `bytes` is valid for 4 bytes.
+        let status = unsafe {
+            mid_ecs_world_static_component_insert(f.world, victim, f.flag_b, bytes.as_ptr(), 4)
+        };
+        assert_eq!(status, MidEcsStatus::Ok as i32);
+        assert_eq!(flag_b_of(f.world, victim), Some(41));
+        // The entity kept its Health and nothing else was touched.
+        assert_eq!(hp_values(f.world), vec![1, 2, 3]);
+        // The new value is both added and changed; the migrated Health
+        // value was moved, not re-stamped.
+        assert_eq!(
+            changed_entities_via_ffi(f.world, f.flag_b, last_run, false),
+            vec![victim]
+        );
+        assert_eq!(
+            changed_entities_via_ffi(f.world, f.flag_b, last_run, true),
+            vec![victim]
+        );
+        assert!(changed_entities_via_ffi(f.world, f.health, last_run, false).is_empty());
+        // SAFETY: freed exactly once.
+        unsafe { mid_ecs_world_free(f.world) };
+    }
+
+    #[test]
+    fn insert_statuses_and_nothing_inserted_on_an_error() {
+        let f = write_fixture();
+        let victim = f.plain_entities[0];
+        let value = 77u32.to_ne_bytes();
+        let insert = |entity: u64, component: u32, bytes: *const u8, len: usize| -> i32 {
+            // SAFETY: `f.world` is live; `bytes` is NULL only with `len == 0`
+            // or valid for `len` bytes at every call site below.
+            unsafe { mid_ecs_world_static_component_insert(f.world, entity, component, bytes, len) }
+        };
+        // Already has it: reported, and the first value stays.
+        assert_eq!(
+            insert(victim, f.health, value.as_ptr(), 4),
+            MidEcsStatus::AlreadyPresent as i32
+        );
+        // Registered read-only; never registered.
+        assert_eq!(
+            insert(victim, f.flag_a, value.as_ptr(), 4),
+            MidEcsStatus::NotWritable as i32
+        );
+        assert_eq!(
+            insert(victim, 9999, value.as_ptr(), 4),
+            MidEcsStatus::NotFound as i32
+        );
+        // Wrong lengths, including NULL with 0.
+        for len in [3usize, 5] {
+            assert_eq!(
+                insert(victim, f.flag_b, value.as_ptr(), len),
+                MidEcsStatus::SizeMismatch as i32
+            );
+        }
+        assert_eq!(
+            insert(victim, f.flag_b, std::ptr::null(), 0),
+            MidEcsStatus::SizeMismatch as i32
+        );
+        // A bogus entity, a NULL buffer with a length, and a NULL world.
+        assert_eq!(
+            insert(u64::MAX, f.flag_b, value.as_ptr(), 4),
+            MidEcsStatus::NotAlive as i32
+        );
+        assert_eq!(
+            insert(victim, f.flag_b, std::ptr::null(), 4),
+            MidEcsStatus::NullPointer as i32
+        );
+        // SAFETY: NULL world is the documented rejected case.
+        unsafe {
+            assert_eq!(
+                mid_ecs_world_static_component_insert(
+                    std::ptr::null_mut(),
+                    victim,
+                    f.flag_b,
+                    value.as_ptr(),
+                    4
+                ),
+                MidEcsStatus::NullPointer as i32
+            );
+        }
+        // Nothing attached anywhere: no archetype holds a FlagB.
+        assert!(matching_ids(f.world, &[f.flag_b], &[]).is_empty());
+        assert_eq!(hp_values(f.world), vec![1, 2, 3]);
+        // SAFETY: freed exactly once.
+        unsafe { mid_ecs_world_free(f.world) };
+    }
+
+    #[test]
+    fn insert_onto_a_stale_handle_is_not_alive_and_never_reaches_the_slot_reuser() {
+        let f = write_fixture();
+        let doomed = f.plain_entities[0];
+        // SAFETY: `f.world` is live.
+        let reused = unsafe {
+            assert_eq!(
+                mid_ecs_world_despawn(f.world, doomed),
+                MidEcsStatus::Ok as i32
+            );
+            mid_ecs_world_spawn(f.world)
+        };
+        assert_ne!(reused, doomed);
+        let value = 9u32.to_ne_bytes();
+        // SAFETY: `f.world` is live; `value` is valid for 4 bytes.
+        let status = unsafe {
+            mid_ecs_world_static_component_insert(f.world, doomed, f.flag_b, value.as_ptr(), 4)
+        };
+        assert_eq!(status, MidEcsStatus::NotAlive as i32);
+        assert_eq!(flag_b_of(f.world, reused), None);
+        // SAFETY: freed exactly once.
+        unsafe { mid_ecs_world_free(f.world) };
+    }
+
+    #[test]
+    fn queued_inserts_apply_in_order_onto_spawned_and_existing_entities() {
+        let f = write_fixture();
+        let victim = f.plain_entities[0];
+        let (v10, v20, v99) = (
+            10u32.to_ne_bytes(),
+            20u32.to_ne_bytes(),
+            99u32.to_ne_bytes(),
+        );
+        let commands = mid_ecs_commands_new();
+        // SAFETY: both handles are live; every buffer is valid for 4 bytes.
+        unsafe {
+            assert_eq!(mid_ecs_commands_spawn(commands), MidEcsStatus::Ok as i32);
+            assert_eq!(mid_ecs_commands_spawn(commands), MidEcsStatus::Ok as i32);
+            assert_eq!(mid_ecs_commands_spawn_count(commands), 2);
+            // Out of order on purpose: slot 1 first.
+            assert_eq!(
+                mid_ecs_commands_static_component_insert_spawned(
+                    commands,
+                    f.world,
+                    1,
+                    f.flag_b,
+                    v20.as_ptr(),
+                    4
+                ),
+                MidEcsStatus::Ok as i32
+            );
+            assert_eq!(
+                mid_ecs_commands_static_component_insert_spawned(
+                    commands,
+                    f.world,
+                    0,
+                    f.flag_b,
+                    v10.as_ptr(),
+                    4
+                ),
+                MidEcsStatus::Ok as i32
+            );
+            assert_eq!(
+                mid_ecs_commands_static_component_insert(
+                    commands,
+                    f.world,
+                    victim,
+                    f.flag_b,
+                    v99.as_ptr(),
+                    4
+                ),
+                MidEcsStatus::Ok as i32
+            );
+            assert_eq!(mid_ecs_commands_len(commands), 5);
+            // Nothing has happened to the world yet.
+            assert_eq!(flag_b_of(f.world, victim), None);
+            assert_eq!(rust_side(f.world).entity_count(), 3);
+
+            let mut out = [0u64; 2];
+            assert_eq!(
+                mid_ecs_commands_apply(commands, f.world, out.as_mut_ptr(), 2),
+                2
+            );
+            assert_eq!(flag_b_of(f.world, out[0]), Some(10));
+            assert_eq!(flag_b_of(f.world, out[1]), Some(20));
+            assert_eq!(flag_b_of(f.world, victim), Some(99));
+            assert_eq!(mid_ecs_commands_len(commands), 0);
+            mid_ecs_commands_free(commands);
+            mid_ecs_world_free(f.world);
+        }
+    }
+
+    #[test]
+    fn queued_insert_statuses_and_nothing_queued_on_an_error() {
+        let f = write_fixture();
+        let victim = f.plain_entities[0];
+        let value = 5u32.to_ne_bytes();
+        let commands = mid_ecs_commands_new();
+        // SAFETY: both handles are live; `value` is valid for 4 bytes.
+        unsafe {
+            assert_eq!(mid_ecs_commands_spawn(commands), MidEcsStatus::Ok as i32);
+            let before = mid_ecs_commands_len(commands);
+            let ok = MidEcsStatus::Ok as i32;
+            let not_found = MidEcsStatus::NotFound as i32;
+            let insert = |component: u32, bytes: *const u8, len: usize| {
+                mid_ecs_commands_static_component_insert(
+                    commands, f.world, victim, component, bytes, len,
+                )
+            };
+            let spawned = |index: usize, component: u32, bytes: *const u8, len: usize| {
+                mid_ecs_commands_static_component_insert_spawned(
+                    commands, f.world, index, component, bytes, len,
+                )
+            };
+            // Component-level errors, for both forms.
+            assert_eq!(
+                insert(f.flag_a, value.as_ptr(), 4),
+                MidEcsStatus::NotWritable as i32
+            );
+            assert_eq!(
+                spawned(0, f.flag_a, value.as_ptr(), 4),
+                MidEcsStatus::NotWritable as i32
+            );
+            assert_eq!(insert(9999, value.as_ptr(), 4), not_found);
+            assert_eq!(spawned(0, 9999, value.as_ptr(), 4), not_found);
+            for len in [3usize, 5] {
+                assert_eq!(
+                    insert(f.flag_b, value.as_ptr(), len),
+                    MidEcsStatus::SizeMismatch as i32
+                );
+                assert_eq!(
+                    spawned(0, f.flag_b, value.as_ptr(), len),
+                    MidEcsStatus::SizeMismatch as i32
+                );
+            }
+            assert_eq!(
+                insert(f.flag_b, std::ptr::null(), 0),
+                MidEcsStatus::SizeMismatch as i32
+            );
+            // A spawn slot that is not queued (yet): one past the end, and huge.
+            assert_eq!(spawned(1, f.flag_b, value.as_ptr(), 4), not_found);
+            assert_eq!(spawned(usize::MAX, f.flag_b, value.as_ptr(), 4), not_found);
+            // NULLs.
+            assert_eq!(
+                insert(f.flag_b, std::ptr::null(), 4),
+                MidEcsStatus::NullPointer as i32
+            );
+            assert_eq!(
+                spawned(0, f.flag_b, std::ptr::null(), 4),
+                MidEcsStatus::NullPointer as i32
+            );
+            assert_eq!(
+                mid_ecs_commands_static_component_insert(
+                    std::ptr::null_mut(),
+                    f.world,
+                    victim,
+                    f.flag_b,
+                    value.as_ptr(),
+                    4
+                ),
+                MidEcsStatus::NullPointer as i32
+            );
+            assert_eq!(
+                mid_ecs_commands_static_component_insert(
+                    commands,
+                    std::ptr::null(),
+                    victim,
+                    f.flag_b,
+                    value.as_ptr(),
+                    4
+                ),
+                MidEcsStatus::NullPointer as i32
+            );
+            assert_eq!(
+                mid_ecs_commands_static_component_insert_spawned(
+                    commands,
+                    std::ptr::null(),
+                    0,
+                    f.flag_b,
+                    value.as_ptr(),
+                    4
+                ),
+                MidEcsStatus::NullPointer as i32
+            );
+            // None of that queued anything, and good calls still work.
+            assert_eq!(mid_ecs_commands_len(commands), before);
+            assert_eq!(insert(f.flag_b, value.as_ptr(), 4), ok);
+            assert_eq!(spawned(0, f.flag_b, value.as_ptr(), 4), ok);
+            assert_eq!(mid_ecs_commands_len(commands), before + 2);
+            mid_ecs_commands_free(commands);
+            mid_ecs_world_free(f.world);
+        }
+    }
+
+    #[test]
+    fn queued_inserts_that_no_longer_apply_are_no_ops_at_apply() {
+        let f = write_fixture();
+        let (dead, present) = (f.plain_entities[0], f.plain_entities[1]);
+        let value = 7u32.to_ne_bytes();
+        let commands = mid_ecs_commands_new();
+        // SAFETY: all handles are live; `value` is valid for 4 bytes.
+        unsafe {
+            // Valid when queued: a live entity, and one that has Health already.
+            assert_eq!(
+                mid_ecs_commands_static_component_insert(
+                    commands,
+                    f.world,
+                    dead,
+                    f.flag_b,
+                    value.as_ptr(),
+                    4
+                ),
+                MidEcsStatus::Ok as i32
+            );
+            assert_eq!(
+                mid_ecs_commands_static_component_insert(
+                    commands,
+                    f.world,
+                    present,
+                    f.health,
+                    value.as_ptr(),
+                    4
+                ),
+                MidEcsStatus::Ok as i32
+            );
+            // ...then the first entity dies before apply.
+            assert_eq!(
+                mid_ecs_world_despawn(f.world, dead),
+                MidEcsStatus::Ok as i32
+            );
+            assert_eq!(
+                mid_ecs_commands_apply(commands, f.world, std::ptr::null_mut(), 0),
+                0
+            );
+            assert!(!mid_ecs_world_is_alive(f.world, dead));
+            assert_eq!(flag_b_of(f.world, dead), None);
+            // The entity that already had Health kept its first value.
+            assert_eq!(hp_values(f.world), vec![2, 3]);
+            mid_ecs_commands_free(commands);
+            mid_ecs_world_free(f.world);
+        }
+    }
+
+    #[test]
+    fn a_queue_applied_to_a_world_that_does_not_know_the_component_is_a_no_op_not_a_panic() {
+        let f = write_fixture();
+        let other = mid_ecs_world_new();
+        let value = 7u32.to_ne_bytes();
+        let commands = mid_ecs_commands_new();
+        // SAFETY: all handles are live; `value` is valid for 4 bytes.
+        unsafe {
+            assert_eq!(mid_ecs_commands_spawn(commands), MidEcsStatus::Ok as i32);
+            // Validated against `f.world`, which knows FlagB...
+            assert_eq!(
+                mid_ecs_commands_static_component_insert_spawned(
+                    commands,
+                    f.world,
+                    0,
+                    f.flag_b,
+                    value.as_ptr(),
+                    4
+                ),
+                MidEcsStatus::Ok as i32
+            );
+            // ...but applied to a world that has never heard of it.
+            let mut out = [0u64; 1];
+            assert_eq!(
+                mid_ecs_commands_apply(commands, other, out.as_mut_ptr(), 1),
+                1
+            );
+            assert!(mid_ecs_world_is_alive(other, out[0]));
+            assert_eq!(
+                rust_side(other)
+                    .archetypes_with_static_component(ComponentId::from_u32(f.flag_b))
+                    .count(),
+                0
+            );
+            mid_ecs_commands_free(commands);
+            mid_ecs_world_free(other);
+            mid_ecs_world_free(f.world);
+        }
     }
 }

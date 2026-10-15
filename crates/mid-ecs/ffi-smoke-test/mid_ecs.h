@@ -37,6 +37,7 @@ extern "C" {
 #define MID_ECS_BUFFER_TOO_SMALL -5
 #define MID_ECS_SIZE_MISMATCH  -6
 #define MID_ECS_NOT_WRITABLE   -7
+#define MID_ECS_ALREADY_PRESENT -8
 
 // Sentinel component_id/archetype_id meaning "not found" -- returned by
 // the lookup_ffi_* functions below. Not 0: 0 is a real, valid id for
@@ -100,9 +101,11 @@ size_t mid_ecs_world_entity_count(const MidEcsWorld *world);
 
 // --- Deferred changes (command queue) ---
 //
-// Record spawns and despawns, then run them against a world with
-// mid_ecs_commands_apply. Nothing touches the world until apply. Queuing a
-// component insert from C is not exposed (see docs/mid-ecs.md, "Commands").
+// Record spawns, despawns and component inserts, then run them against a
+// world with mid_ecs_commands_apply. Nothing touches the world until apply.
+// Queued inserts (mid_ecs_commands_static_component_insert[_spawned], below
+// with the other insert functions) are for components registered writable;
+// see docs/mid-ecs.md, "Inserting a component from C".
 
 typedef struct MidEcsCommands MidEcsCommands;
 
@@ -345,6 +348,50 @@ int32_t mid_ecs_world_static_component_raw_span_mut(MidEcsWorld *world, uint32_t
 // entity is alive without it); MID_ECS_NOT_WRITABLE; MID_ECS_SIZE_MISMATCH.
 // Nothing is written or stamped on an error.
 int32_t mid_ecs_world_static_component_write(MidEcsWorld *world, uint64_t entity, uint32_t component_id, const uint8_t *bytes, size_t len);
+
+// --- Inserting a component from C ---
+//
+// `write` above overwrites a value the entity already has. Giving an entity
+// a component it does NOT have yet is a structural change: the entity moves
+// to the archetype for its larger component set (so every span previously
+// handed out for its old and new archetype is invalidated), and the new
+// value is stamped added AND changed at the current tick. The same rule as
+// for writes decides which components can be inserted: only those
+// registered WRITABLE on the Rust side.
+
+// Attaches a component_id component, built from len bytes at bytes, to
+// entity. len must equal the type's size exactly (the span's stride);
+// bytes is copied, needs no alignment, and may be NULL only when len is 0.
+// Statuses, checked in this order: MID_ECS_NULL_POINTER; MID_ECS_NOT_ALIVE
+// (dead, bogus or stale entity); MID_ECS_NOT_FOUND (component never
+// registered for FFI); MID_ECS_NOT_WRITABLE; MID_ECS_SIZE_MISMATCH;
+// MID_ECS_ALREADY_PRESENT (the entity already has it: nothing is written and
+// the first value stays; use mid_ecs_world_static_component_write to
+// overwrite). Nothing is written or stamped on an error.
+int32_t mid_ecs_world_static_component_insert(MidEcsWorld *world, uint64_t entity, uint32_t component_id, const uint8_t *bytes, size_t len);
+
+// The queued form: records an insert onto an existing entity, applied by
+// mid_ecs_commands_apply in the order queued. `world` is only READ, now, to
+// check that component_id is registered writable and len is its size (a
+// queue has no world of its own, and this puts those errors on the call that
+// caused them); it is not retained and nothing in it changes. bytes is
+// copied now. Whether the entity is alive is checked when the command
+// runs, not now: a dead or stale entity, an entity that already has the
+// component (the first value stays), or a world that does not know the
+// component, makes the command a no-op then. Returns MID_ECS_OK (queued),
+// MID_ECS_NULL_POINTER, MID_ECS_NOT_FOUND (component never registered for
+// FFI), MID_ECS_NOT_WRITABLE or MID_ECS_SIZE_MISMATCH. Nothing is queued on
+// an error.
+int32_t mid_ecs_commands_static_component_insert(MidEcsCommands *commands, const MidEcsWorld *world, uint64_t entity, uint32_t component_id, const uint8_t *bytes, size_t len);
+
+// As above, onto the entity the spawn_index'th queued spawn will produce
+// (counting from 0 in the order mid_ecs_commands_spawn was called since the
+// last apply or clear; mid_ecs_commands_spawn_count is how many there are),
+// so one apply can create an entity AND give it components. The inserts run
+// after that spawn, in the order queued. Same statuses, plus
+// MID_ECS_NOT_FOUND for a spawn_index not below the number of spawns queued
+// so far (checked after the component checks).
+int32_t mid_ecs_commands_static_component_insert_spawned(MidEcsCommands *commands, const MidEcsWorld *world, size_t spawn_index, uint32_t component_id, const uint8_t *bytes, size_t len);
 
 // --- Test fixture (see ffi.rs's own doc comment on this function) ---
 
