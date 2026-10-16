@@ -25,6 +25,7 @@
   - [sync::Barrier](crates/mid-platform/barrier.md)
   - [sync::Arc / Weak](crates/mid-platform/arc.md)
   - [hash](crates/mid-platform/hash.md)
+  - [collections](crates/mid-platform/collections.md)
 - [mid-net](crates/mid-net.md)
 - [mid-ecs](crates/mid-ecs.md)
 - [mid-geom](crates/mid-geom.md)

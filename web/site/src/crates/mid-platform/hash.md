@@ -14,6 +14,12 @@ hashes to the same value on every run and every platform (the state is
 `u64` on every target, including wasm32). `fixed_hash_one` hashes a single
 value with it.
 
+One property to know about: the output ends in a multiplication, so its low
+bits depend only on the low bits of the key. A table that picks buckets from
+the low bits of the hash can collide heavily on keys that share them
+(`i << 12`, aligned addresses). See the note on the
+[`collections`](collections.md) page.
+
 There is no `RandomState` equivalent, on purpose. A fold/multiply hash can't
 be made DoS-resistant by randomizing its seed, so a randomized version would
 only look safer than it is. Anything that hashes untrusted input should use
@@ -39,7 +45,7 @@ assert_eq!(fixed_hash_one("mid-engine"), fixed_hash_one("mid-engine"));
 
 Done — Phase 3, hasher half. Matches the published `rustc-hash` 1.1.0 on
 64-bit targets, apart from negative `i8`/`i16`/`i32` values. Benchmarks
-written, first run pending. A `HashMap`/`HashSet` of its own is not built
-yet. Callable from C: `mid_platform_fixed_hash_{bytes,u64}`. Full design write-up, including why this is a second copy of
+written, first run pending. The maps that use it are on the
+[`collections`](collections.md) page. Callable from C: `mid_platform_fixed_hash_{bytes,u64}`. Full design write-up, including why this is a second copy of
 `mid-collections`'s hasher rather than a dependency on it:
 `docs/mid-platform.md`, "hash.rs."

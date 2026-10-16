@@ -19,11 +19,13 @@
 //! [`sync::OnceLock`] / [`sync::OnceState`], [`sync::LazyLock`], and
 //! [`sync::Barrier`] / [`sync::BarrierWaitResult`].
 //!
-//! **Phase 3, started:** [`hash::FxHasher`] / [`hash::FixedHasher`] — an
+//! **Phase 3 done:** [`hash::FxHasher`] / [`hash::FixedHasher`] — an
 //! independent copy of `mid_collections::FxHasher`'s own algorithm, see
-//! `docs/mid-platform.md`, "Why a second, independent `FxHasher`."
-//! `HashMap`/`HashSet` are still a separate, later decision — see
-//! `docs/mid-platform.md`, "Build order," Phase 3.
+//! `docs/mid-platform.md`, "Why a second, independent `FxHasher`" — and, with
+//! the `alloc` feature, [`collections`]: `HashMap`/`HashSet` as `std`'s own
+//! types when `std` is on and as this crate's safe-code
+//! [`collections::OpenHashMap`] / [`collections::OpenHashSet`] when it is
+//! off. See `docs/mid-platform.md`, "collections/."
 //!
 //! Every lock type here works identically whether the `std` feature (on by
 //! default) is enabled or not: with `std`, it's a thin pass-through to
@@ -45,6 +47,8 @@ extern crate alloc;
 extern crate std;
 
 pub mod cell;
+#[cfg(feature = "alloc")]
+pub mod collections;
 pub mod hash;
 pub mod sync;
 

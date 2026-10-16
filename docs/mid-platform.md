@@ -140,24 +140,21 @@ See "Modules" below for what each file actually does and why:
 (`benches/hash_bench.rs`, first run pending). No `RandomState` equivalent,
 on purpose — see "hash.rs" under Modules.
 
-**Phase 3, `HashMap`/`HashSet` half (open — needs an explicit decision, not
-started):** `collections::hash_map`/`hash_set`. The options on the table,
-none chosen:
-1. A `std` passthrough only — `HashMap`/`HashSet` aliases over
-   `std::collections` with `FixedHasher` as the default hasher, and no
-   `no_std` fallback at all yet. Smallest, matches how every other type in
-   this crate is built `std`-first; leaves the `no_std` configuration
-   without a map until something needs one.
-2. Depend on `hashbrown` directly (what `bevy_platform` itself does).
-   Breaks this crate's zero-dependency premise, for the one thing on the
-   list that's genuinely hard to hand-roll well.
-3. A deliberately simple, safe, hand-rolled open-addressing map for the
-   `no_std` path — slower than `hashbrown`, far easier to get right with no
-   compiler in the working environment, measured against real workloads
-   before anyone decides whether the gap matters.
-4. A from-scratch SwissTable/`hashbrown`-equivalent — the "second
-   `mid-ptr`-sized project" the dependency table above already names.
-   Not recommended without a compiler and fuzzing in the loop.
+**Phase 3, `HashMap`/`HashSet` half (done — options 1 and 3 together):**
+`collections/`. Decision, from the user: build the `std` passthrough *and*
+the simple safe hand-rolled table, rather than choosing between them.
+1. **`std` passthrough.** With `std` on, `collections::HashMap`/`HashSet`
+   are aliases over `std::collections` with `FixedHasher` as the default
+   hasher.
+2. **Hand-rolled table.** `OpenHashMap`/`OpenHashSet`: safe code, linear
+   probing. With `std` off (but `alloc` on), the same two names are aliases
+   for these instead. They stay reachable under their own names with `std`
+   on, so they are tested and benchmarked against `std`'s map in default
+   features.
+
+Not chosen: depending on `hashbrown` (breaks the zero-dependency premise),
+and a from-scratch SwissTable (a `mid-ptr`-sized project, not recommended
+without fuzzing). See "collections/" under Modules.
 
 **Not planned at all right now:** `dirs::*`, the `web`/async-executor features,
 `serde`, `rayon`, `collections::aligned_vec` — all trigger-based deferrals per
@@ -312,6 +309,119 @@ against the published `rustc-hash` 1.1.0 crate (a dev-dependency; covers
 every `write` tail length 0–15 bytes plus each integer width), and a test
 pinning the one known divergence (negative narrow signed ints).
 
+### `collections/`
+
+**What it does:** `HashMap` and `HashSet` with `FixedHasher` as the default
+hasher, in two implementations behind one source-compatible API.
+`collections::HashMap`/`HashSet` are `std`'s own types when `std` is on and
+`OpenHashMap`/`OpenHashSet` when it is off. Files: `mod.rs` (the aliases and
+a `hash_map` module re-exporting the entry types), `raw.rs` (the table),
+`open_map.rs`, `open_set.rs`, `tests.rs`. Needs the `alloc` feature (`std`
+implies it).
+
+**Decisions:**
+- **Both options, as the user asked.** `std`'s map is hashbrown underneath,
+  so the `std` path costs no dependency and no unsafe code written here. The
+  hand-rolled table exists so the no_std configuration has a map at all,
+  without `hashbrown` and without a from-scratch SwissTable.
+- **One API, the common subset.** The contract is the part of
+  `std::collections::HashMap` both implementations have, with `std`'s
+  signatures: `with_hasher`, `with_capacity_and_hasher`, `hasher`, `len`,
+  `is_empty`, `capacity`, `clear`, `reserve`, `insert`, `get`, `get_mut`,
+  `get_key_value`, `contains_key`, `remove`, `remove_entry`, `entry` (with
+  `or_insert`, `or_insert_with`, `or_insert_with_key`, `or_default`,
+  `and_modify`, `key`, and the occupied/vacant entry methods), `retain`,
+  `iter`, `iter_mut`, `keys`, `values`, `values_mut`, `into_keys`,
+  `into_values`, `Index<&Q>`, `Extend`, `FromIterator`, `Default`, `Clone`,
+  `Debug`, `PartialEq`/`Eq`. Sets add `insert`, `contains`, `get`, `take`,
+  `remove`, `union`, `intersection`, `difference`, `is_subset`,
+  `is_superset`, `is_disjoint`. Entry types keep `std`'s two-parameter
+  `Entry<'a, K, V>` shape, which is why the table is hasher-free (below).
+  Anything beyond that list exists only in the `std` configuration.
+- **No `new()`.** `std` provides `new`/`with_capacity` only for its default
+  `RandomState`, and the default here is `FixedHasher`. Callers write
+  `HashMap::default()` (type known from context), `with_hasher(FixedHasher)`,
+  or `with_capacity_and_hasher(n, FixedHasher)`. `OpenHashMap` deliberately
+  does not add a `new()` of its own: code that used it would compile with
+  `std` off and fail with `std` on.
+- **Set algebra returns `impl Iterator`.** `std` returns named types
+  (`Union`, `Intersection`, ...). Usage compiles the same either way; naming
+  those types does not.
+- **Safe code, `Vec<Option<Bucket>>`.** No unsafe in the table. A bucket
+  stores its 64-bit hash next to the key and value. That costs memory per
+  entry compared with hashbrown's control-byte layout (an `Option` tag and
+  a stored hash per slot, at up to 3/4 load) and makes iteration walk empty
+  slots. Not measured for memory; `map_bench.rs`'s `iterate` groups show the
+  iteration side.
+- **Linear probing, maximum load 3/4, no tombstones.** Tables are
+  power-of-two sized, minimum four slots, doubling on growth. Removal shifts
+  later members of the cluster back (backward-shift deletion), so probe
+  paths never cross a hole and lookups stay a plain walk to the first empty
+  slot. A table is never full, so that walk always ends. If that invariant
+  were broken, a probe would loop forever; mutating the load limit upward
+  does exactly that in the tests.
+- **Home slot from the top bits of `hash * 0x9E37_79B9_7F4A_7C15`.** One
+  extra multiply per operation, so the table does not depend on the hasher
+  having good low bits. This matters for the next point.
+- **The table never touches a hasher.** Every `RawTable` operation takes a
+  hash the caller computed, and growth reuses stored hashes. That is what
+  lets `Entry<'a, K, V>` hold a bare `&mut RawTable<K, V>` and match `std`'s
+  type parameters.
+- **`retain` rebuilds the table at its current size** instead of deleting in
+  place, because backward-shift deletion moves entries under the iterator.
+  If the closure panics, entries it had not yet visited are dropped and the
+  table stays valid.
+- **No `RandomState`, same as `hash.rs`.** `FixedHasher` is deterministic and
+  not DoS-resistant. Two maps built by the same inserts iterate in the same
+  order (tested for `OpenHashMap`).
+
+**Suspected hazard, pending the first CI bench:** `FixedHasher` ends in a
+multiplication, so the low bits of its output depend only on the low bits
+of the key. `std`'s map picks its bucket from the low bits of the hash. Keys
+that share their low bits (`i << 12`, aligned addresses, packed coordinates
+with a zero low half) therefore may collide heavily in
+`std::collections::HashMap<_, _, FixedHasher>`. A short, noisy, sandbox-only
+run (rustc 1.91.1, 10 samples, nothing recorded) pointed that way, with the
+`std` alias tens of times slower than `OpenHashMap` on `i << 12` keys and no
+such gap on `0..N`. `OpenHashMap` is not exposed to it by construction. The
+`*_aligned_u64` groups in `benches/map_bench.rs` are there to confirm or
+refute this on CI. If confirmed, the fix is in `FixedHasher`'s output
+mixing, not in the map, and changing it would break the bit-for-bit
+`rustc-hash` 1.1.0 parity that `hash.rs` currently asserts for `FxHasher`
+(a separate hasher type for `FixedHasher` would keep both). Not changed
+without a decision.
+
+**Not built:** `drain`, `extract_if`, `shrink_to`/`shrink_to_fit`,
+`try_reserve`, `raw_entry`, `get_many_mut`, `From<[(K, V); N]>`,
+`Extend<(&K, &V)>`, `symmetric_difference`, set operator overloads. All are
+std-only. Trigger-based, like everything else deferred in this crate.
+
+**FFI: decided, none.** A C ABI cannot carry a generic `K`/`V`. The
+realistic shapes are a fixed-type map (`u64 -> u64`) or a byte-blob map
+with caller-supplied sizes, and either is its own design question with
+no consumer behind it today. Stated here so the standing "decide FFI in the
+same pass" rule is met by a decision rather than an omission.
+
+**Tests:** `collections/tests.rs`, 35 tests plus 2 doctests, written against
+`alloc` only so one file runs in every configuration. A random-operation
+model comparison against `BTreeMap` under `FixedHasher`, an identity hasher,
+and a constant hasher (every key collides, for seven different constants so
+the cluster lands at different positions and wraps); an exhaustive
+removal-from-one-cluster test over 48 homes and every victim; a spread test
+(`longest_cluster`, test-only) on keys that differ only above bit 20;
+capacity/reserve arithmetic; the entry API; `retain`; iterator sizes; drop
+counts (every value dropped exactly once across remove, overwrite, retain,
+clear, drop, and a half-consumed `into_iter`); set algebra against
+`BTreeSet`; and the aliases exercised through one function that uses only
+the shared API, so it must compile in both configurations.
+Mutation-tested: 17 deliberate bugs (backward-shift condition off by one,
+`len` not decremented, load limit raised, no Fibonacci spread, growth one
+step late, stale shift after resize, `retain` miscounting, insert not
+replacing, iterator size not decremented, hash-only key comparison, `clear`
+variants, inverted set operations, `Eq` without its length check) each
+fail at least one test. The two `Eq` length checks had no test that only a
+length difference could fail; strict-subset assertions were added for them.
+
 ### `ffi.rs`
 
 **What it does:** C-compatible FFI exports. `std`-only. `Once`, `Barrier`,
@@ -391,20 +501,36 @@ between those two rows is codegen, not algorithm. **Not yet run** — no
 numbers exist for this bench yet; same honesty as `sync_bench.rs` had
 before its own first dispatch.
 
+`benches/map_bench.rs` (Phase 3, maps) — `u64 -> u64`, three variants in
+every group: `std`'s map with its default `RandomState`, `collections::HashMap`
+(`std` plus `FixedHasher`), and `OpenHashMap` (`FixedHasher`). Two key
+shapes: `seq` (`0..10_000`) and `aligned` (`i << 12`, every key sharing its low
+12 bits, the case the suspected hazard under `collections/` is about). Six
+groups per shape: `insert_grow`, `insert_presized`, `get_hit`, `get_miss`,
+`remove_all` (clone excluded), `iterate`. Default features only, since the
+comparison needs `std`; `OpenHashMap`'s code is identical with `std` off.
+Shortened criterion timings (0.5 s warm-up, 2 s measurement, 50 samples)
+keep the 36 benchmarks to a few minutes. **Not yet run on CI** — no
+numbers recorded here.
+
 ## CI and Workflows
 
 - `.github/workflows/mid-platform-bench.yml` — `benches/sync_bench.rs`,
   run twice (default features, then `--no-default-features`), plus
   `benches/hash_bench.rs` once (default features only — no feature split
-  for `hash.rs`), bash-grep summary pattern (see
+  for `hash.rs`) and `benches/map_bench.rs` once (default features only —
+  the comparison needs `std`), bash-grep summary pattern (see
   `docs/benching-standards.md`). `workflow_dispatch` only. Adding `criterion` as a dev-dependency gives this crate the same
   edition2024-via-`clap_builder` MSRV wall `mid-collections`'s and
   `mid-arena`'s own bench dev-dependencies already carry — see
   `docs/workspace-cargo.md`, "MSRV / toolchain walls" — so `cargo test -p
   mid-platform` now needs the newer toolchain too, not just `--bench`.
 - `.github/workflows/mid-platform-test.yml` — build, clippy, fmt check, unit
-  + doc-tests, run twice (default `std` features, then
-  `--no-default-features` for the actual hand-rolled no_std fallback path).
+  + doc-tests, run three times: default `std` features, then
+  `--no-default-features` for the hand-rolled no_std lock fallbacks, then
+  `--no-default-features --features alloc` — the only configuration where
+  `collections` is compiled without `std`, so the only one that runs
+  `OpenHashMap` as `collections::HashMap`.
   `workflow_dispatch` only, with a real parsed `$GITHUB_STEP_SUMMARY` (one
   combined table covering both feature configurations) — matches
   `mid-ecs-test.yml`'s established pattern; see
@@ -477,3 +603,17 @@ callback and returns nothing) — the same "narrowest real slice first,
 name the harder piece and defer it explicitly" call `mid-ecs`'s own
 `ffi.rs` made for component-data access in its first pass, not a new
 principle invented here.
+
+### `--no-default-features` does not compile `collections`
+
+Caught before shipping, by running the configurations rather than by CI. The
+crate's features are `std = ["alloc"]` and `alloc = []`, so
+`--no-default-features` turns `alloc` off as well, and `collections` (which
+needs `Vec`) is compiled out entirely. The no_std CI run that already
+existed therefore never builds the map, and the configuration where
+`collections::HashMap` is `OpenHashMap` would have been untested in CI. Added
+a third configuration, `--no-default-features --features alloc`, to
+`mid-platform-test.yml`; locally it runs the full 70-test lib suite and the
+doctests, with the aliases pointing at `OpenHashMap`. Any future module that
+needs `alloc` but not `std` has the same property: it is only reachable from
+that third configuration.
