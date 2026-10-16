@@ -36,6 +36,11 @@
 # unlike sync_bench.rs there's no std/no_std split to sweep, hash.rs is pure
 # core arithmetic with a single code path in both configurations.
 #
+# Also runs benches/map_bench.rs (Phase 3 maps: std RandomState vs the
+# collections::HashMap alias vs OpenHashMap, two key shapes) ONCE, under
+# default features only -- the comparison needs std, and OpenHashMap's code is
+# identical with std off.
+#
 # DO NOT add push/pull_request triggers.
 
 name: mid-platform — bench sync primitives
@@ -124,6 +129,13 @@ jobs:
             2>&1 | tee bench-mid-platform-hash-raw.txt
           echo "Bench exit code (hash): $?" >> "$GITHUB_STEP_SUMMARY"
 
+      - name: Run benchmarks (maps -- single configuration, needs std for the comparison)
+        run: |
+          set -o pipefail
+          cargo bench -p mid-platform --bench map_bench -- --color never \
+            2>&1 | tee bench-mid-platform-map-raw.txt
+          echo "Bench exit code (map): $?" >> "$GITHUB_STEP_SUMMARY"
+
       - name: Surface bench diagnostics
         if: always()
         run: |
@@ -146,6 +158,12 @@ jobs:
             echo '```'
             grep -E 'took zero time|Unable to complete|Warning:|panicked|Completed [0-9]+ iterations' \
               bench-mid-platform-hash-raw.txt | head -60 || echo "(none found)"
+            echo '```'
+            echo ""
+            echo "**map run:**"
+            echo '```'
+            grep -E 'took zero time|Unable to complete|Warning:|panicked|Completed [0-9]+ iterations' \
+              bench-mid-platform-map-raw.txt | head -60 || echo "(none found)"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -174,6 +192,11 @@ jobs:
             echo "#### hash (hash::FixedHasher vs rustc-hash 1.1.0 vs std SipHash)"
             echo '```'
             grep -B 1 "time:" bench-mid-platform-hash-raw.txt | grep -v "^--$" || echo "(no results parsed -- see raw log)"
+            echo '```'
+            echo ""
+            echo "#### maps (std RandomState vs collections::HashMap alias vs OpenHashMap; seq and aligned keys)"
+            echo '```'
+            grep -B 1 "time:" bench-mid-platform-map-raw.txt | grep -v "^--$" || echo "(no results parsed -- see raw log)"
             echo '```'
             echo ""
             echo "<details><summary>Full raw output (all runs)</summary>"
@@ -216,6 +239,17 @@ jobs:
             fi
             echo '```'
             echo ""
+            echo "**map:**"
+            echo '```'
+            if grep -q 'Finished `bench` profile' bench-mid-platform-map-raw.txt; then
+              awk '/Finished `bench` profile/{f=1} f' bench-mid-platform-map-raw.txt | head -c 900000
+            else
+              echo "(Compilation never finished -- showing the full raw log, including build errors.)"
+              echo ""
+              head -c 900000 bench-mid-platform-map-raw.txt
+            fi
+            echo '```'
+            echo ""
             echo "</details>"
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -228,5 +262,6 @@ jobs:
             bench-mid-platform-std-raw.txt
             bench-mid-platform-nostd-raw.txt
             bench-mid-platform-hash-raw.txt
+            bench-mid-platform-map-raw.txt
             target/criterion
           retention-days: 30

@@ -10,6 +10,14 @@
 #
 # gh-pages deploy deliberately not replicated here either, same reasoning
 # as mid-ptr-test.yml -- see that file's header comment.
+#
+# THREE feature configurations, not two: default (std), --no-default-features
+# (no std AND no alloc -- the lock fallbacks), and --no-default-features
+# --features alloc (no std, with alloc). The third exists because `collections`
+# needs Vec and the crate's features are std = ["alloc"], alloc = [] -- so
+# --no-default-features turns alloc off too and compiles `collections` out
+# entirely. Only the third configuration builds collections::HashMap as
+# OpenHashMap. See docs/mid-platform.md, "Fixes and Problems."
 
 name: mid-platform — Tests
 
@@ -60,11 +68,18 @@ jobs:
         run: cargo clippy -p mid-platform --no-default-features -- -D warnings
         continue-on-error: true
 
+      - name: Clippy (no std, with alloc -- collections fallback path)
+        run: cargo clippy -p mid-platform --no-default-features --features alloc -- -D warnings
+        continue-on-error: true
+
       - name: Build (default features -- std)
         run: cargo build -p mid-platform
 
       - name: Build (no default features -- no_std fallback path)
         run: cargo build -p mid-platform --no-default-features
+
+      - name: Build (no std, with alloc -- collections fallback path)
+        run: cargo build -p mid-platform --no-default-features --features alloc
 
       # Two separate runs, two separate raw logs -- default features
       # (std passthrough) and --no-default-features (the actual
@@ -84,6 +99,16 @@ jobs:
           set -o pipefail
           cargo test -p mid-platform --no-default-features --color=never --no-fail-fast \
             -- --show-output 2>&1 | tee mid-platform-test-nostd-raw.txt
+
+      # The one configuration where collections::HashMap/HashSet are
+      # OpenHashMap/OpenHashSet: no std, alloc on. Runs the lib tests and
+      # the doc-tests.
+      - name: Test (no std, with alloc -- collections fallback path)
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          cargo test -p mid-platform --no-default-features --features alloc --color=never --no-fail-fast \
+            -- --show-output 2>&1 | tee mid-platform-test-alloc-raw.txt
 
       # Real end-to-end verification of src/ffi.rs (Once/Barrier -- see
       # that file's own doc comment for why Mutex/RwLock/OnceLock/LazyLock
@@ -220,6 +245,7 @@ jobs:
 
           suites  = parse_file('mid-platform-test-std-raw.txt',   'std')
           suites += parse_file('mid-platform-test-nostd-raw.txt', 'no_std fallback')
+          suites += parse_file('mid-platform-test-alloc-raw.txt', 'no_std + alloc')
 
           total   = sum(s['passed'] + s['failed'] + s['ignored'] for s in suites)
           passed  = sum(s['passed']  for s in suites)
@@ -278,14 +304,16 @@ jobs:
           )
           lines.append("")
           lines.append(
-              "Runs both feature configurations: default (`std`) and "
+              "Runs three feature configurations: default (`std`), "
               "`--no-default-features` (the hand-rolled no_std spin-based "
-              "fallback). See docs/mid-platform.md."
+              "fallback), and `--no-default-features --features alloc` "
+              "(the only one where `collections::HashMap` is `OpenHashMap`). "
+              "See docs/mid-platform.md."
           )
           lines.append("")
 
           if summary['failed'] == 0 and summary['total'] > 0:
-              lines.append(f"### ✅ All {summary['total']} tests passed (both configurations)")
+              lines.append(f"### ✅ All {summary['total']} tests passed (all configurations)")
           elif summary['total'] == 0:
               lines.append("### ⚠️ No tests were collected — check the raw logs")
           else:
@@ -372,6 +400,7 @@ jobs:
           path: |
             mid-platform-test-std-raw.txt
             mid-platform-test-nostd-raw.txt
+            mid-platform-test-alloc-raw.txt
             mid-platform-test-results.json
             mid-platform-ffi-smoke-raw.txt
           retention-days: 7
