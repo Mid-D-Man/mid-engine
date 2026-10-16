@@ -334,6 +334,46 @@ impl EntityCommands<'_> {
         self
     }
 
+    /// Queues [`World::insert_static_bytes_many`]: attaches several
+    /// components, each built from a *copy* of its bytes taken now, in one
+    /// structural change. All or nothing when it runs; if it then fails
+    /// (the entity is gone, has any of the components already, or the world
+    /// it runs against does not know one) it does nothing, like every other
+    /// command. A caller that wants those errors up front checks them
+    /// against a world first ([`World::check_static_component_list`]).
+    pub fn insert_static_bytes_many(&mut self, entries: &[(ComponentId, &[u8])]) -> &mut Self {
+        let entries: Vec<(ComponentId, Vec<u8>)> = entries
+            .iter()
+            .map(|(id, bytes)| (*id, bytes.to_vec()))
+            .collect();
+        self.queue.push(Command::OnEntity(
+            self.target,
+            Box::new(move |world, entity| {
+                let borrowed: Vec<(ComponentId, &[u8])> = entries
+                    .iter()
+                    .map(|(id, bytes)| (*id, bytes.as_slice()))
+                    .collect();
+                let _ = world.insert_static_bytes_many(entity, &borrowed);
+            }),
+        ));
+        self
+    }
+
+    /// Queues [`World::remove_static_by_ids`]: detaches several components
+    /// in one structural change. All or nothing when it runs; a no-op if
+    /// the entity is gone, lacks any of them, or the world does not know
+    /// one.
+    pub fn remove_static_by_ids(&mut self, component_ids: &[ComponentId]) -> &mut Self {
+        let component_ids = component_ids.to_vec();
+        self.queue.push(Command::OnEntity(
+            self.target,
+            Box::new(move |world, entity| {
+                let _ = world.remove_static_by_ids(entity, &component_ids);
+            }),
+        ));
+        self
+    }
+
     /// Queues [`World::remove_static`].
     pub fn remove_static<T: 'static>(&mut self) -> &mut Self {
         self.queue
@@ -1004,5 +1044,96 @@ mod tests {
         queue.apply(&mut world);
         assert!(!world.is_alive(dead));
         assert_eq!(world.get_static::<Hp>(lacks), Some(&Hp(2)));
+    }
+
+    // ── Bundles ──────────────────────────────────────────────────────
+
+    #[test]
+    fn queued_bundles_run_in_order_onto_spawn_slots_and_existing_entities() {
+        let (mut world, hp, mana) = byte_world();
+        let existing = world.spawn();
+        world.insert_static(existing, Hp(1));
+        let mut queue = CommandQueue::new();
+        {
+            let mut commands = queue.commands();
+            commands.spawn();
+            commands
+                .queued_spawn(0)
+                .unwrap()
+                .insert_static_bytes_many(&[
+                    (hp, &10u32.to_ne_bytes()[..]),
+                    (mana, &11u32.to_ne_bytes()[..]),
+                ]);
+            // On the existing entity: add a Mana, then drop both.
+            commands
+                .entity(existing)
+                .insert_static_bytes_many(&[(mana, &5u32.to_ne_bytes()[..])])
+                .remove_static_by_ids(&[hp, mana]);
+        }
+        assert_eq!(world.entity_count(), 1, "nothing before apply");
+        let spawned = queue.apply(&mut world);
+        assert_eq!(world.get_static::<Hp>(spawned[0]), Some(&Hp(10)));
+        assert_eq!(world.get_static::<Mana>(spawned[0]), Some(&Mana(11)));
+        assert!(!world.has_static::<Hp>(existing) && !world.has_static::<Mana>(existing));
+    }
+
+    #[test]
+    fn a_queued_bundle_copies_its_bytes_when_queued() {
+        let (mut world, hp, mana) = byte_world();
+        let e = world.spawn();
+        let mut bytes = 5u32.to_ne_bytes();
+        let mut queue = CommandQueue::new();
+        queue
+            .commands()
+            .entity(e)
+            .insert_static_bytes_many(&[(hp, &bytes[..]), (mana, &bytes[..])]);
+        bytes = 99u32.to_ne_bytes();
+        let _ = bytes;
+        queue.apply(&mut world);
+        assert_eq!(world.get_static::<Hp>(e), Some(&Hp(5)));
+        assert_eq!(world.get_static::<Mana>(e), Some(&Mana(5)));
+    }
+
+    #[test]
+    fn a_queued_bundle_that_no_longer_applies_does_nothing_all_or_nothing() {
+        let (mut world, hp, mana) = byte_world();
+        let dead = world.spawn();
+        let has_hp = world.spawn();
+        world.insert_static(has_hp, Hp(1));
+        let has_only_hp = world.spawn();
+        world.insert_static(has_only_hp, Hp(2));
+        let four = 9u32.to_ne_bytes();
+        let mut queue = CommandQueue::new();
+        {
+            let mut commands = queue.commands();
+            commands
+                .entity(dead)
+                .insert_static_bytes_many(&[(hp, &four[..]), (mana, &four[..])]);
+            // Already has Hp, so Mana must not be attached either.
+            commands
+                .entity(has_hp)
+                .insert_static_bytes_many(&[(mana, &four[..]), (hp, &four[..])]);
+            // Lacks Mana, so Hp must not be removed either.
+            commands
+                .entity(has_only_hp)
+                .remove_static_by_ids(&[hp, mana]);
+            // A repeat, an id this world never issued, and a wrong length.
+            commands
+                .entity(has_only_hp)
+                .insert_static_bytes_many(&[(mana, &four[..]), (mana, &four[..])]);
+            commands
+                .entity(has_only_hp)
+                .insert_static_bytes_many(&[(ComponentId::from_u32(9999), &four[..])]);
+            commands
+                .entity(has_only_hp)
+                .insert_static_bytes_many(&[(mana, &[1u8][..])]);
+        }
+        world.despawn(dead);
+        queue.apply(&mut world);
+        assert!(!world.is_alive(dead));
+        assert_eq!(world.get_static::<Hp>(has_hp), Some(&Hp(1)));
+        assert!(!world.has_static::<Mana>(has_hp));
+        assert_eq!(world.get_static::<Hp>(has_only_hp), Some(&Hp(2)));
+        assert!(!world.has_static::<Mana>(has_only_hp));
     }
 }

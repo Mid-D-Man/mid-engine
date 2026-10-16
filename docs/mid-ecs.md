@@ -3967,12 +3967,144 @@ rustfmt wanted from the previous pass.
   tests missed both.
 
 **Not done.**
-- **Bundle forms from C.** Inserting or removing several components as one
-  structural change (Rust's `insert_bundle` / `remove_bundle`, one migration
-  instead of one per component). It needs a list of ids and sizes validated as a
-  unit, and an all-or-nothing rule for the removal side. This is what remains of
-  the family.
+- **Bundle forms from C.** Built in the next pass: "Bundles from C" below, which
+  closes the family.
 - **Reserved entity ids / an `Entity`-returning queued spawn.** Slots address
   the queued spawns, but the real entity is still only known after apply.
 - **The Sparse Shell.**
 - **No benchmark.** A queued removal boxes one closure. Optimization is paused.
+
+### Bundles from C (`insert_many`, `remove_many`): the family is closed
+
+Several components in *one* structural change, the C counterparts of Rust's
+`insert_bundle` and `remove_bundle`. With these the C-side component API is
+complete:
+
+| operation | direct (C) | queued (C) |
+|---|---|---|
+| overwrite a value | `..._write`, `..._raw_span_mut` (bulk) | n/a |
+| attach one | `..._insert` | `..._insert`, `..._insert_spawned` |
+| detach one | `..._remove` | `..._remove` |
+| attach several, one migration | `..._insert_many` | `..._insert_many`, `..._insert_many_spawned` |
+| detach several, one migration | `..._remove_many` | `..._remove_many` |
+
+(`mid_ecs_world_static_component_*` for direct, `mid_ecs_commands_static_component_*`
+for queued.) In C, a new status `MID_ECS_DUPLICATE` (-9) is appended and a
+struct `MidEcsComponentValue { uint32_t component_id; const uint8_t *bytes; size_t len; }`
+is the list entry. In Rust: `World::insert_static_bytes_many(entity, &[(ComponentId, &[u8])])`,
+`World::remove_static_by_ids(entity, &[ComponentId])`,
+`World::check_static_component_list(&[(ComponentId, Option<usize>)])`,
+`EntityCommands::insert_static_bytes_many` and `remove_static_by_ids`, and
+`ComponentFfiError::Duplicate`.
+
+**Where it lives.** `archetype/ffi_write.rs` (the writer registry gains a
+type-erased `push`; `check_list`, `insert_many_bytes`, `remove_many_dropping`,
+`remove_many_rows`), `world.rs`, `commands.rs`, `ffi.rs` (five `extern "C"`
+functions, the value struct, the status), and `ffi-smoke-test/`.
+
+**Decisions, with reasons.**
+- **All or nothing, validated as a unit.** This is `insert_bundle`'s contract
+  (it returns `false` if the entity has *any* of the components), extended to
+  the whole call: the list is checked before anything moves, so a failure leaves
+  the entity exactly as it was, with no partially applied bundle to recover
+  from. Errors come in a fixed order: the entity (`NotAlive`); then each listed
+  component in list order (`NOT_FOUND` for an unregistered id, `NOT_WRITABLE`,
+  and for an insert `SIZE_MISMATCH`); then `DUPLICATE`; then, against the
+  entity, `ALREADY_PRESENT` (insert: it has *any*) or `NOT_FOUND` (remove: it
+  lacks *any*).
+- **A list of `{id, bytes, len}`, not one packed buffer.** C can point each entry
+  at a different struct without packing them, each length is checked against its
+  own type (a packed total could hide one entry too long and another too short),
+  and a NULL `bytes` is only allowed with `len == 0`.
+- **`DUPLICATE` is its own status.** A repeated component is a bad argument
+  about the list, found before the entity is examined; folding it into
+  `ALREADY_PRESENT` or `NOT_FOUND` would blame state the entity does not have.
+- **One migration, and the same graph as the typed bundle.** `insert_many_bytes`
+  repeats `insert_bundle`'s migration (it chains `edge_for_insert` per component,
+  so the same intermediate archetypes appear, moves the entity's existing values
+  once, then pushes the new ones). `Bundle` is a static trait and cannot be
+  implemented over a runtime list, so the pushes go through a new type-erased
+  `push` in the writer registry, which does what `Bundle::push_into` does per
+  element: ensure the column, push the value built from its bytes, push ticks
+  stamped added and changed. Every new value is stamped both; the entity's
+  existing values arrive untouched. Nothing is stamped by a removal.
+- **One erased removal migration, guarded twice.** `remove_dropping` (single) is
+  now the one-component case of `remove_many_dropping`, so there is one copy
+  of the type-erased removal, not two. It is held to the typed code by two
+  differential tests: the single-removal test from the previous pass (which now
+  exercises the many-path with one id) and a new one for bundles. `remove` and
+  `remove_bundle` themselves are untouched.
+- **A second differential test for bundles.**
+  `bundle_ops_match_the_typed_bundles_step_for_step` runs 600 pseudo-random
+  steps over twin worlds (20 entities, three component types, one zero-sized),
+  each step a bundle insert or removal over a random non-empty subset of the
+  three (all seven subsets), through the typed `insert_bundle` / `remove_bundle`
+  on one world and the list forms on the other. It asserts the two agree on
+  whether each step did anything (which includes the all-or-nothing refusals),
+  that both worlds hold identical entities, components, values and iteration
+  order after every step, and the same `Added`/`Changed` stamps at the end, and
+  that the run really exercised inserts, removals and refusals (each more than
+  30 times).
+- **One list check, shared.** `check_list` does the per-entry and duplicate
+  checks for both the real operation and the queue-time validation
+  (`World::check_static_component_list`), so the two cannot disagree.
+- **Queued forms follow the single forms' rule.** The list-level checks run when
+  queued, against a world you pass in, which is only read and not retained, so
+  those errors come back on the call that caused them and a failed call queues
+  nothing. Whether the entity is alive, and has none (insert) or all (remove) of
+  the components, is checked when the command runs, and any miss makes the
+  *whole* command a no-op (never partial, never a panic). Bytes are copied when
+  queued. `insert_many_spawned` gives a queued spawn a whole bundle in one apply.
+  There is no `remove_many_spawned`, for the reason there is no single one.
+- **An empty list is `OK` and changes nothing** (the list pointer may be NULL),
+  for the direct forms after the liveness check, and queues nothing for the
+  queued forms.
+- **No cap on the list length.** The typed bundle stops at eight because tuples
+  do; this one is a runtime list and allocates one `Vec` per call. A queued bundle
+  copies its bytes and boxes one closure.
+
+**Tests, from the sandbox (rustc 1.91.1; real CI not yet run).**
+- 11 core tests (`archetype/ffi_write.rs`, including the bundle differential), 3
+  command-queue tests, 5 FFI tests (driving the real `extern "C"` functions),
+  plus 17 C checks. Default lib tests 464 to 483 (469 to 488 with `scratch-arena`),
+  the `ffi::` tests 71 to 76, C checks 184 to 201. The C program is clean under
+  `-Wall -Wextra` against both `libmid_ecs.so` and `libmid_ecs.a`, and under
+  valgrind.
+- Covered: every new value stamped added and changed while an existing one is
+  not re-stamped; all-or-nothing for an already-present component, a wrong size,
+  an unknown id, a read-only one and a repeat (each leaving no component of the
+  bundle attached); the full error order, including that per-entry errors beat a
+  repeat and a repeat beats `ALREADY_PRESENT`; the empty list; a middle row
+  inserted into and removed from with every other row staying aligned; stale
+  handles that must not reach a slot's new occupant; a zero-sized entry among
+  others; removal that lacks one component leaving the others, a read-only one in
+  the list leaving everything, and a removal that leaves the entity alive; the
+  list check on its own; and, from C and Rust, every status, `NULL` handling for
+  the world, the list and an entry's bytes, queued bundles onto spawn slots given
+  out of order, queue order across insert and removal, queue-time errors queueing
+  nothing, and whole-command no-ops at apply.
+- **Mutation testing: 25 of 25 mutants caught.** The already-present check
+  removed; the last value never pushed; only the first id in the target
+  signature (for insert and for remove); stamping tick zero; ticks not pushed;
+  repeats undetected; sizes unchecked; a repeat reported before later
+  per-entry errors; the entity placed at row 0 or the swapped entity not fixed
+  up; an empty list migrating; removal that needs any rather than all, drops only
+  the first id, or builds the wrong target; both liveness checks removed; both
+  queued commands doing nothing; the status mapping altered; both `NULL` checks
+  removed (caught by crashes); the queue-time size check ignored; the spawned form
+  always using slot 0; the queued removal's validation removed; and the empty-list
+  guard inverted. One mutant first errored because its pattern did not match
+  rustfmt's layout of the condition, so it never ran; it was redone against the
+  real text and caught.
+- Two failures on the first runs were mistakes in the tests, not the code: one
+  passed a NULL output buffer to `apply` while a spawn was still queued, which is
+  correctly `BUFFER_TOO_SMALL`; the other did not cover the new `DUPLICATE`
+  status in the status-mapping test, found when planning the mutants.
+
+**Not done.**
+- **Reserved entity ids / an `Entity`-returning queued spawn.** Slots address the
+  queued spawns, but the real entity is still only known after apply.
+- **A C-side mutable query iterator.** `raw_span_mut` is the bulk form; C walks
+  the span itself.
+- **The Sparse Shell**, throughout.
+- **No benchmark.** Optimization is paused.

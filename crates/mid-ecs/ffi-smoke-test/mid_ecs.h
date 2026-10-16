@@ -38,6 +38,7 @@ extern "C" {
 #define MID_ECS_SIZE_MISMATCH  -6
 #define MID_ECS_NOT_WRITABLE   -7
 #define MID_ECS_ALREADY_PRESENT -8
+#define MID_ECS_DUPLICATE       -9
 
 // Sentinel component_id/archetype_id meaning "not found" -- returned by
 // the lookup_ffi_* functions below. Not 0: 0 is a real, valid id for
@@ -424,6 +425,57 @@ int32_t mid_ecs_world_static_component_remove(MidEcsWorld *world, uint64_t entit
 // (queued), MID_ECS_NULL_POINTER, MID_ECS_NOT_FOUND (component never
 // registered for FFI) or MID_ECS_NOT_WRITABLE. Nothing is queued on an error.
 int32_t mid_ecs_commands_static_component_remove(MidEcsCommands *commands, const MidEcsWorld *world, uint64_t entity, uint32_t component_id);
+
+// --- Bundles: several components in ONE structural change ---
+//
+// The list forms of insert and remove (Rust's insert_bundle / remove_bundle):
+// the entity migrates once, not once per component, and the call is ALL OR
+// NOTHING. The whole list is validated as a unit before anything moves, and
+// on any error nothing changes. Errors are reported in this order: the entity
+// (MID_ECS_NOT_ALIVE); then each listed component in list order
+// (MID_ECS_NOT_FOUND for an id never registered for FFI, MID_ECS_NOT_WRITABLE
+// for a read-only one, and for an insert MID_ECS_SIZE_MISMATCH); then
+// MID_ECS_DUPLICATE if a component is listed twice; then
+// MID_ECS_ALREADY_PRESENT (insert: the entity has ANY of them) or
+// MID_ECS_NOT_FOUND (remove: the entity lacks ANY of them). A count of 0 is
+// MID_ECS_OK and changes nothing (the list pointer may then be NULL). Same
+// writable rule as the single forms, same invalidation of spans.
+
+// One entry of a bundle insert: the component and the bytes of its value.
+// len must equal the type's size exactly (the span's stride); bytes may be
+// NULL only if len is 0. Each value is copied.
+typedef struct MidEcsComponentValue {
+    uint32_t component_id;
+    const uint8_t *bytes;
+    size_t len;
+} MidEcsComponentValue;
+
+// Attaches count components to entity in one go. Every new value is stamped
+// added AND changed at the current tick; the entity's existing values and
+// their stamps come across untouched. Also MID_ECS_NULL_POINTER for a NULL
+// world, a NULL values with a non-zero count, or an entry with NULL bytes and
+// a non-zero len.
+int32_t mid_ecs_world_static_component_insert_many(MidEcsWorld *world, uint64_t entity, const MidEcsComponentValue *values, size_t count);
+
+// Detaches count components from entity in one go and drops their values.
+// Stamps nothing. Also MID_ECS_NULL_POINTER for a NULL world or a NULL
+// component_ids with a non-zero count.
+int32_t mid_ecs_world_static_component_remove_many(MidEcsWorld *world, uint64_t entity, const uint32_t *component_ids, size_t count);
+
+// The queued forms. `world` is only READ, now, to run the list-level checks
+// (registered writable, lengths, no repeats) so those errors come back on the
+// call that caused them; it is not retained. Whether the entity is alive and
+// the all-or-nothing entity checks (has none / has all) happen when the
+// command runs: any miss makes the WHOLE command a no-op then. Bytes are
+// copied now. Nothing is queued on an error, and a count of 0 queues
+// nothing.
+int32_t mid_ecs_commands_static_component_insert_many(MidEcsCommands *commands, const MidEcsWorld *world, uint64_t entity, const MidEcsComponentValue *values, size_t count);
+// As above, onto the entity the spawn_index'th queued spawn will produce
+// (MID_ECS_NOT_FOUND for a spawn_index not below the number queued, checked
+// after the list checks): one apply can create an entity and give it a whole
+// bundle.
+int32_t mid_ecs_commands_static_component_insert_many_spawned(MidEcsCommands *commands, const MidEcsWorld *world, size_t spawn_index, const MidEcsComponentValue *values, size_t count);
+int32_t mid_ecs_commands_static_component_remove_many(MidEcsCommands *commands, const MidEcsWorld *world, uint64_t entity, const uint32_t *component_ids, size_t count);
 
 // --- Test fixture (see ffi.rs's own doc comment on this function) ---
 

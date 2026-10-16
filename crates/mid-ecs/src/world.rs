@@ -687,6 +687,75 @@ impl World {
         self.archetypes.remove_row(entity, component_id)
     }
 
+    /// Checks, changing nothing, a list of components an id-driven bundle
+    /// call would name: each `(component, len)` must be registered
+    /// writable and, when `len` is `Some`, `len` must be its size; they are
+    /// checked in list order, and then no component may repeat. The
+    /// checks [`Self::insert_static_bytes_many`] and
+    /// [`Self::remove_static_by_ids`] make before they look at an entity,
+    /// exposed so a caller with no entity yet (a command queue) can raise
+    /// the same errors up front. [`ComponentFfiError::UnknownId`],
+    /// [`ComponentFfiError::NotWritable`], [`ComponentFfiError::SizeMismatch`],
+    /// [`ComponentFfiError::Duplicate`], in that order of precedence.
+    pub fn check_static_component_list(
+        &self,
+        entries: &[(ComponentId, Option<usize>)],
+    ) -> Result<(), ComponentFfiError> {
+        self.archetypes.check_list(entries.iter().copied())
+    }
+
+    /// Attaches several components, each built from its bytes, to `entity`
+    /// in *one* structural change: the byte-driven counterpart of
+    /// [`Self::insert_bundle`], for components registered with
+    /// [`Self::register_ffi_static_component_writable`]. Every new value
+    /// is stamped added and changed at the current tick; the entity's
+    /// existing values come across untouched.
+    ///
+    /// All or nothing. Errors, checked in this order:
+    /// [`ComponentFfiError::NotAlive`]; then each listed component in
+    /// order ([`ComponentFfiError::UnknownId`],
+    /// [`ComponentFfiError::NotWritable`], [`ComponentFfiError::SizeMismatch`]);
+    /// then [`ComponentFfiError::Duplicate`] if a component is listed
+    /// twice; then [`ComponentFfiError::AlreadyPresent`] if the entity
+    /// already has *any* of them. Nothing is inserted on an error. An
+    /// empty list is `Ok` and changes nothing. A structural change: it
+    /// invalidates every span previously handed out for the entity's old
+    /// and new archetype.
+    pub fn insert_static_bytes_many(
+        &mut self,
+        entity: Entity,
+        entries: &[(ComponentId, &[u8])],
+    ) -> Result<(), ComponentFfiError> {
+        if !self.is_alive(entity) {
+            return Err(ComponentFfiError::NotAlive);
+        }
+        self.archetypes
+            .insert_many_bytes(entity, entries, self.change_tick)
+    }
+
+    /// Detaches several components from `entity` in *one* structural change
+    /// and drops their values: the id-driven counterpart of
+    /// [`Self::remove_bundle`], for components registered with
+    /// [`Self::register_ffi_static_component_writable`]. The entity's other
+    /// values and their ticks come across untouched; nothing is stamped.
+    ///
+    /// All or nothing. Errors, in order: [`ComponentFfiError::NotAlive`];
+    /// each listed component in order ([`ComponentFfiError::UnknownId`],
+    /// [`ComponentFfiError::NotWritable`]); [`ComponentFfiError::Duplicate`];
+    /// then [`ComponentFfiError::Absent`] if the entity lacks *any* of them.
+    /// Nothing is removed on an error. An empty list is `Ok` and changes
+    /// nothing.
+    pub fn remove_static_by_ids(
+        &mut self,
+        entity: Entity,
+        ids: &[ComponentId],
+    ) -> Result<(), ComponentFfiError> {
+        if !self.is_alive(entity) {
+            return Err(ComponentFfiError::NotAlive);
+        }
+        self.archetypes.remove_many_rows(entity, ids)
+    }
+
     /// Copies `bytes` in as `entity`'s `component_id` value and stamps
     /// exactly that row changed (not added) at the current tick: the
     /// precise counterpart of [`Self::static_component_raw_span_mut`].

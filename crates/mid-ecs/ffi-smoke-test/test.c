@@ -743,6 +743,165 @@ int main(void) {
         mid_ecs_world_free(rw);
     }
 
+    // --- Bundles from C: insert_many / remove_many, direct and queued, all or nothing ---
+    {
+        MidEcsWorld *bw = mid_ecs_test_write_fixture_world_new();
+        uint32_t b_health = mid_ecs_world_lookup_ffi_static_component_id(bw, "FfiHealthStatic");
+        uint32_t b_flag_a = mid_ecs_world_lookup_ffi_static_component_id(bw, "FfiFlagA");
+        uint32_t b_flag_b = mid_ecs_world_lookup_ffi_static_component_id(bw, "FfiFlagB");
+        uint32_t b_arch[8];
+        int32_t b_n = mid_ecs_world_archetypes_matching_static(bw, &b_health, 1, NULL, 0, NULL, 0, b_arch, 8);
+        uint64_t has_health = 0;
+        for (int32_t i = 0; i < b_n && has_health == 0; i++) {
+            uint64_t ids[8];
+            if (mid_ecs_world_static_component_entity_ids(bw, b_arch[i], b_health, ids, 8) > 0) has_health = ids[0];
+        }
+        uint64_t flagged = 0;
+        {
+            uint32_t fa[8];
+            uint64_t ids[4];
+            int32_t fa_n = mid_ecs_world_archetypes_matching_static(bw, &b_flag_a, 1, NULL, 0, NULL, 0, fa, 8);
+            CHECK(fa_n == 1 && mid_ecs_world_static_component_entity_ids(bw, fa[0], b_flag_a, ids, 4) == 1,
+                  "bundle fixture: one entity holds the read-only FlagA");
+            flagged = ids[0];
+        }
+        uint32_t b_last_run = mid_ecs_world_change_tick(bw);
+        mid_ecs_world_increment_change_tick(bw);
+        uint32_t seen = 0, hp_before = 0, v1 = 1, v2 = 2, v7 = 7, v8 = 8;
+        CHECK(has_health != 0 && u32_of(bw, b_health, has_health, &hp_before),
+              "bundle fixture: an entity with Health, and its hp");
+        uint8_t b3[3] = { 1, 2, 3 };
+
+        // insert_many onto a bare entity: two components, one migration.
+        uint64_t bare = mid_ecs_world_spawn(bw);
+        MidEcsComponentValue ins[2] = {
+            { b_health, (const uint8_t *)&v7, sizeof v7 },
+            { b_flag_b, (const uint8_t *)&v8, sizeof v8 },
+        };
+        CHECK(mid_ecs_world_static_component_insert_many(bw, bare, ins, 2) == MID_ECS_OK
+                  && u32_of(bw, b_health, bare, &seen) && seen == 7
+                  && u32_of(bw, b_flag_b, bare, &seen) && seen == 8,
+              "insert_many: Health 7 and FlagB 8 are attached to a bare entity in one call");
+        {
+            uint32_t fb[8];
+            int32_t fb_n = mid_ecs_world_archetypes_matching_static(bw, &b_flag_b, 1, NULL, 0, NULL, 0, fb, 8);
+            CHECK(fb_n == 1
+                      && mid_ecs_world_static_component_changed_rows(bw, fb[0], b_flag_b, b_last_run, NULL, 0) == 1
+                      && mid_ecs_world_static_component_added_rows(bw, fb[0], b_flag_b, b_last_run, NULL, 0) == 1,
+                  "the inserted bundle's values are stamped both added and changed");
+        }
+
+        // All or nothing: an entity that already has one of them gets none of them.
+        MidEcsComponentValue mixed[2] = {
+            { b_flag_b, (const uint8_t *)&v1, sizeof v1 },
+            { b_health, (const uint8_t *)&v2, sizeof v2 },
+        };
+        CHECK(mid_ecs_world_static_component_insert_many(bw, has_health, mixed, 2) == MID_ECS_ALREADY_PRESENT
+                  && !u32_of(bw, b_flag_b, has_health, &seen)
+                  && u32_of(bw, b_health, has_health, &seen) && seen == hp_before,
+              "insert_many: an entity that already has Health is MID_ECS_ALREADY_PRESENT and gets no FlagB either");
+
+        // List-level errors: nothing attached.
+        uint64_t bare2 = mid_ecs_world_spawn(bw);
+        MidEcsComponentValue ro[2] = { { b_flag_b, (const uint8_t *)&v1, 4 }, { b_flag_a, (const uint8_t *)&v2, 4 } };
+        MidEcsComponentValue unk[2] = { { b_flag_b, (const uint8_t *)&v1, 4 }, { 9999, (const uint8_t *)&v2, 4 } };
+        MidEcsComponentValue bad[2] = { { b_flag_b, (const uint8_t *)&v1, 4 }, { b_health, b3, 3 } };
+        MidEcsComponentValue dup[2] = { { b_flag_b, (const uint8_t *)&v1, 4 }, { b_flag_b, (const uint8_t *)&v2, 4 } };
+        CHECK(mid_ecs_world_static_component_insert_many(bw, bare2, ro, 2) == MID_ECS_NOT_WRITABLE
+                  && mid_ecs_world_static_component_insert_many(bw, bare2, unk, 2) == MID_ECS_NOT_FOUND
+                  && mid_ecs_world_static_component_insert_many(bw, bare2, bad, 2) == MID_ECS_SIZE_MISMATCH
+                  && mid_ecs_world_static_component_insert_many(bw, bare2, dup, 2) == MID_ECS_DUPLICATE
+                  && mid_ecs_world_static_component_insert_many(bw, 0xFFFFFFFFFFFFFFFFull, ins, 2) == MID_ECS_NOT_ALIVE
+                  && !u32_of(bw, b_flag_b, bare2, &seen) && !u32_of(bw, b_health, bare2, &seen),
+              "insert_many: read-only, unknown id, wrong length, repeat, dead entity: each its own status, and nothing attached");
+        MidEcsComponentValue null_bytes[1] = { { b_flag_b, NULL, 4 } };
+        CHECK(mid_ecs_world_static_component_insert_many(NULL, bare2, ins, 2) == MID_ECS_NULL_POINTER
+                  && mid_ecs_world_static_component_insert_many(bw, bare2, NULL, 2) == MID_ECS_NULL_POINTER
+                  && mid_ecs_world_static_component_insert_many(bw, bare2, null_bytes, 1) == MID_ECS_NULL_POINTER
+                  && mid_ecs_world_static_component_insert_many(bw, bare2, NULL, 0) == MID_ECS_OK
+                  && !u32_of(bw, b_flag_b, bare2, &seen),
+              "insert_many: NULL world / list / bytes is MID_ECS_NULL_POINTER; an empty list is OK and changes nothing");
+
+        // remove_many.
+        uint32_t both[2] = { b_health, b_flag_b };
+        uint32_t with_ro[2] = { b_health, b_flag_a };
+        uint32_t repeat[2] = { b_health, b_health };
+        uint32_t unknown_id[2] = { b_health, 9999 };
+        CHECK(mid_ecs_world_static_component_remove_many(bw, has_health, both, 2) == MID_ECS_NOT_FOUND
+                  && u32_of(bw, b_health, has_health, &seen) && seen == hp_before,
+              "remove_many: an entity that lacks FlagB loses nothing, not even the Health it has");
+        CHECK(mid_ecs_world_static_component_remove_many(bw, flagged, with_ro, 2) == MID_ECS_NOT_WRITABLE
+                  && mid_ecs_world_static_component_remove_many(bw, bare, unknown_id, 2) == MID_ECS_NOT_FOUND
+                  && mid_ecs_world_static_component_remove_many(bw, bare, repeat, 2) == MID_ECS_DUPLICATE
+                  && mid_ecs_world_static_component_remove_many(bw, 0xFFFFFFFFFFFFFFFFull, both, 2) == MID_ECS_NOT_ALIVE
+                  && u32_of(bw, b_health, flagged, &seen) && u32_of(bw, b_flag_a, flagged, &seen) && seen == 20
+                  && u32_of(bw, b_health, bare, &seen) && u32_of(bw, b_flag_b, bare, &seen),
+              "remove_many: read-only in the list, unknown id, repeat, dead entity: each its own status, and nothing removed");
+        CHECK(mid_ecs_world_static_component_remove_many(NULL, bare, both, 2) == MID_ECS_NULL_POINTER
+                  && mid_ecs_world_static_component_remove_many(bw, bare, NULL, 2) == MID_ECS_NULL_POINTER
+                  && mid_ecs_world_static_component_remove_many(bw, bare, NULL, 0) == MID_ECS_OK
+                  && u32_of(bw, b_health, bare, &seen),
+              "remove_many: NULL world / list is MID_ECS_NULL_POINTER; an empty list is OK and changes nothing");
+        CHECK(mid_ecs_world_static_component_remove_many(bw, bare, both, 2) == MID_ECS_OK
+                  && !u32_of(bw, b_health, bare, &seen) && !u32_of(bw, b_flag_b, bare, &seen)
+                  && mid_ecs_world_is_alive(bw, bare),
+              "remove_many: both components are gone in one call and the entity is still alive");
+
+        // Queued bundles.
+        MidEcsCommands *bq = mid_ecs_commands_new();
+        uint32_t v10 = 10, v11 = 11, v21 = 21, v30 = 30, v31 = 31;
+        MidEcsComponentValue slot0[2] = { { b_health, (const uint8_t *)&v10, 4 }, { b_flag_b, (const uint8_t *)&v11, 4 } };
+        MidEcsComponentValue slot1[1] = { { b_flag_b, (const uint8_t *)&v21, 4 } };
+        MidEcsComponentValue onto2[2] = { { b_health, (const uint8_t *)&v30, 4 }, { b_flag_b, (const uint8_t *)&v31, 4 } };
+        uint32_t drop_health[1] = { b_health };
+        CHECK(mid_ecs_commands_spawn(bq) == MID_ECS_OK && mid_ecs_commands_spawn(bq) == MID_ECS_OK
+                  && mid_ecs_commands_static_component_insert_many_spawned(bq, bw, 1, slot1, 1) == MID_ECS_OK
+                  && mid_ecs_commands_static_component_insert_many_spawned(bq, bw, 0, slot0, 2) == MID_ECS_OK
+                  && mid_ecs_commands_static_component_insert_many(bq, bw, bare2, onto2, 2) == MID_ECS_OK
+                  && mid_ecs_commands_static_component_remove_many(bq, bw, bare2, drop_health, 1) == MID_ECS_OK
+                  && mid_ecs_commands_len(bq) == 6,
+              "queue: two spawns, bundles onto both slots, and a bundle then a removal on an existing entity (6 commands)");
+        CHECK(!u32_of(bw, b_flag_b, bare2, &seen), "nothing has touched the world before apply");
+        uint64_t spawned[2] = { 0, 0 };
+        CHECK(mid_ecs_commands_apply(bq, bw, spawned, 2) == 2
+                  && u32_of(bw, b_health, spawned[0], &seen) && seen == 10
+                  && u32_of(bw, b_flag_b, spawned[0], &seen) && seen == 11
+                  && !u32_of(bw, b_health, spawned[1], &seen)
+                  && u32_of(bw, b_flag_b, spawned[1], &seen) && seen == 21
+                  && !u32_of(bw, b_health, bare2, &seen)
+                  && u32_of(bw, b_flag_b, bare2, &seen) && seen == 31,
+              "apply: slot 0 got Health 10 + FlagB 11, slot 1 got FlagB 21, and bare2 ended with FlagB 31 only (insert then remove, in order)");
+
+        // Queue-time errors queue nothing; empty lists queue nothing.
+        CHECK(mid_ecs_commands_static_component_insert_many(bq, bw, bare, ro, 2) == MID_ECS_NOT_WRITABLE
+                  && mid_ecs_commands_static_component_insert_many(bq, bw, bare, unk, 2) == MID_ECS_NOT_FOUND
+                  && mid_ecs_commands_static_component_insert_many(bq, bw, bare, bad, 2) == MID_ECS_SIZE_MISMATCH
+                  && mid_ecs_commands_static_component_insert_many(bq, bw, bare, dup, 2) == MID_ECS_DUPLICATE
+                  && mid_ecs_commands_static_component_insert_many_spawned(bq, bw, 0, slot1, 1) == MID_ECS_NOT_FOUND
+                  && mid_ecs_commands_static_component_remove_many(bq, bw, bare, with_ro, 2) == MID_ECS_NOT_WRITABLE
+                  && mid_ecs_commands_static_component_remove_many(bq, bw, bare, repeat, 2) == MID_ECS_DUPLICATE
+                  && mid_ecs_commands_static_component_insert_many(bq, bw, bare, NULL, 0) == MID_ECS_OK
+                  && mid_ecs_commands_static_component_remove_many(bq, bw, bare, NULL, 0) == MID_ECS_OK
+                  && mid_ecs_commands_len(bq) == 0,
+              "queued bundle errors (read-only, unknown id, length, repeat, no such spawn slot) queue nothing, and empty lists queue nothing");
+        CHECK(mid_ecs_commands_static_component_insert_many(NULL, bw, bare, ins, 2) == MID_ECS_NULL_POINTER
+                  && mid_ecs_commands_static_component_insert_many(bq, NULL, bare, ins, 2) == MID_ECS_NULL_POINTER
+                  && mid_ecs_commands_static_component_insert_many(bq, bw, bare, NULL, 2) == MID_ECS_NULL_POINTER
+                  && mid_ecs_commands_static_component_remove_many(bq, bw, bare, NULL, 2) == MID_ECS_NULL_POINTER
+                  && mid_ecs_commands_len(bq) == 0,
+              "queued bundles: NULL commands, world or list is MID_ECS_NULL_POINTER and queues nothing");
+
+        // At apply, a miss refuses the WHOLE command.
+        CHECK(mid_ecs_commands_static_component_insert_many(bq, bw, has_health, mixed, 2) == MID_ECS_OK
+                  && mid_ecs_commands_static_component_remove_many(bq, bw, has_health, both, 2) == MID_ECS_OK
+                  && mid_ecs_commands_apply(bq, bw, NULL, 0) == 0
+                  && !u32_of(bw, b_flag_b, has_health, &seen)
+                  && u32_of(bw, b_health, has_health, &seen) && seen == hp_before,
+              "a queued bundle insert onto an entity that has one already, and a queued bundle removal from one that lacks one, are whole no-ops when applied");
+        mid_ecs_commands_free(bq);
+        mid_ecs_world_free(bw);
+    }
+
     // --- Command queue: spawns and despawns recorded now, applied after ---
     {
         MidEcsWorld *qw = mid_ecs_world_new();

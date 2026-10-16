@@ -117,6 +117,10 @@ pub enum MidEcsStatus {
     /// assume they were stored. Use `mid_ecs_world_static_component_write`
     /// to overwrite.
     AlreadyPresent = -8,
+    /// A list of components (a bundle insert or removal) names the same
+    /// component twice. The whole list is rejected before any entity is
+    /// looked at, and nothing changes.
+    Duplicate = -9,
 }
 
 fn ffi_guard(f: impl FnOnce() -> i32) -> i32 {
@@ -547,6 +551,313 @@ pub unsafe extern "C" fn mid_ecs_commands_static_component_remove(
             .commands()
             .entity(Entity::from_ffi(entity))
             .remove_static_by_id(component);
+        MidEcsStatus::Ok as i32
+    })
+}
+
+/// One entry of a bundle insert: a component id and the bytes of its value.
+/// `len` must be exactly the registered type's size (the span's `stride`);
+/// `bytes` may be NULL only if `len` is 0.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct FfiComponentValue {
+    /// The registered component id.
+    pub component_id: u32,
+    /// The value's bytes, copied.
+    pub bytes: *const u8,
+    /// Length of `bytes`.
+    pub len: usize,
+}
+
+/// The `(component, bytes)` list behind a `values`/`count` pair, or the
+/// `NullPointer` status if `values` is NULL with a non-zero count or any
+/// entry has NULL `bytes` with a non-zero `len`.
+///
+/// # Safety
+/// `values` must be valid for reading `count` entries, and every entry's
+/// `bytes` valid for `len` bytes, for the returned lifetime.
+unsafe fn values_from_c<'a>(
+    values: *const FfiComponentValue,
+    count: usize,
+) -> Result<Vec<(ComponentId, &'a [u8])>, i32> {
+    if count == 0 {
+        return Ok(Vec::new());
+    }
+    if values.is_null() {
+        return Err(MidEcsStatus::NullPointer as i32);
+    }
+    let values = unsafe { slice::from_raw_parts(values, count) };
+    let mut entries = Vec::with_capacity(count);
+    for value in values {
+        if value.bytes.is_null() && value.len > 0 {
+            return Err(MidEcsStatus::NullPointer as i32);
+        }
+        let bytes: &[u8] = if value.len == 0 {
+            &[]
+        } else {
+            unsafe { slice::from_raw_parts(value.bytes, value.len) }
+        };
+        entries.push((ComponentId::from_u32(value.component_id), bytes));
+    }
+    Ok(entries)
+}
+
+/// The component ids behind an `ids`/`count` pair, or `NullPointer` if
+/// `ids` is NULL with a non-zero count.
+///
+/// # Safety
+/// `ids` must be valid for reading `count` entries.
+unsafe fn ids_from_c(ids: *const u32, count: usize) -> Result<Vec<ComponentId>, i32> {
+    if count == 0 {
+        return Ok(Vec::new());
+    }
+    if ids.is_null() {
+        return Err(MidEcsStatus::NullPointer as i32);
+    }
+    Ok(unsafe { slice::from_raw_parts(ids, count) }
+        .iter()
+        .map(|&id| ComponentId::from_u32(id))
+        .collect())
+}
+
+/// What a queued bundle can be checked for *now*: every listed component
+/// registered writable in `world`, each length its size, and no repeats.
+fn check_queued_values(
+    world: &World,
+    entries: &[(ComponentId, &[u8])],
+) -> Result<(), ComponentFfiError> {
+    let list: Vec<(ComponentId, Option<usize>)> = entries
+        .iter()
+        .map(|(id, bytes)| (*id, Some(bytes.len())))
+        .collect();
+    world.check_static_component_list(&list)
+}
+
+/// Attaches `count` components to `entity` in *one* structural change: the
+/// bundle form of [`mid_ecs_world_static_component_insert`] (Rust's
+/// `insert_bundle`), so the entity migrates once, not once per component.
+/// Each `values[i]` gives a component id and its value's bytes. Every new
+/// value is stamped both *added* and *changed* at the current tick; the
+/// entity's existing values and their stamps come across untouched.
+///
+/// **All or nothing.** The list is validated as a unit before anything
+/// moves. Returns `MidEcsStatus::Ok`; `NullPointer` (`world` NULL,
+/// `values` NULL with a non-zero `count`, or an entry with NULL `bytes` and
+/// a non-zero `len`); `NotAlive`; then, for each entry in list order,
+/// `NotFound` (never registered for FFI), `NotWritable` (registered
+/// read-only) or `SizeMismatch`; then `Duplicate` (a component listed
+/// twice); then `AlreadyPresent` (the entity already has *any* of them),
+/// checked in that order. Nothing is inserted on an error. `count == 0` is
+/// `Ok` and changes nothing.
+///
+/// A structural change: every span previously handed out for the entity's
+/// old and new archetype is invalidated.
+///
+/// # Safety
+/// `world` must be a valid, non-null handle from `mid_ecs_world_new`.
+/// `values` must be valid for reading `count` entries (NULL only if
+/// `count` is 0), each entry's `bytes` valid for `len` bytes.
+#[no_mangle]
+pub unsafe extern "C" fn mid_ecs_world_static_component_insert_many(
+    world: *mut MidEcsWorld,
+    entity: u64,
+    values: *const FfiComponentValue,
+    count: usize,
+) -> i32 {
+    ffi_guard(|| {
+        if world.is_null() {
+            return MidEcsStatus::NullPointer as i32;
+        }
+        let entries = match unsafe { values_from_c(values, count) } {
+            Ok(entries) => entries,
+            Err(status) => return status,
+        };
+        let world = unsafe { &mut *world };
+        match world
+            .0
+            .insert_static_bytes_many(Entity::from_ffi(entity), &entries)
+        {
+            Ok(()) => MidEcsStatus::Ok as i32,
+            Err(error) => component_status(error),
+        }
+    })
+}
+
+/// Detaches `count` components from `entity` in *one* structural change,
+/// dropping their values: the bundle form of
+/// [`mid_ecs_world_static_component_remove`] (Rust's `remove_bundle`). The
+/// entity's other values and their stamps come across untouched; nothing is
+/// stamped.
+///
+/// **All or nothing.** Returns `MidEcsStatus::Ok`; `NullPointer` (`world`
+/// NULL, or `component_ids` NULL with a non-zero `count`); `NotAlive`; then,
+/// for each id in list order, `NotFound` (never registered for FFI) or
+/// `NotWritable`; then `Duplicate`; then `NotFound` again if the entity
+/// lacks *any* of them. Nothing is removed on an error. `count == 0` is
+/// `Ok` and changes nothing. A structural change, as for the single form.
+///
+/// # Safety
+/// `world` must be a valid, non-null handle from `mid_ecs_world_new`.
+/// `component_ids` must be valid for reading `count` entries (NULL only if
+/// `count` is 0).
+#[no_mangle]
+pub unsafe extern "C" fn mid_ecs_world_static_component_remove_many(
+    world: *mut MidEcsWorld,
+    entity: u64,
+    component_ids: *const u32,
+    count: usize,
+) -> i32 {
+    ffi_guard(|| {
+        if world.is_null() {
+            return MidEcsStatus::NullPointer as i32;
+        }
+        let ids = match unsafe { ids_from_c(component_ids, count) } {
+            Ok(ids) => ids,
+            Err(status) => return status,
+        };
+        let world = unsafe { &mut *world };
+        match world.0.remove_static_by_ids(Entity::from_ffi(entity), &ids) {
+            Ok(()) => MidEcsStatus::Ok as i32,
+            Err(error) => component_status(error),
+        }
+    })
+}
+
+/// Queues a bundle insert onto the existing entity packed in `entity`: the
+/// queued form of [`mid_ecs_world_static_component_insert_many`]. `world`
+/// is read only to check, now, that every listed component is registered
+/// writable, each length is its size, and none repeats (the list-level
+/// checks of the direct form); it is not retained. Bytes are copied now.
+/// Whether the entity is alive, and has none of the components yet, is
+/// checked when the command runs, all or nothing: any miss makes the whole
+/// command a no-op then.
+///
+/// Returns `MidEcsStatus::Ok` (queued), `NullPointer`, `NotFound`,
+/// `NotWritable`, `SizeMismatch` or `Duplicate`. Nothing is queued on an
+/// error, and `count == 0` is `Ok` and queues nothing.
+///
+/// # Safety
+/// As [`mid_ecs_world_static_component_insert_many`], plus `commands` a
+/// valid handle from `mid_ecs_commands_new` and `world` non-null.
+#[no_mangle]
+pub unsafe extern "C" fn mid_ecs_commands_static_component_insert_many(
+    commands: *mut MidEcsCommands,
+    world: *const MidEcsWorld,
+    entity: u64,
+    values: *const FfiComponentValue,
+    count: usize,
+) -> i32 {
+    ffi_guard(|| {
+        if commands.is_null() || world.is_null() {
+            return MidEcsStatus::NullPointer as i32;
+        }
+        let entries = match unsafe { values_from_c(values, count) } {
+            Ok(entries) => entries,
+            Err(status) => return status,
+        };
+        let commands = unsafe { &mut *commands };
+        let world = unsafe { &*world };
+        if let Err(error) = check_queued_values(&world.0, &entries) {
+            return component_status(error);
+        }
+        if !entries.is_empty() {
+            commands
+                .0
+                .commands()
+                .entity(Entity::from_ffi(entity))
+                .insert_static_bytes_many(&entries);
+        }
+        MidEcsStatus::Ok as i32
+    })
+}
+
+/// As [`mid_ecs_commands_static_component_insert_many`], onto the entity
+/// the `spawn_index`th queued spawn will produce (see
+/// [`mid_ecs_commands_static_component_insert_spawned`]): one apply can
+/// create an entity and give it a whole bundle. Same statuses, plus
+/// `NotFound` for a `spawn_index` not below the number of spawns queued so
+/// far (checked after the list checks).
+///
+/// # Safety
+/// As [`mid_ecs_commands_static_component_insert_many`].
+#[no_mangle]
+pub unsafe extern "C" fn mid_ecs_commands_static_component_insert_many_spawned(
+    commands: *mut MidEcsCommands,
+    world: *const MidEcsWorld,
+    spawn_index: usize,
+    values: *const FfiComponentValue,
+    count: usize,
+) -> i32 {
+    ffi_guard(|| {
+        if commands.is_null() || world.is_null() {
+            return MidEcsStatus::NullPointer as i32;
+        }
+        let entries = match unsafe { values_from_c(values, count) } {
+            Ok(entries) => entries,
+            Err(status) => return status,
+        };
+        let commands = unsafe { &mut *commands };
+        let world = unsafe { &*world };
+        if let Err(error) = check_queued_values(&world.0, &entries) {
+            return component_status(error);
+        }
+        let mut queue = commands.0.commands();
+        match queue.queued_spawn(spawn_index) {
+            Some(mut target) => {
+                if !entries.is_empty() {
+                    target.insert_static_bytes_many(&entries);
+                }
+                MidEcsStatus::Ok as i32
+            }
+            None => MidEcsStatus::NotFound as i32,
+        }
+    })
+}
+
+/// Queues a bundle removal from the existing entity packed in `entity`:
+/// the queued form of [`mid_ecs_world_static_component_remove_many`].
+/// `world` is read only to check, now, that every id is registered writable
+/// and none repeats; it is not retained. Whether the entity is alive and has
+/// *all* of the components is checked when the command runs, all or
+/// nothing: any miss makes the whole command a no-op then.
+///
+/// Returns `MidEcsStatus::Ok` (queued), `NullPointer`, `NotFound`,
+/// `NotWritable` or `Duplicate`. Nothing is queued on an error, and
+/// `count == 0` is `Ok` and queues nothing.
+///
+/// # Safety
+/// `commands` must be a valid handle from `mid_ecs_commands_new` and `world`
+/// a valid handle from `mid_ecs_world_new`, both non-null. `component_ids`
+/// must be valid for reading `count` entries (NULL only if `count` is 0).
+#[no_mangle]
+pub unsafe extern "C" fn mid_ecs_commands_static_component_remove_many(
+    commands: *mut MidEcsCommands,
+    world: *const MidEcsWorld,
+    entity: u64,
+    component_ids: *const u32,
+    count: usize,
+) -> i32 {
+    ffi_guard(|| {
+        if commands.is_null() || world.is_null() {
+            return MidEcsStatus::NullPointer as i32;
+        }
+        let ids = match unsafe { ids_from_c(component_ids, count) } {
+            Ok(ids) => ids,
+            Err(status) => return status,
+        };
+        let commands = unsafe { &mut *commands };
+        let world = unsafe { &*world };
+        let list: Vec<(ComponentId, Option<usize>)> = ids.iter().map(|id| (*id, None)).collect();
+        if let Err(error) = world.0.check_static_component_list(&list) {
+            return component_status(error);
+        }
+        if !ids.is_empty() {
+            commands
+                .0
+                .commands()
+                .entity(Entity::from_ffi(entity))
+                .remove_static_by_ids(&ids);
+        }
         MidEcsStatus::Ok as i32
     })
 }
@@ -1421,6 +1732,7 @@ fn component_status(error: ComponentFfiError) -> i32 {
         ComponentFfiError::NotAlive => MidEcsStatus::NotAlive as i32,
         ComponentFfiError::SizeMismatch => MidEcsStatus::SizeMismatch as i32,
         ComponentFfiError::AlreadyPresent => MidEcsStatus::AlreadyPresent as i32,
+        ComponentFfiError::Duplicate => MidEcsStatus::Duplicate as i32,
     }
 }
 
@@ -3999,6 +4311,11 @@ mod tests {
             MidEcsStatus::AlreadyPresent as i32
         );
         assert_eq!(MidEcsStatus::AlreadyPresent as i32, -8);
+        assert_eq!(
+            ok(ComponentFfiError::Duplicate),
+            MidEcsStatus::Duplicate as i32
+        );
+        assert_eq!(MidEcsStatus::Duplicate as i32, -9);
     }
 
     // ---- inserting a component from C ----
@@ -4587,6 +4904,403 @@ mod tests {
             assert!(mid_ecs_world_is_alive(other, victim));
             mid_ecs_commands_free(commands);
             mid_ecs_world_free(other);
+            mid_ecs_world_free(f.world);
+        }
+    }
+
+    // ---- bundles from C: insert_many / remove_many ----
+
+    fn value(component_id: u32, bytes: &[u8]) -> FfiComponentValue {
+        FfiComponentValue {
+            component_id,
+            bytes: bytes.as_ptr(),
+            len: bytes.len(),
+        }
+    }
+
+    /// A bare entity (no components) in the fixture's world.
+    fn bare(world: *mut MidEcsWorld) -> u64 {
+        // SAFETY: `world` is a live handle.
+        unsafe { mid_ecs_world_spawn(world) }
+    }
+
+    #[test]
+    fn insert_many_attaches_a_bundle_in_one_call_stamped_added_and_changed() {
+        let f = write_fixture();
+        let last_run = tick_now_and_advance(f.world);
+        let e = bare(f.world);
+        let (hp, fb) = (7u32.to_ne_bytes(), 8u32.to_ne_bytes());
+        let values = [value(f.health, &hp), value(f.flag_b, &fb)];
+        // SAFETY: `f.world` is live; `values` and its buffers outlive the call.
+        let status =
+            unsafe { mid_ecs_world_static_component_insert_many(f.world, e, values.as_ptr(), 2) };
+        assert_eq!(status, MidEcsStatus::Ok as i32);
+        assert_eq!(hp_values(f.world), vec![1, 2, 3, 7]);
+        assert_eq!(flag_b_of(f.world, e), Some(8));
+        for component in [f.health, f.flag_b] {
+            assert_eq!(
+                changed_entities_via_ffi(f.world, component, last_run, false),
+                vec![e]
+            );
+            assert_eq!(
+                changed_entities_via_ffi(f.world, component, last_run, true),
+                vec![e]
+            );
+        }
+        // SAFETY: freed exactly once.
+        unsafe { mid_ecs_world_free(f.world) };
+    }
+
+    #[test]
+    fn insert_many_statuses_are_all_or_nothing_and_change_nothing() {
+        let f = write_fixture();
+        let has_health = f.plain_entities[0];
+        let fresh = bare(f.world);
+        let (a, b, bad) = (1u32.to_ne_bytes(), 2u32.to_ne_bytes(), [9u8; 3]);
+        let insert = |entity: u64, values: &[FfiComponentValue]| -> i32 {
+            // SAFETY: `f.world` is live; `values` and its buffers outlive the call.
+            unsafe {
+                mid_ecs_world_static_component_insert_many(
+                    f.world,
+                    entity,
+                    values.as_ptr(),
+                    values.len(),
+                )
+            }
+        };
+        let none_attached = || {
+            matching_ids(f.world, &[f.flag_b], &[]).is_empty()
+                && flag_b_of(f.world, fresh).is_none()
+                && hp_values(f.world) == vec![1, 2, 3]
+        };
+
+        // The entity already has one of them: the other must not be attached.
+        assert_eq!(
+            insert(has_health, &[value(f.flag_b, &a), value(f.health, &b)]),
+            MidEcsStatus::AlreadyPresent as i32
+        );
+        // Per-entry errors, then a repeat.
+        assert_eq!(
+            insert(fresh, &[value(f.flag_b, &a), value(f.flag_a, &b)]),
+            MidEcsStatus::NotWritable as i32
+        );
+        assert_eq!(
+            insert(fresh, &[value(f.flag_b, &a), value(9999, &b)]),
+            MidEcsStatus::NotFound as i32
+        );
+        assert_eq!(
+            insert(fresh, &[value(f.flag_b, &a), value(f.health, &bad)]),
+            MidEcsStatus::SizeMismatch as i32
+        );
+        assert_eq!(
+            insert(fresh, &[value(f.flag_b, &a), value(f.flag_b, &b)]),
+            MidEcsStatus::Duplicate as i32
+        );
+        assert_eq!(
+            insert(u64::MAX, &[value(f.flag_b, &a)]),
+            MidEcsStatus::NotAlive as i32
+        );
+        assert!(none_attached());
+
+        // NULLs: world, the list itself, and an entry's bytes.
+        let values = [value(f.flag_b, &a)];
+        // SAFETY: NULL is the documented rejected case for each.
+        unsafe {
+            assert_eq!(
+                mid_ecs_world_static_component_insert_many(
+                    std::ptr::null_mut(),
+                    fresh,
+                    values.as_ptr(),
+                    1
+                ),
+                MidEcsStatus::NullPointer as i32
+            );
+            assert_eq!(
+                mid_ecs_world_static_component_insert_many(f.world, fresh, std::ptr::null(), 1),
+                MidEcsStatus::NullPointer as i32
+            );
+            let null_bytes = [FfiComponentValue {
+                component_id: f.flag_b,
+                bytes: std::ptr::null(),
+                len: 4,
+            }];
+            assert_eq!(
+                mid_ecs_world_static_component_insert_many(f.world, fresh, null_bytes.as_ptr(), 1),
+                MidEcsStatus::NullPointer as i32
+            );
+            // An empty list is fine, even with a NULL pointer.
+            assert_eq!(
+                mid_ecs_world_static_component_insert_many(f.world, fresh, std::ptr::null(), 0),
+                MidEcsStatus::Ok as i32
+            );
+        }
+        assert!(none_attached());
+        // SAFETY: freed exactly once.
+        unsafe { mid_ecs_world_free(f.world) };
+    }
+
+    #[test]
+    fn remove_many_detaches_a_bundle_and_is_all_or_nothing() {
+        let f = write_fixture();
+        let e = bare(f.world);
+        let (a, b) = (3u32.to_ne_bytes(), 4u32.to_ne_bytes());
+        let remove = |entity: u64, ids: &[u32]| -> i32 {
+            // SAFETY: `f.world` is live; `ids` outlives the call.
+            unsafe {
+                mid_ecs_world_static_component_remove_many(f.world, entity, ids.as_ptr(), ids.len())
+            }
+        };
+        let values = [value(f.health, &a), value(f.flag_b, &b)];
+        // SAFETY: `f.world` is live; `values` and its buffers outlive the call.
+        assert_eq!(
+            unsafe { mid_ecs_world_static_component_insert_many(f.world, e, values.as_ptr(), 2) },
+            MidEcsStatus::Ok as i32
+        );
+
+        // Lacks one of them: nothing is removed.
+        let lacks_flag_b = f.plain_entities[0];
+        assert_eq!(
+            remove(lacks_flag_b, &[f.health, f.flag_b]),
+            MidEcsStatus::NotFound as i32
+        );
+        assert_eq!(hp_values(f.world), vec![1, 2, 3, 3]);
+        // A read-only component in the list, on the entity that has it.
+        assert_eq!(
+            remove(f.flagged_entity, &[f.health, f.flag_a]),
+            MidEcsStatus::NotWritable as i32
+        );
+        assert_eq!(remove(e, &[f.health, 9999]), MidEcsStatus::NotFound as i32);
+        assert_eq!(
+            remove(e, &[f.health, f.health]),
+            MidEcsStatus::Duplicate as i32
+        );
+        assert_eq!(remove(u64::MAX, &[f.health]), MidEcsStatus::NotAlive as i32);
+        assert_eq!(flag_b_of(f.world, e), Some(4));
+        assert_eq!(hp_values(f.world), vec![1, 2, 3, 3]);
+        // NULLs, and the empty list.
+        // SAFETY: NULL is the documented rejected case for each.
+        unsafe {
+            assert_eq!(
+                mid_ecs_world_static_component_remove_many(
+                    std::ptr::null_mut(),
+                    e,
+                    [f.health].as_ptr(),
+                    1
+                ),
+                MidEcsStatus::NullPointer as i32
+            );
+            assert_eq!(
+                mid_ecs_world_static_component_remove_many(f.world, e, std::ptr::null(), 1),
+                MidEcsStatus::NullPointer as i32
+            );
+            assert_eq!(
+                mid_ecs_world_static_component_remove_many(f.world, e, std::ptr::null(), 0),
+                MidEcsStatus::Ok as i32
+            );
+        }
+        // Now the real thing: both go, the entity stays.
+        assert_eq!(remove(e, &[f.health, f.flag_b]), MidEcsStatus::Ok as i32);
+        assert_eq!(hp_values(f.world), vec![1, 2, 3]);
+        assert_eq!(flag_b_of(f.world, e), None);
+        // SAFETY: `f.world` is live; freed exactly once.
+        unsafe {
+            assert!(mid_ecs_world_is_alive(f.world, e));
+            mid_ecs_world_free(f.world);
+        }
+    }
+
+    #[test]
+    fn queued_bundles_apply_in_order_and_validate_when_queued() {
+        let f = write_fixture();
+        let existing = bare(f.world);
+        let (a, b, c) = (
+            10u32.to_ne_bytes(),
+            11u32.to_ne_bytes(),
+            21u32.to_ne_bytes(),
+        );
+        let commands = mid_ecs_commands_new();
+        // SAFETY: both handles are live; every buffer outlives its call.
+        unsafe {
+            assert_eq!(mid_ecs_commands_spawn(commands), MidEcsStatus::Ok as i32);
+            assert_eq!(mid_ecs_commands_spawn(commands), MidEcsStatus::Ok as i32);
+            let slot0 = [value(f.health, &a), value(f.flag_b, &b)];
+            let slot1 = [value(f.flag_b, &c)];
+            assert_eq!(
+                mid_ecs_commands_static_component_insert_many_spawned(
+                    commands,
+                    f.world,
+                    1,
+                    slot1.as_ptr(),
+                    1
+                ),
+                MidEcsStatus::Ok as i32
+            );
+            assert_eq!(
+                mid_ecs_commands_static_component_insert_many_spawned(
+                    commands,
+                    f.world,
+                    0,
+                    slot0.as_ptr(),
+                    2
+                ),
+                MidEcsStatus::Ok as i32
+            );
+            // On an existing entity: attach a bundle, then detach it again.
+            assert_eq!(
+                mid_ecs_commands_static_component_insert_many(
+                    commands,
+                    f.world,
+                    existing,
+                    slot0.as_ptr(),
+                    2
+                ),
+                MidEcsStatus::Ok as i32
+            );
+            assert_eq!(
+                mid_ecs_commands_static_component_remove_many(
+                    commands,
+                    f.world,
+                    existing,
+                    [f.flag_b, f.health].as_ptr(),
+                    2
+                ),
+                MidEcsStatus::Ok as i32
+            );
+            assert_eq!(mid_ecs_commands_len(commands), 6);
+            assert_eq!(hp_values(f.world), vec![1, 2, 3], "nothing before apply");
+
+            let mut out = [0u64; 2];
+            assert_eq!(
+                mid_ecs_commands_apply(commands, f.world, out.as_mut_ptr(), 2),
+                2
+            );
+            assert_eq!(flag_b_of(f.world, out[0]), Some(11));
+            assert_eq!(flag_b_of(f.world, out[1]), Some(21));
+            assert_eq!(hp_values(f.world), vec![1, 2, 3, 10]);
+            assert_eq!(flag_b_of(f.world, existing), None);
+            mid_ecs_commands_free(commands);
+            mid_ecs_world_free(f.world);
+        }
+    }
+
+    #[test]
+    fn queued_bundle_statuses_queue_nothing_and_misses_at_apply_are_whole_no_ops() {
+        let f = write_fixture();
+        let victim = f.plain_entities[0];
+        let (a, bad) = (5u32.to_ne_bytes(), [1u8; 3]);
+        let commands = mid_ecs_commands_new();
+        // SAFETY: both handles are live; every buffer outlives its call.
+        unsafe {
+            assert_eq!(mid_ecs_commands_spawn(commands), MidEcsStatus::Ok as i32);
+            let before = mid_ecs_commands_len(commands);
+            let insert = |values: &[FfiComponentValue]| {
+                mid_ecs_commands_static_component_insert_many(
+                    commands,
+                    f.world,
+                    victim,
+                    values.as_ptr(),
+                    values.len(),
+                )
+            };
+            let spawned = |index: usize, values: &[FfiComponentValue]| {
+                mid_ecs_commands_static_component_insert_many_spawned(
+                    commands,
+                    f.world,
+                    index,
+                    values.as_ptr(),
+                    values.len(),
+                )
+            };
+            let remove = |ids: &[u32]| {
+                mid_ecs_commands_static_component_remove_many(
+                    commands,
+                    f.world,
+                    victim,
+                    ids.as_ptr(),
+                    ids.len(),
+                )
+            };
+            let good = [value(f.flag_b, &a)];
+            // List-level errors, for each form.
+            assert_eq!(
+                insert(&[value(f.flag_a, &a)]),
+                MidEcsStatus::NotWritable as i32
+            );
+            assert_eq!(insert(&[value(9999, &a)]), MidEcsStatus::NotFound as i32);
+            assert_eq!(
+                insert(&[value(f.flag_b, &bad)]),
+                MidEcsStatus::SizeMismatch as i32
+            );
+            assert_eq!(
+                insert(&[value(f.flag_b, &a), value(f.flag_b, &a)]),
+                MidEcsStatus::Duplicate as i32
+            );
+            assert_eq!(
+                spawned(0, &[value(f.flag_a, &a)]),
+                MidEcsStatus::NotWritable as i32
+            );
+            assert_eq!(remove(&[f.flag_a]), MidEcsStatus::NotWritable as i32);
+            assert_eq!(remove(&[9999]), MidEcsStatus::NotFound as i32);
+            assert_eq!(
+                remove(&[f.health, f.health]),
+                MidEcsStatus::Duplicate as i32
+            );
+            // A spawn slot that is not queued, after the list checks pass.
+            assert_eq!(spawned(1, &good), MidEcsStatus::NotFound as i32);
+            assert_eq!(spawned(usize::MAX, &good), MidEcsStatus::NotFound as i32);
+            // NULLs.
+            assert_eq!(
+                mid_ecs_commands_static_component_insert_many(
+                    commands,
+                    f.world,
+                    victim,
+                    std::ptr::null(),
+                    1
+                ),
+                MidEcsStatus::NullPointer as i32
+            );
+            assert_eq!(
+                mid_ecs_commands_static_component_remove_many(
+                    commands,
+                    f.world,
+                    victim,
+                    std::ptr::null(),
+                    1
+                ),
+                MidEcsStatus::NullPointer as i32
+            );
+            assert_eq!(
+                mid_ecs_commands_static_component_insert_many(
+                    commands,
+                    std::ptr::null(),
+                    victim,
+                    good.as_ptr(),
+                    1
+                ),
+                MidEcsStatus::NullPointer as i32
+            );
+            // None of that queued anything; empty lists are Ok and queue nothing.
+            assert_eq!(mid_ecs_commands_len(commands), before);
+            assert_eq!(insert(&[]), MidEcsStatus::Ok as i32);
+            assert_eq!(remove(&[]), MidEcsStatus::Ok as i32);
+            assert_eq!(mid_ecs_commands_len(commands), before);
+
+            // Valid when queued, but at apply the entity already has Health
+            // (so the whole bundle is refused) and lacks FlagB (so the whole
+            // removal is refused).
+            let mixed = [value(f.flag_b, &a), value(f.health, &a)];
+            assert_eq!(insert(&mixed), MidEcsStatus::Ok as i32);
+            assert_eq!(remove(&[f.health, f.flag_b]), MidEcsStatus::Ok as i32);
+            // The queue still holds the one spawn from above, so apply needs
+            // a buffer (a NULL one with a spawn waiting is BufferTooSmall).
+            let mut spawned_out = [0u64; 1];
+            assert_eq!(
+                mid_ecs_commands_apply(commands, f.world, spawned_out.as_mut_ptr(), 1),
+                1
+            );
+            assert_eq!(hp_values(f.world), vec![1, 2, 3]);
+            assert!(matching_ids(f.world, &[f.flag_b], &[]).is_empty());
+            mid_ecs_commands_free(commands);
             mid_ecs_world_free(f.world);
         }
     }
