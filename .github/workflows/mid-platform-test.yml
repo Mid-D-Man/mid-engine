@@ -18,6 +18,10 @@
 # --no-default-features turns alloc off too and compiles `collections` out
 # entirely. Only the third configuration builds collections::HashMap as
 # OpenHashMap. See docs/mid-platform.md, "Fixes and Problems."
+#
+# The parser's RE_TEST also accepts `test name - should panic ... ok|FAILED`
+# lines. Without that, #[should_panic] tests were silently dropped from the
+# counts, and a failing one would have been invisible. Same section.
 
 name: mid-platform — Tests
 
@@ -163,7 +167,7 @@ jobs:
           RE_RUN    = re.compile(r'Running\s+.*?\(\S*?/deps/([A-Za-z0-9_]+)-[0-9a-f]{8,}\)\s*$')
           RE_DOC    = re.compile(r'^\s*Doc-tests\s+(\S+)\s*$')
           RE_TEST   = re.compile(
-              r'^test\s+([\w:./-]+(?:::\w+)*(?:\s-\s\S+\s\(line\s\d+\))?)\s+\.\.\.\s+'
+              r'^test\s+([\w:./-]+(?:::\w+)*(?:\s-\s\S+\s\(line\s\d+\)|\s-\sshould\spanic)?)\s+\.\.\.\s+'
               r'(ok|FAILED|ignored)(?:\s+\(([\d.]+)s\))?'
           )
           RE_RESULT = re.compile(r'test result:.*?finished in ([\d.]+)s')
@@ -226,7 +230,8 @@ jobs:
                       if cur_name is None:
                           cur_name, cur_tests, cur_dur = 'unknown suite', [], 0.0
                       tname, status, dur = m.group(1), m.group(2), m.group(3)
-                      out = fail_output.get(tname) or test_output.get(tname, '')
+                      base = tname[:-len(' - should panic')] if tname.endswith(' - should panic') else tname
+                      out = fail_output.get(base) or test_output.get(base, '')
                       cur_tests.append({
                           'name':        tname,
                           'status':      {'ok':'passed','FAILED':'failed','ignored':'ignored'}.get(status,'unknown'),
