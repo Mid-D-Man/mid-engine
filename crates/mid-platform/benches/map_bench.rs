@@ -11,7 +11,7 @@
 //!   alias when `std` is off. Same hasher as the row above, so the gap
 //!   between the two rows is the table, not the hash function.
 //!
-//! Two key shapes, because they stress different things:
+//! Three key shapes, because they stress different things:
 //! - `seq`: `0..N`. Friendly to a multiply hash; the case a fold/multiply
 //!   hasher is built for.
 //! - `aligned`: `i << 12`. Every key shares its low 12 bits. A fold/multiply
@@ -19,7 +19,13 @@
 //!   the low input bits, and a table that indexes by low hash bits sees
 //!   these keys collide. `OpenHashMap` indexes by the *top* bits after one
 //!   more multiply; whether `std`'s table copes is what this shape measures.
+//! - `high32`: `i << 32`. Every key shares its low 32 bits: the shape of an
+//!   entity id with its generation in the high half. The worst case for a
+//!   hasher whose low output bits only see the key's low bits.
 //!
+//! Misses use the same shape as the stored keys (indices `N..2N` mapped
+//! through it), so a miss on an `aligned` or `high32` map walks the same
+//! kind of probe path a hit does.//!
 //! Groups, per key shape: `insert_grow` (build from empty, includes every
 //! rehash), `insert_presized`, `get_hit`, `get_miss`, `remove_all`
 //! (clone excluded from the timing), `iterate`.
@@ -127,18 +133,18 @@ const STD_RANDOM: &str = "std RandomState";
 const STD_FIXED: &str = "collections::HashMap (std + FixedHasher)";
 const OPEN: &str = "OpenHashMap (FixedHasher)";
 
-fn keys_seq() -> Vec<u64> {
-    (0..N).collect()
+/// Key `i` of a shape. `misses` are the same shape over indices `N..2N`.
+fn shape_key(shape: &str, i: u64) -> u64 {
+    match shape {
+        "seq" => i,
+        "aligned" => i << 12,
+        "high32" => i << 32,
+        _ => unreachable!("unknown key shape"),
+    }
 }
 
-fn keys_aligned() -> Vec<u64> {
-    (0..N).map(|i| i << 12).collect()
-}
-
-/// Keys guaranteed absent from the sets above: odd, so never `i << 12`, and
-/// beyond `N` so never `0..N`.
-fn miss_keys(shape: &[u64]) -> Vec<u64> {
-    shape.iter().map(|k| (k << 1) | 1).map(|k| k + N).collect()
+fn keys_for(shape: &str, range: std::ops::Range<u64>) -> Vec<u64> {
+    range.map(|i| shape_key(shape, i)).collect()
 }
 
 fn filled<M: Map>(keys: &[u64]) -> M {
@@ -217,8 +223,10 @@ fn iterate<M: Map>(g: &mut BenchmarkGroup<'_, WallTime>, name: &str, keys: &[u64
     g.bench_function(name, |b| b.iter(|| black_box(map.sum_values())));
 }
 
-fn bench_shape(c: &mut Criterion, shape: &str, keys: &[u64]) {
-    let misses = miss_keys(keys);
+fn bench_shape(c: &mut Criterion, shape: &str) {
+    let keys = keys_for(shape, 0..N);
+    let keys = keys.as_slice();
+    let misses = keys_for(shape, N..2 * N);
 
     let mut g = c.benchmark_group(format!("insert_grow_{shape}_u64"));
     insert_grow::<StdRandom>(&mut g, STD_RANDOM, keys);
@@ -258,8 +266,9 @@ fn bench_shape(c: &mut Criterion, shape: &str, keys: &[u64]) {
 }
 
 fn bench_maps(c: &mut Criterion) {
-    bench_shape(c, "seq", &keys_seq());
-    bench_shape(c, "aligned", &keys_aligned());
+    for shape in ["seq", "aligned", "high32"] {
+        bench_shape(c, shape);
+    }
 }
 
 criterion_group! {

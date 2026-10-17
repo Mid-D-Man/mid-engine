@@ -135,8 +135,8 @@ See "Modules" below for what each file actually does and why:
 - `thread::sleep` — std path trivial; no_std fallback busy-spins on `Instant`, needs the `mid-time`-consolidation decision below settled first
 - `future::block_on` — the busy-spin fallback itself is simple and zero-dep; mainly blocked on deciding whether `mid-platform` re-exports `mid-time`'s `Instant` or grows its own
 
-**Phase 3, hasher half (done):** `hash.rs` — `FxHasher`, `FixedHasher`,
-`fixed_hash_one`. Benchmarked against `rustc-hash` 1.1.0 and std's SipHash
+**Phase 3, hasher half (done):** `hash.rs` — `FxHasher`, `FoldedFxHasher`
+(what `FixedHasher` builds), `FixedHasher`, `fixed_hash_one`. Benchmarked against `rustc-hash` 1.1.0 and std's SipHash
 (`benches/hash_bench.rs`; CI figures under Benchmarks). No `RandomState` equivalent,
 on purpose — see "hash.rs" under Modules.
 
@@ -273,8 +273,10 @@ actually unblocks the next round).
 
 ### `hash.rs`
 
-**What it does:** `FxHasher`, `FixedHasher` (a deterministic `BuildHasher`
-for it), and `fixed_hash_one`. No `std`/`no_std` split — pure `core`
+**What it does:** `FxHasher` (the plain Fx algorithm), `FoldedFxHasher` (the
+same accumulation with a folded-multiply finish), `FixedHasher` (a
+deterministic `BuildHasher` that builds a `FoldedFxHasher`), and
+`fixed_hash_one`. No `std`/`no_std` split — pure `core`
 integer arithmetic, one code path in every configuration.
 
 **Decisions:**
@@ -294,7 +296,39 @@ integer arithmetic, one code path in every configuration.
 - `FixedHasher` starts from `0x9E37_79B9_7F4A_7C15` (the 64-bit golden-ratio
   constant) rather than zero — a well-known odd constant, not a value the
   implementation depends on for any particular property.
-- Matches `rustc-hash` 1.1.0 (read from its crates.io source) bit-for-bit
+- **`FixedHasher` builds a `FoldedFxHasher`, not a bare `FxHasher`.** A plain
+  fold/multiply hash ends in a multiplication, so its low output bits depend
+  only on the low bits of the key, and `std`'s map picks buckets from the
+  low bits. Keys whose entropy sits higher (`i << 12`, an entity id with its
+  generation in the high half, `f64` bits) collided almost completely: bench
+  Build #3 measured the `std` alias 8x to 17x slower than `std`'s default
+  SipHash map on `i << 12` keys. `FoldedFxHasher::finish` does one 64x64 to
+  128-bit multiply and XORs the two halves, the same idea as `foldhash`'s
+  (`bevy_platform`'s own `FixedHasher` is `foldhash::fast::FixedState`; read
+  from its source in the user's bevy fork). Chosen by measurement, not by
+  default: a standalone sandbox comparison (rustc 1.91.1, `std`'s map,
+  10,000 keys, relative figures only) of four finishes. Bare Fx took 17,336
+  µs on `i << 32` and 15,313 µs on `i << 48` against about 120 µs on
+  sequential keys. `rotate_left(26)` (what `rustc-hash` 2.1.1 does, read
+  from its source) fixed `i << 12` and `i << 32` but stayed at 9,872 µs on
+  `i << 48`, because a rotate only moves entropy that already sits in the
+  high bits and a key varying only in its top 16 bits has nowhere to go.
+  The folded multiply was within 14% of the best on every shape tried
+  (sequential 125 µs vs 110 µs for the rotate) and fastest on strings. An
+  xorshift-multiply mix also worked and cost more. **CI has not yet
+  confirmed these figures.**
+- **What it costs:** one `mul` and one XOR per hash on x86-64 (on `wasm32`,
+  LLVM expands the 128-bit product into a few 64-bit multiplies; not
+  measured). The raw `hash_u64` loop was already 1.44x slower than
+  `rustc-hash` before this change and will be slower again; the
+  `hash_u64`/`hashmap_insert_lookup_u64` groups now carry a bare-`FxHasher`
+  row so the finish step's cost is separable from codegen and seed.
+- **Every `FixedHasher` output changed**, including
+  `mid_platform_fixed_hash_bytes`/`_u64` from C. The value is a property of
+  this crate version, not a published format, and was never stored anywhere
+  by this repository; nothing in the repository pins a literal value (the
+  tests compare against the Rust-side hasher).
+- `FxHasher` matches `rustc-hash` 1.1.0 (read from its crates.io source) bit-for-bit
   on 64-bit targets from a zero seed, except for negative `i8`/`i16`/`i32`:
   `rustc-hash` zero-extends those, this sign-extends them (inherited from
   `mid-collections`). Unlike `rustc-hash`, this uses a `u64` state on every
@@ -305,9 +339,22 @@ integer arithmetic, one code path in every configuration.
   here.
 
 **Tests:** in-file — determinism, seed sensitivity, a real parity test
-against the published `rustc-hash` 1.1.0 crate (a dev-dependency; covers
-every `write` tail length 0–15 bytes plus each integer width), and a test
-pinning the one known divergence (negative narrow signed ints).
+against the published `rustc-hash` 1.1.0 crate for `FxHasher` (a
+dev-dependency; covers every `write` tail length 0–15 bytes plus each
+integer width), a test pinning the one known divergence (negative narrow
+signed ints), and for the finish step: `FoldedFxHasher` equals an
+independent restatement of the fold applied to the Fx state for every
+`write_*` method, every byte length 0–20, negative values, and chained
+writes; `FixedHasher` starts from the fixed seed and folds; `FxHasher::finish`
+is still the raw state; and a spread test that 10,000 keys of seven shapes
+(sequential, `i << 12`, `i << 32`, `i << 48`, `i * 1000`, `f64` bits,
+`i * 65536 + 7`) reach more than 5,000 of 65,536 low-16-bit values and at
+least 120 of hashbrown's 128 tag values, next to a test pinning that a bare
+`FxHasher` reaches at most 16 on `i << 12`. Mutation-tested: 9 deliberate
+bugs (no fold, low half only, high half only, wrong constant, `i16`
+zero-extended, bytes truncated, `usize` dropped, zero seed, a finalizer
+added to `FxHasher`) each fail at least one test; the zero-seed one needed a
+new test, which was added first.
 
 ### `collections/`
 
@@ -388,14 +435,12 @@ with a generation in the high half, packed coordinates with a zero low
 half, and power-of-two strides are all shaped like that. `OpenHashMap` is
 not exposed to it by construction (top bits, one extra multiply).
 
-The fix lives in `FixedHasher`'s output mixing, not in the map. One shape:
-mix in `finish()`, for example rotating so the well-mixed high bits of the
-product land in the low bits, in a hasher type distinct from `FxHasher`, so
-`FxHasher` keeps its bit-for-bit `rustc-hash` 1.1.0 parity. That costs about
-one instruction per hash and changes every `FixedHasher` output, including
-the values the C functions `mid_platform_fixed_hash_*` return. **Open
-decision, nothing changed:** `FixedHasher` is deliberately left as it is
-until it is made.
+**Fixed, pending a CI re-run:** `FixedHasher` now builds a
+`FoldedFxHasher`; see "hash.rs" above for what it does and why this finish
+step over a rotate. The figures above and under Benchmarks are the state
+*before* the fix and are kept as the record of it. `map_bench.rs` since
+gained a `high32` shape (`i << 32`) and same-shape miss keys; the next bench
+dispatch measures the fixed hasher on all three shapes.
 
 **Not built:** `drain`, `extract_if`, `shrink_to`/`shrink_to_fit`,
 `try_reserve`, `raw_entry`, `get_many_mut`, `From<[(K, V); N]>`,
@@ -506,7 +551,8 @@ is already asserted bit-for-bit by `hash.rs`'s own tests, any real gap
 between those two rows is codegen, not algorithm.
 
 First CI run (bench Build #3, `rustc 1.99.1`, ubuntu-latest, commit
-`2ffefb9d`, criterion point estimates):
+`2ffefb9d`, criterion point estimates). This is `FixedHasher` *before* the
+folded-multiply finish was added, i.e. bare Fx from a non-zero seed:
 
 | Group | `FixedHasher` | `rustc-hash` 1.1.0 | std SipHash |
 |---|---|---|---|
@@ -525,14 +571,21 @@ on 256 bytes, and 3.8x in the map.
 
 `benches/map_bench.rs` (Phase 3, maps) — `u64 -> u64`, three variants in
 every group: `std`'s map with its default `RandomState`, `collections::HashMap`
-(`std` plus `FixedHasher`), and `OpenHashMap` (`FixedHasher`). Two key
-shapes: `seq` (`0..10_000`) and `aligned` (`i << 12`, every key sharing its low
-12 bits, the case the suspected hazard under `collections/` is about). Six
-groups per shape: `insert_grow`, `insert_presized`, `get_hit`, `get_miss`,
-`remove_all` (clone excluded), `iterate`. Default features only, since the
-comparison needs `std`; `OpenHashMap`'s code is identical with `std` off.
-Shortened criterion timings (0.5 s warm-up, 2 s measurement, 50 samples)
-keep the 36 benchmarks to a few minutes.
+(`std` plus `FixedHasher`), and `OpenHashMap` (`FixedHasher`). Three key
+shapes: `seq` (`0..10_000`), `aligned` (`i << 12`, every key sharing its low
+12 bits) and `high32` (`i << 32`, every key sharing its low 32 bits, the
+shape of an entity id with its generation in the high half). Misses use the
+same shape as the stored keys (indices `N..2N` through it). Six groups per
+shape: `insert_grow`, `insert_presized`, `get_hit`, `get_miss`, `remove_all`
+(clone excluded), `iterate`. Default features only, since the comparison
+needs `std`; `OpenHashMap`'s code is identical with `std` off. Shortened
+criterion timings (0.5 s warm-up, 2 s measurement, 50 samples) keep the 54
+benchmarks to a few minutes.
+
+**Build #3 predates both the `FoldedFxHasher` fix and these two bench
+changes.** It ran two shapes and odd miss keys. Its figures below stand as
+the record of the unfixed hasher; they are not comparable to a run of the
+current bench group-for-group on `get_miss_aligned`.
 
 First CI run (bench Build #3, `rustc 1.99.1`, ubuntu-latest, commit
 `2ffefb9d`, criterion point estimates, µs per 10,000 operations):
@@ -557,8 +610,8 @@ Reading it:
   `hash_bench` predicted. `OpenHashMap` is 1.3x to 1.4x faster than the
   alias on inserts, level on hits, 1.1x faster on removal, 1.8x *slower* on
   misses (a probe walks to an empty slot at up to 3/4 load, where hashbrown
-  rejects on a tag), and within 5% on iteration. The safe-code table gives
-  up less than expected; the miss path is its one clear loss.
+  rejects on a tag), and within 5% on iteration. Read this bullet with the
+  caveat at the end of this list: it flatters the table.
 - **`aligned` keys:** the alias collapses, as described under
   `collections/` (hazard). `OpenHashMap` degrades modestly (hits 36.3 vs
   28.5 µs, grow-inserts 92.3 vs 80.9 µs), which is the extra clustering a
@@ -569,6 +622,24 @@ Reading it:
   this bench, not a property of either map. A miss set that does share
   them would be a fairer test and has not been run.
 - Not measured: string keys, large values, memory, mixed workloads.
+- **Caveat found after the hasher fix: Build #3 flattered `OpenHashMap`.**
+  Bare Fx places structured keys almost without collisions in a table that
+  indexes by the top bits after a Fibonacci multiply (a standalone
+  simulation of 10,000 keys in 16,384 slots: 1.00 probes per hit and 1.97
+  per miss for sequential keys under bare Fx; 1.86 and 3.95 with the folded
+  hash, which is what a well-mixed hash gives at that 0.61 load). The
+  Build #3 `OpenHashMap` figures on `seq` and `aligned` reflect that luck
+  and should not be read as its general speed. With `FixedHasher` now
+  well-mixed, expect textbook linear-probing numbers. A short sandbox run of
+  the rebuilt bench (10 samples; the `std` alias ran about 1.5x slower there
+  than on CI, so only ratios mean anything, and CI has not confirmed them)
+  had `OpenHashMap` at 1.9x to 2.4x the alias on grow-inserts, 2.4x to 3.2x
+  on hits and 5.8x to 6.8x on misses across the three shapes, roughly level
+  with `std`'s SipHash map on hits. The same run had the *fixed* alias at
+  about 38 µs on `aligned` hits and 31 µs on `high32`, against 1,774 µs on
+  CI before the fix. Whether `OpenHashMap` is worth tuning (load factor,
+  storing hashes apart from keys to cut cache misses) is a follow-up to
+  decide after a CI run; it is the no_std fallback, not the default.
 - The run's diagnostics block shows two "Unable to complete 50 samples in
   2.0s" warnings (criterion suggested 2.2 s and 2.3 s) without naming the
   benchmarks. The intervals are tight, so the conclusions above do not hinge

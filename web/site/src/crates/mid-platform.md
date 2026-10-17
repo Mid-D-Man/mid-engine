@@ -18,7 +18,7 @@ the crate.
 - [`sync::LazyLock`](mid-platform/lazy-lock.md)
 - [`sync::Barrier`](mid-platform/barrier.md) — `BarrierWaitResult`
 - [`sync::Arc` / `Weak`](mid-platform/arc.md) — plain re-export of `alloc::sync`
-- [`hash`](mid-platform/hash.md) — `FxHasher`, `FixedHasher`, `fixed_hash_one`
+- [`hash`](mid-platform/hash.md) — `FxHasher`, `FoldedFxHasher`, `FixedHasher`, `fixed_hash_one`
 - [`collections`](mid-platform/collections.md) — `HashMap`, `HashSet`, `OpenHashMap`, `OpenHashSet`
 
 **Status:** Phases 1, 2 and 3 done (see `docs/mid-platform.md`): the locks and

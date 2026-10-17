@@ -49,15 +49,14 @@ Done: Phase 3, map half. 35 tests plus 2 doctests, run in default features
 and in the `alloc`-only configuration; 17 deliberate bugs each caught by at
 least one test. All three feature configurations pass on CI.
 
-**One thing to know, confirmed on CI:** `FixedHasher`'s low output bits depend
-only on the low bits of the key, and keys that share their low bits (`i << 12`,
-aligned addresses) make the `std` alias 8x to 17x slower than `std`'s own
-default map on insert, lookup, and remove. On ordinary sequential keys the
-alias is about 3.5x faster than that default. `OpenHashMap` is not exposed to
-it: on the same strided keys it is 18x to 49x faster than the alias. Whether
-`FixedHasher` itself should change is an open decision; details and figures
-in `docs/mid-platform.md`, "collections/" and "Benchmarks."
-
-Not callable from C: a C ABI cannot carry a generic key and value type, and
-no fixed-type shape has a user yet. Full design write-up:
-`docs/mid-platform.md`, "collections/."
+**One thing that was wrong, and the fix:** `FixedHasher` used to end in a plain
+multiplication, so its low output bits depended only on the key's low bits.
+CI showed that keys sharing their low bits (`i << 12`, aligned addresses) made
+the `std` alias 8x to 17x slower than `std`'s own default map on insert,
+lookup, and remove, and 18x to 49x slower than `OpenHashMap`. `FixedHasher`
+now ends in a folded multiply (see the [`hash`](hash.md) page), so the alias
+is expected to behave on those keys. That is a sandbox result until the next
+CI bench run measures it, on sequential, `i << 12`, and `i << 32` keys.
+`OpenHashMap` was never exposed to it: it indexes by the top bits after one
+more multiply. Details and the pre-fix figures: `docs/mid-platform.md`,
+"collections/" and "Benchmarks."

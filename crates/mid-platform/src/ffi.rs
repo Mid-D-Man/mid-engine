@@ -251,7 +251,8 @@ pub unsafe extern "C" fn mid_platform_once_is_completed(once: *const MidPlatform
 /// to `*out`. The same bytes always give the same result, on every run and
 /// every platform. This hashes the raw bytes only; it is *not* the same
 /// value Rust's `Hash` impl for `str`/`[u8]` produces (those also mix in a
-/// length prefix or terminator).
+/// length prefix or terminator). The value is a property of this crate
+/// version, not a published format: do not store it across versions.
 ///
 /// `data` may be NULL only when `len` is `0` (an empty input is valid).
 /// Returns `MidPlatformStatus::NullPointer` for a NULL `out`, or a NULL

@@ -9,16 +9,21 @@ for `HashMap`/`HashSet` keys you control, not keys an attacker chooses.
 data structures: rotate, xor in the next word, multiply by a fixed constant,
 eight bytes at a time. It is fast because it does very little per word, and
 weak for the same reason. `FixedHasher` is a `BuildHasher` that hands out
-`FxHasher`s from the same fixed starting state every time, so the same key
-hashes to the same value on every run and every platform (the state is
+`FoldedFxHasher`s from the same fixed starting state every time, so the same
+key hashes to the same value on every run and every platform (the state is
 `u64` on every target, including wasm32). `fixed_hash_one` hashes a single
 value with it.
 
-One property to know about: the output ends in a multiplication, so its low
-bits depend only on the low bits of the key. A table that picks buckets from
-the low bits of the hash can collide heavily on keys that share them
-(`i << 12`, aligned addresses). See the note on the
-[`collections`](collections.md) page.
+`FoldedFxHasher` is `FxHasher` plus one step at the end: a 64x64 to 128-bit
+multiply with the two halves XORed together. Plain Fx ends in a
+multiplication, so its low output bits depend only on the low bits of the
+key, and a table that picks buckets from the low bits collides heavily on
+keys that differ only higher up (`i << 12`, aligned addresses, an entity id
+with its generation in the high half). The folded multiply lets every key
+bit reach the low bits. The bare `FxHasher` is still there, unchanged and
+bit-for-bit equal to `rustc-hash` 1.1.0, for consumers that spread the hash
+themselves. Figures and the measurement behind the choice: the `collections`
+page and `docs/mid-platform.md`, "hash.rs."
 
 There is no `RandomState` equivalent, on purpose. A fold/multiply hash can't
 be made DoS-resistant by randomizing its seed, so a randomized version would
@@ -43,9 +48,11 @@ assert_eq!(fixed_hash_one("mid-engine"), fixed_hash_one("mid-engine"));
 
 ## Status
 
-Done — Phase 3, hasher half. Matches the published `rustc-hash` 1.1.0 on
-64-bit targets, apart from negative `i8`/`i16`/`i32` values. Benchmarks
-written, first run pending. The maps that use it are on the
+Done — Phase 3, hasher half. `FxHasher` matches the published `rustc-hash`
+1.1.0 on 64-bit targets, apart from negative `i8`/`i16`/`i32` values.
+`FixedHasher`'s folded-multiply finish is new and measured only in a sandbox
+so far; the next CI bench run is the check. Its output is a property of this
+crate version, not a stable format. The maps that use it are on the
 [`collections`](collections.md) page. Callable from C: `mid_platform_fixed_hash_{bytes,u64}`. Full design write-up, including why this is a second copy of
 `mid-collections`'s hasher rather than a dependency on it:
 `docs/mid-platform.md`, "hash.rs."

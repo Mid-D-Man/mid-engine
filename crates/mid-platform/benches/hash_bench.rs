@@ -3,7 +3,8 @@
 //! what it is: `rustc-hash` 1.1.0 (the published crate whose algorithm
 //! `hash::FxHasher` is -- verified bit-for-bit on 64-bit targets by
 //! `src/hash.rs`'s own parity test, so any real gap here is codegen, not
-//! algorithm) and `std`'s default `DefaultHasher` (SipHash 1-3, the
+//! algorithm, for `FxHasher`; `FixedHasher` adds a folded-multiply finish on
+//! top, see `hash.rs`) and `std`'s default `DefaultHasher` (SipHash 1-3, the
 //! DoS-resistant hasher this module deliberately is *not*, see `hash.rs`'s
 //! own top doc comment -- included so the "why bother" number is on the
 //! page, not assumed). `rustc-hash` is a `[dev-dependencies]` entry only
@@ -16,6 +17,9 @@
 //!
 //! What this measures, and what it deliberately doesn't
 //! ------------------------------------------------------
+//! - `hash_u64`: also carries a row for `mid-platform`'s bare `FxHasher` (zero
+//!   seed, no finalizer), so the cost of `FixedHasher`'s finish step and
+//!   seed is separable from codegen differences against `rustc-hash`.
 //! - `hash_u64` / `hash_str_16b` / `hash_bytes_256b`: raw hashing cost for
 //!   three key shapes (an integer, a short string, a long byte slice --
 //!   different branches of `FxHasher::write`).
@@ -24,9 +28,10 @@
 //!   HashMap`. Includes `RandomState` (std's default) as the baseline a
 //!   real consumer would otherwise get.
 //!
-//! Not measured: collision quality/distribution (this module makes no
-//! quality claim beyond "the same algorithm rustc itself uses"), and
-//! adversarial-input behavior (explicitly out of scope, see `hash.rs`).
+//! Not measured here: collision quality on structured keys (that is
+//! `map_bench.rs`'s `aligned` and `high32` shapes, and `hash.rs`'s own spread
+//! tests), and adversarial-input behavior (explicitly out of scope, see
+//! `hash.rs`).
 //!
 //! Run
 //! ---
@@ -41,6 +46,7 @@ use mid_platform::hash::FixedHasher;
 const N: u64 = 10_000;
 
 type RustcFx = BuildHasherDefault<rustc_hash::FxHasher>;
+type MidFx = BuildHasherDefault<mid_platform::hash::FxHasher>;
 
 // ── raw hashing: u64 keys ─────────────────────────────────────────────────
 
@@ -52,6 +58,17 @@ fn bench_hash_u64(c: &mut Criterion) {
             let mut acc = 0u64;
             for i in 0..N {
                 acc ^= FixedHasher.hash_one(black_box(i));
+            }
+            black_box(acc)
+        })
+    });
+
+    g.bench_function("mid-platform::hash::FxHasher (zero seed, no finalizer)", |b| {
+        let s = MidFx::default();
+        b.iter(|| {
+            let mut acc = 0u64;
+            for i in 0..N {
+                acc ^= s.hash_one(black_box(i));
             }
             black_box(acc)
         })
@@ -157,6 +174,20 @@ fn bench_hashmap_insert_lookup(c: &mut Criterion) {
     g.bench_function("HashMap<_, _, mid-platform FixedHasher>", |b| {
         b.iter(|| {
             let mut m: HashMap<u64, u64, FixedHasher> = HashMap::with_hasher(FixedHasher);
+            for i in 0..N {
+                m.insert(i, i);
+            }
+            let mut sum = 0u64;
+            for i in 0..N {
+                sum = sum.wrapping_add(*m.get(&i).unwrap());
+            }
+            black_box(sum)
+        })
+    });
+
+    g.bench_function("HashMap<_, _, mid-platform FxHasher (no finalizer)>", |b| {
+        b.iter(|| {
+            let mut m: HashMap<u64, u64, MidFx> = HashMap::default();
             for i in 0..N {
                 m.insert(i, i);
             }

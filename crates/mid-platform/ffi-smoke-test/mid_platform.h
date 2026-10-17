@@ -87,7 +87,9 @@ bool mid_platform_once_is_completed(const MidPlatformOnce *once);
 // Hashes len bytes at data with the deterministic fixed hasher (fast,
 // non-cryptographic, for trusted keys only -- not HashDoS-resistant) and
 // writes the 64-bit result to *out. Same bytes -> same result on every run
-// and platform. Hashes raw bytes only. data may be NULL only when len is 0.
+// and platform. Hashes raw bytes only. The value belongs to this crate
+// version, not a published format: do not store it across versions.
+// data may be NULL only when len is 0.
 // Returns MID_PLATFORM_NULL_POINTER for a NULL out, or NULL data with a
 // non-zero len; MID_PLATFORM_OK otherwise.
 int32_t mid_platform_fixed_hash_bytes(const uint8_t *data, size_t len, uint64_t *out);
