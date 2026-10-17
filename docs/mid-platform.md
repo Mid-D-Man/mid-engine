@@ -137,7 +137,7 @@ See "Modules" below for what each file actually does and why:
 
 **Phase 3, hasher half (done):** `hash.rs` — `FxHasher`, `FixedHasher`,
 `fixed_hash_one`. Benchmarked against `rustc-hash` 1.1.0 and std's SipHash
-(`benches/hash_bench.rs`, first run pending). No `RandomState` equivalent,
+(`benches/hash_bench.rs`; CI figures under Benchmarks). No `RandomState` equivalent,
 on purpose — see "hash.rs" under Modules.
 
 **Phase 3, `HashMap`/`HashSet` half (done — options 1 and 3 together):**
@@ -375,21 +375,27 @@ implies it).
   not DoS-resistant. Two maps built by the same inserts iterate in the same
   order (tested for `OpenHashMap`).
 
-**Suspected hazard, pending the first CI bench:** `FixedHasher` ends in a
+**Confirmed hazard (bench Build #3, CI):** `FixedHasher` ends in a
 multiplication, so the low bits of its output depend only on the low bits
-of the key. `std`'s map picks its bucket from the low bits of the hash. Keys
-that share their low bits (`i << 12`, aligned addresses, packed coordinates
-with a zero low half) therefore may collide heavily in
-`std::collections::HashMap<_, _, FixedHasher>`. A short, noisy, sandbox-only
-run (rustc 1.91.1, 10 samples, nothing recorded) pointed that way, with the
-`std` alias tens of times slower than `OpenHashMap` on `i << 12` keys and no
-such gap on `0..N`. `OpenHashMap` is not exposed to it by construction. The
-`*_aligned_u64` groups in `benches/map_bench.rs` are there to confirm or
-refute this on CI. If confirmed, the fix is in `FixedHasher`'s output
-mixing, not in the map, and changing it would break the bit-for-bit
-`rustc-hash` 1.1.0 parity that `hash.rs` currently asserts for `FxHasher`
-(a separate hasher type for `FixedHasher` would keep both). Not changed
-without a decision.
+of the key. `std`'s map, consistent with hashbrown indexing by the low bits
+of the hash (not read from its source here), collides heavily on keys whose
+entropy sits above their low bits. On `i << 12` keys,
+`std::collections::HashMap<_, _, FixedHasher>` (the `std` alias) is 8x to
+17x *slower than `std`'s own default SipHash map* and 18x to 49x slower than
+`OpenHashMap` on insert, lookup-hit and remove, while on `0..N` keys it is
+3.5x faster than SipHash. Figures under Benchmarks. Aligned addresses, ids
+with a generation in the high half, packed coordinates with a zero low
+half, and power-of-two strides are all shaped like that. `OpenHashMap` is
+not exposed to it by construction (top bits, one extra multiply).
+
+The fix lives in `FixedHasher`'s output mixing, not in the map. One shape:
+mix in `finish()`, for example rotating so the well-mixed high bits of the
+product land in the low bits, in a hasher type distinct from `FxHasher`, so
+`FxHasher` keeps its bit-for-bit `rustc-hash` 1.1.0 parity. That costs about
+one instruction per hash and changes every `FixedHasher` output, including
+the values the C functions `mid_platform_fixed_hash_*` return. **Open
+decision, nothing changed:** `FixedHasher` is deliberately left as it is
+until it is made.
 
 **Not built:** `drain`, `extract_if`, `shrink_to`/`shrink_to_fit`,
 `try_reserve`, `raw_entry`, `get_many_mut`, `From<[(K, V); N]>`,
@@ -497,9 +503,25 @@ string, and 256-byte keys, plus each hasher as the `BuildHasher` of a real
 `std::collections::HashMap` (insert + lookup). Runs once, under default
 features — no `std`/`no_std` split to sweep. Since parity with `rustc-hash`
 is already asserted bit-for-bit by `hash.rs`'s own tests, any real gap
-between those two rows is codegen, not algorithm. **Not yet run** — no
-numbers exist for this bench yet; same honesty as `sync_bench.rs` had
-before its own first dispatch.
+between those two rows is codegen, not algorithm.
+
+First CI run (bench Build #3, `rustc 1.99.1`, ubuntu-latest, commit
+`2ffefb9d`, criterion point estimates):
+
+| Group | `FixedHasher` | `rustc-hash` 1.1.0 | std SipHash |
+|---|---|---|---|
+| `hash_u64` | 4.48 µs | 3.12 µs | 59.2 µs |
+| `hash_str_16b` | 4.01 µs | 3.95 µs | 10.26 µs |
+| `hash_bytes_256b` | 29.10 ns | 29.07 ns | 63.15 ns |
+| `hashmap_insert_lookup_u64` | 124.3 µs | 121.4 µs | 468.7 µs |
+
+Parity on strings, bytes, and as the hasher of a real map (within 2.5%).
+The one gap is the raw `u64` loop: `FixedHasher` is 1.44x slower than
+`rustc-hash`. Suspected cause: `rustc-hash`'s zero seed constant-folds away
+and `FixedHasher`'s non-zero seed leaves an extra operation per hash. Not
+checked in assembly. It does not show up in the map workload (1.02x), so it
+is left alone. Against SipHash: 13x on `u64`, 2.6x on 16-byte strings, 2.2x
+on 256 bytes, and 3.8x in the map.
 
 `benches/map_bench.rs` (Phase 3, maps) — `u64 -> u64`, three variants in
 every group: `std`'s map with its default `RandomState`, `collections::HashMap`
@@ -510,8 +532,47 @@ groups per shape: `insert_grow`, `insert_presized`, `get_hit`, `get_miss`,
 `remove_all` (clone excluded), `iterate`. Default features only, since the
 comparison needs `std`; `OpenHashMap`'s code is identical with `std` off.
 Shortened criterion timings (0.5 s warm-up, 2 s measurement, 50 samples)
-keep the 36 benchmarks to a few minutes. **Not yet run on CI** — no
-numbers recorded here.
+keep the 36 benchmarks to a few minutes.
+
+First CI run (bench Build #3, `rustc 1.99.1`, ubuntu-latest, commit
+`2ffefb9d`, criterion point estimates, µs per 10,000 operations):
+
+| Group | std `RandomState` | alias (`std` + `FixedHasher`) | `OpenHashMap` |
+|---|---|---|---|
+| `insert_grow_seq` | 381.5 | 108.5 | 80.9 |
+| `insert_presized_seq` | 135.1 | 57.7 | 41.6 |
+| `get_hit_seq` | 103.9 | 28.9 | 28.5 |
+| `get_miss_seq` | 85.1 | 16.7 | 29.9 |
+| `remove_all_seq` | 149.9 | 68.6 | 61.1 |
+| `iterate_seq` | 8.61 | 10.39 | 10.94 |
+| `insert_grow_aligned` | 380.7 | 3,886 | 92.3 |
+| `insert_presized_aligned` | 138.0 | 1,741 | 49.5 |
+| `get_hit_aligned` | 107.1 | 1,774 | 36.3 |
+| `get_miss_aligned` | 85.2 | 18.9 | 34.6 |
+| `remove_all_aligned` | 150.9 | 1,200 | 65.8 |
+| `iterate_aligned` | 8.60 | 9.51 | 10.76 |
+
+Reading it:
+- **`seq` keys:** the alias is 3.5x faster than SipHash on inserts, as
+  `hash_bench` predicted. `OpenHashMap` is 1.3x to 1.4x faster than the
+  alias on inserts, level on hits, 1.1x faster on removal, 1.8x *slower* on
+  misses (a probe walks to an empty slot at up to 3/4 load, where hashbrown
+  rejects on a tag), and within 5% on iteration. The safe-code table gives
+  up less than expected; the miss path is its one clear loss.
+- **`aligned` keys:** the alias collapses, as described under
+  `collections/` (hazard). `OpenHashMap` degrades modestly (hits 36.3 vs
+  28.5 µs, grow-inserts 92.3 vs 80.9 µs), which is the extra clustering a
+  linear-probing table pays for keys that stay structured after the
+  Fibonacci multiply.
+- **`get_miss_aligned` does not test the collision case.** The miss keys are
+  odd, so they do not share the stored keys' low bits. That is a choice in
+  this bench, not a property of either map. A miss set that does share
+  them would be a fairer test and has not been run.
+- Not measured: string keys, large values, memory, mixed workloads.
+- The run's diagnostics block shows two "Unable to complete 50 samples in
+  2.0s" warnings (criterion suggested 2.2 s and 2.3 s) without naming the
+  benchmarks. The intervals are tight, so the conclusions above do not hinge
+  on it.
 
 ## CI and Workflows
 
@@ -617,3 +678,26 @@ a third configuration, `--no-default-features --features alloc`, to
 doctests, with the aliases pointing at `OpenHashMap`. Any future module that
 needs `alloc` but not `std` has the same property: it is only reachable from
 that third configuration.
+
+### The test summary dropped `#[should_panic]` tests
+
+Found from the first CI run of `collections`: the summary counted 59 and 69
+tests in the two `alloc` configurations where a local run counted 60 and 70.
+The parser's test-line pattern in `mid-platform-test.yml` matched
+`test name ... ok` and doc-test lines, but not
+`test name - should panic ... ok`, so the one `#[should_panic]` test
+(`indexing_a_missing_key_panics`) was never counted. Locally there is exactly
+one such line in each `alloc` configuration and none in the bare no_std
+one, which accounts for the difference exactly. The worse half: a
+`#[should_panic]` test that *failed* would have been dropped the same way,
+and the summary would have shown a clean table. Fixed in the workflow's
+parser (the pattern now accepts the ` - should panic` suffix, and the
+failure-output lookup strips it). Not fixed: seven other copies of the
+pattern, none of which accept the suffix: `mid-arena-test.yml`,
+`mid-ptr-test.yml` and `scripts/parse_test_results.py` (same text this
+workflow had) and `mid-ecs-test.yml`, `mid-log-test.yml`,
+`mid-math-test.yml`, `mid-net-test.yml` (a slightly different pattern). A
+crate is only affected if it has `#[should_panic]` tests. A repository-wide
+search finds them in `mid-ecs`, `mid-math` and `mid-log` (each with a test
+workflow carrying one of the two blind patterns), and in `mid-anim` and
+`mid-physics` (workflows not checked).

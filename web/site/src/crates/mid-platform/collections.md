@@ -47,13 +47,16 @@ assert!(seen.contains(&3));
 
 Done: Phase 3, map half. 35 tests plus 2 doctests, run in default features
 and in the `alloc`-only configuration; 17 deliberate bugs each caught by at
-least one test. Benchmarks written, first CI run pending.
+least one test. All three feature configurations pass on CI.
 
-One thing to watch: `FixedHasher`'s low output bits depend only on the low
-bits of the key, and `std`'s map indexes by them, so keys that share their
-low bits may collide heavily in the `std` alias. `OpenHashMap` is not exposed
-to that. A short sandbox run pointed that way; the bench's `aligned` groups
-will confirm or refute it on CI.
+**One thing to know, confirmed on CI:** `FixedHasher`'s low output bits depend
+only on the low bits of the key, and keys that share their low bits (`i << 12`,
+aligned addresses) make the `std` alias 8x to 17x slower than `std`'s own
+default map on insert, lookup, and remove. On ordinary sequential keys the
+alias is about 3.5x faster than that default. `OpenHashMap` is not exposed to
+it: on the same strided keys it is 18x to 49x faster than the alias. Whether
+`FixedHasher` itself should change is an open decision; details and figures
+in `docs/mid-platform.md`, "collections/" and "Benchmarks."
 
 Not callable from C: a C ABI cannot carry a generic key and value type, and
 no fixed-type shape has a user yet. Full design write-up:
