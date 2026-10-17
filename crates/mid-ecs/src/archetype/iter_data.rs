@@ -44,7 +44,7 @@
 use super::iter_mut::select;
 use super::{Archetype, ArchetypeId, Archetypes, Column, Table};
 use crate::component::ComponentId;
-use crate::filter::QueryFilter;
+use crate::data_filter::DataFilter;
 use crate::query_data::{AccessEntry, QueryData, ReadOnlyQueryData};
 use crate::tick::{ComponentTicks, Tick};
 use crate::world::Entity;
@@ -56,6 +56,16 @@ enum Slot<'w> {
     Shared(&'w Box<dyn Column>),
     /// Written by exactly one `Mut` term, which takes it (once).
     Mut(Option<&'w mut Box<dyn Column>>),
+}
+
+/// How the mutable iterator holds the change ticks of one component of
+/// the current archetype.
+enum TickSlot<'w> {
+    /// Read by `Ref`/`Added`/`Changed` terms or by a row filter.
+    Shared(&'w [ComponentTicks]),
+    /// Written by exactly one `Mut` term, which takes it (once). A row
+    /// filter on the same component reads it first, before the take.
+    Mut(Option<&'w mut [ComponentTicks]>),
 }
 
 /// One archetype, as the terms of a query see it, handed to
@@ -71,31 +81,38 @@ pub struct TableAccess<'w> {
     signature: &'w [ComponentId],
     entities: &'w [Entity],
     this_run: Tick,
+    /// The tracker's tick `Added`/`Changed` compare against. Meaningless
+    /// (and unread) for a query with no such term or filter.
+    last_run: Tick,
     /// `Some` in shared mode only.
     table: Option<&'w Table>,
     /// Exclusive mode only.
     columns: Vec<(ComponentId, Slot<'w>)>,
-    /// Exclusive mode only: the tick slices of the written components.
-    ticks: Vec<(ComponentId, Option<&'w mut [ComponentTicks]>)>,
+    /// Exclusive mode only: the tick slices of the written components,
+    /// and of the read ones a `Ref`/`Added`/`Changed` term or a row
+    /// filter needs.
+    ticks: Vec<(ComponentId, TickSlot<'w>)>,
 }
 
 impl<'w> TableAccess<'w> {
-    fn shared(archetype: &'w Archetype) -> Self {
+    fn shared(archetype: &'w Archetype, this_run: Tick, last_run: Tick) -> Self {
         Self {
             signature: &archetype.component_ids,
             entities: &archetype.table.entities,
-            this_run: Tick::default(),
+            this_run,
+            last_run,
             table: Some(&archetype.table),
             columns: Vec::new(),
             ticks: Vec::new(),
         }
     }
 
-    fn exclusive(this_run: Tick) -> Self {
+    fn exclusive(this_run: Tick, last_run: Tick) -> Self {
         Self {
             signature: &[],
             entities: &[],
             this_run,
+            last_run,
             table: None,
             columns: Vec::new(),
             ticks: Vec::new(),
@@ -103,9 +120,9 @@ impl<'w> TableAccess<'w> {
     }
 
     /// Points this access at `archetype` and hands its columns out
-    /// according to `plan` (`(component, written)` pairs, one per
-    /// component the query touches).
-    fn load(&mut self, archetype: &'w mut Archetype, plan: &[(ComponentId, bool)]) {
+    /// according to `plan` (`(component, written, ticks_read)` triples,
+    /// one per component the query touches).
+    fn load(&mut self, archetype: &'w mut Archetype, plan: &[(ComponentId, bool, bool)]) {
         let Archetype {
             component_ids,
             table,
@@ -121,7 +138,7 @@ impl<'w> TableAccess<'w> {
         self.columns.clear();
         self.ticks.clear();
         for (id, column) in columns.iter_mut() {
-            if let Some(&(_, written)) = plan.iter().find(|(planned, _)| *planned == id) {
+            if let Some(&(_, written, _)) = plan.iter().find(|(planned, _, _)| *planned == id) {
                 let slot = if written {
                     Slot::Mut(Some(column))
                 } else {
@@ -131,11 +148,15 @@ impl<'w> TableAccess<'w> {
             }
         }
         for (id, column_ticks) in ticks.iter_mut() {
-            if plan
-                .iter()
-                .any(|&(planned, written)| planned == id && written)
+            if let Some(&(_, written, ticked)) = plan.iter().find(|(planned, _, _)| *planned == id)
             {
-                self.ticks.push((id, Some(column_ticks.as_mut_slice())));
+                if written {
+                    self.ticks
+                        .push((id, TickSlot::Mut(Some(column_ticks.as_mut_slice()))));
+                } else if ticked {
+                    self.ticks
+                        .push((id, TickSlot::Shared(column_ticks.as_slice())));
+                }
             }
         }
     }
@@ -158,10 +179,51 @@ impl<'w> TableAccess<'w> {
         self.signature.contains(&id)
     }
 
-    /// The tick a write through a `Mut` from this access is stamped with.
+    /// The world's tick as of query creation: what a write through a
+    /// `Mut` from this access is stamped with, and what a `Ref` or an
+    /// `Added`/`Changed` check measures a row's ticks against.
     #[inline]
     pub(crate) fn this_run(&self) -> Tick {
         self.this_run
+    }
+
+    /// The tracker's last-checked tick (see the field's note).
+    #[inline]
+    pub(crate) fn last_run(&self) -> Tick {
+        self.last_run
+    }
+
+    /// The change ticks of the column under `id`, for reading, with the
+    /// full `'w` lifetime so a term can keep them. `None` if the table has
+    /// no such column yet. In exclusive mode only a component the plan
+    /// marked as ticks-read is available this way (never a written one:
+    /// `Ref`/`Added`/`Changed` conflict with `Mut` on the same component).
+    #[inline]
+    pub(crate) fn ticks(&self, id: ComponentId) -> Option<&'w [ComponentTicks]> {
+        match self.table {
+            Some(table) => table.ticks.get(id).map(|ticks| ticks.as_slice()),
+            None => match &self.ticks.iter().find(|(planned, _)| *planned == id)?.1 {
+                TickSlot::Shared(ticks) => Some(*ticks),
+                TickSlot::Mut(_) => None,
+            },
+        }
+    }
+
+    /// Like [`Self::ticks`] but borrowed from `self`, and also able to
+    /// look at a slice a `Mut` term will later take. That is what lets a
+    /// row filter (`Changed<T>`) run on a component the same query
+    /// writes: the filter reads, finishes, and only then does
+    /// `init_fetch` move the slice into the `Mut`. `None` once taken.
+    #[inline]
+    pub(crate) fn peek_ticks(&self, id: ComponentId) -> Option<&[ComponentTicks]> {
+        match self.table {
+            Some(table) => table.ticks.get(id).map(|ticks| ticks.as_slice()),
+            None => match &self.ticks.iter().find(|(planned, _)| *planned == id)?.1 {
+                TickSlot::Shared(ticks) => Some(*ticks),
+                TickSlot::Mut(Some(ticks)) => Some(&**ticks),
+                TickSlot::Mut(None) => None,
+            },
+        }
     }
 
     /// The column of `T` registered under `id`, for reading, if this
@@ -217,11 +279,10 @@ impl<'w> TableAccess<'w> {
     /// same rules as [`Self::column_mut`].
     #[inline]
     pub(crate) fn ticks_mut(&mut self, id: ComponentId) -> Option<&'w mut [ComponentTicks]> {
-        self.ticks
-            .iter_mut()
-            .find(|(planned, _)| *planned == id)?
-            .1
-            .take()
+        match &mut self.ticks.iter_mut().find(|(planned, _)| *planned == id)?.1 {
+            TickSlot::Mut(ticks) => ticks.take(),
+            TickSlot::Shared(_) => None,
+        }
     }
 }
 
@@ -229,18 +290,35 @@ impl<'w> TableAccess<'w> {
 /// state. One pass over the archetypes and one small `Vec`; nothing here
 /// runs per row. Shared by both iterators, so pruning is decided in one
 /// place.
-fn plan_matches<Q: QueryData, F: QueryFilter>(
+fn plan_matches<Q: QueryData, F: DataFilter>(
     archetypes: &Archetypes,
-) -> (Q::State, Vec<ArchetypeId>) {
-    let state = Q::get_state(&|type_id| archetypes.component_ids.get(&type_id).copied());
+) -> (Q::State, F::State, Vec<ArchetypeId>) {
+    let resolve = |type_id| archetypes.component_ids.get(&type_id).copied();
+    let state = Q::get_state(&resolve);
+    let filter = F::get_state(&resolve);
     let matched = if Q::is_satisfiable(&state) {
         let mut required = Vec::new();
         Q::collect_required(&state, &mut required);
-        archetypes.matched_filtered::<F>(&required)
+        archetypes.matched_data_filtered::<F>(&filter, &required)
     } else {
         Vec::new()
     };
-    (state, matched)
+    (state, filter, matched)
+}
+
+/// Fills `rows` with the rows of the archetype `table` points at that
+/// filter `F` keeps, ascending. Runs once per archetype, before any `Mut`
+/// term takes a slice, so a filter may read the ticks of a component the
+/// same query writes. Only called for a `F::TRACKED` filter: every other
+/// filter is fully decided at archetype level.
+fn select_rows<F: DataFilter>(filter: &F::State, table: &TableAccess<'_>, rows: &mut Vec<usize>) {
+    rows.clear();
+    let fetch = F::init_fetch(filter, table);
+    for row in 0..table.len() {
+        if F::matches_row(&fetch, row) {
+            rows.push(row);
+        }
+    }
 }
 
 /// Panics if the query reads and writes, or writes twice, the same
@@ -259,17 +337,31 @@ fn validate_access(entries: &[AccessEntry]) {
     }
 }
 
-/// `(component, written)` for every component the query touches, one
-/// entry per component (a write wins over a read). Types the world has
+/// `(component, written, ticks_read)` for every component the query
+/// touches, one entry per component (a write wins over a read). A
+/// component is `ticks_read` if a term needs its tick slice for reading
+/// (`entries`) or a row filter does (`filter_ticks`). Types the world has
 /// never seen have no id and are skipped: they match nothing anyway.
-fn build_plan(entries: &[AccessEntry]) -> Vec<(ComponentId, bool)> {
-    let mut plan: Vec<(ComponentId, bool)> = Vec::new();
+fn build_plan(
+    entries: &[AccessEntry],
+    filter_ticks: &[ComponentId],
+) -> Vec<(ComponentId, bool, bool)> {
+    let mut plan: Vec<(ComponentId, bool, bool)> = Vec::new();
     for entry in entries {
         if let Some(id) = entry.id {
-            match plan.iter_mut().find(|(planned, _)| *planned == id) {
-                Some((_, written)) => *written |= entry.write,
-                None => plan.push((id, entry.write)),
+            match plan.iter_mut().find(|(planned, _, _)| *planned == id) {
+                Some((_, written, ticked)) => {
+                    *written |= entry.write;
+                    *ticked |= entry.ticks;
+                }
+                None => plan.push((id, entry.write, entry.ticks)),
             }
+        }
+    }
+    for &id in filter_ticks {
+        match plan.iter_mut().find(|(planned, _, _)| *planned == id) {
+            Some((_, _, ticked)) => *ticked = true,
+            None => plan.push((id, false, true)),
         }
     }
     plan
@@ -279,24 +371,40 @@ fn build_plan(entries: &[AccessEntry]) -> Vec<(ComponentId, bool)> {
 
 /// The real `Iterator` behind `World::query_data`: walks the matched
 /// archetypes in order and, inside each, every row up to the length all of
-/// the query's column slices can serve.
-pub(crate) struct IterData<'w, Q: QueryData> {
+/// the query's column slices can serve. With a row-level filter
+/// (`F::TRACKED`) it instead walks only the rows the filter selected for
+/// the archetype, in ascending order.
+pub(crate) struct IterData<'w, Q: QueryData, F: DataFilter> {
     archetypes: &'w Archetypes,
     state: Q::State,
+    filter: F::State,
+    this_run: Tick,
+    last_run: Tick,
     matched: std::vec::IntoIter<ArchetypeId>,
     /// The current archetype's resolved slices. `None` only before the
     /// first archetype is entered, when `len` is 0 and it is never read.
     fetch: Option<Q::Fetch<'w>>,
     row: usize,
     len: usize,
+    /// `F::TRACKED` only: the rows of the current archetype the filter
+    /// kept (all below `len`), and how many have been handed out.
+    rows: Vec<usize>,
+    next_selected: usize,
 }
 
-impl<'w, Q: QueryData> Iterator for IterData<'w, Q> {
+impl<'w, Q: QueryData, F: DataFilter> Iterator for IterData<'w, Q, F> {
     type Item = Q::Item<'w>;
 
     fn next(&mut self) -> Option<Self::Item> {
         loop {
-            if self.row < self.len {
+            if F::TRACKED {
+                if let Some(fetch) = self.fetch.as_mut() {
+                    if let Some(&row) = self.rows.get(self.next_selected) {
+                        self.next_selected += 1;
+                        return Some(Q::fetch(fetch, row));
+                    }
+                }
+            } else if self.row < self.len {
                 if let Some(fetch) = self.fetch.as_mut() {
                     let item = Q::fetch(fetch, self.row);
                     self.row += 1;
@@ -307,9 +415,17 @@ impl<'w, Q: QueryData> Iterator for IterData<'w, Q> {
             let archetype = self.archetypes.archetypes.get(archetype_id).expect(
                 "query_data's precomputed matched list only ever contains real, currently-existing archetype ids",
             );
-            let mut table = TableAccess::shared(archetype);
+            let mut table = TableAccess::shared(archetype, self.this_run, self.last_run);
+            if F::TRACKED {
+                select_rows::<F>(&self.filter, &table, &mut self.rows);
+                self.next_selected = 0;
+            }
             let fetch = Q::init_fetch(&self.state, &mut table);
             self.len = Q::clamp_len(&fetch, table.len());
+            if F::TRACKED {
+                let keep = self.rows.partition_point(|&row| row < self.len);
+                self.rows.truncate(keep);
+            }
             self.fetch = Some(fetch);
             self.row = 0;
         }
@@ -317,20 +433,49 @@ impl<'w, Q: QueryData> Iterator for IterData<'w, Q> {
 }
 
 impl Archetypes {
+    /// The archetypes that contain every id in `required` *and* satisfy
+    /// `F`'s archetype-level test, in dense order. For a row-level filter
+    /// the test is the necessary condition (`Changed<T>` needs `T`
+    /// present); the rows are chosen later, per archetype.
+    fn matched_data_filtered<F: DataFilter>(
+        &self,
+        filter: &F::State,
+        required: &[ComponentId],
+    ) -> Vec<ArchetypeId> {
+        self.archetypes
+            .iter()
+            .filter_map(|(id, archetype)| {
+                let signature = &archetype.component_ids;
+                let keep = required.iter().all(|c| signature.contains(c))
+                    && F::matches_component_set(filter, &|c| signature.contains(&c));
+                keep.then_some(id)
+            })
+            .collect()
+    }
+
     /// Builds the read-only iterator for query data `Q` over the
     /// archetypes that contain every `&T` term's component *and* satisfy
-    /// filter `F`. `F = ()` is the unfiltered query.
-    pub(crate) fn iter_data_filtered<Q: ReadOnlyQueryData, F: QueryFilter>(
+    /// filter `F`. `F = ()` is the unfiltered query. `this_run` is the
+    /// world's tick (what a `Ref` carries); `last_run` is the tracker's
+    /// (read only by `Added`/`Changed`).
+    pub(crate) fn iter_data_filtered<Q: ReadOnlyQueryData, F: DataFilter>(
         &self,
-    ) -> IterData<'_, Q> {
-        let (state, matched) = plan_matches::<Q, F>(self);
+        this_run: Tick,
+        last_run: Tick,
+    ) -> IterData<'_, Q, F> {
+        let (state, filter, matched) = plan_matches::<Q, F>(self);
         IterData {
             archetypes: self,
             state,
+            filter,
+            this_run,
+            last_run,
             matched: matched.into_iter(),
             fetch: None,
             row: 0,
             len: 0,
+            rows: Vec::new(),
+            next_selected: 0,
         }
     }
 }
@@ -340,25 +485,49 @@ impl Archetypes {
 /// The real `Iterator` behind `World::query_data_mut`. `I` is the
 /// matching-archetype walk from `select`; it is a type parameter only
 /// because that walk's type cannot be named.
-pub(crate) struct IterDataMut<'w, Q: QueryData, I> {
+pub(crate) struct IterDataMut<'w, Q: QueryData, F: DataFilter, I> {
     archetypes: I,
     state: Q::State,
-    /// `(component, written)` for every component the query touches.
-    plan: Vec<(ComponentId, bool)>,
+    filter: F::State,
+    /// `(component, written, ticks_read)` for every component the query
+    /// touches.
+    plan: Vec<(ComponentId, bool, bool)>,
     /// Reused across archetypes, so entering one allocates nothing once
     /// the first has sized the slot lists.
     table: TableAccess<'w>,
     fetch: Option<Q::Fetch<'w>>,
+    /// The next row `Q::fetch` will be called for. `Mut` terms hand their
+    /// slices out one element per call, so every row up to the last
+    /// selected one is fetched, in order, even those a row filter skipped
+    /// (their items are dropped unused: dropping a `Mut` stamps nothing).
     row: usize,
     len: usize,
+    /// `F::TRACKED` only: see `IterData`.
+    rows: Vec<usize>,
+    next_selected: usize,
 }
 
-impl<'w, Q: QueryData, I: Iterator<Item = &'w mut Archetype>> Iterator for IterDataMut<'w, Q, I> {
+impl<'w, Q: QueryData, F: DataFilter, I: Iterator<Item = &'w mut Archetype>> Iterator
+    for IterDataMut<'w, Q, F, I>
+{
     type Item = Q::Item<'w>;
 
     fn next(&mut self) -> Option<Self::Item> {
         loop {
-            if self.row < self.len {
+            if F::TRACKED {
+                if let Some(fetch) = self.fetch.as_mut() {
+                    if let Some(&target) = self.rows.get(self.next_selected) {
+                        self.next_selected += 1;
+                        while self.row < target {
+                            drop(Q::fetch(fetch, self.row));
+                            self.row += 1;
+                        }
+                        let item = Q::fetch(fetch, self.row);
+                        self.row += 1;
+                        return Some(item);
+                    }
+                }
+            } else if self.row < self.len {
                 if let Some(fetch) = self.fetch.as_mut() {
                     let item = Q::fetch(fetch, self.row);
                     self.row += 1;
@@ -367,8 +536,16 @@ impl<'w, Q: QueryData, I: Iterator<Item = &'w mut Archetype>> Iterator for IterD
             }
             let archetype = self.archetypes.next()?;
             self.table.load(archetype, &self.plan);
+            if F::TRACKED {
+                select_rows::<F>(&self.filter, &self.table, &mut self.rows);
+                self.next_selected = 0;
+            }
             let fetch = Q::init_fetch(&self.state, &mut self.table);
             self.len = Q::clamp_len(&fetch, self.table.len());
+            if F::TRACKED {
+                let keep = self.rows.partition_point(|&row| row < self.len);
+                self.rows.truncate(keep);
+            }
             self.fetch = Some(fetch);
             self.row = 0;
         }
@@ -379,28 +556,36 @@ impl Archetypes {
     /// Builds the exclusive iterator for query data `Q` (any terms) over
     /// the archetypes that contain every `&T`/`Mut<T>` term's component
     /// and satisfy `F`. Writes made through `Mut` terms are stamped with
-    /// `this_run`.
+    /// `this_run`; `last_run` is the tracker's tick, read only by
+    /// `Added`/`Changed` terms and filters.
     ///
     /// # Panics
     /// If `Q` reads and writes, or writes twice, the same component type
     /// (see `validate_access`). Checked before anything is borrowed and
-    /// regardless of which types the world holds.
-    pub(crate) fn iter_data_mut_filtered<'a, Q: QueryData + 'a, F: QueryFilter>(
+    /// regardless of which types the world holds. A row filter on a
+    /// component `Q` also writes is *not* a conflict.
+    pub(crate) fn iter_data_mut_filtered<'a, Q: QueryData + 'a, F: DataFilter + 'a>(
         &'a mut self,
         this_run: Tick,
+        last_run: Tick,
     ) -> impl Iterator<Item = Q::Item<'a>> + 'a {
-        let (state, matched) = plan_matches::<Q, F>(self);
+        let (state, filter, matched) = plan_matches::<Q, F>(self);
         let mut entries = Vec::new();
         Q::collect_access(&state, &mut entries);
         validate_access(&entries);
-        IterDataMut::<Q, _> {
+        let mut filter_ticks = Vec::new();
+        F::collect_tick_reads(&filter, &mut filter_ticks);
+        IterDataMut::<Q, F, _> {
             archetypes: select(&mut self.archetypes, matched),
             state,
-            plan: build_plan(&entries),
-            table: TableAccess::exclusive(this_run),
+            filter,
+            plan: build_plan(&entries, &filter_ticks),
+            table: TableAccess::exclusive(this_run, last_run),
             fetch: None,
             row: 0,
             len: 0,
+            rows: Vec::new(),
+            next_selected: 0,
         }
     }
 }
@@ -423,7 +608,11 @@ mod tests {
     /// simply yields no rows), so the pruning is checked on the matched
     /// list itself.
     fn visited<Q: ReadOnlyQueryData>(world: &World) -> usize {
-        world.archetypes.iter_data_filtered::<Q, ()>().matched.len()
+        world
+            .archetypes
+            .iter_data_filtered::<Q, ()>(Tick::ZERO, Tick::ZERO)
+            .matched
+            .len()
     }
 
     /// Four archetypes: `{}` (left empty once its entities migrate
@@ -467,7 +656,7 @@ mod tests {
     /// Like `visited`, for the exclusive path's terms: the matched list
     /// both iterators share, built without borrowing anything mutably.
     fn matched_for<Q: QueryData>(world: &World) -> usize {
-        plan_matches::<Q, ()>(&world.archetypes).1.len()
+        plan_matches::<Q, ()>(&world.archetypes).2.len()
     }
 
     #[test]
@@ -478,6 +667,35 @@ mod tests {
         assert_eq!(matched_for::<(Mut<A>, Mut<B>, Mut<C>)>(&world), 1);
         assert_eq!(matched_for::<(&A, Option<Mut<B>>, Has<C>)>(&world), 3);
         assert_eq!(matched_for::<(Entity, Option<Mut<C>>)>(&world), 4);
+    }
+
+    /// How many archetypes the row filter `F` leaves for `Entity` to walk.
+    /// Row filters decide rows later, but the archetype-level half (the
+    /// component must be present) prunes first, and the rows a query
+    /// yields cannot show that: an archetype without the component
+    /// produces no surviving rows either way.
+    fn matched_with<F: DataFilter>(world: &World) -> usize {
+        plan_matches::<Entity, F>(&world.archetypes).2.len()
+    }
+
+    #[test]
+    fn row_filters_prune_archetypes_that_lack_the_component() {
+        use crate::data_filter::DataFilter as _;
+        use crate::filter::{Or, With};
+        use crate::query_data::{Added, Changed};
+        let world = world_with_four_archetypes();
+        assert_eq!(matched_with::<()>(&world), 4);
+        assert_eq!(matched_with::<Changed<A>>(&world), 3);
+        assert_eq!(matched_with::<Added<B>>(&world), 2);
+        assert_eq!(matched_with::<Changed<C>>(&world), 1);
+        assert_eq!(matched_with::<(Changed<A>, With<C>)>(&world), 1);
+        assert_eq!(matched_with::<Changed<Never>>(&world), 0);
+        assert_eq!(matched_with::<Or<(Changed<C>, With<B>)>>(&world), 2);
+        assert_eq!(matched_with::<Or<(Changed<Never>, With<B>)>>(&world), 2);
+        assert_eq!(
+            matched_with::<Or<(Changed<Never>, Added<Never>)>>(&world),
+            0
+        );
     }
 
     #[test]

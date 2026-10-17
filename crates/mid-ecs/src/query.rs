@@ -18,10 +18,22 @@
 //! existed to wrap.
 
 use crate::archetype::ArchetypeId;
+use crate::data_filter::DataFilter;
 use crate::filter::QueryFilter;
 use crate::query_data::{QueryData, ReadOnlyQueryData};
 use crate::tick::{ChangeTracker, Mut, Tick};
 use crate::world::{Entity, World};
+
+/// The plain `query_data*` methods have no tracker, so a query that
+/// compares against one is refused when it is created rather than being
+/// answered against a made-up "since the beginning" (which would report
+/// everything as new, silently).
+fn assert_untracked<Q: QueryData, F: DataFilter>(method: &str) {
+    assert!(
+        !Q::TRACKED && !F::TRACKED,
+        "{method}: this query has an Added/Changed term or filter, which compares against a ChangeTracker; use the `_since` form of the method and pass one"
+    );
+}
 
 impl World {
     /// Iterates every `(Entity, &T)` currently alive with a `T`
@@ -199,13 +211,16 @@ impl World {
     //
     // The general form of `query_static`/`query2_static`/the `_mut`
     // queries: the item shape is a type (`QueryData`), so any number of
-    // components, plus `Option<&T>`, `Has<T>`, `Entity`, `Mut<T>` and
-    // `Option<Mut<T>>` terms, in one call. Archetype Core only.
+    // components, plus `Option<&T>`, `Has<T>`, `Entity`, `Mut<T>`,
+    // `Option<Mut<T>>`, `Ref<T>`, `Added<T>` and `Changed<T>` terms, in one
+    // call. Archetype Core only.
     // `query_data` takes `&self` and read-only terms; `query_data_mut`
     // takes `&mut self` and any terms. Implemented in
     // `archetype/iter_data.rs`, deliberately not on `Iter1`/`Iter2`; see
     // `query_data.rs` and `docs/mid-ecs.md`, "Multi-term queries" and
-    // "Mutable terms in `query_data`", for the design.
+    // "Mutable terms in `query_data`", for the design. Queries that
+    // compare against a `ChangeTracker` (`Added`/`Changed` terms or
+    // filters) go through the `_since` forms; see `data_filter.rs`.
 
     /// Iterates every row of every archetype that holds all of `Q`'s
     /// `&T` components, yielding `Q`'s item for it: the multi-term
@@ -259,20 +274,109 @@ impl World {
     /// let world = World::new();
     /// let _ = world.query_data::<Mut<Hp>>();
     /// ```
+    ///
+    /// # Panics
+    /// If `Q` contains an [`Added`](crate::Added) or
+    /// [`Changed`](crate::Changed) term: they compare against a
+    /// [`ChangeTracker`], so use [`Self::query_data_since`].
     pub fn query_data<'a, Q: ReadOnlyQueryData + 'a>(
         &'a self,
     ) -> impl Iterator<Item = Q::Item<'a>> + 'a {
-        self.archetypes.iter_data_filtered::<Q, ()>()
+        self.query_data_filtered::<Q, ()>()
     }
 
     /// [`Self::query_data`] restricted to archetypes satisfying `F`
     /// (`With`, `Without`, `Or`, tuples of them: see `filter.rs`). The
     /// filter is evaluated once per archetype when the query is created,
     /// not per row.
-    pub fn query_data_filtered<'a, Q: ReadOnlyQueryData + 'a, F: QueryFilter>(
+    ///
+    /// # Panics
+    /// If `Q` or `F` contains an `Added`/`Changed` term or filter: use
+    /// [`Self::query_data_filtered_since`].
+    pub fn query_data_filtered<'a, Q: ReadOnlyQueryData + 'a, F: DataFilter + 'a>(
         &'a self,
     ) -> impl Iterator<Item = Q::Item<'a>> + 'a {
-        self.archetypes.iter_data_filtered::<Q, F>()
+        assert_untracked::<Q, F>("query_data_filtered");
+        self.archetypes
+            .iter_data_filtered::<Q, F>(self.change_tick(), Tick::ZERO)
+    }
+
+    /// [`Self::query_data`] for queries that compare against `tracker`:
+    /// `Q` may contain [`Added`](crate::Added) and
+    /// [`Changed`](crate::Changed) terms, which yield a `bool` per row
+    /// (whether that row's component was inserted, or inserted or written,
+    /// after the tracker's last-checked tick), and `Ref<T>` terms, whose
+    /// `is_added`/`is_changed` take a tracker too.
+    ///
+    /// ```
+    /// use mid_ecs::{ChangeTracker, Entity, Changed, World};
+    ///
+    /// struct Hp(u32);
+    ///
+    /// let mut world = World::new();
+    /// let a = world.spawn();
+    /// let b = world.spawn();
+    /// world.insert_static(a, Hp(10));
+    /// world.insert_static(b, Hp(20));
+    ///
+    /// let mut tracker = ChangeTracker::new();
+    /// tracker.update(&world); // both inserts are now "seen"
+    /// world.increment_change_tick();
+    /// world.get_static_mut::<Hp>(b).unwrap().0 += 1;
+    ///
+    /// let mut flags: Vec<(Entity, bool)> = world
+    ///     .query_data_since::<(Entity, Changed<Hp>)>(&tracker)
+    ///     .collect();
+    /// flags.sort_by_key(|(e, _)| e.index());
+    /// assert_eq!(flags, vec![(a, false), (b, true)]);
+    /// ```
+    pub fn query_data_since<'a, Q: ReadOnlyQueryData + 'a>(
+        &'a self,
+        tracker: &ChangeTracker,
+    ) -> impl Iterator<Item = Q::Item<'a>> + 'a {
+        self.query_data_filtered_since::<Q, ()>(tracker)
+    }
+
+    /// [`Self::query_data_since`] restricted by a row-level filter `F`:
+    /// [`With`](crate::With), [`Without`](crate::Without),
+    /// [`Or`](crate::Or), tuples of them, and
+    /// [`Added`](crate::Added)/[`Changed`](crate::Changed) *as filters*,
+    /// which skip the rows that fail instead of reporting them. Rows are
+    /// visited in the same order as the unfiltered query, minus the
+    /// skipped ones.
+    ///
+    /// ```
+    /// use mid_ecs::{Changed, ChangeTracker, Entity, With, World};
+    ///
+    /// struct Hp(u32);
+    /// struct Shield;
+    ///
+    /// let mut world = World::new();
+    /// let a = world.spawn();
+    /// let b = world.spawn();
+    /// world.insert_static(a, Hp(10));
+    /// world.insert_static(b, Hp(20));
+    /// world.insert_static(b, Shield);
+    ///
+    /// let mut tracker = ChangeTracker::new();
+    /// tracker.update(&world);
+    /// world.increment_change_tick();
+    /// world.get_static_mut::<Hp>(a).unwrap().0 += 1;
+    /// world.get_static_mut::<Hp>(b).unwrap().0 += 1;
+    ///
+    /// // Entities whose Hp changed and that carry a Shield: only `b`.
+    /// let hit: Vec<(Entity, u32)> = world
+    ///     .query_data_filtered_since::<(Entity, &Hp), (Changed<Hp>, With<Shield>)>(&tracker)
+    ///     .map(|(e, hp)| (e, hp.0))
+    ///     .collect();
+    /// assert_eq!(hit, vec![(b, 21)]);
+    /// ```
+    pub fn query_data_filtered_since<'a, Q: ReadOnlyQueryData + 'a, F: DataFilter + 'a>(
+        &'a self,
+        tracker: &ChangeTracker,
+    ) -> impl Iterator<Item = Q::Item<'a>> + 'a {
+        self.archetypes
+            .iter_data_filtered::<Q, F>(self.change_tick(), tracker.last_run())
     }
 
     /// [`Self::query_data`] with write access: `Q` may contain [`Mut`] and
@@ -339,11 +443,68 @@ impl World {
     ///
     /// # Panics
     /// Under the same conditions as [`Self::query_data_mut`].
-    pub fn query_data_mut_filtered<'a, Q: QueryData + 'a, F: QueryFilter>(
+    /// Also panics if `Q` or `F` contains an `Added`/`Changed` term or
+    /// filter: use [`Self::query_data_mut_filtered_since`].
+    pub fn query_data_mut_filtered<'a, Q: QueryData + 'a, F: DataFilter + 'a>(
         &'a mut self,
     ) -> impl Iterator<Item = Q::Item<'a>> + 'a {
+        assert_untracked::<Q, F>("query_data_mut_filtered");
         let this_run = self.change_tick();
-        self.archetypes.iter_data_mut_filtered::<Q, F>(this_run)
+        self.archetypes
+            .iter_data_mut_filtered::<Q, F>(this_run, Tick::ZERO)
+    }
+
+    /// [`Self::query_data_since`] with write access.
+    ///
+    /// # Panics
+    /// Under the same conditions as [`Self::query_data_mut`]. A `Ref`,
+    /// `Added` or `Changed` *term* on a component also counts as a read
+    /// of it, so it conflicts with a `Mut` of the same component; the
+    /// `Added`/`Changed` *filters* do not.
+    pub fn query_data_mut_since<'a, Q: QueryData + 'a>(
+        &'a mut self,
+        tracker: &ChangeTracker,
+    ) -> impl Iterator<Item = Q::Item<'a>> + 'a {
+        self.query_data_mut_filtered_since::<Q, ()>(tracker)
+    }
+
+    /// [`Self::query_data_filtered_since`] with write access: the usual
+    /// "touch only what changed" loop.
+    ///
+    /// ```
+    /// use mid_ecs::{Changed, ChangeTracker, Mut, World};
+    ///
+    /// struct Hp(u32);
+    ///
+    /// let mut world = World::new();
+    /// let a = world.spawn();
+    /// let b = world.spawn();
+    /// world.insert_static(a, Hp(1));
+    /// world.insert_static(b, Hp(1));
+    ///
+    /// let mut tracker = ChangeTracker::new();
+    /// tracker.update(&world);
+    /// world.increment_change_tick();
+    /// world.get_static_mut::<Hp>(a).unwrap().0 = 5; // only `a` changed
+    ///
+    /// // Double every Hp that changed; `Mut<Hp>` and the `Changed<Hp>`
+    /// // filter name the same component, which is allowed.
+    /// for mut hp in world.query_data_mut_filtered_since::<Mut<Hp>, Changed<Hp>>(&tracker) {
+    ///     hp.0 *= 2;
+    /// }
+    /// assert_eq!(world.get_static::<Hp>(a).map(|h| h.0), Some(10));
+    /// assert_eq!(world.get_static::<Hp>(b).map(|h| h.0), Some(1));
+    /// ```
+    ///
+    /// # Panics
+    /// Under the same conditions as [`Self::query_data_mut_since`].
+    pub fn query_data_mut_filtered_since<'a, Q: QueryData + 'a, F: DataFilter + 'a>(
+        &'a mut self,
+        tracker: &ChangeTracker,
+    ) -> impl Iterator<Item = Q::Item<'a>> + 'a {
+        let this_run = self.change_tick();
+        self.archetypes
+            .iter_data_mut_filtered::<Q, F>(this_run, tracker.last_run())
     }
 
     // ── Bulk mutable queries ────────────────────────────────────────

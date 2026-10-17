@@ -3022,10 +3022,11 @@ not enough once `fold` existed.
 
 **Not covered, stated plainly.**
 
-- **No `Ref<T>`.** The read-only counterpart (`is_changed()` on a shared
+- **No `Ref<T>`.** *(Done later: see "`Ref<T>`, `Added`/`Changed` terms and
+  filters" below.)* The read-only counterpart (`is_changed()` on a shared
   fetch) is what combining a row-level `Changed` with other query terms in one
-  call needs, and is the natural next step; `query_changed`/`query_added` are
-  still single-component and still separate paths.
+  call needs; `query_changed`/`query_added` stay single-component and
+  separate paths.
 - **No three-component or entity-free forms, no `Option<&T>`/`Has<T>`.**
 - **No C counterpart, deliberately, the one exception to shipping FFI with each
   feature.** The spans were read-only, so there was no bulk mutable query to
@@ -3231,7 +3232,7 @@ first, then on CI, then the ARM runner.**
 **Not done.** No C-timed bench (there is no C counterpart to time). No
 `bench-nolto` dispatch of these groups. No bench for `query2_static_mut` (both
 sides mutable) or the `_filtered` forms; the `(&mut A, &B)` shape is the one most
-per-frame updates are. No `Ref<T>` bench because there is no `Ref<T>`.
+per-frame updates are. No `Ref<T>` bench (`Ref<T>` was added later, unmeasured).
 
 ### Commands: `commands.rs` (`CommandQueue`, `Commands`, `EntityCommands`)
 
@@ -3378,7 +3379,8 @@ Gap-list item 1 against bevy_ecs: queries over three or more components,
 plus `Option<&T>`, `Has<T>` and `Entity` terms. Before this, the widest
 Archetype Core query was `query2_static` (two components, no optional
 terms). Archetype Core only, read-only. Mutable terms, `Ref<T>` and
-`Added`/`Changed` terms are not part of this pass, see "Not done" below.
+`Added`/`Changed` terms are not part of this pass, see "Not done" below (all
+three were added in later passes).
 
 **What it is.** `World::query_data::<Q>()` and
 `World::query_data_filtered::<Q, F>()`, where `Q` is one term or a tuple of
@@ -3490,7 +3492,8 @@ without, and 1 with a `FlagB`.
   "Mutable terms in `query_data`" below. (Not by generalising
   `SparseSet::get_disjoint_mut`, which only pairs two keys.)
 - `Ref<T>`, and `Added`/`Changed` combined with `With`/`Without`/`Or` in one
-  call (gap-list item 3).
+  call (gap-list item 3). Done in a later pass: see "`Ref<T>`, `Added`/`Changed`
+  terms and filters" below.
 - **No benchmark, and no performance claim.** `next()` pays a per-row check on
   the current archetype's slices on top of the indexing, and the earlier call-
   site investigation (see "Mutable-query benches") showed that what a loop
@@ -3631,13 +3634,118 @@ write through it would skip the change ticks).
 
 **Not done.**
 - `Ref<T>`, and `Added`/`Changed` as terms or combined with `With`/`Without`/`Or`
-  in one call (gap-list item 3).
+  in one call (gap-list item 3): done, see "`Ref<T>`, `Added`/`Changed` terms
+  and filters" below.
 - A public access-set type and a `SystemParam`-style trait (item 4): the hidden
   `AccessEntry` is only the seed.
 - `par_iter`, which needs item 4.
 - No `size_hint`, no cached matched-archetype list; every call walks the
   archetypes once.
 - No benchmark (above).
+
+### `Ref<T>`, `Added`/`Changed` terms and filters (`data_filter.rs`)
+
+Gap-list item 3 against bevy_ecs: the read-side wrapper `Ref<T>`, and
+`Added`/`Changed` usable inside a multi-term query, combined with
+`With`/`Without`/`Or` in one call. Archetype Core only, Rust only. Until now change
+detection was single-component and separate from everything else
+(`query_added::<T>`, `query_changed::<T>`, the C `..._added_rows` /
+`..._changed_rows`). Those are untouched.
+
+**What shipped.**
+
+| piece | what it is |
+|---|---|
+| `Ref<T>`, `Option<Ref<T>>` | `QueryData` terms. `Deref` to `&T` plus the row's ticks: `is_added(&tracker)`, `is_changed(&tracker)`, the same arguments `Mut` takes. Needs no tracker when the query is created. `Copy`. |
+| `Added<T>`, `Changed<T>` as terms | `QueryData` terms yielding a `bool` per row. Never skip a row. Need the tracker at creation. |
+| `Added<T>`, `Changed<T>` as filters | `DataFilter` (new sealed trait, `data_filter.rs`): skip the rows that fail. Compose with `With`, `Without`, tuples and `Or`, each `Or` member judged on its own. |
+| `query_data_since`, `query_data_filtered_since`, `query_data_mut_since`, `query_data_mut_filtered_since` | The four methods that take a `&ChangeTracker`. |
+
+The user chose "both" (terms and filters) when asked. The term form is the
+same two types as the filter form, so `Changed<A>` in the item position is a
+`bool` and in the filter position is a row skip.
+
+**The tracker rule.** `Added`/`Changed` compare against a `ChangeTracker`, so a
+query containing one is only valid through a `_since` method. The plain
+methods (`query_data`, `query_data_filtered`, `query_data_mut`,
+`query_data_mut_filtered`) panic *when the query is created* if `Q` or `F`
+has one (`QueryData::TRACKED` / `DataFilter::TRACKED`, folded at compile
+time, free otherwise). The alternative, answering against a made-up
+`ChangeTracker::new()`, would silently report every row as new.
+
+**Why a second filter trait instead of extending `QueryFilter`.** `QueryFilter`
+decides once per archetype and the frozen `Iter1`/`Iter2` bodies never see
+it. A row's ticks differ from the next row's, so `Added`/`Changed` need a per-row
+decision those iterators have no place for. If they implemented
+`QueryFilter`, the old `query_static_filtered` family would accept them and
+silently ignore the row part. As a separate trait the old methods reject them
+at compile time and `query.rs`'s existing paths are not modified. `DataFilter`
+is implemented for `With`, `Without`, `()` by delegating to their `QueryFilter` impls
+(a test pins that both traits select the same archetypes for everything they
+share), for tuples (all members), for `Or` (any member) and for the two new
+filters. `Or` needed a second group trait (`DataOrGroup`) because each member
+has to carry its own archetype-level verdict into the row decision:
+`Or<(Added<A>, Changed<B>)>` keeps a row of an `{A, B}` archetype if its `A` is
+new *or* its `B` changed, and a row of an `{A}` archetype if its `A` is new.
+
+**How a row filter runs.** On entering an archetype the iterator evaluates the
+filter once over all its rows and records the survivors in a reused
+`Vec<usize>` (`select_rows` in `archetype/iter_data.rs`), then walks only
+those. Only `F::TRACKED` filters take that path; for every other filter the
+loop is the code that existed before, the branch being a constant. In the
+exclusive iterator the pass runs *before* the `Mut` terms take their slices
+(`TableAccess::peek_ticks`), which is what makes the common
+`query_data_mut_filtered_since::<Mut<Hp>, Changed<Hp>>` legal. `Mut` terms
+hand their slices out one row at a time in order, so rows a filter skipped are
+still fetched and the item dropped (dropping a `Mut` stamps nothing); only the
+rows up to the last selected one are touched.
+
+**Access rules.** A `Ref`, `Added` or `Changed` *term* on a component counts as
+a read of it and conflicts with a `Mut` of the same component (panic at
+creation, the existing rule). The `Added`/`Changed` *filters* do not: they
+read ticks, finish, and only then does the `Mut` take the slice. The plan
+(`build_plan`) grew a third flag per component, "tick slice needed for
+reading", set by terms (`AccessEntry::ticks`) and by filters
+(`DataFilter::collect_tick_reads`); a component only a filter mentions still gets
+its tick slice. In shared mode `TableAccess` now carries the world tick (it
+used to be zero there, since nothing read it) and the tracker's last-run tick.
+
+**Verification.** Default lib tests 483 to 512 (scratch-arena 488 to 517),
+doctests 7 to 10, `ffi::` tests unchanged at 76. The central test is a
+differential one: 600 steps of random spawns, despawns (swap-removes),
+migrations in both directions, writes, tick steps and tracker updates, and at
+every step `Changed<A>`, `Added<A>`, `Or<(Changed<A>, Changed<B>)>`, a mixed
+`Or`, and `(Changed<A>, With<B>)` are compared against the older
+`query_added`/`query_changed` plus membership checks, with the history
+asserted to produce both strict-subset and empty selections; every fifth step
+the exclusive iterator writes through the same selection and every value is
+checked. Mutation testing: 47 mutants, 44 caught, 3 equivalent survivors
+(all defensive bounds the table invariant, "ticks column as long as the
+table", makes unreachable: the `None => false` in `matches_row`, the redundant
+`table.contains` guard before `peek_ticks`, and `row <= len` in the
+selected-row truncation). The first run caught 37; the other seven exposed
+real test gaps, fixed before shipping: the matched-archetype list for row
+filters was unpinned (pruning is invisible through items), tuple and `Or`
+filters on a component the query has no term for were untested (their tick
+slices never reached the iterator), the merge of a term's and a filter's
+request for one component's ticks was untested, and the `Ref` per-row test
+passed with `this_run` replaced by zero because wrapping arithmetic keeps the
+ordering for small ticks: it now also checks a fresh tracker, where it does
+not. (Also learned: the world starts at tick 1, not 0, so a fresh tracker sees
+everything.)
+
+**Not done.**
+- **No benchmark, and no performance claim.** Expect a tracked filter to cost
+  one extra pass over an archetype's rows (one tick read per filter member
+  per row) and a `Vec<usize>` that is reused; expect the exclusive iterator to
+  keep the per-term-cursor cost of `IterDataMut`. `IterData`/`IterDataMut` gained
+  fields, so the untracked path is not guaranteed bit-identical in codegen to
+  before. Optimization is paused; none of this was measured.
+- No C counterpart: `..._added_rows` / `..._changed_rows` remain the C-side
+  change detection.
+- No `query2_added` form: `query_data_filtered_since::<(Entity, &A, &B), Added<A>>`
+  covers it.
+- No `AnyOf`, no resource change detection, no tick wraparound check (item 8).
 
 ### Writing component data from C (`raw_span_mut`, `write`, `FfiSpanMut`)
 

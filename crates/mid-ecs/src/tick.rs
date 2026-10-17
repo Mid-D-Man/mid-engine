@@ -220,6 +220,79 @@ impl<T: std::fmt::Debug> std::fmt::Debug for Mut<'_, T> {
     }
 }
 
+/// Shared access to one archetype-tracked component value together with
+/// its change ticks: the read-side counterpart of [`Mut`], obtained as a
+/// term of [`crate::World::query_data`] and friends (`Ref<T>`,
+/// `Option<Ref<T>>`).
+///
+/// Dereferences to `&T` and costs nothing beyond what `&T` costs plus two
+/// extra pointers. What it adds is the per-row question "was this value
+/// added or changed since my tracker last looked?":
+/// [`Self::is_added`] and [`Self::is_changed`], the same arguments
+/// [`Mut`] takes, for the same reason (there is no system here to hold a
+/// last-run tick). Use it when the answer should be an `if` inside the
+/// loop; use the [`crate::Added`] / [`crate::Changed`] filters when rows
+/// that fail should not be visited at all.
+///
+/// `Ref` is `Copy`: it is two shared references and a tick.
+pub struct Ref<'a, T> {
+    value: &'a T,
+    ticks: &'a ComponentTicks,
+    this_run: Tick,
+}
+
+impl<'a, T> Ref<'a, T> {
+    pub(crate) fn new(value: &'a T, ticks: &'a ComponentTicks, this_run: Tick) -> Self {
+        Self {
+            value,
+            ticks,
+            this_run,
+        }
+    }
+
+    /// Whether this value was inserted after `tracker`'s last-checked
+    /// tick: the per-row form of [`crate::World::query_added`].
+    pub fn is_added(&self, tracker: &ChangeTracker) -> bool {
+        self.ticks.is_added(tracker.last_run(), self.this_run)
+    }
+
+    /// Whether this value was inserted or mutated after `tracker`'s
+    /// last-checked tick: the per-row form of
+    /// [`crate::World::query_changed`].
+    pub fn is_changed(&self, tracker: &ChangeTracker) -> bool {
+        self.ticks.is_changed(tracker.last_run(), self.this_run)
+    }
+
+    /// The plain reference, with the full lifetime of the query borrow
+    /// rather than this wrapper's.
+    pub fn into_inner(self) -> &'a T {
+        self.value
+    }
+}
+
+impl<T> Clone for Ref<'_, T> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<T> Copy for Ref<'_, T> {}
+
+impl<T> Deref for Ref<'_, T> {
+    type Target = T;
+
+    #[inline]
+    fn deref(&self) -> &T {
+        self.value
+    }
+}
+
+impl<T: std::fmt::Debug> std::fmt::Debug for Ref<'_, T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("Ref").field(self.value).finish()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -339,5 +412,34 @@ mod tests {
         let mut ticks = ComponentTicks::new(Tick::new(1));
         let m = Mut::new(&mut value, &mut ticks, Tick::new(2));
         assert_eq!(format!("{m:?}"), "Mut(5)");
+    }
+
+    #[test]
+    fn ref_reads_through_deref_and_reports_ticks_against_a_tracker() {
+        let value = 5u32;
+        let ticks = ComponentTicks::new(Tick::new(4));
+        let r = Ref::new(&value, &ticks, Tick::new(6));
+        assert_eq!(*r, 5);
+        let fresh = ChangeTracker::new();
+        assert!(r.is_added(&fresh));
+        assert!(r.is_changed(&fresh));
+        let mut caught_up = ChangeTracker::new();
+        caught_up.last_run = Tick::new(4);
+        assert!(!r.is_added(&caught_up), "inserted at the tracker's tick");
+        assert!(!r.is_changed(&caught_up));
+        caught_up.last_run = Tick::new(3);
+        assert!(r.is_added(&caught_up));
+    }
+
+    #[test]
+    fn ref_is_copy_and_into_inner_returns_the_plain_reference() {
+        let value = 7u32;
+        let ticks = ComponentTicks::new(Tick::new(1));
+        let r = Ref::new(&value, &ticks, Tick::new(2));
+        let copy = r;
+        assert_eq!(*r, *copy);
+        let plain: &u32 = r.into_inner();
+        assert_eq!(*plain, 7);
+        assert_eq!(format!("{copy:?}"), "Ref(7)");
     }
 }

@@ -1,11 +1,13 @@
 // ============================================================================
 // NOTICE: Full documentation, design decisions, and fix history for this file
-// live in docs/mid-ecs.md, sections "Multi-term queries: `query_data.rs`" and
-// "Mutable terms in `query_data`"
+// live in docs/mid-ecs.md, sections "Multi-term queries: `query_data.rs`",
+// "Mutable terms in `query_data`" and "`Ref<T>`, `Added`/`Changed` terms and
+// filters"
 // ============================================================================
 //! Multi-term query data for the Archetype Core: [`Entity`], `&T`,
-//! `Option<&T>`, [`Has<T>`], [`Mut<T>`], `Option<Mut<T>>`, and tuples of
-//! them (up to twelve).
+//! `Option<&T>`, [`Has<T>`], [`Mut<T>`], `Option<Mut<T>>`, [`Ref<T>`],
+//! `Option<Ref<T>>`, [`Added<T>`], [`Changed<T>`], and tuples of them (up
+//! to twelve).
 //!
 //! Where `query_static` and `query2_static` fix their item shape in the
 //! method name, `World::query_data::<Q>()` takes the shape as a type:
@@ -23,8 +25,13 @@
 //! | `Has<T>`         | `bool`           | no: `false` where it is absent  | none   |
 //! | `Mut<T>`         | `Mut<T>`         | **yes**                         | write  |
 //! | `Option<Mut<T>>` | `Option<Mut<T>>` | no: `None` where it is absent   | write  |
+//! | `Ref<T>`         | `Ref<T>`         | **yes**                         | read (+ticks) |
+//! | `Option<Ref<T>>` | `Option<Ref<T>>` | no: `None` where it is absent   | read (+ticks) |
+//! | `Added<T>`       | `bool`           | **yes**                         | read ticks |
+//! | `Changed<T>`     | `bool`           | **yes**                         | read ticks |
 //!
-//! Only `&T` and `Mut<T>` terms narrow which archetypes are visited.
+//! Only `&T`, `Mut<T>`, `Ref<T>`, `Added<T>` and `Changed<T>` terms narrow
+//! which archetypes are visited.
 //! `Option` and `Has` terms are decided once per archetype, not per row,
 //! and every term resolves its column slice once when the iterator enters
 //! an archetype, so a row costs slice indexing and nothing else.
@@ -48,6 +55,22 @@
 //! query's type, not its data. Checked at run time because stable Rust
 //! cannot compare the types inside a tuple.
 //!
+//! **Change detection.** [`Ref<T>`] is `&T` plus the row's change ticks:
+//! `is_added(&tracker)` / `is_changed(&tracker)` answer per row, with the
+//! same arguments [`Mut`] takes, and it needs no tracker at query time.
+//! The [`Added<T>`] and [`Changed<T>`] terms instead yield the answer as a
+//! `bool`, so they need the tracker when the query is created: they are
+//! only accepted by the `_since` query methods
+//! (`World::query_data_since` and friends), which take a
+//! [`crate::ChangeTracker`]; the plain methods panic when the query is
+//! created if `Q` contains one. The same two types are also row-level
+//! *filters* (`data_filter.rs`), which skip the rows that fail instead of
+//! reporting them. A `Ref`, `Added` or `Changed` term on a component
+//! counts as a read of it, so it conflicts with a `Mut` of the same
+//! component in the same query; the *filters* do not (they are evaluated
+//! before the `Mut` term takes the column), so `Mut<T>` filtered by
+//! `Changed<T>` is allowed.
+//!
 //! **No raw `&mut T` term.** A raw write would skip the change ticks and
 //! `Changed` queries would miss it. `Mut<T>` stamps a row changed only
 //! when it is actually written through, exactly as `query_static_mut`
@@ -63,7 +86,7 @@ use std::marker::PhantomData;
 
 use crate::archetype::TableAccess;
 use crate::component::ComponentId;
-use crate::tick::{ComponentTicks, Mut, Tick};
+use crate::tick::{ComponentTicks, Mut, Ref, Tick};
 use crate::world::Entity;
 
 mod sealed {
@@ -81,6 +104,13 @@ mod sealed {
 /// Everything but [`Self::Item`] is machinery for the iterators in
 /// `archetype/iter_data.rs` and hidden from the docs.
 pub trait QueryData: sealed::Sealed {
+    /// `true` if this term (or a tuple member) compares against a
+    /// [`crate::ChangeTracker`] when the query is created: [`Added`] and
+    /// [`Changed`]. Such a query is only valid through the `_since`
+    /// methods, which are the ones that have a tracker to give.
+    #[doc(hidden)]
+    const TRACKED: bool = false;
+
     /// What one visited row yields.
     type Item<'w>;
 
@@ -151,6 +181,9 @@ pub struct AccessEntry {
     pub(crate) name: &'static str,
     pub(crate) id: Option<ComponentId>,
     pub(crate) write: bool,
+    /// The term also needs the component's change-tick slice (`Ref`,
+    /// `Added`, `Changed`), so the iterator must hand it out.
+    pub(crate) ticks: bool,
 }
 
 impl AccessEntry {
@@ -160,6 +193,14 @@ impl AccessEntry {
             name: type_name::<T>(),
             id,
             write: false,
+            ticks: false,
+        }
+    }
+
+    fn read_ticked<T: 'static>(id: Option<ComponentId>) -> Self {
+        Self {
+            ticks: true,
+            ..Self::read::<T>(id)
         }
     }
 
@@ -169,6 +210,7 @@ impl AccessEntry {
             name: type_name::<T>(),
             id,
             write: true,
+            ticks: false,
         }
     }
 }
@@ -512,6 +554,222 @@ impl<T: 'static> QueryData for Option<Mut<'_, T>> {
     }
 }
 
+// ── Ref<T> and Option<Ref<T>> ───────────────────────────────────────
+
+/// One archetype's worth of a `Ref<T>` term: the value slice, the tick
+/// slice that goes with it, and the world tick the row's `Ref` carries.
+#[doc(hidden)]
+pub struct RefFetch<'w, T> {
+    values: &'w [T],
+    ticks: &'w [ComponentTicks],
+    this_run: Tick,
+}
+
+fn ref_fetch<'w, T: 'static>(id: ComponentId, table: &TableAccess<'w>) -> RefFetch<'w, T> {
+    RefFetch {
+        values: table.column::<T>(id).unwrap_or(&[]),
+        ticks: table.ticks(id).unwrap_or(&[]),
+        this_run: table.this_run(),
+    }
+}
+
+fn ref_clamp<T>(fetch: &RefFetch<'_, T>, len: usize) -> usize {
+    len.min(fetch.values.len()).min(fetch.ticks.len())
+}
+
+fn ref_at<'w, T>(fetch: &RefFetch<'w, T>, row: usize) -> Ref<'w, T> {
+    Ref::new(&fetch.values[row], &fetch.ticks[row], fetch.this_run)
+}
+
+impl<T: 'static> sealed::Sealed for Ref<'_, T> {}
+impl<T: 'static> ReadOnlyQueryData for Ref<'_, T> {}
+
+impl<T: 'static> QueryData for Ref<'_, T> {
+    type Item<'w> = Ref<'w, T>;
+    type State = Option<ComponentId>;
+    type Fetch<'w> = RefFetch<'w, T>;
+
+    #[inline]
+    fn get_state(resolve: &dyn Fn(TypeId) -> Option<ComponentId>) -> Self::State {
+        resolve(TypeId::of::<T>())
+    }
+
+    #[inline]
+    fn is_satisfiable(state: &Self::State) -> bool {
+        state.is_some()
+    }
+
+    #[inline]
+    fn collect_required(state: &Self::State, out: &mut Vec<ComponentId>) {
+        if let Some(id) = *state {
+            out.push(id);
+        }
+    }
+
+    #[inline]
+    fn collect_access(state: &Self::State, out: &mut Vec<AccessEntry>) {
+        out.push(AccessEntry::read_ticked::<T>(*state));
+    }
+
+    #[inline]
+    fn init_fetch<'w>(state: &Self::State, table: &mut TableAccess<'w>) -> Self::Fetch<'w> {
+        match *state {
+            Some(id) => ref_fetch::<T>(id, table),
+            None => RefFetch {
+                values: &[],
+                ticks: &[],
+                this_run: table.this_run(),
+            },
+        }
+    }
+
+    #[inline]
+    fn clamp_len(fetch: &Self::Fetch<'_>, len: usize) -> usize {
+        ref_clamp(fetch, len)
+    }
+
+    #[inline]
+    fn fetch<'w>(fetch: &mut Self::Fetch<'w>, row: usize) -> Self::Item<'w> {
+        ref_at(fetch, row)
+    }
+}
+
+impl<T: 'static> sealed::Sealed for Option<Ref<'_, T>> {}
+impl<T: 'static> ReadOnlyQueryData for Option<Ref<'_, T>> {}
+
+impl<T: 'static> QueryData for Option<Ref<'_, T>> {
+    type Item<'w> = Option<Ref<'w, T>>;
+    type State = Option<ComponentId>;
+    type Fetch<'w> = Option<RefFetch<'w, T>>;
+
+    #[inline]
+    fn get_state(resolve: &dyn Fn(TypeId) -> Option<ComponentId>) -> Self::State {
+        resolve(TypeId::of::<T>())
+    }
+
+    #[inline]
+    fn is_satisfiable(_state: &Self::State) -> bool {
+        true
+    }
+
+    #[inline]
+    fn collect_required(_state: &Self::State, _out: &mut Vec<ComponentId>) {}
+
+    #[inline]
+    fn collect_access(state: &Self::State, out: &mut Vec<AccessEntry>) {
+        out.push(AccessEntry::read_ticked::<T>(*state));
+    }
+
+    #[inline]
+    fn init_fetch<'w>(state: &Self::State, table: &mut TableAccess<'w>) -> Self::Fetch<'w> {
+        match *state {
+            Some(id) if table.contains(id) => Some(ref_fetch::<T>(id, table)),
+            _ => None,
+        }
+    }
+
+    #[inline]
+    fn clamp_len(fetch: &Self::Fetch<'_>, len: usize) -> usize {
+        match fetch {
+            Some(fetch) => ref_clamp(fetch, len),
+            None => len,
+        }
+    }
+
+    #[inline]
+    fn fetch<'w>(fetch: &mut Self::Fetch<'w>, row: usize) -> Self::Item<'w> {
+        fetch.as_ref().map(|fetch| ref_at(fetch, row))
+    }
+}
+
+// ── Added<T> and Changed<T> as terms ─────────────────────────────────
+
+/// Yields, per row, whether `T` was inserted after the tracker's
+/// last-checked tick, as a `bool`. As a *term* it never skips a row; as a
+/// filter (`data_filter.rs`) the same type skips the rows where this is
+/// false. Needs the `_since` query methods, which take the
+/// [`crate::ChangeTracker`]. The archetype must contain `T`. Never
+/// constructed; a type-level marker only.
+pub struct Added<T>(PhantomData<fn() -> T>);
+
+/// Yields, per row, whether `T` was inserted or mutated after the
+/// tracker's last-checked tick, as a `bool`. As a *term* it never skips a
+/// row; as a filter (`data_filter.rs`) the same type skips the rows where
+/// this is false. Needs the `_since` query methods, which take the
+/// [`crate::ChangeTracker`]. The archetype must contain `T`. Never
+/// constructed; a type-level marker only.
+pub struct Changed<T>(PhantomData<fn() -> T>);
+
+/// One archetype's worth of an `Added`/`Changed` term: the tick slice and
+/// the two ticks a row is compared with.
+#[doc(hidden)]
+pub struct TickFetch<'w> {
+    ticks: &'w [ComponentTicks],
+    last_run: Tick,
+    this_run: Tick,
+}
+
+macro_rules! impl_tick_term {
+    ($name:ident, $check:ident) => {
+        impl<T: 'static> sealed::Sealed for $name<T> {}
+        impl<T: 'static> ReadOnlyQueryData for $name<T> {}
+
+        impl<T: 'static> QueryData for $name<T> {
+            const TRACKED: bool = true;
+            type Item<'w> = bool;
+            type State = Option<ComponentId>;
+            type Fetch<'w> = TickFetch<'w>;
+
+            #[inline]
+            fn get_state(resolve: &dyn Fn(TypeId) -> Option<ComponentId>) -> Self::State {
+                resolve(TypeId::of::<T>())
+            }
+
+            #[inline]
+            fn is_satisfiable(state: &Self::State) -> bool {
+                state.is_some()
+            }
+
+            #[inline]
+            fn collect_required(state: &Self::State, out: &mut Vec<ComponentId>) {
+                if let Some(id) = *state {
+                    out.push(id);
+                }
+            }
+
+            #[inline]
+            fn collect_access(state: &Self::State, out: &mut Vec<AccessEntry>) {
+                out.push(AccessEntry::read_ticked::<T>(*state));
+            }
+
+            #[inline]
+            fn init_fetch<'w>(state: &Self::State, table: &mut TableAccess<'w>) -> Self::Fetch<'w> {
+                TickFetch {
+                    ticks: match *state {
+                        Some(id) => table.ticks(id).unwrap_or(&[]),
+                        None => &[],
+                    },
+                    last_run: table.last_run(),
+                    this_run: table.this_run(),
+                }
+            }
+
+            #[inline]
+            fn clamp_len(fetch: &Self::Fetch<'_>, len: usize) -> usize {
+                len.min(fetch.ticks.len())
+            }
+
+            #[inline]
+            fn fetch<'w>(fetch: &mut Self::Fetch<'w>, row: usize) -> Self::Item<'w> {
+                fetch.ticks[row].$check(fetch.last_run, fetch.this_run)
+            }
+        }
+    };
+}
+
+impl_tick_term!(Added, is_added);
+impl_tick_term!(Changed, is_changed);
+
 // ── Tuples ───────────────────────────────────────────────────────────
 
 macro_rules! impl_query_data_for_tuple {
@@ -521,6 +779,7 @@ macro_rules! impl_query_data_for_tuple {
         impl<$($T: ReadOnlyQueryData),+> ReadOnlyQueryData for ($($T,)+) {}
 
         impl<$($T: QueryData),+> QueryData for ($($T,)+) {
+            const TRACKED: bool = false $(|| $T::TRACKED)+;
             type Item<'w> = ($($T::Item<'w>,)+);
             type State = ($($T::State,)+);
             type Fetch<'w> = ($($T::Fetch<'w>,)+);
@@ -1451,5 +1710,234 @@ mod tests {
             world.query_data_mut::<(&Never, Mut<AlsoNever>)>().count(),
             0
         );
+    }
+
+    // ── Ref<T>, Added<T>, Changed<T> ─────────────────────────────────
+
+    fn key(e: &Entity) -> (u32, u32) {
+        (e.index(), e.generation())
+    }
+
+    /// `old` (inserted at tick 0, then written at tick 2), `new` (inserted
+    /// at tick 2), and a tracker last checked at tick 1.
+    fn old_and_new() -> (World, Entity, Entity, ChangeTracker) {
+        let mut world = World::new();
+        let old = make(&mut world, 1, true, false, false);
+        world.increment_change_tick();
+        let mut tracker = ChangeTracker::new();
+        tracker.update(&world);
+        world.increment_change_tick();
+        let new = make(&mut world, 2, true, false, false);
+        world.get_static_mut::<A>(old).unwrap().0 = 11;
+        (world, old, new, tracker)
+    }
+
+    #[test]
+    fn ref_yields_the_value_and_per_row_tick_answers() {
+        let (world, old, new, tracker) = old_and_new();
+        let mut rows: Vec<(Entity, u32, bool, bool)> = world
+            .query_data::<(Entity, Ref<A>)>()
+            .map(|(e, r)| (e, r.0, r.is_added(&tracker), r.is_changed(&tracker)))
+            .collect();
+        rows.sort_by_key(|r| key(&r.0));
+        assert_eq!(rows, vec![(old, 11, false, true), (new, 2, true, true)]);
+
+        // A tracker that has never looked (last-checked tick 0) sees every
+        // value as added and changed (the world starts at tick 1). The
+        // answer depends on the tick the `Ref` carries, not only on the two
+        // stored ticks: measured against a wrong "now" the wrapping
+        // comparison says no.
+        let fresh = ChangeTracker::new();
+        let mut rows: Vec<(Entity, bool, bool)> = world
+            .query_data::<(Entity, Ref<A>)>()
+            .map(|(e, r)| (e, r.is_added(&fresh), r.is_changed(&fresh)))
+            .collect();
+        rows.sort_by_key(|r| key(&r.0));
+        assert_eq!(rows, vec![(old, true, true), (new, true, true)]);
+    }
+
+    #[test]
+    fn ref_and_a_plain_read_of_the_same_component_share_one_plan_entry() {
+        // `&B` first, `Ref<B>` second: the plan entry made for the plain
+        // read must pick up the tick-slice request of the later term.
+        let mut world = World::new();
+        for n in 1..=4 {
+            make(&mut world, n, true, true, false);
+        }
+        let mut rows: Vec<(u32, u32, u32)> = world
+            .query_data_mut::<(Mut<A>, &B, Ref<B>)>()
+            .map(|(mut a, b, r)| {
+                a.0 += 1;
+                (a.0, b.0, r.0)
+            })
+            .collect();
+        rows.sort();
+        assert_eq!(
+            rows,
+            vec![(2, 10, 10), (3, 20, 20), (4, 30, 30), (5, 40, 40)]
+        );
+    }
+
+    #[test]
+    fn ref_terms_narrow_like_ref_terms_and_option_ref_does_not() {
+        let mut world = World::new();
+        make(&mut world, 1, true, true, false);
+        make(&mut world, 2, true, false, false);
+        make(&mut world, 3, false, true, false);
+        assert_eq!(world.query_data::<Ref<A>>().count(), 2);
+        assert_eq!(world.query_data::<(Ref<A>, Ref<B>)>().count(), 1);
+        let rows: Vec<(u32, Option<u32>)> = world
+            .query_data::<(&A, Option<Ref<B>>)>()
+            .map(|(a, b)| (a.0, b.map(|b| b.0)))
+            .collect();
+        let mut rows = rows;
+        rows.sort();
+        assert_eq!(rows, vec![(1, Some(10)), (2, None)]);
+        assert_eq!(world.query_data::<Ref<Never>>().count(), 0);
+        assert!(world
+            .query_data::<(Entity, Option<Ref<Never>>)>()
+            .all(|(_, r)| r.is_none()));
+    }
+
+    #[test]
+    fn ref_carries_the_tick_of_the_query_it_came_from() {
+        // `Ref::is_changed` measures against the world tick at query
+        // creation, exactly as `Mut` does for the write it stamps.
+        let (mut world, _, _, tracker) = old_and_new();
+        world.increment_change_tick();
+        let seen: Vec<bool> = world
+            .query_data::<Ref<A>>()
+            .map(|r| r.is_changed(&tracker))
+            .collect();
+        assert_eq!(seen.len(), 2);
+        assert!(
+            seen.iter().all(|&changed| changed),
+            "both are newer than tick 1"
+        );
+        // After the tracker catches up, nothing is.
+        let mut caught_up = tracker;
+        caught_up.update(&world);
+        world.increment_change_tick();
+        assert!(world
+            .query_data::<Ref<A>>()
+            .all(|r| !r.is_changed(&caught_up) && !r.is_added(&caught_up)));
+    }
+
+    #[test]
+    fn ref_reads_in_an_exclusive_query_while_another_component_is_written() {
+        let mut world = World::new();
+        for n in 0..5 {
+            make(&mut world, n, true, true, false);
+        }
+        world.increment_change_tick();
+        let mut tracker = ChangeTracker::new();
+        tracker.update(&world);
+        world.increment_change_tick();
+        for (a, mut b) in world.query_data_mut::<(Ref<A>, Mut<B>)>() {
+            b.0 += a.0;
+        }
+        let mut got: Vec<(u32, u32)> = world
+            .query_data::<(&A, &B)>()
+            .map(|(a, b)| (a.0, b.0))
+            .collect();
+        got.sort();
+        assert_eq!(got, vec![(0, 0), (1, 11), (2, 22), (3, 33), (4, 44)]);
+        world.increment_change_tick();
+        assert_eq!(
+            world.query_changed::<A>(&tracker).count(),
+            0,
+            "reading A through Ref stamps nothing"
+        );
+        assert_eq!(
+            world.query_changed::<B>(&tracker).count(),
+            5,
+            "every row was written through its Mut, even `b.0 += 0`"
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "conflicting access")]
+    fn ref_and_mut_of_the_same_component_conflict() {
+        let mut world = World::new();
+        make(&mut world, 1, true, false, false);
+        let _ = world.query_data_mut::<(Ref<A>, Mut<A>)>();
+    }
+
+    #[test]
+    #[should_panic(expected = "conflicting access")]
+    fn option_ref_and_mut_of_the_same_component_conflict() {
+        let mut world = World::new();
+        let _ = world.query_data_mut::<(Option<Ref<A>>, Mut<A>)>();
+    }
+
+    #[test]
+    fn added_and_changed_terms_yield_a_bool_per_row() {
+        let (world, old, new, tracker) = old_and_new();
+        let mut rows: Vec<(Entity, bool, bool)> = world
+            .query_data_since::<(Entity, Added<A>, Changed<A>)>(&tracker)
+            .collect();
+        rows.sort_by_key(|r| key(&r.0));
+        assert_eq!(rows, vec![(old, false, true), (new, true, true)]);
+    }
+
+    #[test]
+    fn tick_terms_narrow_to_archetypes_holding_the_component() {
+        let mut world = World::new();
+        make(&mut world, 1, true, false, false);
+        make(&mut world, 2, false, true, false);
+        let tracker = ChangeTracker::new();
+        assert_eq!(world.query_data_since::<Added<A>>(&tracker).count(), 1);
+        assert_eq!(world.query_data_since::<Changed<B>>(&tracker).count(), 1);
+        assert_eq!(
+            world
+                .query_data_since::<(Added<A>, Changed<B>)>(&tracker)
+                .count(),
+            0
+        );
+        assert_eq!(world.query_data_since::<Added<Never>>(&tracker).count(), 0);
+    }
+
+    #[test]
+    fn tick_terms_work_next_to_mut_terms_of_other_components() {
+        let (mut world, _, _, tracker) = old_and_new();
+        let e_b = world.spawn();
+        world.insert_static(e_b, B(5));
+        let mut visited = 0;
+        // As a term `Added<B>` would conflict with `Mut<B>`; as a filter it
+        // does not.
+        for (e, mut b) in
+            world.query_data_mut_filtered_since::<(Entity, Mut<B>), Added<B>>(&tracker)
+        {
+            assert_eq!(e, e_b);
+            b.0 = 6;
+            visited += 1;
+        }
+        assert_eq!(visited, 1);
+        assert_eq!(world.get_static::<B>(e_b).map(|b| b.0), Some(6));
+        // A tick term on one component next to an optional write of another.
+        let flags: Vec<bool> = world
+            .query_data_mut_since::<(Changed<A>, Option<Mut<C>>)>(&tracker)
+            .map(|(changed, c)| {
+                assert!(c.is_none());
+                changed
+            })
+            .collect();
+        assert_eq!(flags.len(), 2);
+        assert!(flags.iter().all(|&changed| changed));
+    }
+
+    #[test]
+    #[should_panic(expected = "conflicting access")]
+    fn a_tick_term_conflicts_with_a_mut_of_the_same_component() {
+        let mut world = World::new();
+        let tracker = ChangeTracker::new();
+        let _ = world.query_data_mut_since::<(Mut<A>, Changed<A>)>(&tracker);
+    }
+
+    #[test]
+    #[should_panic(expected = "ChangeTracker")]
+    fn a_tick_term_needs_the_since_form() {
+        let world = World::new();
+        let _ = world.query_data::<(Entity, Added<A>)>();
     }
 }
