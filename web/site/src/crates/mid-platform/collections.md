@@ -55,8 +55,11 @@ CI showed that keys sharing their low bits (`i << 12`, aligned addresses) made
 the `std` alias 8x to 17x slower than `std`'s own default map on insert,
 lookup, and remove, and 18x to 49x slower than `OpenHashMap`. `FixedHasher`
 now ends in a folded multiply (see the [`hash`](hash.md) page), so the alias
-is expected to behave on those keys. That is a sandbox result until the next
-CI bench run measures it, on sequential, `i << 12`, and `i << 32` keys.
+behaves on those keys: CI shows it at the same speed on sequential,
+`i << 12`, and `i << 32` keys, 16x to 63x faster than before on the strided
+ones. On ordinary sequential keys the fix cost the alias's grow-inserts 1.75x
+and left lookups unchanged; it is still 2x to 3.7x faster than `std`'s own
+default map everywhere.
 `OpenHashMap` was never exposed to it: it indexes by the top bits after one
 more multiply. Details and the pre-fix figures: `docs/mid-platform.md`,
 "collections/" and "Benchmarks."

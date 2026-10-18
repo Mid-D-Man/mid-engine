@@ -345,14 +345,22 @@ integer arithmetic, one code path in every configuration.
   high bits and a key varying only in its top 16 bits has nowhere to go.
   The folded multiply was within 14% of the best on every shape tried
   (sequential 125 µs vs 110 µs for the rotate) and fastest on strings. An
-  xorshift-multiply mix also worked and cost more. **CI has not yet
-  confirmed these figures.**
-- **What it costs:** one `mul` and one XOR per hash on x86-64 (on `wasm32`,
-  LLVM expands the 128-bit product into a few 64-bit multiplies; not
-  measured). The raw `hash_u64` loop was already 1.44x slower than
-  `rustc-hash` before this change and will be slower again; the
-  `hash_u64`/`hashmap_insert_lookup_u64` groups now carry a bare-`FxHasher`
-  row so the finish step's cost is separable from codegen and seed.
+  xorshift-multiply mix also worked and cost more. CI bench Build #4
+  confirms the fix and puts its cost higher than the sandbox did; see
+  "What it costs" below and Benchmarks.
+- **What it costs, from bench Build #4 (CI):** 2.74x on the raw `u64`
+  hashing loop (8.56 µs against 3.12 µs for the bare `FxHasher`), 1.04x on
+  256 bytes, no difference on 16-byte strings, and 1.71x in a map
+  insert-and-lookup loop on sequential keys (207 against 121 µs). Against
+  std's SipHash it is still 6.9x faster raw and 2.3x faster in that loop.
+  In the map the cost lands on growth, not on lookups: on sequential keys
+  the alias's grow-inserts got 1.75x slower than before the fix, presized
+  inserts 1.04x, hits 1.01x (consistent with `std`'s map rehashing every
+  entry on growth; not read from its source). The sandbox run had predicted
+  about 25% on the map loop; that was wrong. Why the raw loop costs 2.7x
+  where one multiply and one XOR would suggest less has not been
+  investigated, and the assembly has not been read. On `wasm32` LLVM
+  expands the 128-bit product into a few 64-bit multiplies; not measured.
 - **Every `FixedHasher` output changed**, including
   `mid_platform_fixed_hash_bytes`/`_u64` from C. The value is a property of
   this crate version, not a published format, and was never stored anywhere
@@ -465,12 +473,15 @@ with a generation in the high half, packed coordinates with a zero low
 half, and power-of-two strides are all shaped like that. `OpenHashMap` is
 not exposed to it by construction (top bits, one extra multiply).
 
-**Fixed, pending a CI re-run:** `FixedHasher` now builds a
+**Fixed, confirmed by bench Build #4 (CI):** `FixedHasher` now builds a
 `FoldedFxHasher`; see "hash.rs" above for what it does and why this finish
-step over a rotate. The figures above and under Benchmarks are the state
-*before* the fix and are kept as the record of it. `map_bench.rs` since
-gained a `high32` shape (`i << 32`) and same-shape miss keys; the next bench
-dispatch measures the fixed hasher on all three shapes.
+step over a rotate. On `aligned` keys the `std` alias went from 1,774 µs to
+28.3 µs on hits (62.7x), 3,886 to 170.0 µs on grow-inserts (22.9x), 1,741 to
+58.1 µs presized (30.0x) and 1,200 to 75.2 µs on removal (16.0x), and is now
+the same speed on all three key shapes (hits 28.3 to 29.1 µs). Figures under
+Benchmarks; the Build #3 figures stay there as the record of the unfixed
+hasher. `map_bench.rs` gained a `high32` shape and same-shape miss keys
+before Build #4, so `get_miss` is not comparable across the two builds.
 
 **Not built:** `drain`, `extract_if`, `shrink_to`/`shrink_to_fit`,
 `try_reserve`, `raw_entry`, `get_many_mut`, `From<[(K, V); N]>`,
@@ -570,12 +581,18 @@ earlier, broader comparison; this covers the platform crate only.
   `FixedHasher`'s extra multiply buys those two maps nothing.
 
 **What is next, ranked.**
-1. Re-run the test and bench workflows on the `FoldedFxHasher` change; the
-   sandbox figures in "`hash.rs`" are not CI figures.
-2. Stop adding primitives that nothing pulls. The first real users of
-   `Mutex`/`RwLock`/`OnceLock`/`Arc` are the `mid-app` scheduler and the
-   parallel-iteration work in the ECS gap list (access tracking and
-   `SystemParam`, then `par_iter`). Let that work pull the next piece.
+1. **Finish the FFI.** `Mutex`, `RwLock`, `OnceLock` and `LazyLock` are
+   still not callable from C (see "Fixes and Problems"), and the root
+   README's design mandate and this project's own "build FFI as each piece
+   lands" rule say a platform crate is not done until they are covered or
+   explicitly ruled out. This is the one open item that belongs to this
+   crate rather than to a consumer. `Instant`, the maps and the hasher have
+   their FFI decisions made; these four do not.
+2. Beyond the FFI, stop adding primitives that nothing pulls. The first
+   real users of `Mutex`/`RwLock`/`OnceLock`/`Arc` are the `mid-app`
+   scheduler and the parallel-iteration work in the ECS gap list (access
+   tracking and `SystemParam`, then `par_iter`). Let that work pull the next
+   piece.
 3. When `mid-ecs` adopts `mid-platform` for its hashing, build `Hashed`,
    `PassHash` and `NoOpHash` (about 100 lines of safe code) against that
    concrete use rather than ahead of it.
@@ -583,10 +600,12 @@ earlier, broader comparison; this covers the platform crate only.
    "Fixes and Problems"). `mid-ecs`, `mid-math` and `mid-log` have such
    tests; `mid-anim` and `mid-physics` do too, and their workflows were not
    checked.
-5. FFI guard handles for `Mutex` and `RwLock`, and a decision on what a C
-   caller can hold from `OnceLock`/`LazyLock`, when a C consumer exists.
-6. Tune `OpenHashMap` (load factor, storing hashes apart from keys) only if
+5. Tune `OpenHashMap` (load factor, storing hashes apart from keys) only if
    the no_std map ever matters; it is the fallback, not the default.
+
+Done since this list was first written: the `FoldedFxHasher` change is
+confirmed on CI (bench Build #4); the test workflow on that commit has not
+been reported here.
 
 ## Benchmarks
 
@@ -647,11 +666,27 @@ folded-multiply finish was added, i.e. bare Fx from a non-zero seed:
 
 Parity on strings, bytes, and as the hasher of a real map (within 2.5%).
 The one gap is the raw `u64` loop: `FixedHasher` is 1.44x slower than
-`rustc-hash`. Suspected cause: `rustc-hash`'s zero seed constant-folds away
-and `FixedHasher`'s non-zero seed leaves an extra operation per hash. Not
-checked in assembly. It does not show up in the map workload (1.02x), so it
-is left alone. Against SipHash: 13x on `u64`, 2.6x on 16-byte strings, 2.2x
-on 256 bytes, and 3.8x in the map.
+`rustc-hash`. Build #4's new bare-`FxHasher` row settles the cause: it
+matches `rustc-hash` to 0.1% (3.120 against 3.122 µs), so the algorithm and
+its codegen are the same and the 1.44x was the non-zero seed, the only
+other difference. It did not show up in the map workload (1.02x). Against
+SipHash: 13x on `u64`, 2.6x on 16-byte strings, 2.2x on 256 bytes, and 3.8x
+in the map.
+
+Second CI run (bench Build #4, `rustc 1.99.1`, ubuntu-latest, commit
+`fc6ea2c9`): `FixedHasher` *after* the folded-multiply finish, with a
+bare-`FxHasher` row added.
+
+| Group | `FixedHasher` (folded) | bare `FxHasher` (zero seed) | `rustc-hash` 1.1.0 | std SipHash |
+|---|---|---|---|---|
+| `hash_u64` | 8.56 µs | 3.12 µs | 3.12 µs | 59.2 µs |
+| `hash_str_16b` | 3.91 µs | — | 4.01 µs | 10.53 µs |
+| `hash_bytes_256b` | 30.35 ns | — | 29.06 ns | 63.43 ns |
+| `hashmap_insert_lookup_u64` | 207.1 µs | 121.5 µs | 121.6 µs | 471.4 µs |
+
+The finish step costs 2.74x on the raw `u64` loop and 1.71x in the map loop,
+and nothing measurable on strings; see "`hash.rs`" for what that means and
+what was predicted wrongly.
 
 `benches/map_bench.rs` (Phase 3, maps) — `u64 -> u64`, three variants in
 every group: `std`'s map with its default `RandomState`, `collections::HashMap`
@@ -706,28 +741,66 @@ Reading it:
   this bench, not a property of either map. A miss set that does share
   them would be a fairer test and has not been run.
 - Not measured: string keys, large values, memory, mixed workloads.
-- **Caveat found after the hasher fix: Build #3 flattered `OpenHashMap`.**
-  Bare Fx places structured keys almost without collisions in a table that
-  indexes by the top bits after a Fibonacci multiply (a standalone
-  simulation of 10,000 keys in 16,384 slots: 1.00 probes per hit and 1.97
-  per miss for sequential keys under bare Fx; 1.86 and 3.95 with the folded
-  hash, which is what a well-mixed hash gives at that 0.61 load). The
-  Build #3 `OpenHashMap` figures on `seq` and `aligned` reflect that luck
-  and should not be read as its general speed. With `FixedHasher` now
-  well-mixed, expect textbook linear-probing numbers. A short sandbox run of
-  the rebuilt bench (10 samples; the `std` alias ran about 1.5x slower there
-  than on CI, so only ratios mean anything, and CI has not confirmed them)
-  had `OpenHashMap` at 1.9x to 2.4x the alias on grow-inserts, 2.4x to 3.2x
-  on hits and 5.8x to 6.8x on misses across the three shapes, roughly level
-  with `std`'s SipHash map on hits. The same run had the *fixed* alias at
-  about 38 µs on `aligned` hits and 31 µs on `high32`, against 1,774 µs on
-  CI before the fix. Whether `OpenHashMap` is worth tuning (load factor,
-  storing hashes apart from keys to cut cache misses) is a follow-up to
-  decide after a CI run; it is the no_std fallback, not the default.
+- **Caveat: Build #3 flattered `OpenHashMap`, and Build #4 shows by how
+  much.** Bare Fx places structured keys almost without collisions in a
+  table that indexes by the top bits after a Fibonacci multiply (a
+  standalone simulation of 10,000 keys in 16,384 slots: 1.00 probes per hit
+  and 1.97 per miss for sequential keys under bare Fx; 1.86 and 3.95 with
+  the folded hash, which is what a well-mixed hash gives at that 0.61 load).
+  From Build #3 to Build #4, `OpenHashMap` grow-inserts went from 80.9 to
+  261.5 µs on `seq` and from 92.3 to 254.8 µs on `aligned` (about 3x), and
+  `seq` hits from 28.5 to 37.7 µs (+32%); `aligned` hits barely moved (36.3
+  to 37.3 µs). The Build #3 figures reflect the hasher's luck, not the
+  table's general speed. A short sandbox run made before Build #4 had put
+  the `OpenHashMap` gap to the alias at 2.4x to 3.2x on hits and 1.9x to
+  2.4x on grow-inserts; CI shows 1.3x and 1.4x to 1.5x. Only its miss gap
+  matched (5.8x to 6.8x in the sandbox, 5.0x to 5.2x on CI). Sandbox ratios
+  overstated this table's costs.
 - The run's diagnostics block shows two "Unable to complete 50 samples in
   2.0s" warnings (criterion suggested 2.2 s and 2.3 s) without naming the
   benchmarks. The intervals are tight, so the conclusions above do not hinge
   on it.
+
+Second CI run (bench Build #4, `rustc 1.99.1`, ubuntu-latest, commit
+`fc6ea2c9`): the folded `FixedHasher`, three key shapes, same-shape misses.
+µs per 10,000 operations.
+
+| Group | std `RandomState` | alias (`std` + `FixedHasher`) | `OpenHashMap` |
+|---|---|---|---|
+| `insert_grow_seq` | 378.0 | 189.7 | 261.5 |
+| `insert_presized_seq` | 135.7 | 59.8 | 67.7 |
+| `get_hit_seq` | 104.3 | 29.1 | 37.7 |
+| `get_miss_seq` | 85.7 | 25.96 | 135.6 |
+| `remove_all_seq` | 151.1 | 75.9 | 173.5 |
+| `iterate_seq` | 8.55 | 8.54 | 13.4 |
+| `insert_grow_aligned` | 373.8 | 170.0 | 254.8 |
+| `insert_presized_aligned` | 135.9 | 58.1 | 62.1 |
+| `get_hit_aligned` | 104.2 | 28.3 | 37.3 |
+| `get_miss_aligned` | 86.6 | 25.9 | 128.8 |
+| `remove_all_aligned` | 153.3 | 75.2 | 172.2 |
+| `iterate_aligned` | 8.54 | 8.54 | 22.7 |
+| `insert_grow_high32` | 374.0 | 177.1 | 252.3 |
+| `insert_presized_high32` | 135.6 | 58.1 | 61.0 |
+| `get_hit_high32` | 104.2 | 28.7 | 36.6 |
+| `get_miss_high32` | 85.2 | 26.0 | 129.9 |
+| `remove_all_high32` | 150.5 | 75.0 | 164.1 |
+| `iterate_high32` | 8.54 | 9.58 | 21.5 |
+
+Reading it:
+- **The fix works.** The alias is the same speed on all three shapes (hits
+  28.3 to 29.1 µs) and 2.0x to 3.7x faster than `std`'s SipHash map on every
+  group. It is 16x to 63x faster than before the fix on the `aligned` shape.
+- **What the fix cost on ordinary keys:** on `seq`, the alias's grow-inserts
+  went from 108.5 to 189.7 µs (1.75x), presized inserts 57.7 to 59.8 µs
+  (1.04x), hits 28.9 to 29.1 µs (1.01x).
+- **`OpenHashMap` against the alias:** hits 1.3x slower, grow-inserts 1.4x to
+  1.5x, presized inserts 1.05x to 1.13x, removal 2.2x to 2.3x, iteration 1.6x
+  to 2.7x, misses 5.0x to 5.2x. **Against `std`'s SipHash map:** faster on
+  hits (2.8x), grow-inserts (1.4x to 1.5x) and presized inserts (2.0x to
+  2.2x); slower on misses (1.5x to 1.6x), removal (1.1x) and iteration (1.6x
+  to 2.7x). As a no_std fallback that is a reasonable place to sit; the
+  miss path is its clear weakness, and tuning is only worth doing if the
+  no_std map ever matters.
 
 ## CI and Workflows
 
