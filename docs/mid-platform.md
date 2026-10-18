@@ -132,8 +132,38 @@ See "Modules" below for what each file actually does and why:
 - `sync::barrier::Barrier` — ported from `spin::Barrier`'s real algorithm onto this crate's own `Mutex`
 
 **Phase 2, explicitly deferred (not part of this pass):**
-- `thread::sleep` — std path trivial; no_std fallback busy-spins on `Instant`, needs the `mid-time`-consolidation decision below settled first
-- `future::block_on` — the busy-spin fallback itself is simple and zero-dep; mainly blocked on deciding whether `mid-platform` re-exports `mid-time`'s `Instant` or grows its own
+- `thread::sleep` — the `std` path is a passthrough; not built, because nothing consumes it. The `Instant` question that blocked it is decided (next paragraph).
+- `future::block_on` — the busy-spin fallback itself is simple and zero-dep; not built, same reason.
+
+**`Instant` (decided, not built):** `mid-time` keeps owning its `Instant`.
+Decision, from the user, after moving the implementation down into
+`mid-platform` was proposed and questioned: when a platform feature needs an
+`Instant` (`thread::sleep`, `future::block_on`), `mid-platform` takes
+`mid-time` as an optional dependency behind its `std` feature and re-exports
+`Instant` and `Duration` as `mid_platform::time`. Nothing is written yet,
+because nothing consumes it. Why, and what was given up:
+- **No code moves.** The alternative would have rewritten `mid-time`'s
+  `wasm32` clock (an `f64` becoming a `Duration`) in code that cannot be run
+  or compile-checked from the environment this crate was developed in: no
+  `wasm32` standard library could be installed there.
+- **It fits the standing rule** that a piece usable on its own is its own
+  crate. `mid-time` already is one, with zero dependencies.
+- **Accepted cost: the dependency points the opposite way from bevy's.**
+  `bevy_time` uses `bevy_platform::time::Instant` (read from the fork's
+  `crates/bevy_time`). Ours would point from the lower layer to the higher
+  one. It holds only while `mid-time` never needs anything from
+  `mid-platform`, a lock around a global clock for example. If it ever does,
+  that is a dependency cycle and moving `Instant` down is the answer then.
+- **Accepted cost: no `Instant` without `std`.** `mid-time`'s native
+  `Instant` is `std::time::Instant`, so `thread::sleep` and `block_on` would
+  be `std`-only. Bevy's no_std fallback reads a CPU counter (`rdtsc` on x86)
+  and treats its ticks as nanoseconds, and asks the program to install a
+  clock on other architectures (read from the fork's `time/fallback.rs`).
+  Copying the first part was rejected because the units are not guaranteed.
+  No mid-engine target is no_std without a clock, so nothing is lost today.
+- **Not a reason: FFI.** `Instant` has no C story under either direction; an
+  opaque monotonic timestamp is not something a C caller needs from this
+  crate, so none is built.
 
 **Phase 3, hasher half (done):** `hash.rs` — `FxHasher`, `FoldedFxHasher`
 (what `FixedHasher` builds), `FixedHasher`, `fixed_hash_one`. Benchmarked against `rustc-hash` 1.1.0 and std's SipHash
@@ -503,6 +533,60 @@ compiled C program, run against the actual compiled
 `libmid_platform.so`/`.a`, whose own `Barrier` check spawns four real
 `pthread`s (not just single-threaded C calls) via
 `.github/workflows/mid-platform-test.yml`.
+
+## Comparison with `bevy_platform`
+
+Read from `Mid-D-Man/bevy` at `f3b5346` (a shallow clone of `crates/bevy_platform`
+and `crates/bevy_time`), October 2026. `docs/bevy-comparison.md` §1 is the
+earlier, broader comparison; this covers the platform crate only.
+
+| `bevy_platform` | `mid-platform` |
+|---|---|
+| `cell`: `SyncCell`, `SyncUnsafeCell` | done |
+| `sync`: `Arc`, `Weak`, `Mutex`, `RwLock`, `Once`/`OnceLock`/`OnceState`, `LazyLock`, `Barrier`, `atomic`, poison types | done |
+| `hash::FixedHasher`, `fixed_hash_one` | done; `FixedHasher` builds a `FoldedFxHasher`, the same idea as the `foldhash` bevy wraps |
+| `hash::RandomState` | deliberately not (see `hash.rs`) |
+| `hash::Hashed`, `PassHash`/`PassHasher`, `NoOpHash`/`NoOpHasher` | not built |
+| `collections::HashMap`, `HashSet` | done: `std` aliases, plus `OpenHashMap`/`OpenHashSet` without `std` |
+| `collections::HashTable`, `Equivalent` | not built; the internal `RawTable` is hasher-free and could grow into a public equivalent |
+| `collections::AlignedVec` | deferred, no consumer |
+| `time::Instant`, `thread::sleep`, `future::block_on` | decided, not built: see "`Instant` (decided, not built)" under Build order |
+| `dirs::preferences_dir` | not planned |
+
+**What the comparison shows.**
+- **For the scope this crate set itself, it is complete**, and in two places
+  ahead of what it was measured against: `FixedHasher`'s finish step was
+  found and fixed through this crate's own benches, and the maps have a
+  safe-code no_std fallback instead of a `hashbrown` dependency.
+- **Nothing consumes it.** At `0e478dd`, no crate in the workspace lists
+  `mid-platform` as a dependency. `mid-ecs` keeps private hashers of its own
+  (`TypeIdMap` and `DenseIdMap` in `hash.rs`, both `pub(crate)`, over
+  `BuildHasherDefault`), and `mid-collections` keeps its own `FxHasher`,
+  whose `finish` returns the raw state, the property `FixedHasher` used to
+  have. No `mid-ecs` map is keyed by a shifted or packed value today, so no
+  current exposure was found there.
+- **Bevy's `mid-ecs` counterparts are not drop-in swaps.** `TypeId` keys are
+  already well-mixed and sequential ids suit a multiplicative hash, so
+  `FixedHasher`'s extra multiply buys those two maps nothing.
+
+**What is next, ranked.**
+1. Re-run the test and bench workflows on the `FoldedFxHasher` change; the
+   sandbox figures in "`hash.rs`" are not CI figures.
+2. Stop adding primitives that nothing pulls. The first real users of
+   `Mutex`/`RwLock`/`OnceLock`/`Arc` are the `mid-app` scheduler and the
+   parallel-iteration work in the ECS gap list (access tracking and
+   `SystemParam`, then `par_iter`). Let that work pull the next piece.
+3. When `mid-ecs` adopts `mid-platform` for its hashing, build `Hashed`,
+   `PassHash` and `NoOpHash` (about 100 lines of safe code) against that
+   concrete use rather than ahead of it.
+4. Fix the same `#[should_panic]` blind spot in the other test parsers (see
+   "Fixes and Problems"). `mid-ecs`, `mid-math` and `mid-log` have such
+   tests; `mid-anim` and `mid-physics` do too, and their workflows were not
+   checked.
+5. FFI guard handles for `Mutex` and `RwLock`, and a decision on what a C
+   caller can hold from `OnceLock`/`LazyLock`, when a C consumer exists.
+6. Tune `OpenHashMap` (load factor, storing hashes apart from keys) only if
+   the no_std map ever matters; it is the fallback, not the default.
 
 ## Benchmarks
 

@@ -156,9 +156,12 @@ which can be hand-rolled, and which are deferred the same way this
 decision itself was). Phase 1 (`sync::atomic`, `cell`, `sync::poison`,
 `sync::mutex`, `sync::{Arc, Weak}`) and Phase 2 (`sync::rwlock`,
 `sync::once`, `sync::lazy_lock`, `sync::barrier`) are both built now,
-and so is Phase 3's fast hasher (`hash`); the hash-map question in
-particular is explicitly not decided yet, same trigger-based discipline
-this entry always used.
+and so is Phase 3 (`hash`, `collections`). The `Instant` half of the
+trigger is settled without moving code: `mid-time` keeps owning its
+`Instant`, and `mid-platform` takes `mid-time` as an optional `std`-only
+dependency when a platform feature (`thread::sleep`, `future::block_on`)
+first needs one (`docs/mid-platform.md`, "Build order"). Nothing is built
+for it yet, same trigger-based discipline this entry always used.
 
 ---
 
