@@ -57,6 +57,7 @@
 
 use std::any::TypeId;
 
+use crate::access::FilteredAccess;
 use crate::archetype::TableAccess;
 use crate::component::ComponentId;
 use crate::filter::{Or, QueryFilter, With, Without};
@@ -116,6 +117,13 @@ pub trait DataFilter: sealed::Sealed {
     #[doc(hidden)]
     fn collect_tick_reads(state: &Self::State, out: &mut Vec<ComponentId>);
 
+    /// Records this filter's archetype constraints (`with`, `without`)
+    /// and the reads it makes (`Added`/`Changed` read a component's
+    /// ticks) into `access`, keyed by type, without a world. See
+    /// `access.rs`.
+    #[doc(hidden)]
+    fn update_access(access: &mut FilteredAccess);
+
     /// Resolves what `matches_row` needs for the archetype `table`
     /// points at.
     #[doc(hidden)]
@@ -134,7 +142,7 @@ pub trait DataFilter: sealed::Sealed {
 /// traits cannot drift apart (a test pins that they select the same
 /// archetypes).
 macro_rules! impl_data_filter_via_query_filter {
-    ($($(#[$meta:meta])* impl[$($gen:tt)*] $ty:ty;)+) => {
+    ($(impl[$($gen:tt)*] $ty:ty, |$access:ident| $update:block;)+) => {
         $(
             impl<$($gen)*> sealed::Sealed for $ty {}
 
@@ -160,6 +168,9 @@ macro_rules! impl_data_filter_via_query_filter {
                 fn collect_tick_reads(_state: &Self::State, _out: &mut Vec<ComponentId>) {}
 
                 #[inline]
+                fn update_access($access: &mut FilteredAccess) $update
+
+                #[inline]
                 fn init_fetch<'a>(_state: &Self::State, _table: &'a TableAccess<'_>) -> Self::Fetch<'a> {}
 
                 #[inline]
@@ -172,9 +183,9 @@ macro_rules! impl_data_filter_via_query_filter {
 }
 
 impl_data_filter_via_query_filter! {
-    impl[T: 'static] With<T>;
-    impl[T: 'static] Without<T>;
-    impl[] ();
+    impl[T: 'static] With<T>, |access| { access.add_with::<T>(); };
+    impl[T: 'static] Without<T>, |access| { access.add_without::<T>(); };
+    impl[] (), |_access| {};
 }
 
 // ── Added<T> and Changed<T> ──────────────────────────────────────────
@@ -219,6 +230,12 @@ macro_rules! impl_tick_filter {
                 if let Some(id) = *state {
                     out.push(id);
                 }
+            }
+
+            #[inline]
+            fn update_access(access: &mut FilteredAccess) {
+                access.add_component_read::<T>();
+                access.add_with::<T>();
             }
 
             #[inline]
@@ -284,6 +301,11 @@ macro_rules! impl_data_filter_for_tuple {
             }
 
             #[inline]
+            fn update_access(access: &mut FilteredAccess) {
+                $($F::update_access(access);)+
+            }
+
+            #[inline]
             #[allow(non_snake_case)]
             fn init_fetch<'a>(state: &Self::State, table: &'a TableAccess<'_>) -> Self::Fetch<'a> {
                 let ($($F,)+) = state;
@@ -334,6 +356,8 @@ pub trait DataOrGroup: sealed::OrSealed {
     #[doc(hidden)]
     fn collect_tick_reads(state: &Self::State, out: &mut Vec<ComponentId>);
     #[doc(hidden)]
+    fn update_access(access: &mut FilteredAccess);
+    #[doc(hidden)]
     fn init_fetch<'a>(state: &Self::State, table: &'a TableAccess<'_>) -> Self::Fetch<'a>;
     #[doc(hidden)]
     fn any_matches_row(fetch: &Self::Fetch<'_>, row: usize) -> bool;
@@ -368,6 +392,18 @@ macro_rules! impl_data_or_group_for_tuple {
             fn collect_tick_reads(state: &Self::State, out: &mut Vec<ComponentId>) {
                 let ($($F,)+) = state;
                 $($F::collect_tick_reads($F, out);)+
+            }
+
+            // Every arm's reads count; none of its constraints do (only
+            // one arm needs to hold, and dropping a constraint can only
+            // make two accesses look more likely to overlap).
+            #[inline]
+            fn update_access(access: &mut FilteredAccess) {
+                $(
+                    let mut arm = FilteredAccess::new();
+                    $F::update_access(&mut arm);
+                    access.extend_access(&arm);
+                )+
             }
 
             #[inline]
@@ -421,6 +457,11 @@ impl<T: DataOrGroup> DataFilter for Or<T> {
     #[inline]
     fn collect_tick_reads(state: &Self::State, out: &mut Vec<ComponentId>) {
         T::collect_tick_reads(state, out);
+    }
+
+    #[inline]
+    fn update_access(access: &mut FilteredAccess) {
+        T::update_access(access);
     }
 
     #[inline]

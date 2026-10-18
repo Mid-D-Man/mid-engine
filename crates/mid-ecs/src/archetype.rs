@@ -113,7 +113,7 @@ mod ffi_write;
 use ffi_write::FfiWriter;
 pub use ffi_write::{ComponentFfiError, FfiSpanMut};
 mod iter_data;
-pub(crate) use iter_data::TableAccess;
+pub(crate) use iter_data::{validate_access, TableAccess};
 mod iter_mut;
 
 /// Dense identifier for one archetype (one exact component-type set).

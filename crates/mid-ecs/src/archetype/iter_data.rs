@@ -324,12 +324,12 @@ fn select_rows<F: DataFilter>(filter: &F::State, table: &TableAccess<'_>, rows: 
 /// Panics if the query reads and writes, or writes twice, the same
 /// component type. Keyed by `TypeId`, not by registered id, so the answer
 /// does not depend on which types the world happens to hold.
-fn validate_access(entries: &[AccessEntry]) {
+pub(crate) fn validate_access(context: &str, entries: &[AccessEntry]) {
     for (i, a) in entries.iter().enumerate() {
         for b in &entries[i + 1..] {
             if a.type_id == b.type_id && (a.write || b.write) {
                 panic!(
-                    "query_data_mut: conflicting access to `{}`: a component can be read by any number of terms, or written by exactly one `Mut` term and nothing else",
+                    "{context}: conflicting access to `{}`: a component can be read by any number of terms, or written by exactly one `Mut` term and nothing else",
                     a.name
                 );
             }
@@ -572,7 +572,7 @@ impl Archetypes {
         let (state, filter, matched) = plan_matches::<Q, F>(self);
         let mut entries = Vec::new();
         Q::collect_access(&state, &mut entries);
-        validate_access(&entries);
+        validate_access("query_data_mut", &entries);
         let mut filter_ticks = Vec::new();
         F::collect_tick_reads(&filter, &mut filter_ticks);
         IterDataMut::<Q, F, _> {

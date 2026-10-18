@@ -3747,6 +3747,99 @@ everything.)
   covers it.
 - No `AnyOf`, no resource change detection, no tick wraparound check (item 8).
 
+### Access sets: `access.rs` (`Access`, `FilteredAccess`, `FilteredAccessSet`)
+
+Gap-list item 4, first half: the primitives a scheduler and a parallel
+iterator stand on. Nothing here runs anything and nothing is enforced at
+runtime; it answers one question, exactly: *could these two pieces of work
+touch the same data with at least one of them writing?* The other half of
+item 4 (the `SystemParam` trait and system state) is not built; see "Not done".
+Safe code only, no `unsafe`. This split follows `crates/mid-app`'s own header,
+which says it waits for mid-ecs to define the parameter convention rather than
+invent one twice.
+
+| type | what it is |
+|---|---|
+| `Access` | Component and resource reads and writes as sets, plus read-all / write-all flags for exclusive work (`&mut World`). `add_*`, `extend`, `get_conflicts`, `is_compatible`. |
+| `FilteredAccess` | An `Access` plus the query's archetype constraints (`with`, `without`). `FilteredAccess::of_query::<Q, F>()` builds one from a query type, no world needed. |
+| `FilteredAccessSet` | The filtered accesses of one system, one per parameter, plus their union. `get_conflicts_single` (a new parameter against the ones already there) and `get_conflicts` (system against system, part against part). |
+| `AccessConflicts` | The answer: empty, or `is_all()` (one side claims a whole class), plus the sorted, deduplicated type names in conflict. `Display` for panic messages. |
+
+**Decisions.**
+- **Keyed by `TypeId`, not `ComponentId`.** A system is analysed before the
+  world holds an entity, and a type the world has never seen has no
+  `ComponentId`. The type name kept beside each id is for messages only. This is
+  the same choice `query_data_mut`'s own conflict check already made.
+- **Components and resources are separate namespaces.** Component `A` and
+  resource `A` never conflict. Conflict names are deduplicated by type name, so
+  if the same type is in conflict as both, it is named once.
+- **Constraints decide.** `Query<&mut A, With<B>>` and `Query<&mut A,
+  Without<B>>` are compatible: no entity is in both. A required term (`&B`,
+  `Mut<B>`, `Ref<B>`, `Added<B>`, `Changed<B>`) constrains like `With<B>`; an
+  optional term and `Has` constrain nothing. A contradictory query (`With<B>`
+  and `Without<B>`) matches nothing, so it conflicts with nothing. A component
+  that one side excludes cannot be the shared one (`Option<&A>` + `Without<A>`
+  never reads an `A`). Resource conflicts do not depend on entities and always
+  stand.
+- **`Added`/`Changed` are reads.** As terms and as filters they read the
+  component's change ticks, so a system that writes `T` conflicts with one that
+  tests `Changed<T>`; a ticks read racing a ticks write would be a data race. A
+  `Mut<T>` term and a `Changed<T>` *filter* in one query are one access (a
+  write), which is why `Mut<T>` filtered by `Changed<T>` is legal.
+- **`Or` is conservative.** An `Or` adds every arm's reads and none of its
+  `with`/`without` constraints (only one arm needs to hold). Dropping a
+  constraint can only make two accesses look more likely to overlap, so it can
+  report a conflict a finer analysis would not, never miss one.
+- **Exclusive work** is `write_all()`: it conflicts with any access that
+  touches anything and with nothing that is empty. `read_all()` conflicts with
+  writers only.
+- **Plumbing.** `QueryData` and `DataFilter` each gained a hidden
+  `update_access(&mut FilteredAccess)`, so the description lives with the term
+  and the filter. A test pins that it agrees with the older `collect_access` /
+  `collect_required` the iterators actually use. `validate_access`, the
+  term-conflict check `query_data_mut` makes at creation, became `pub(crate)`
+  with a context argument so `of_query` reports the same conflict
+  (`FilteredAccess::of_query: conflicting access to ...`).
+
+**Verification.** Default lib tests 512 to 541, scratch-arena 517 to 546,
+doctests 10 to 11 (`FilteredAccess::of_query`), `ffi::` tests unchanged at 76.
+The central test is an exhaustive oracle: 23 query specs (terms and filters of
+every kind, including `Or`, a contradictory filter, and `Mut` with `Changed`
+on the same component), every ordered pair (529), each compared against a brute-force search
+over all 8 archetypes of a 3-component universe built from the real
+archetype-level semantics (`matches_component_set`, `collect_required`,
+`collect_access`, `collect_tick_reads`), with no reference to `FilteredAccess`.
+The verdict must never miss a real conflict, must equal the oracle exactly for
+every pair without an `Or`, and the table is asserted to contain both
+verdicts and at least one pair where `Or` is more conservative than the oracle.
+Mutation testing: 62 mutants over `access.rs` and the `update_access`
+implementations; 52 caught first time, the other 10 split into 8 test gaps
+(only one direction of `read_all` tested, `extend` leaving a stale read entry,
+`writes_resource` under exclusive access, names repeated across pairs, the
+`Display` separator) fixed by new tests, and 2 equivalent mutants: `is_exclusive`
+with `||` for `&&` (the two flags are only ever set together, by `write_all`), and
+the inner `dedup` in the per-class conflict list (an id is never in both the
+read and the write map, so it cannot repeat there).
+
+**Not done.**
+- **`SystemParam`, `SystemMeta`, system state, a system trait, and parameter
+  types (`Query<Q, F>`, `Res`, `ResMut`, `Commands`, `Local`).** This is the
+  second half of item 4. A system with two query parameters and a `ResMut`
+  holds several borrows of one `World` at once, which safe Rust cannot express
+  for borrows that are only known to be disjoint by an access check; bevy does it
+  with an unsafe world cell whose soundness rests on checks like these.
+  That is a real decision (it introduces the crate's first `unsafe` outside the
+  FFI boundary and the same cell is what `par_iter` needs), so it waits for an
+  explicit go.
+- No runtime enforcement: nothing here stops a caller from ignoring a
+  conflict.
+- Bevy's finer, per-archetype runtime access (to let two systems run while
+  their archetype sets happen not to overlap) is not modelled; the constraint
+  analysis above is static.
+- The Sparse Shell has no access description; only Archetype Core components
+  and resources.
+- No benchmark: these are setup-time structures, not on any query path.
+
 ### Writing component data from C (`raw_span_mut`, `write`, `FfiSpanMut`)
 
 The open question the mutable queries left: the C span pointer is `const`, and a

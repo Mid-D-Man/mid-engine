@@ -6,6 +6,7 @@
 //! Multiplayer-first: the sync module marks components for
 //! mid-net replication from day one.
 
+pub mod access;
 pub mod archetype;
 pub mod commands;
 pub mod component;
@@ -30,6 +31,7 @@ pub mod world;
 // that was caught); kept as a note for anyone re-deriving this crate's
 // history, not because the bug risk still applies now that the type is
 // real.
+pub use access::{Access, AccessConflicts, FilteredAccess, FilteredAccessSet};
 pub use archetype::{ArchetypeId, ComponentFfiError, FfiSpanMut};
 pub use commands::{CommandQueue, Commands, EntityCommands};
 pub use component::{ComponentId, SparseShell};

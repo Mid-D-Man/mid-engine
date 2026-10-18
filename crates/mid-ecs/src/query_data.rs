@@ -84,6 +84,7 @@
 use std::any::{type_name, TypeId};
 use std::marker::PhantomData;
 
+use crate::access::FilteredAccess;
 use crate::archetype::TableAccess;
 use crate::component::ComponentId;
 use crate::tick::{ComponentTicks, Mut, Ref, Tick};
@@ -147,6 +148,14 @@ pub trait QueryData: sealed::Sealed {
     /// per-archetype column hand-out of the mutable iterator.
     #[doc(hidden)]
     fn collect_access(state: &Self::State, out: &mut Vec<AccessEntry>);
+
+    /// Records what this term reads, writes and requires into `access`,
+    /// without a world: the same facts as `collect_access` plus the
+    /// archetype constraint a required term implies (`with`), keyed by
+    /// type so a system can be analysed before the world holds any
+    /// entity. See `access.rs`.
+    #[doc(hidden)]
+    fn update_access(access: &mut FilteredAccess);
 
     /// Resolves the slices and flags for one archetype's table.
     #[doc(hidden)]
@@ -247,6 +256,9 @@ impl QueryData for Entity {
     fn collect_access(_state: &Self::State, _out: &mut Vec<AccessEntry>) {}
 
     #[inline]
+    fn update_access(_access: &mut FilteredAccess) {}
+
+    #[inline]
     fn init_fetch<'w>(_state: &Self::State, table: &mut TableAccess<'w>) -> Self::Fetch<'w> {
         table.entities()
     }
@@ -292,6 +304,12 @@ impl<T: 'static> QueryData for &T {
     #[inline]
     fn collect_access(state: &Self::State, out: &mut Vec<AccessEntry>) {
         out.push(AccessEntry::read::<T>(*state));
+    }
+
+    #[inline]
+    fn update_access(access: &mut FilteredAccess) {
+        access.add_component_read::<T>();
+        access.add_with::<T>();
     }
 
     #[inline]
@@ -346,6 +364,11 @@ impl<T: 'static> QueryData for Option<&T> {
     }
 
     #[inline]
+    fn update_access(access: &mut FilteredAccess) {
+        access.add_component_read::<T>();
+    }
+
+    #[inline]
     fn init_fetch<'w>(state: &Self::State, table: &mut TableAccess<'w>) -> Self::Fetch<'w> {
         // Presence is the archetype's signature, not whether the column
         // object exists yet (see the `&T` impl).
@@ -397,6 +420,9 @@ impl<T: 'static> QueryData for Has<T> {
 
     #[inline]
     fn collect_access(_state: &Self::State, _out: &mut Vec<AccessEntry>) {}
+
+    #[inline]
+    fn update_access(_access: &mut FilteredAccess) {}
 
     #[inline]
     fn init_fetch<'w>(state: &Self::State, table: &mut TableAccess<'w>) -> Self::Fetch<'w> {
@@ -485,6 +511,12 @@ impl<T: 'static> QueryData for Mut<'_, T> {
     }
 
     #[inline]
+    fn update_access(access: &mut FilteredAccess) {
+        access.add_component_write::<T>();
+        access.add_with::<T>();
+    }
+
+    #[inline]
     fn init_fetch<'w>(state: &Self::State, table: &mut TableAccess<'w>) -> Self::Fetch<'w> {
         match *state {
             Some(id) => mut_fetch::<T>(id, table),
@@ -530,6 +562,11 @@ impl<T: 'static> QueryData for Option<Mut<'_, T>> {
     #[inline]
     fn collect_access(state: &Self::State, out: &mut Vec<AccessEntry>) {
         out.push(AccessEntry::write::<T>(*state));
+    }
+
+    #[inline]
+    fn update_access(access: &mut FilteredAccess) {
+        access.add_component_write::<T>();
     }
 
     #[inline]
@@ -612,6 +649,12 @@ impl<T: 'static> QueryData for Ref<'_, T> {
     }
 
     #[inline]
+    fn update_access(access: &mut FilteredAccess) {
+        access.add_component_read::<T>();
+        access.add_with::<T>();
+    }
+
+    #[inline]
     fn init_fetch<'w>(state: &Self::State, table: &mut TableAccess<'w>) -> Self::Fetch<'w> {
         match *state {
             Some(id) => ref_fetch::<T>(id, table),
@@ -658,6 +701,11 @@ impl<T: 'static> QueryData for Option<Ref<'_, T>> {
     #[inline]
     fn collect_access(state: &Self::State, out: &mut Vec<AccessEntry>) {
         out.push(AccessEntry::read_ticked::<T>(*state));
+    }
+
+    #[inline]
+    fn update_access(access: &mut FilteredAccess) {
+        access.add_component_read::<T>();
     }
 
     #[inline]
@@ -743,6 +791,12 @@ macro_rules! impl_tick_term {
             }
 
             #[inline]
+            fn update_access(access: &mut FilteredAccess) {
+                access.add_component_read::<T>();
+                access.add_with::<T>();
+            }
+
+            #[inline]
             fn init_fetch<'w>(state: &Self::State, table: &mut TableAccess<'w>) -> Self::Fetch<'w> {
                 TickFetch {
                     ticks: match *state {
@@ -811,6 +865,11 @@ macro_rules! impl_query_data_for_tuple {
             fn collect_access(state: &Self::State, out: &mut Vec<AccessEntry>) {
                 let ($($T,)+) = state;
                 $($T::collect_access($T, out);)+
+            }
+
+            #[inline]
+            fn update_access(access: &mut FilteredAccess) {
+                $($T::update_access(access);)+
             }
 
             #[inline]
