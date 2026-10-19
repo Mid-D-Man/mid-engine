@@ -205,7 +205,7 @@ pub struct World {
     pub(crate) components: SparseShell,
     pub(crate) archetypes: Archetypes,
     pub(crate) sync: crate::sync::SyncRegistry,
-    resources: Resources,
+    pub(crate) resources: Resources,
     storage_claims: StorageClaims,
     change_tick: Tick,
 }

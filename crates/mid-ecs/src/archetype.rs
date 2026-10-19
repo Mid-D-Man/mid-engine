@@ -87,6 +87,7 @@ use zerocopy::{Immutable, IntoBytes, KnownLayout};
 
 use crate::component::ComponentId;
 use crate::hash::{DenseIdMap, TypeIdMap};
+use crate::interior::Interior;
 use crate::tick::{ComponentTicks, Tick};
 use crate::world::Entity;
 
@@ -207,13 +208,13 @@ impl<T: 'static> Column for Vec<T> {
 /// [`Column`] per component type, one [`Entity`] per row, all in
 /// lockstep. See this module's doc comment for the full design.
 pub(crate) struct Table {
-    columns: SparseSet<ComponentId, Box<dyn Column>>,
+    columns: SparseSet<ComponentId, Interior<Box<dyn Column>>>,
     /// Per-component, row-aligned with `columns`' own `Vec<T>` at the
     /// same `ComponentId` key -- always the same key set and the same
     /// length as that column, maintained by `ensure_ticks` alongside
     /// every `ensure_column` call and updated everywhere a row is
     /// pushed, migrated, or swap-removed. See `tick.rs`.
-    ticks: SparseSet<ComponentId, Vec<ComponentTicks>>,
+    ticks: SparseSet<ComponentId, Interior<Vec<ComponentTicks>>>,
     entities: Vec<Entity>,
 }
 
@@ -1018,7 +1019,7 @@ impl Archetypes {
                 .columns
                 .get_mut(comp)
                 .expect("just ensured present");
-            column.move_row_to(from_location.row, &mut **dest);
+            column.move_row_to(from_location.row, &mut ***dest);
             let moved_ticks = from_archetype
                 .table
                 .ticks
@@ -1160,7 +1161,7 @@ impl Archetypes {
                 .columns
                 .get_mut(comp)
                 .expect("just ensured present");
-            column.move_row_to(from_location.row, &mut **dest);
+            column.move_row_to(from_location.row, &mut ***dest);
             let moved_ticks = from_archetype
                 .table
                 .ticks
@@ -1332,7 +1333,7 @@ impl Archetypes {
                 .columns
                 .get_mut(comp)
                 .expect("just ensured present");
-            column.move_row_to(from_location.row, &mut **dest);
+            column.move_row_to(from_location.row, &mut ***dest);
             let moved_ticks = from_archetype
                 .table
                 .ticks
@@ -1432,7 +1433,7 @@ impl Archetypes {
                 .columns
                 .get_mut(comp)
                 .expect("just ensured present");
-            column.move_row_to(from_location.row, &mut **dest);
+            column.move_row_to(from_location.row, &mut ***dest);
             let moved_ticks = from_archetype
                 .table
                 .ticks
@@ -1502,7 +1503,7 @@ impl Archetypes {
         let location = *self.locations.get(entity)?;
         let archetype = self.archetypes.get_mut(location.archetype_id)?;
         if let Some(ticks) = archetype.table.ticks.get_mut(component_id) {
-            if let Some(row_ticks) = ticks.get_mut(location.row) {
+            if let Some(row_ticks) = ticks.as_mut_slice().get_mut(location.row) {
                 row_ticks.changed = tick;
             }
         }
@@ -1571,20 +1572,23 @@ impl Archetypes {
 /// method, since it's only ever called from inside a `column_mut`-style
 /// borrow where `self` isn't conveniently available as `&mut Archetypes`.
 fn ensure_column(
-    columns: &mut SparseSet<ComponentId, Box<dyn Column>>,
+    columns: &mut SparseSet<ComponentId, Interior<Box<dyn Column>>>,
     id: ComponentId,
     make: impl FnOnce() -> Box<dyn Column>,
 ) {
     if !columns.contains(id) {
-        columns.insert(id, make());
+        columns.insert(id, Interior::new(make()));
     }
 }
 
 /// `ensure_column`'s counterpart for `Table::ticks` -- called alongside
 /// every `ensure_column` so the two stay at the same key set.
-fn ensure_ticks(ticks: &mut SparseSet<ComponentId, Vec<ComponentTicks>>, id: ComponentId) {
+fn ensure_ticks(
+    ticks: &mut SparseSet<ComponentId, Interior<Vec<ComponentTicks>>>,
+    id: ComponentId,
+) {
     if !ticks.contains(id) {
-        ticks.insert(id, Vec::new());
+        ticks.insert(id, Interior::new(Vec::new()));
     }
 }
 

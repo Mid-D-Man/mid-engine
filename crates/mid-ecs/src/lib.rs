@@ -14,6 +14,7 @@ pub mod data_filter;
 pub mod ffi;
 pub mod filter;
 mod hash;
+mod interior;
 pub mod query;
 pub mod query_data;
 pub mod resource;
@@ -22,6 +23,7 @@ pub mod sync;
 pub mod tick;
 pub mod transform;
 pub mod world;
+pub mod world_cell;
 
 // Restored: world.rs now actually defines World (and Entity), as of the
 // generational-arena/entity-allocation pass -- see world.rs's own doc
@@ -42,3 +44,4 @@ pub use resource::{ResourceFfiError, ResourceId};
 pub use tick::{ChangeTracker, Mut, Ref, Tick};
 pub use transform::{GlobalTransform, GlobalTransformLWC};
 pub use world::{Entity, World};
+pub use world_cell::WorldCell;

@@ -345,7 +345,7 @@ impl Archetypes {
         );
         if let Some(stamp) = ticks
             .get_mut(component_id)
-            .and_then(|row_ticks| row_ticks.get_mut(location.row))
+            .and_then(|row_ticks| row_ticks.as_mut_slice().get_mut(location.row))
         {
             stamp.changed = this_run;
         }
@@ -468,7 +468,7 @@ impl Archetypes {
                 .columns
                 .get_mut(comp)
                 .expect("just ensured present");
-            column.move_row_to(from_location.row, &mut **dest);
+            column.move_row_to(from_location.row, &mut ***dest);
             let moved_ticks = from_archetype
                 .table
                 .ticks
@@ -591,7 +591,7 @@ impl Archetypes {
                 .columns
                 .get_mut(comp)
                 .expect("just ensured present");
-            column.move_row_to(from_location.row, &mut **dest);
+            column.move_row_to(from_location.row, &mut ***dest);
             let moved_ticks = from_archetype
                 .table
                 .ticks

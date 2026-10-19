@@ -26,7 +26,9 @@
 //! `iter2_ref_filtered` visits for the same required components and
 //! filter (asserted by a test).
 //!
-//! **Zero `unsafe`, including the mutable one.** The exclusive iterator
+//! **Zero `unsafe`, including the mutable one** (for the exclusive
+//! source; the `WorldCell` source below is the one exception, behind
+//! `unsafe fn iter_data_cell`, see `world_cell.rs`). The exclusive iterator
 //! takes each matched archetype as `&mut Archetype` (as `iter_mut.rs`
 //! does), destructures its `Table` into independent field borrows, and
 //! makes one pass over `columns.iter_mut()` and one over
@@ -161,6 +163,50 @@ impl<'w> TableAccess<'w> {
         }
     }
 
+    /// `load`'s counterpart for a `WorldCell`: the same plan-driven
+    /// hand-out of columns and tick slices, but from a *shared*
+    /// `&Archetype`, taking the written ones through their `Interior`.
+    ///
+    /// # Safety
+    /// For the whole of `'w`: no reference to a column or tick slice this
+    /// plan marks *written* exists except the one this call hands out, and
+    /// no column or tick slice it marks *read* is written by anyone. A
+    /// column's data and its tick slice are separate `Interior`s, each
+    /// handed out at most once per call (the plan has one entry per
+    /// component).
+    unsafe fn load_cell(&mut self, archetype: &'w Archetype, plan: &[(ComponentId, bool, bool)]) {
+        self.signature = archetype.component_ids.as_slice();
+        self.entities = archetype.table.entities.as_slice();
+        self.columns.clear();
+        self.ticks.clear();
+        for (id, column) in archetype.table.columns.iter() {
+            if let Some(&(_, written, _)) = plan.iter().find(|(planned, _, _)| *planned == id) {
+                let slot = if written {
+                    // SAFETY: the caller's contract; this is the only
+                    // `&mut` to this column.
+                    Slot::Mut(Some(unsafe { column.get_mut_unchecked() }))
+                } else {
+                    Slot::Shared(&**column)
+                };
+                self.columns.push((id, slot));
+            }
+        }
+        for (id, column_ticks) in archetype.table.ticks.iter() {
+            if let Some(&(_, written, ticked)) = plan.iter().find(|(planned, _, _)| *planned == id)
+            {
+                if written {
+                    // SAFETY: as above, for the tick slice.
+                    let ticks = unsafe { column_ticks.get_mut_unchecked() };
+                    self.ticks
+                        .push((id, TickSlot::Mut(Some(ticks.as_mut_slice()))));
+                } else if ticked {
+                    self.ticks
+                        .push((id, TickSlot::Shared(column_ticks.as_slice())));
+                }
+            }
+        }
+    }
+
     /// Rows in this archetype's table.
     #[inline]
     pub(crate) fn len(&self) -> usize {
@@ -235,7 +281,7 @@ impl<'w> TableAccess<'w> {
     #[inline]
     pub(crate) fn column<T: 'static>(&self, id: ComponentId) -> Option<&'w [T]> {
         let column: &'w dyn Column = match self.table {
-            Some(table) => &**table.columns.get(id)?,
+            Some(table) => &***table.columns.get(id)?,
             None => match self.columns.iter().find(|(planned, _)| *planned == id) {
                 Some((_, Slot::Shared(column))) => &***column,
                 _ => return None,
@@ -482,11 +528,71 @@ impl Archetypes {
 
 // ── Exclusive iteration ──────────────────────────────────────────────
 
-/// The real `Iterator` behind `World::query_data_mut`. `I` is the
-/// matching-archetype walk from `select`; it is a type parameter only
-/// because that walk's type cannot be named.
-pub(crate) struct IterDataMut<'w, Q: QueryData, F: DataFilter, I> {
-    archetypes: I,
+/// Where the exclusive iterator gets its next archetype from, and how it
+/// turns it into a `TableAccess`: exclusively (`&mut Archetype`, no
+/// `unsafe`) or through a `WorldCell` (`&Archetype` and per-column
+/// interior mutability, behind the contract of `iter_data_cell`).
+pub(crate) trait ArchetypeSource<'w> {
+    /// Loads the next matched archetype into `table` according to `plan`.
+    /// `false` when there are no more.
+    fn load_next(
+        &mut self,
+        table: &mut TableAccess<'w>,
+        plan: &[(ComponentId, bool, bool)],
+    ) -> bool;
+}
+
+/// The safe source: the matching archetypes, taken mutably in dense order.
+pub(crate) struct ExclusiveSource<I>(I);
+
+impl<'w, I: Iterator<Item = &'w mut Archetype>> ArchetypeSource<'w> for ExclusiveSource<I> {
+    fn load_next(
+        &mut self,
+        table: &mut TableAccess<'w>,
+        plan: &[(ComponentId, bool, bool)],
+    ) -> bool {
+        match self.0.next() {
+            Some(archetype) => {
+                table.load(archetype, plan);
+                true
+            }
+            None => false,
+        }
+    }
+}
+
+/// The cell source: the matching archetypes by shared reference. Only
+/// constructible inside `Archetypes::iter_data_cell`, an `unsafe fn`
+/// whose contract is what makes `load_next`'s `unsafe` call sound.
+pub(crate) struct CellSource<'w> {
+    archetypes: &'w Archetypes,
+    matched: std::vec::IntoIter<ArchetypeId>,
+}
+
+impl<'w> ArchetypeSource<'w> for CellSource<'w> {
+    fn load_next(
+        &mut self,
+        table: &mut TableAccess<'w>,
+        plan: &[(ComponentId, bool, bool)],
+    ) -> bool {
+        let Some(id) = self.matched.next() else {
+            return false;
+        };
+        let archetype = self.archetypes.archetypes.get(id).expect(
+            "the cell iterator's precomputed matched list only ever contains real, currently-existing archetype ids",
+        );
+        // SAFETY: a `CellSource` exists only inside the iterator returned
+        // by `Archetypes::iter_data_cell`, whose caller promised the
+        // access contract for the iterator's whole lifetime.
+        unsafe { table.load_cell(archetype, plan) };
+        true
+    }
+}
+
+/// The real `Iterator` behind `World::query_data_mut` and the
+/// `WorldCell` queries. `S` is where the matching archetypes come from.
+pub(crate) struct IterDataMut<'w, Q: QueryData, F: DataFilter, S> {
+    source: S,
     state: Q::State,
     filter: F::State,
     /// `(component, written, ticks_read)` for every component the query
@@ -507,8 +613,8 @@ pub(crate) struct IterDataMut<'w, Q: QueryData, F: DataFilter, I> {
     next_selected: usize,
 }
 
-impl<'w, Q: QueryData, F: DataFilter, I: Iterator<Item = &'w mut Archetype>> Iterator
-    for IterDataMut<'w, Q, F, I>
+impl<'w, Q: QueryData, F: DataFilter, S: ArchetypeSource<'w>> Iterator
+    for IterDataMut<'w, Q, F, S>
 {
     type Item = Q::Item<'w>;
 
@@ -534,8 +640,9 @@ impl<'w, Q: QueryData, F: DataFilter, I: Iterator<Item = &'w mut Archetype>> Ite
                     return Some(item);
                 }
             }
-            let archetype = self.archetypes.next()?;
-            self.table.load(archetype, &self.plan);
+            if !self.source.load_next(&mut self.table, &self.plan) {
+                return None;
+            }
             if F::TRACKED {
                 select_rows::<F>(&self.filter, &self.table, &mut self.rows);
                 self.next_selected = 0;
@@ -553,6 +660,49 @@ impl<'w, Q: QueryData, F: DataFilter, I: Iterator<Item = &'w mut Archetype>> Ite
 }
 
 impl Archetypes {
+    /// The `WorldCell` form of [`Self::iter_data_mut_filtered`]: the same
+    /// iterator, reading the archetypes through `&self` and taking the
+    /// columns it writes through their `Interior`, so several of these
+    /// (and read-only ones) can be live at once over the same archetypes
+    /// as long as they touch different columns.
+    ///
+    /// # Panics
+    /// Under the same conditions as `iter_data_mut_filtered`.
+    ///
+    /// # Safety
+    /// For as long as the returned iterator, or anything it yielded, is
+    /// live: no `&mut Archetypes` or `&mut World` exists, and no other
+    /// access conflicts with this query's own, as `FilteredAccess::of_query`
+    /// describes it: nothing else reads or writes a component it writes
+    /// (values *or* change ticks), and nothing else writes one it reads.
+    pub(crate) unsafe fn iter_data_cell<'a, Q: QueryData + 'a, F: DataFilter + 'a>(
+        &'a self,
+        this_run: Tick,
+        last_run: Tick,
+    ) -> impl Iterator<Item = Q::Item<'a>> + 'a {
+        let (state, filter, matched) = plan_matches::<Q, F>(self);
+        let mut entries = Vec::new();
+        Q::collect_access(&state, &mut entries);
+        validate_access("WorldCell::query_iter_mut", &entries);
+        let mut filter_ticks = Vec::new();
+        F::collect_tick_reads(&filter, &mut filter_ticks);
+        IterDataMut::<Q, F, _> {
+            source: CellSource {
+                archetypes: self,
+                matched: matched.into_iter(),
+            },
+            state,
+            filter,
+            plan: build_plan(&entries, &filter_ticks),
+            table: TableAccess::exclusive(this_run, last_run),
+            fetch: None,
+            row: 0,
+            len: 0,
+            rows: Vec::new(),
+            next_selected: 0,
+        }
+    }
+
     /// Builds the exclusive iterator for query data `Q` (any terms) over
     /// the archetypes that contain every `&T`/`Mut<T>` term's component
     /// and satisfy `F`. Writes made through `Mut` terms are stamped with
@@ -576,7 +726,7 @@ impl Archetypes {
         let mut filter_ticks = Vec::new();
         F::collect_tick_reads(&filter, &mut filter_ticks);
         IterDataMut::<Q, F, _> {
-            archetypes: select(&mut self.archetypes, matched),
+            source: ExclusiveSource(select(&mut self.archetypes, matched)),
             state,
             filter,
             plan: build_plan(&entries, &filter_ticks),

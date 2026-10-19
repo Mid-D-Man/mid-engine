@@ -3823,14 +3823,10 @@ read and the write map, so it cannot repeat there).
 
 **Not done.**
 - **`SystemParam`, `SystemMeta`, system state, a system trait, and parameter
-  types (`Query<Q, F>`, `Res`, `ResMut`, `Commands`, `Local`).** This is the
-  second half of item 4. A system with two query parameters and a `ResMut`
-  holds several borrows of one `World` at once, which safe Rust cannot express
-  for borrows that are only known to be disjoint by an access check; bevy does it
-  with an unsafe world cell whose soundness rests on checks like these.
-  That is a real decision (it introduces the crate's first `unsafe` outside the
-  FFI boundary and the same cell is what `par_iter` needs), so it waits for an
-  explicit go.
+  types (`Query<Q, F>`, `Res`, `ResMut`, `Commands`, `Local`).** The second half
+  of item 4. Its prerequisite, the cell that lets one system hold several
+  borrows of one `World`, was added afterwards: see "`WorldCell`: shared access
+  with checked disjointness" below.
 - No runtime enforcement: nothing here stops a caller from ignoring a
   conflict.
 - Bevy's finer, per-archetype runtime access (to let two systems run while
@@ -3839,6 +3835,89 @@ read and the write map, so it cannot repeat there).
 - The Sparse Shell has no access description; only Archetype Core components
   and resources.
 - No benchmark: these are setup-time structures, not on any query path.
+
+### `WorldCell`: shared access with checked disjointness (`world_cell.rs`, `interior.rs`)
+
+Gap-list item 4, the prerequisite for its second half: one handle that lets
+several queries and resources of one system be live at once. A system with
+`Query<&mut A>`, `Query<&B>` and `ResMut<R>` holds three borrows of one `World`;
+safe Rust cannot express "these touch different data" when the difference is
+only in the *types* the queries name. The user chose to add this, accepting the
+crate's first `unsafe` outside the FFI boundary. All of it is in four places:
+`interior.rs`, `world_cell.rs`, `TableAccess::load_cell` /
+`Archetypes::iter_data_cell` in `archetype/iter_data.rs`, and
+`Resources::get_mut_unchecked`.
+
+**The rule.** A `WorldCell` function may be called only while nothing else
+reads what it writes or writes what it reads. That is exactly what
+`FilteredAccess::of_query::<Q, F>()` (previous section) describes and what
+`is_compatible` decides, which is why a system will check its parameters' access
+sets when it is set up. Violating it is undefined behaviour; nothing is checked at
+runtime (no borrow flags), so every query and resource function on the cell is
+`unsafe` and states the contract. The one check made regardless is the one
+`query_data_mut` already made: a query that conflicts with itself
+(`(&A, Mut<A>)`) panics before anything is touched.
+
+**Why that is enough: `Interior<T>`.** Two `&mut` to different columns of one
+archetype are only sound if neither is reached through a `&mut` to (or a
+conflicting `&` of) the structure that holds the other. So each column of
+component values, each column of change ticks and each resource is its own
+`UnsafeCell` (`Interior<T>`, `repr(transparent)`: same size, no extra pointer
+hop). The archetype list, the tables and everything that locates a column are
+only ever borrowed shared through the cell. The cell comes from
+`World::as_world_cell(&mut self)` and carries that borrow, so nothing outside
+can touch the world meanwhile: any overlap would have to come from two calls on the
+cell, and those are `unsafe`. `Interior`'s `Deref` is safe because a `&mut` from
+`get_mut_unchecked` only exists while a cell holds the world's exclusive borrow.
+All the existing `&mut` paths (`get_mut`-style, migrations, the exclusive
+iterator) are unchanged except for type-level auto-deref (`&mut ***dest` at six
+sites), and `DerefMut` goes through `UnsafeCell::get_mut`, which is free.
+
+**What the cell offers.** `WorldCell::query_iter` (read-only terms) and
+`query_iter_mut` (any terms, any `DataFilter`), both taking the two ticks
+(`this_run`, `last_run`) instead of a tracker, `resource` / `resource_mut`,
+`contains_resource`, `change_tick`. `query_iter_mut` is the existing exclusive
+iterator with a different archetype source: `IterDataMut` became generic over
+an `ArchetypeSource`, with the safe `ExclusiveSource` (unchanged behaviour) and
+`CellSource`, whose `load_next` calls `unsafe TableAccess::load_cell`. It
+reads archetypes through `&Archetypes` and takes the written columns and tick
+slices through their `Interior`, once each, per the same per-query plan. The
+terms, filters, row selection and conflict check are shared code, not copies.
+
+**Not through a cell.** Adding an entity, inserting or removing a component,
+inserting or removing a resource: those change structures other cell calls
+hold shared references into, and belong to commands applied afterwards with
+`&mut World`. The cell is not `Send`/`Sync` (raw pointer); running two systems
+at once (item 5) has to make that decision.
+
+**Verification.** Default lib tests 541 to 554 (13 new: 3 `Interior`, 10 cell),
+`ffi::` unchanged. The cell tests include queries that are live at the same
+time over the same archetypes (a reader of `B` nested inside a writer of `A`;
+two writers of different components holding all their items at once), cell
+results against the safe queries (read-only with `Changed`, and a filtered write
+compared with the safe exclusive iterator on an identical world, values and
+stamps), the tick slice of a component the query only filters on, a resource
+borrowed beside component queries, and reuse of the world once the cell is
+dropped. Mutation testing of the cell layer: 18 mutants, 18 caught (one by hang
+detection). valgrind over the cell, interior, access and `query_data` tests
+(102 tests): no errors. **Not verified: aliasing.** Neither valgrind nor the
+sandbox can check Rust's aliasing rules (no nightly, so no Miri). Run
+`cargo +nightly miri test -p mid-ecs --lib world_cell::` (and
+`MIRIFLAGS=-Zmiri-tree-borrows` too) before relying on this; the tests were
+written to be Miri-friendly (no FFI, no threads).
+
+**Not done.**
+- The second half of item 4: `SystemParam`, `SystemMeta`, a system trait and
+  function systems, and the parameter types `Query`, `Res`, `ResMut`,
+  `Commands`, `Local`. Nothing here checks a system's parameters against each
+  other yet; that check is `FilteredAccessSet::get_conflicts_single`, to be
+  called when a system is set up.
+- No benchmark. The storage change adds no indirection and no field, and the
+  typed paths do not call the new code, but the structural-change and query
+  benchmarks were not rerun here; optimization is paused.
+- The Sparse Shell is not behind `Interior` and has no cell access.
+- The FFI resource and component paths are unchanged (they use the `&mut`
+  side).
 
 ### Writing component data from C (`raw_span_mut`, `write`, `FfiSpanMut`)
 

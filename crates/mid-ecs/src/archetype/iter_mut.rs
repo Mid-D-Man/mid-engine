@@ -40,6 +40,7 @@ use std::slice::{Iter, IterMut};
 use super::{Archetype, ArchetypeId, Archetypes, Column, Table};
 use crate::component::ComponentId;
 use crate::filter::QueryFilter;
+use crate::interior::Interior;
 use crate::tick::{ComponentTicks, Mut, Tick};
 use crate::world::Entity;
 
@@ -61,7 +62,7 @@ pub(super) fn select<'a>(
     })
 }
 
-fn values_mut<'a, T: 'static>(column: Option<&'a mut Box<dyn Column>>) -> &'a mut [T] {
+fn values_mut<'a, T: 'static>(column: Option<&'a mut Interior<Box<dyn Column>>>) -> &'a mut [T] {
     match column {
         Some(column) => column
             .as_any_mut()
@@ -72,7 +73,7 @@ fn values_mut<'a, T: 'static>(column: Option<&'a mut Box<dyn Column>>) -> &'a mu
     }
 }
 
-fn values_ref<'a, T: 'static>(column: Option<&'a mut Box<dyn Column>>) -> &'a [T] {
+fn values_ref<'a, T: 'static>(column: Option<&'a mut Interior<Box<dyn Column>>>) -> &'a [T] {
     match column {
         Some(column) => column
             .as_any()
@@ -83,7 +84,7 @@ fn values_ref<'a, T: 'static>(column: Option<&'a mut Box<dyn Column>>) -> &'a [T
     }
 }
 
-fn ticks_mut(ticks: Option<&mut Vec<ComponentTicks>>) -> &mut [ComponentTicks] {
+fn ticks_mut(ticks: Option<&mut Interior<Vec<ComponentTicks>>>) -> &mut [ComponentTicks] {
     match ticks {
         Some(ticks) => ticks.as_mut_slice(),
         None => &mut [],

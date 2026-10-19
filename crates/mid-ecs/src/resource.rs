@@ -23,6 +23,7 @@ use mid_collections::FfiSpan;
 use zerocopy::{FromBytes, Immutable, IntoBytes, KnownLayout};
 
 use crate::hash::TypeIdMap;
+use crate::interior::Interior;
 
 /// Identifies a resource type registered for FFI access. Issued by
 /// `World::register_ffi_resource`, densely from 0, and only meaningful
@@ -56,7 +57,7 @@ pub enum ResourceFfiError {
     Absent,
 }
 
-type Values = TypeIdMap<Box<dyn Any>>;
+type Values = TypeIdMap<Interior<Box<dyn Any>>>;
 
 struct FfiEntry {
     type_id: TypeId,
@@ -87,7 +88,7 @@ fn write_one<T: 'static + FromBytes>(values: &mut Values, bytes: &[u8]) -> bool 
                 .expect("resource value type must match its registered TypeId") = new_value;
         }
         None => {
-            values.insert(TypeId::of::<T>(), Box::new(new_value));
+            values.insert(TypeId::of::<T>(), Interior::new(Box::new(new_value)));
         }
     }
     true
@@ -109,9 +110,10 @@ impl Resources {
     /// Stores `value`, returning the previous value of that type if any.
     pub(crate) fn insert<T: 'static>(&mut self, value: T) -> Option<T> {
         self.values
-            .insert(TypeId::of::<T>(), Box::new(value))
+            .insert(TypeId::of::<T>(), Interior::new(Box::new(value)))
             .map(|old| {
-                *old.downcast::<T>()
+                *old.into_inner()
+                    .downcast::<T>()
                     .expect("resource value type must match its TypeId")
             })
     }
@@ -126,9 +128,24 @@ impl Resources {
 
     pub(crate) fn remove<T: 'static>(&mut self) -> Option<T> {
         self.values.remove(&TypeId::of::<T>()).map(|old| {
-            *old.downcast::<T>()
+            *old.into_inner()
+                .downcast::<T>()
                 .expect("resource value type must match its TypeId")
         })
+    }
+
+    /// A mutable reference to the `T` resource through a shared one, for
+    /// `WorldCell`.
+    ///
+    /// # Safety
+    /// For as long as the returned reference is live, nothing else may
+    /// read or write this resource (the contract of
+    /// [`Interior::get_mut_unchecked`]); in particular no `get`, `get_mut`
+    /// or second call for the same `T`.
+    pub(crate) unsafe fn get_mut_unchecked<T: 'static>(&self) -> Option<&mut T> {
+        let cell = self.values.get(&TypeId::of::<T>())?;
+        // SAFETY: forwarded to the caller.
+        unsafe { cell.get_mut_unchecked() }.downcast_mut::<T>()
     }
 
     pub(crate) fn contains<T: 'static>(&self) -> bool {
