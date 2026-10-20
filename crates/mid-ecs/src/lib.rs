@@ -20,6 +20,8 @@ pub mod query_data;
 pub mod resource;
 mod scratch;
 pub mod sync;
+pub mod system;
+pub mod system_param;
 pub mod tick;
 pub mod transform;
 pub mod world;
@@ -41,6 +43,12 @@ pub use data_filter::DataFilter;
 pub use filter::{Or, QueryFilter, With, Without};
 pub use query_data::{Added, Changed, Has, QueryData, ReadOnlyQueryData};
 pub use resource::{ResourceFfiError, ResourceId};
+pub use system::{
+    ExclusiveFunctionSystem, FunctionSystem, IntoSystem, System, SystemParamFunction,
+};
+pub use system_param::{
+    Local, Query, Res, ResMut, SystemMeta, SystemParam, SystemParamItem, SystemState,
+};
 pub use tick::{ChangeTracker, Mut, Ref, Tick};
 pub use transform::{GlobalTransform, GlobalTransformLWC};
 pub use world::{Entity, World};

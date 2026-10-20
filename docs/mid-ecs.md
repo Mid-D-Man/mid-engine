@@ -3825,8 +3825,9 @@ read and the write map, so it cannot repeat there).
 - **`SystemParam`, `SystemMeta`, system state, a system trait, and parameter
   types (`Query<Q, F>`, `Res`, `ResMut`, `Commands`, `Local`).** The second half
   of item 4. Its prerequisite, the cell that lets one system hold several
-  borrows of one `World`, was added afterwards: see "`WorldCell`: shared access
-  with checked disjointness" below.
+  borrows of one `World`, and then the parameters and systems themselves, were
+  added afterwards: see "`WorldCell`: shared access with checked disjointness"
+  and "System parameters" below.
 - No runtime enforcement: nothing here stops a caller from ignoring a
   conflict.
 - Bevy's finer, per-archetype runtime access (to let two systems run while
@@ -3907,17 +3908,96 @@ sandbox can check Rust's aliasing rules (no nightly, so no Miri). Run
 written to be Miri-friendly (no FFI, no threads).
 
 **Not done.**
-- The second half of item 4: `SystemParam`, `SystemMeta`, a system trait and
-  function systems, and the parameter types `Query`, `Res`, `ResMut`,
-  `Commands`, `Local`. Nothing here checks a system's parameters against each
-  other yet; that check is `FilteredAccessSet::get_conflicts_single`, to be
-  called when a system is set up.
+- The second half of item 4 (done afterwards, see "System parameters"). Nothing
+  in `WorldCell` itself checks anything; the check is
+  `FilteredAccessSet::get_conflicts_single`, made when a system is set up.
 - No benchmark. The storage change adds no indirection and no field, and the
   typed paths do not call the new code, but the structural-change and query
   benchmarks were not rerun here; optimization is paused.
 - The Sparse Shell is not behind `Interior` and has no cell access.
 - The FFI resource and component paths are unchanged (they use the `&mut`
   side).
+
+### System parameters: `system_param.rs`, `system.rs`
+
+Gap-list item 4, second half, on top of the access sets and the `WorldCell`
+(previous two sections). A system is a plain function whose arguments name what
+it needs from the world; setting it up checks those arguments against each
+other, and running it hands them out as live borrows of one world.
+
+| piece | what it is |
+|---|---|
+| `SystemMeta` | The name (for messages), the registered `FilteredAccessSet`, and the tick of the system's previous run. `add_param_access` registers one parameter's access and panics if it conflicts with one already there. |
+| `SystemParam` (`unsafe trait`) | `State`, `Item<'w, 's>`, `init_state` (registers access), `unsafe get_param` (this run's value from a `WorldCell`), `apply` (deferred work, with `&mut World`). An implementor promises `get_param` makes no access `init_state` did not register. |
+| `Query<'w, 's, Q, F = ()>` | Any `QueryData` filtered by any `DataFilter`. `iter(&self)` for read-only `Q`, `iter_mut(&mut self)` for any. `Added`/`Changed` measure against the system's own previous run. |
+| `Res<T>`, `ResMut<T>`, `Option<..>` of each | A resource, shared or exclusive. Missing: a panic naming system and type when the system runs, or `None` for the `Option` forms. |
+| `Local<T>` | `T::default()` kept in the system across runs; one per use. |
+| `Commands` | The existing `CommandQueue` as state; applied by `apply` after the system returns. |
+| tuples | Up to twelve parameters (nest for more). |
+| `SystemState<P>` | A parameter set initialized against a world, usable outside any system: `new`, `get(&mut World)`, `apply`. |
+| `System` | `initialize` (builds state and runs the conflict check), `access`, `unsafe run_unchecked(WorldCell, this_run)`, `apply_deferred`, and `run(&mut World)` = initialize, run at the current tick and then advance it, apply. |
+| `IntoSystem`, `FunctionSystem` | Functions and closures of up to twelve `SystemParam` arguments; `Marker` types keep the three impls (parameter functions, `fn(&mut World)`, already-a-system) apart. |
+| `ExclusiveFunctionSystem` | A function of `&mut World`: its access is `write_all`, so it conflicts with everything and needs the cell's `world_mut`. |
+| `World::run_system_once` | Builds, initializes, runs and applies one system. A fresh system has never run, so `Added`/`Changed` see everything as new. |
+
+**Why this is sound.** A system's parameters can hold several borrows of one
+world at once because their access was checked, when the system was set up,
+with `FilteredAccessSet::get_conflicts_single`: two parameters that could alias
+(`Query<Mut<A>>` beside `Query<&A>`, `ResMut<R>` beside `Res<R>`, a writer of
+`B` beside a `Changed<B>` filter) are refused with a panic naming the system and
+the types. That is the premise the `WorldCell` functions' safety contracts are
+written in. The remaining aliasing is *within one parameter*: a `Query` cannot
+be iterated twice at once because `iter_mut` takes `&mut self` (a `compile_fail`
+doctest pins that), and the iterator borrows for the query's borrow, not the
+world's, because `WorldCell` is covariant in its lifetime. `get_param` is
+`unsafe` and `System::run_unchecked` states the contract for a runner: nothing
+conflicting with `System::access` may run at the same time.
+
+**Change detection in a system.** `System::run` runs at the world's *current*
+tick and advances it afterwards; the system's writes are stamped with that tick,
+and its next run measures from it. So its own writes are invisible to itself,
+and anything else that writes after the run is stamped with the later tick and
+is seen. My first draft advanced first and ran at the new tick, which made writes
+made *between* runs by other code look not-newer to the next run (stamp equal to
+`last_run`); a differential test against `ChangeTracker` over a random history
+(below) pins the right behaviour. `SystemState::get` does not advance the tick,
+like `ChangeTracker`: call `World::increment_change_tick` per step of your own
+loop.
+
+**Verification.** Default lib tests 554 to 583, doctests 11 to 14 (the
+`System` module example, the `Query` example and its `compile_fail`, which was
+checked to fail for the right reason: E0499), `ffi::` unchanged. The tests cover
+a reader and a writer of different components live together in one system (and
+nested), conflicts of every kind refused (`Mut` beside `&`, resource read beside
+write, a writer beside a `Changed` filter, and the `Option` forms), disjoint
+`With`/`Without` writers accepted and run, change detection across runs (first
+run sees all, own writes invisible, writes by others seen, inserts count),
+`Commands` not applied until the system returns and the queue reusable, `Local`
+state per system, resources present and missing, every term kind, exclusive
+functions and closures, functions of zero, twelve and tuple parameters,
+annotated closures, `run_unchecked` + `apply_deferred` by hand, `SystemState`,
+and the 500-step differential test: a system with `Changed<A>`, `Added<A>` and
+`Or<(Changed<A>, Changed<B>)>` queries compared on every step with
+`World::query_data_filtered_since` and a `ChangeTracker` over random spawns,
+despawns, migrations, writes and tick steps. Mutation testing: 28 mutants over
+the two files, 26 caught first time, the other 2 (the `Option<Res>` /
+`Option<ResMut>` registrations) were a real test gap, fixed. Aliasing is
+still not checked by anything here: see the Miri note in the `WorldCell`
+section, which applies to these tests too.
+
+**Not done.**
+- **A runner.** Ordering several systems, run conditions, system sets, and
+  running them in parallel are not here. The hooks a runner needs are
+  `System::access`, `run_unchecked` and `apply_deferred`; `mid-app`, which still
+  stores `Box<dyn FnMut(&mut World)>` and uses the Sparse Shell API, is
+  untouched. Parallel execution (item 5) also has to decide `Send`/`Sync`.
+- Systems return nothing (no `In`/`Out`), there is no `ParamSet`, no
+  `Query::get(entity)` or `single`, and no cached matched archetypes: every
+  `iter` re-resolves them, like the `query_data` methods (item 8).
+- Resources have no change detection (item 8); `Res`/`ResMut` carry none.
+- No benchmark: these are setup-time structures plus one call per parameter per
+  run. The per-row cost of a system's query is that of `query_iter` /
+  `query_iter_mut`, which are the existing iterators.
 
 ### Writing component data from C (`raw_span_mut`, `write`, `FfiSpanMut`)
 

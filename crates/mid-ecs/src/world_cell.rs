@@ -80,6 +80,23 @@ impl<'w> WorldCell<'w> {
         unsafe { &*self.world }
     }
 
+    /// The whole world, exclusively: for work that takes `&mut World`
+    /// (an exclusive system) and therefore has to be the only thing
+    /// running.
+    ///
+    /// # Safety
+    /// For as long as the returned reference is live, no other access of
+    /// any kind to the world may exist or begin: no other copy of this
+    /// cell may be used, no iterator or reference taken from one may be
+    /// alive. This is the access `Access::write_all` describes, and why
+    /// that access conflicts with everything that touches anything.
+    #[allow(clippy::mut_from_ref)]
+    pub unsafe fn world_mut(self) -> &'w mut World {
+        // SAFETY: the pointer came from a live `&'w mut World`; the rest
+        // is the caller's contract.
+        unsafe { &mut *self.world }
+    }
+
     /// The world's change tick: what a query made from this cell stamps
     /// writes with and measures `Ref`, `Added` and `Changed` against.
     pub fn change_tick(self) -> Tick {
@@ -506,6 +523,17 @@ mod tests {
     }
 
     struct Missing;
+
+    #[test]
+    fn an_exclusive_reference_can_be_taken_from_the_cell_when_nothing_else_is_live() {
+        let (mut world, _) = world();
+        let cell = world.as_world_cell();
+        // SAFETY: the only access; no query or resource reference exists.
+        let w = unsafe { cell.world_mut() };
+        let e = w.spawn();
+        w.insert_static(e, A(99));
+        assert_eq!(world.get_static::<A>(e).map(|a| a.0), Some(99));
+    }
 
     #[test]
     fn the_world_is_usable_again_once_the_cell_is_dropped() {
