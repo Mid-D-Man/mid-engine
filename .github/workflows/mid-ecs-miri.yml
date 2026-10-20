@@ -1,0 +1,143 @@
+# .github/workflows/mid-ecs-miri.yml
+#
+# Miri for mid-ecs's unsafe layer: Interior<T> (interior.rs), WorldCell
+# (world_cell.rs) and the function systems built on it (system.rs).
+# Valgrind cannot see Rust aliasing violations; Miri can. Nothing else in
+# CI checks this.
+#
+# Shape follows mid-arena-test.yml's `miri` job: workflow_dispatch only,
+# nightly called explicitly (`cargo +nightly`) because the repo's
+# rust-toolchain.toml pins `stable`, Stacked Borrows first and Tree
+# Borrows second so a failure under only one model is visible as such,
+# `set -o pipefail` before every `| tee`, a real $GITHUB_STEP_SUMMARY,
+# raw logs uploaded as an artifact.
+#
+# Default filter = the three modules above, not the whole crate: Miri is
+# ~50-100x slower than native and the whole lib has ~580 tests. The
+# `filter` input takes space-separated libtest name filters; leave it
+# empty to run every lib test (slow). The FFI tests and the C smoke test
+# are out of scope here (Miri cannot run C).
+#
+# NOT YET RUN. First dispatch is the first real result.
+
+name: mid-ecs - Miri
+
+on:
+  workflow_dispatch:
+    inputs:
+      filter:
+        description: "libtest name filters, space separated (empty = every lib test, slow)"
+        required: false
+        default: "world_cell:: system:: interior::"
+
+permissions:
+  contents: read
+  actions:  read
+
+jobs:
+  miri:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install nightly toolchain with Miri
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: miri, rust-src
+
+      # Scoped key, no ~/.cargo/bin/: see mid-ecs-test.yml's "Toolchain
+      # check" comment for why a bare cache prefix is a hazard here.
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+          key: cargo-registry-mid-ecs-miri-${{ runner.os }}-${{ hashFiles('crates/mid-collections/**/Cargo.toml', 'crates/mid-ecs/**/Cargo.toml', 'crates/mid-math/**/Cargo.toml') }}
+          restore-keys: |
+            cargo-registry-mid-ecs-miri-${{ runner.os }}-
+
+      - name: Toolchain check
+        run: |
+          cargo +nightly --version
+          cargo +nightly miri --version
+
+      # `--lib`: only the unit tests; the crate's cdylib/staticlib outputs
+      # are not built under Miri. The filter goes through an env var, not
+      # inline ${{ }}, so a dispatch input can never become shell syntax.
+      - name: Miri, Stacked Borrows
+        id: miri_sb
+        continue-on-error: true
+        env:
+          FILTER: ${{ inputs.filter }}
+        run: |
+          set -o pipefail
+          cargo +nightly miri test -p mid-ecs --lib --color=never \
+            -- $FILTER 2>&1 | tee miri-stacked-borrows.txt
+
+      - name: Miri, Tree Borrows
+        id: miri_tb
+        continue-on-error: true
+        env:
+          FILTER: ${{ inputs.filter }}
+          MIRIFLAGS: -Zmiri-tree-borrows
+        run: |
+          set -o pipefail
+          cargo +nightly miri test -p mid-ecs --lib --color=never \
+            -- $FILTER 2>&1 | tee miri-tree-borrows.txt
+
+      - name: Write Miri results to job summary
+        if: always()
+        run: |
+          {
+            echo "## mid-ecs Miri"
+            echo ""
+            echo "Filter: \`${FILTER:-<all lib tests>}\`"
+            echo ""
+            for entry in \
+              "Stacked Borrows|${{ steps.miri_sb.outcome }}|miri-stacked-borrows.txt" \
+              "Tree Borrows|${{ steps.miri_tb.outcome }}|miri-tree-borrows.txt"; do
+              IFS='|' read -r name outcome file <<< "$entry"
+              if [ "$outcome" = "success" ]; then
+                echo "### ✅ $name"
+                echo ""
+                grep -E "^test result:" "$file" | sed 's/^/    /' || true
+              else
+                echo "### ❌ $name ($outcome)"
+                echo ""
+                echo "<details><summary>Last 60 lines</summary>"
+                echo ""
+                echo '```'
+                tail -n 60 "$file" 2>/dev/null || echo "(no log)"
+                echo '```'
+                echo ""
+                echo "</details>"
+              fi
+              echo ""
+            done
+          } >> "$GITHUB_STEP_SUMMARY"
+        env:
+          FILTER: ${{ inputs.filter }}
+
+      - name: Upload Miri logs as artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mid-ecs-miri-${{ github.run_number }}
+          path: |
+            miri-stacked-borrows.txt
+            miri-tree-borrows.txt
+          retention-days: 7
+
+      # continue-on-error above keeps both models running; this step makes
+      # the JOB red if either one failed, so the run list shows it.
+      - name: Fail the job if either model failed
+        if: steps.miri_sb.outcome != 'success' || steps.miri_tb.outcome != 'success'
+        run: |
+          echo "Stacked Borrows: ${{ steps.miri_sb.outcome }}"
+          echo "Tree Borrows:    ${{ steps.miri_tb.outcome }}"
+          exit 1
