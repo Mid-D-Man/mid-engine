@@ -51,7 +51,7 @@ pub trait QueryFilter: sealed::Sealed {
     /// What this filter resolves to, per query, from the type
     /// registry: one `Option<ComponentId>` per leaf filter (`None` =
     /// that type has never been archetype-tracked).
-    type State;
+    type State: Clone + Send + Sync;
 
     /// Resolves this filter's component types against the Archetype
     /// Core's own `TypeId -> ComponentId` map. `resolve` must be a
@@ -179,7 +179,7 @@ impl_query_filter_for_tuple!(A, B, C, D, E, F, G, H);
 /// `impl_or_filter_group_for_tuple!` below. Not exported: callers only
 /// ever name `Or<(...)>` itself.
 pub trait OrFilterGroup: sealed::OrSealed {
-    type State;
+    type State: Clone + Send + Sync;
     fn get_state(resolve: &dyn Fn(TypeId) -> Option<ComponentId>) -> Self::State;
     fn any_matches(state: &Self::State, contains: &impl Fn(ComponentId) -> bool) -> bool;
 }

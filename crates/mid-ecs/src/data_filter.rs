@@ -92,7 +92,7 @@ pub trait DataFilter: sealed::Sealed {
     /// What this filter resolves to, once per query, from the type
     /// registry.
     #[doc(hidden)]
-    type State;
+    type State: Clone + Send + Sync;
 
     /// What one archetype resolves to: the tick slices (and per-member
     /// archetype verdicts) `matches_row` reads. Borrowed from the table
@@ -343,7 +343,7 @@ pub trait DataOrGroup: sealed::OrSealed {
     #[doc(hidden)]
     const TRACKED: bool;
     #[doc(hidden)]
-    type State;
+    type State: Clone + Send + Sync;
     #[doc(hidden)]
     type Fetch<'a>;
     #[doc(hidden)]

@@ -43,8 +43,12 @@
 //! the `Column` trait are private there, and a child sees them without
 //! anything being widened.
 
+use std::any::TypeId;
+use std::ops::Range;
+
 use super::iter_mut::select;
-use super::{Archetype, ArchetypeId, Archetypes, Column, Table};
+use super::{Archetype, ArchetypeId, Archetypes, Column, RawColumn, Table};
+use crate::batching::{plan_batches, BatchingStrategy};
 use crate::component::ComponentId;
 use crate::data_filter::DataFilter;
 use crate::query_data::{AccessEntry, QueryData, ReadOnlyQueryData};
@@ -58,6 +62,10 @@ enum Slot<'w> {
     Shared(&'w Box<dyn Column>),
     /// Written by exactly one `Mut` term, which takes it (once).
     Mut(Option<&'w mut Box<dyn Column>>),
+    /// `Mut`, in a *windowed* access (parallel iteration): not a `&mut`
+    /// but the raw handle the dispatcher captured; the term's
+    /// `column_mut` builds a `&mut [T]` over this window's rows only.
+    Window(Option<RawColumn>),
 }
 
 /// How the mutable iterator holds the change ticks of one component of
@@ -68,6 +76,19 @@ enum TickSlot<'w> {
     /// Written by exactly one `Mut` term, which takes it (once). A row
     /// filter on the same component reads it first, before the take.
     Mut(Option<&'w mut [ComponentTicks]>),
+    /// `Mut`, in a windowed access: the written ticks of this window's
+    /// rows, already cut to the window.
+    Window(Option<RawTicks>),
+}
+
+/// The change ticks of one window of rows of a written component: a raw
+/// pointer and a length, for the same reason [`RawColumn`] is raw (see
+/// there). Created only in `load_window`, from the pointer the
+/// dispatcher captured.
+#[derive(Clone, Copy)]
+struct RawTicks {
+    ptr: *mut ComponentTicks,
+    len: usize,
 }
 
 /// One archetype, as the terms of a query see it, handed to
@@ -94,6 +115,12 @@ pub struct TableAccess<'w> {
     /// and of the read ones a `Ref`/`Added`/`Changed` term or a row
     /// filter needs.
     ticks: Vec<(ComponentId, TickSlot<'w>)>,
+    /// `Some((start, end))` while this access shows one *window* of an
+    /// archetype (parallel iteration): `entities`, the tick slices and
+    /// every column the terms get are cut to rows `start..end`, so the
+    /// terms see rows `0..end - start` and need not know. `None`
+    /// otherwise.
+    window: Option<(usize, usize)>,
 }
 
 impl<'w> TableAccess<'w> {
@@ -106,6 +133,7 @@ impl<'w> TableAccess<'w> {
             table: Some(&archetype.table),
             columns: Vec::new(),
             ticks: Vec::new(),
+            window: None,
         }
     }
 
@@ -118,6 +146,7 @@ impl<'w> TableAccess<'w> {
             table: None,
             columns: Vec::new(),
             ticks: Vec::new(),
+            window: None,
         }
     }
 
@@ -137,6 +166,7 @@ impl<'w> TableAccess<'w> {
         } = table;
         self.signature = component_ids.as_slice();
         self.entities = entities.as_slice();
+        self.window = None;
         self.columns.clear();
         self.ticks.clear();
         for (id, column) in columns.iter_mut() {
@@ -177,6 +207,7 @@ impl<'w> TableAccess<'w> {
     unsafe fn load_cell(&mut self, archetype: &'w Archetype, plan: &[(ComponentId, bool, bool)]) {
         self.signature = archetype.component_ids.as_slice();
         self.entities = archetype.table.entities.as_slice();
+        self.window = None;
         self.columns.clear();
         self.ticks.clear();
         for (id, column) in archetype.table.columns.iter() {
@@ -202,6 +233,69 @@ impl<'w> TableAccess<'w> {
                 } else if ticked {
                     self.ticks
                         .push((id, TickSlot::Shared(column_ticks.as_slice())));
+                }
+            }
+        }
+    }
+
+    /// `load_cell`'s counterpart for one *window* of an archetype, the
+    /// unit of parallel iteration: points this access at rows
+    /// `desc.rows` of `desc.archetype`, with `entities`, the tick slices
+    /// and (through `column`/`column_mut`) the columns cut to that range.
+    ///
+    /// Safe to call because the only way to get a [`WindowDesc`] is
+    /// `Archetypes::par_batches_cell`, an `unsafe fn` whose contract
+    /// covers every raw handle in it; this only moves them into slots.
+    /// Columns the plan marks written are not touched here at all (no
+    /// reference to them is formed): their slot keeps the raw handle.
+    fn load_window(&mut self, desc: &WindowDesc<'w>, plan: &[(ComponentId, bool, bool)]) {
+        let archetype: &'w Archetype = desc.archetype;
+        let (start, end) = (desc.rows.start, desc.rows.end);
+        self.window = Some((start, end));
+        self.signature = archetype.component_ids.as_slice();
+        let entities = archetype.table.entities.as_slice();
+        let entity_end = end.min(entities.len());
+        self.entities = &entities[start.min(entity_end)..entity_end];
+        self.columns.clear();
+        self.ticks.clear();
+        for (id, column) in archetype.table.columns.iter() {
+            if let Some(&(_, written, _)) = plan.iter().find(|(planned, _, _)| *planned == id) {
+                let slot = if written {
+                    match desc.written.iter().find(|(raw_id, _)| *raw_id == id) {
+                        Some(&(_, raw)) => Slot::Window(Some(raw)),
+                        None => continue,
+                    }
+                } else {
+                    Slot::Shared(&**column)
+                };
+                self.columns.push((id, slot));
+            }
+        }
+        for (id, column_ticks) in archetype.table.ticks.iter() {
+            if let Some(&(_, written, ticked)) = plan.iter().find(|(planned, _, _)| *planned == id)
+            {
+                if written {
+                    if let Some(&(_, raw)) =
+                        desc.written_ticks.iter().find(|(raw_id, _)| *raw_id == id)
+                    {
+                        let end = end.min(raw.len);
+                        let start = start.min(end);
+                        // SAFETY: `start <= end <= raw.len`, so the
+                        // offset is within (or one past) the buffer.
+                        let ptr = unsafe { raw.ptr.add(start) };
+                        self.ticks.push((
+                            id,
+                            TickSlot::Window(Some(RawTicks {
+                                ptr,
+                                len: end - start,
+                            })),
+                        ));
+                    }
+                } else if ticked {
+                    let all = column_ticks.as_slice();
+                    let end = end.min(all.len());
+                    self.ticks
+                        .push((id, TickSlot::Shared(&all[start.min(end)..end])));
                 }
             }
         }
@@ -250,7 +344,7 @@ impl<'w> TableAccess<'w> {
             Some(table) => table.ticks.get(id).map(|ticks| ticks.as_slice()),
             None => match &self.ticks.iter().find(|(planned, _)| *planned == id)?.1 {
                 TickSlot::Shared(ticks) => Some(*ticks),
-                TickSlot::Mut(_) => None,
+                TickSlot::Mut(_) | TickSlot::Window(_) => None,
             },
         }
     }
@@ -268,6 +362,15 @@ impl<'w> TableAccess<'w> {
                 TickSlot::Shared(ticks) => Some(*ticks),
                 TickSlot::Mut(Some(ticks)) => Some(&**ticks),
                 TickSlot::Mut(None) => None,
+                TickSlot::Window(Some(raw)) => {
+                    // SAFETY: `raw` is this window's own, valid, row
+                    // range of a written tick column (see `RawTicks`),
+                    // untaken (`Some`), so no `&mut` over it exists; the
+                    // returned borrow is of `self` and ends before
+                    // `ticks_mut` can take it.
+                    Some(unsafe { std::slice::from_raw_parts(raw.ptr, raw.len) })
+                }
+                TickSlot::Window(None) => None,
             },
         }
     }
@@ -287,13 +390,18 @@ impl<'w> TableAccess<'w> {
                 _ => return None,
             },
         };
-        Some(
-            column
-                .as_any()
-                .downcast_ref::<Vec<T>>()
-                .expect("column type must match component_id's T")
-                .as_slice(),
-        )
+        let slice = column
+            .as_any()
+            .downcast_ref::<Vec<T>>()
+            .expect("column type must match component_id's T")
+            .as_slice();
+        Some(match self.window {
+            None => slice,
+            Some((start, end)) => {
+                let end = end.min(slice.len());
+                &slice[start.min(end)..end]
+            }
+        })
     }
 
     /// The column of `T` registered under `id`, for writing: the one
@@ -302,6 +410,7 @@ impl<'w> TableAccess<'w> {
     /// a shared access.
     #[inline]
     pub(crate) fn column_mut<T: 'static>(&mut self, id: ComponentId) -> Option<&'w mut [T]> {
+        let window = self.window;
         let slot = self
             .columns
             .iter_mut()
@@ -317,6 +426,29 @@ impl<'w> TableAccess<'w> {
                         .as_mut_slice(),
                 )
             }
+            Slot::Window(raw) => {
+                let raw = raw.take()?;
+                assert!(
+                    raw.type_id == TypeId::of::<Vec<T>>(),
+                    "column type must match component_id's T"
+                );
+                let (start, end) =
+                    window.expect("a windowed column slot only exists in a windowed access");
+                let end = end.min(raw.len);
+                let start = start.min(end);
+                // SAFETY: `raw` was captured from a `Vec<T>` (checked
+                // just above) by `Archetypes::par_batches_cell`, whose
+                // caller guarantees this query has exclusive access to
+                // the column for `'w` and that the world's structure is
+                // not changed meanwhile (so the buffer neither moves nor
+                // frees). `start..end` is within `raw.len`, and the
+                // windows of one query are pairwise disjoint (the exact
+                // cover `plan_batches` guarantees), each handed out once
+                // (`take` above), so this `&mut` aliases no other.
+                Some(unsafe {
+                    std::slice::from_raw_parts_mut(raw.ptr.cast::<T>().add(start), end - start)
+                })
+            }
             Slot::Shared(_) => None,
         }
     }
@@ -327,6 +459,14 @@ impl<'w> TableAccess<'w> {
     pub(crate) fn ticks_mut(&mut self, id: ComponentId) -> Option<&'w mut [ComponentTicks]> {
         match &mut self.ticks.iter_mut().find(|(planned, _)| *planned == id)?.1 {
             TickSlot::Mut(ticks) => ticks.take(),
+            TickSlot::Window(raw) => {
+                let raw = raw.take()?;
+                // SAFETY: as for `column_mut`'s windowed branch: `raw` is
+                // this window's own rows of a tick column the query has
+                // exclusive access to, taken once, disjoint from every
+                // other window's.
+                Some(unsafe { std::slice::from_raw_parts_mut(raw.ptr, raw.len) })
+            }
             TickSlot::Shared(_) => None,
         }
     }
@@ -740,6 +880,218 @@ impl Archetypes {
     }
 }
 
+// ── Parallel iteration ───────────────────────────────────────────────
+
+/// One row window of one archetype, plus the raw handles to the columns
+/// and tick columns the query writes there. Built only by
+/// [`Archetypes::par_batches_cell`].
+///
+/// Invariant (what makes `TableAccess::load_window`, `column_mut` and
+/// `ticks_mut` sound): every raw handle was captured by that `unsafe fn`
+/// from the archetype this window names, under its contract: the query
+/// has exclusive access to those columns for `'w`, the world's structure
+/// does not change for `'w`, and no two windows of the query overlap.
+struct WindowDesc<'w> {
+    archetype: &'w Archetype,
+    rows: Range<usize>,
+    written: Vec<(ComponentId, RawColumn)>,
+    written_ticks: Vec<(ComponentId, RawTicks)>,
+}
+
+/// The windowed source: the row windows of one [`QueryBatch`], in order.
+pub(crate) struct WindowSource<'w> {
+    windows: std::vec::IntoIter<WindowDesc<'w>>,
+}
+
+impl<'w> ArchetypeSource<'w> for WindowSource<'w> {
+    fn load_next(
+        &mut self,
+        table: &mut TableAccess<'w>,
+        plan: &[(ComponentId, bool, bool)],
+    ) -> bool {
+        match self.windows.next() {
+            Some(desc) => {
+                table.load_window(&desc, plan);
+                true
+            }
+            None => false,
+        }
+    }
+}
+
+/// One independent piece of a parallel query: an iterator over the rows
+/// of a few row windows, that can be moved to another thread and run
+/// there to completion. Made by `WorldCell::query_batches` /
+/// `Query::par_iter(_mut)`; every row the query matches is in exactly
+/// one batch, and no two batches share a row.
+///
+/// Yields exactly what the same query yields sequentially (same terms,
+/// same row filters, `Mut` writes stamped with the query's tick), for
+/// its rows.
+///
+/// A batch is [`Send`] when the query's `Fetch` is, which is when its
+/// component types are `Sync` for read terms and `Send` for `Mut`
+/// terms: a query over a `Mut<Rc<_>>` cannot be sent to another thread
+/// (and so cannot be run in parallel), checked by the compiler, not by
+/// a rule here.
+pub struct QueryBatch<'w, Q: QueryData, F: DataFilter> {
+    inner: IterDataMut<'w, Q, F, WindowSource<'w>>,
+}
+
+// SAFETY: a batch holds (a) shared references into the archetypes'
+// metadata (signatures, entity lists), plain data; (b) shared references
+// to columns the query only reads, reachable only as typed `&[T]` through
+// terms whose `Fetch` holds a `&[T]`; (c) raw handles to row windows of
+// the columns the query writes, reachable only as `&mut [T]` through
+// `Mut` terms' `Fetch`; (d) plain state. All typed access to component
+// data goes through `Q::Fetch<'w>`, so requiring that to be `Send`
+// requires `T: Sync` for every read term and `T: Send` for every written
+// one, which is exactly what moving the access to another thread needs.
+// The windows of different batches are disjoint (see `WindowDesc`), so
+// two threads never write the same element, and a column one batch
+// writes no batch of the same query reads (the access check).
+unsafe impl<'w, Q: QueryData, F: DataFilter> Send for QueryBatch<'w, Q, F> where Q::Fetch<'w>: Send {}
+
+impl<'w, Q: QueryData, F: DataFilter> Iterator for QueryBatch<'w, Q, F> {
+    type Item = Q::Item<'w>;
+
+    #[inline]
+    fn next(&mut self) -> Option<Self::Item> {
+        self.inner.next()
+    }
+}
+
+/// Captures the raw handles of the columns and tick columns `plan` writes
+/// in `archetype`.
+///
+/// # Safety
+/// The caller has exclusive access to those columns (values and ticks)
+/// for as long as the handles are used.
+unsafe fn capture_written(
+    archetype: &Archetype,
+    plan: &[(ComponentId, bool, bool)],
+) -> (Vec<(ComponentId, RawColumn)>, Vec<(ComponentId, RawTicks)>) {
+    let mut columns = Vec::new();
+    let mut ticks = Vec::new();
+    for &(id, written, _) in plan {
+        if !written {
+            continue;
+        }
+        if let Some(column) = archetype.table.columns.get(id) {
+            // SAFETY: exclusive access, per this function's contract; the
+            // `&mut` lives only for this call and only the raw handle
+            // survives it.
+            let raw = unsafe { column.get_mut_unchecked() }.raw_parts_mut();
+            columns.push((id, raw));
+        }
+        if let Some(column_ticks) = archetype.table.ticks.get(id) {
+            // SAFETY: as above, for the tick column.
+            let vec = unsafe { column_ticks.get_mut_unchecked() };
+            ticks.push((
+                id,
+                RawTicks {
+                    ptr: vec.as_mut_ptr(),
+                    len: vec.len(),
+                },
+            ));
+        }
+    }
+    (columns, ticks)
+}
+
+impl Archetypes {
+    /// Cuts the query `Q` filtered by `F` into [`QueryBatch`]es: each is
+    /// an independent iterator over some row windows of the matching
+    /// archetypes, that may run on any thread, concurrently with the
+    /// others. Together the batches yield every row the sequential cell
+    /// iterator (`iter_data_cell`) yields, once each.
+    ///
+    /// `threads` only sizes the batches (see [`BatchingStrategy`]); this
+    /// function starts no thread.
+    ///
+    /// # Panics
+    /// Under the conditions of `iter_data_mut_filtered`, or if
+    /// `strategy` needs a thread count and `threads` is zero.
+    ///
+    /// # Safety
+    /// For as long as any returned batch, or anything it yielded, is
+    /// live: no `&mut Archetypes` or `&mut World` exists, the world's
+    /// structure (entities, archetypes, columns) is not changed, and no
+    /// other access conflicts with this query's own, as
+    /// `FilteredAccess::of_query` describes it. The batches themselves
+    /// never conflict with each other: their windows are disjoint.
+    pub(crate) unsafe fn par_batches_cell<'a, Q: QueryData + 'a, F: DataFilter + 'a>(
+        &'a self,
+        this_run: Tick,
+        last_run: Tick,
+        strategy: &BatchingStrategy,
+        threads: usize,
+    ) -> Vec<QueryBatch<'a, Q, F>> {
+        let (state, filter, matched) = plan_matches::<Q, F>(self);
+        let mut entries = Vec::new();
+        Q::collect_access(&state, &mut entries);
+        validate_access("WorldCell::query_batches", &entries);
+        let mut filter_ticks = Vec::new();
+        F::collect_tick_reads(&filter, &mut filter_ticks);
+        let plan = build_plan(&entries, &filter_ticks);
+
+        let archetypes: Vec<&'a Archetype> = matched
+            .iter()
+            .map(|&id| {
+                self.archetypes.get(id).expect(
+                    "the precomputed matched list only ever contains real, currently-existing archetype ids",
+                )
+            })
+            .collect();
+        let lens: Vec<usize> = archetypes
+            .iter()
+            .map(|archetype| archetype.table.entities.len())
+            .collect();
+        // (A size of zero is fine: `plan_batches` treats it as one.)
+        let batch_size =
+            strategy.calc_batch_size(|| lens.iter().copied().max().unwrap_or(0), threads);
+
+        type Captured = (Vec<(ComponentId, RawColumn)>, Vec<(ComponentId, RawTicks)>);
+        let mut captured: Vec<Option<Captured>> = (0..archetypes.len()).map(|_| None).collect();
+        let mut batches = Vec::new();
+        for specs in plan_batches(&lens, batch_size) {
+            let mut windows = Vec::with_capacity(specs.len());
+            for spec in specs {
+                let archetype = archetypes[spec.archetype];
+                let (written, written_ticks) = captured[spec.archetype]
+                    .get_or_insert_with(|| {
+                        // SAFETY: this function's contract.
+                        unsafe { capture_written(archetype, &plan) }
+                    })
+                    .clone();
+                windows.push(WindowDesc {
+                    archetype,
+                    rows: spec.rows,
+                    written,
+                    written_ticks,
+                });
+            }
+            batches.push(QueryBatch {
+                inner: IterDataMut::<Q, F, _> {
+                    source: WindowSource {
+                        windows: windows.into_iter(),
+                    },
+                    state: state.clone(),
+                    filter: filter.clone(),
+                    plan: plan.clone(),
+                    table: TableAccess::exclusive(this_run, last_run),
+                    fetch: None,
+                    row: 0,
+                    len: 0,
+                    rows: Vec::new(),
+                    next_selected: 0,
+                },
+            });
+        }
+        batches
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -854,5 +1206,68 @@ mod tests {
         assert_eq!(matched_for::<Mut<Never>>(&world), 0);
         assert_eq!(matched_for::<(Mut<A>, &Never)>(&world), 0);
         assert_eq!(matched_for::<(Entity, Option<Mut<Never>>)>(&world), 4);
+    }
+
+    // ── Windows ──────────────────────────────────────────────────────
+
+    /// What a `TableAccess` loaded with the window `rows` of a 4-row
+    /// archetype {A, B} shows: (entities, B column len, A column first
+    /// value and len, A ticks len, B ticks len).
+    fn window_shape(rows: Range<usize>) -> (usize, usize, Option<u32>, usize, usize, usize) {
+        use std::any::TypeId;
+        let mut world = World::new();
+        for i in 0..4u32 {
+            let e = world.spawn();
+            world.insert_static(e, A(10 + i));
+            world.insert_static(e, B(20 + i));
+        }
+        let archetypes = &world.archetypes;
+        let id_of = |t: TypeId| archetypes.component_ids.get(&t).copied().unwrap();
+        let (id_a, id_b) = (id_of(TypeId::of::<A>()), id_of(TypeId::of::<B>()));
+        let archetype = archetypes
+            .archetypes
+            .iter()
+            .map(|(_, a)| a)
+            .find(|a| a.component_ids.contains(&id_a) && a.component_ids.contains(&id_b))
+            .expect("the {A, B} archetype");
+        // A written, B read (with its ticks).
+        let plan = vec![(id_a, true, false), (id_b, false, true)];
+        // SAFETY: `world` is not touched again until `table` is dropped.
+        let (written, written_ticks) = unsafe { capture_written(archetype, &plan) };
+        let desc = WindowDesc {
+            archetype,
+            rows,
+            written,
+            written_ticks,
+        };
+        let mut table = TableAccess::exclusive(Tick::default(), Tick::default());
+        table.load_window(&desc, &plan);
+        let entities = table.len();
+        let b_len = table.column::<B>(id_b).map_or(usize::MAX, |c| c.len());
+        let b_ticks = table.ticks(id_b).map_or(usize::MAX, |t| t.len());
+        let a_col = table.column_mut::<A>(id_a).unwrap();
+        let (a_first, a_len) = (a_col.first().map(|a| a.0), a_col.len());
+        let a_ticks = table.ticks_mut(id_a).unwrap().len();
+        (entities, b_len, a_first, a_len, a_ticks, b_ticks)
+    }
+
+    #[test]
+    fn a_window_shows_exactly_its_rows_of_every_slice() {
+        // Rows 1..3 of 4: two rows everywhere, starting at A(11).
+        assert_eq!(window_shape(1..3), (2, 2, Some(11), 2, 2, 2));
+        // The whole archetype.
+        assert_eq!(window_shape(0..4), (4, 4, Some(10), 4, 4, 4));
+        // A single last row.
+        assert_eq!(window_shape(3..4), (1, 1, Some(13), 1, 1, 1));
+    }
+
+    #[test]
+    fn a_window_reaching_past_its_archetype_is_cut_to_it() {
+        // Not reachable from `plan_batches`, which never plans past the
+        // end, but the clamps are what keep a bad window from reading
+        // or writing out of bounds.
+        assert_eq!(window_shape(2..10), (2, 2, Some(12), 2, 2, 2));
+        // Entirely past the end: empty everywhere, no panic.
+        assert_eq!(window_shape(8..10), (0, 0, None, 0, 0, 0));
     }
 }

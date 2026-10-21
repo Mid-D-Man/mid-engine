@@ -118,7 +118,7 @@ pub trait QueryData: sealed::Sealed {
     /// What this query resolves to once, from the type registry: one
     /// `Option<ComponentId>` per component term.
     #[doc(hidden)]
-    type State;
+    type State: Clone + Send + Sync;
 
     /// What one archetype resolves to: the column slices (or the
     /// presence bool) the term reads rows from.

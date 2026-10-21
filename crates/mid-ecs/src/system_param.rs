@@ -31,6 +31,8 @@ use std::marker::PhantomData;
 use std::ops::{Deref, DerefMut};
 
 use crate::access::{FilteredAccess, FilteredAccessSet};
+use crate::archetype::QueryBatch;
+use crate::batching::BatchingStrategy;
 use crate::commands::{CommandQueue, Commands};
 use crate::data_filter::DataFilter;
 use crate::query_data::{QueryData, ReadOnlyQueryData};
@@ -226,6 +228,193 @@ impl<'w, 's, Q: QueryData + 'static, F: DataFilter + 'static> Query<'w, 's, Q, F
         // included); `&mut self` makes this the only iteration of this
         // query.
         unsafe { cell.query_iter_mut::<Q, F>(self.this_run, self.last_run) }
+    }
+
+    /// Iterates the rows `Q` matches on several threads at once, reading.
+    /// Needs a read-only `Q` whose component types are `Sync` (checked
+    /// where the iteration is run: see [`QueryParIter::for_each`]).
+    pub fn par_iter(&self) -> QueryParIter<'_, Q, F>
+    where
+        Q: ReadOnlyQueryData,
+    {
+        QueryParIter {
+            world: self.world,
+            this_run: self.this_run,
+            last_run: self.last_run,
+            strategy: BatchingStrategy::new(),
+            _marker: PhantomData,
+        }
+    }
+
+    /// Iterates the rows `Q` matches on several threads at once, with
+    /// write access to the `Mut` terms. Borrows the query exclusively,
+    /// like [`Self::iter_mut`]. Component types written through `Mut`
+    /// must be `Send`, read ones `Sync`.
+    pub fn par_iter_mut(&mut self) -> QueryParIter<'_, Q, F> {
+        QueryParIter {
+            world: self.world,
+            this_run: self.this_run,
+            last_run: self.last_run,
+            strategy: BatchingStrategy::new(),
+            _marker: PhantomData,
+        }
+    }
+}
+
+/// A parallel iteration over a [`Query`], from [`Query::par_iter`] or
+/// [`Query::par_iter_mut`]. Nothing runs until [`Self::for_each`] (or
+/// `for_each_init`, or `into_batches`).
+///
+/// The matched archetypes are cut into batches of row windows (see
+/// [`BatchingStrategy`]); each batch runs on one thread from start to
+/// finish, so rows within a batch are visited in order and no two threads
+/// ever touch the same row. The order *between* batches is not defined.
+/// Writes through `Mut` are stamped with the system's tick exactly as in
+/// the sequential [`Query::iter_mut`], and `Added`/`Changed` terms and
+/// filters work the same way.
+///
+/// On `wasm32` (no threads) `for_each` runs the batches one after another
+/// on the calling thread.
+///
+/// A component type that is not `Send` (for `Mut`) or not `Sync` (for a
+/// read term) cannot be iterated in parallel; the compiler refuses:
+///
+/// ```compile_fail
+/// use mid_ecs::{Mut, Query, SystemState, World};
+/// use std::rc::Rc;
+///
+/// struct NotSend(Rc<u32>);
+///
+/// let mut world = World::new();
+/// let mut state = SystemState::<Query<Mut<NotSend>>>::new(&mut world);
+/// let mut q = state.get(&mut world);
+/// q.par_iter_mut().for_each(|_item| {});
+/// ```
+///
+/// ```compile_fail
+/// use mid_ecs::{Query, SystemState, World};
+/// use std::cell::Cell;
+///
+/// struct NotSync(Cell<u32>);
+///
+/// let mut world = World::new();
+/// let mut state = SystemState::<Query<&NotSync>>::new(&mut world);
+/// let q = state.get(&mut world);
+/// q.par_iter().for_each(|_item| {});
+/// ```
+pub struct QueryParIter<'a, Q: QueryData + 'static, F: DataFilter + 'static> {
+    world: WorldCell<'a>,
+    this_run: Tick,
+    last_run: Tick,
+    strategy: BatchingStrategy,
+    _marker: PhantomData<fn() -> (Q, F)>,
+}
+
+impl<'a, Q: QueryData + 'static, F: DataFilter + 'static> QueryParIter<'a, Q, F> {
+    /// Replaces the default batching (about one batch per thread for the
+    /// largest archetype). See [`BatchingStrategy`].
+    pub fn batching_strategy(mut self, strategy: BatchingStrategy) -> Self {
+        self.strategy = strategy;
+        self
+    }
+
+    /// The query cut into independent [`QueryBatch`]es, for running on a
+    /// thread pool of your own instead of the built-in one. Each batch is
+    /// an iterator of this query's items for its rows; batches are
+    /// pairwise disjoint and together cover every matched row once.
+    /// Batches are `Send` when the component types allow it.
+    pub fn into_batches(self) -> Vec<QueryBatch<'a, Q, F>> {
+        // SAFETY: the `Query` this came from borrowed itself (`&` for a
+        // read-only `Q`, `&mut` otherwise) for `'a`, and its access was
+        // checked against the system's other parameters when the system
+        // was set up, exactly as for `iter`/`iter_mut`; the world's
+        // structure cannot change meanwhile (a system's parameters only
+        // queue structural changes, in `Commands`).
+        unsafe {
+            self.world.query_batches::<Q, F>(
+                &self.strategy,
+                pool_threads(),
+                self.this_run,
+                self.last_run,
+            )
+        }
+    }
+
+    /// Calls `func` on every row, on the rayon thread pool.
+    pub fn for_each<FN>(self, func: FN)
+    where
+        FN: Fn(Q::Item<'a>) + Send + Sync,
+        Q::Fetch<'a>: Send,
+    {
+        self.for_each_init(|| (), |(), item| func(item));
+    }
+
+    /// Like [`Self::for_each`], with a per-batch scratch value: `init`
+    /// runs once at the start of each batch and the result is passed to
+    /// `func` for every row of that batch.
+    pub fn for_each_init<T, INIT, FN>(self, init: INIT, func: FN)
+    where
+        INIT: Fn() -> T + Send + Sync,
+        FN: Fn(&mut T, Q::Item<'a>) + Send + Sync,
+        Q::Fetch<'a>: Send,
+    {
+        let batches = self.into_batches();
+        run_batches::<Q, F, T, INIT, FN>(batches, &init, &func);
+    }
+}
+
+/// How many threads a parallel query should size its batches for.
+#[cfg(not(target_arch = "wasm32"))]
+fn pool_threads() -> usize {
+    rayon::current_num_threads()
+}
+
+#[cfg(target_arch = "wasm32")]
+fn pool_threads() -> usize {
+    1
+}
+
+/// Runs every batch, one per rayon task. A single batch (or none) runs on
+/// the calling thread: no task to start.
+#[cfg(not(target_arch = "wasm32"))]
+fn run_batches<'a, Q, F, T, INIT, FN>(batches: Vec<QueryBatch<'a, Q, F>>, init: &INIT, func: &FN)
+where
+    Q: QueryData + 'static,
+    F: DataFilter + 'static,
+    Q::Fetch<'a>: Send,
+    INIT: Fn() -> T + Sync,
+    FN: Fn(&mut T, Q::Item<'a>) + Sync,
+{
+    use rayon::iter::{IndexedParallelIterator, IntoParallelIterator, ParallelIterator};
+
+    let run = |batch: QueryBatch<'a, Q, F>| {
+        let mut scratch = init();
+        for item in batch {
+            func(&mut scratch, item);
+        }
+    };
+    if batches.len() <= 1 {
+        batches.into_iter().for_each(run);
+    } else {
+        // `with_max_len(1)`: every batch is its own unit of stealing, so a
+        // slow batch cannot hold back others queued behind it.
+        batches.into_par_iter().with_max_len(1).for_each(run);
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+fn run_batches<'a, Q, F, T, INIT, FN>(batches: Vec<QueryBatch<'a, Q, F>>, init: &INIT, func: &FN)
+where
+    Q: QueryData + 'static,
+    F: DataFilter + 'static,
+    INIT: Fn() -> T,
+    FN: Fn(&mut T, Q::Item<'a>),
+{
+    for batch in batches {
+        let mut scratch = init();
+        for item in batch {
+            func(&mut scratch, item);
+        }
     }
 }
 

@@ -1029,4 +1029,339 @@ mod tests {
             "{nonempty} nonempty, {empty} empty"
         );
     }
+
+    // ── Parallel iteration ───────────────────────────────────────────
+
+    use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+    use std::sync::Mutex;
+    use std::thread::ThreadId;
+
+    use crate::batching::BatchingStrategy;
+
+    #[derive(Default)]
+    struct Totals {
+        sum: AtomicU64,
+        rows: AtomicUsize,
+        inits: AtomicUsize,
+    }
+
+    #[derive(Default)]
+    struct Threads(Mutex<HashSet<ThreadId>>);
+
+    /// A world of `n` entities with `A(i)`, every third also with `B(i)`,
+    /// so there are two archetypes of different sizes.
+    fn mixed_world(n: u32) -> (World, Vec<Entity>) {
+        let (mut world, es) = world_with_a(n);
+        for (i, &e) in es.iter().enumerate() {
+            if i % 3 == 0 {
+                world.insert_static(e, B(i as u32));
+            }
+        }
+        world.insert_resource(Totals::default());
+        (world, es)
+    }
+
+    fn a_values(world: &World, es: &[Entity]) -> Vec<Option<u32>> {
+        es.iter()
+            .map(|&e| world.get_static::<A>(e).map(|a| a.0))
+            .collect()
+    }
+
+    /// Runs `f` on a rayon pool of `threads` threads, so a parallel query
+    /// inside it sizes its batches for that pool. `World` is deliberately
+    /// not `Send`, so `f` is handed to the pool through a wrapper that
+    /// says it is.
+    fn in_pool(threads: usize, f: impl FnOnce()) {
+        struct AssertSend<T>(T);
+        // SAFETY: the calling thread blocks in `install` until `f` has
+        // finished, so whatever `f` borrows (the world, the system) is
+        // used by exactly one thread at a time, and never outlives the
+        // call.
+        unsafe impl<T> Send for AssertSend<T> {}
+        let f = AssertSend(f);
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(threads)
+            .build()
+            .expect("a rayon pool")
+            .install(move || {
+                let f = f;
+                (f.0)()
+            });
+    }
+
+    fn par_sum(q: Query<&A>, totals: Res<Totals>) {
+        q.par_iter().for_each(|a| {
+            totals.sum.fetch_add(u64::from(a.0), Ordering::Relaxed);
+            totals.rows.fetch_add(1, Ordering::Relaxed);
+        });
+    }
+
+    #[test]
+    #[cfg(not(miri))]
+    fn par_iter_visits_every_row_once_with_the_right_values() {
+        for threads in [1usize, 2, 4, 7] {
+            let (mut world, _) = mixed_world(300);
+            in_pool(threads, || world.run_system_once(par_sum));
+            let totals = world.get_resource::<Totals>().unwrap();
+            assert_eq!(
+                totals.rows.load(Ordering::Relaxed),
+                300,
+                "{threads} threads"
+            );
+            assert_eq!(
+                totals.sum.load(Ordering::Relaxed),
+                (0..300u64).sum::<u64>(),
+                "{threads} threads"
+            );
+        }
+    }
+
+    fn seq_write(mut q: Query<(Entity, Mut<A>)>) {
+        for (e, mut a) in q.iter_mut() {
+            a.0 = a.0 * 3 + e.index();
+        }
+    }
+
+    fn par_write(mut q: Query<(Entity, Mut<A>)>) {
+        q.par_iter_mut().for_each(|(e, mut a)| {
+            a.0 = a.0 * 3 + e.index();
+        });
+    }
+
+    #[test]
+    #[cfg(not(miri))]
+    fn par_iter_mut_leaves_the_world_as_iter_mut_does() {
+        let (mut seq, es) = mixed_world(500);
+        let (mut par, _) = mixed_world(500);
+        seq.run_system_once(seq_write);
+        in_pool(4, || par.run_system_once(par_write));
+        assert_eq!(a_values(&par, &es), a_values(&seq, &es));
+        assert_eq!(a_values(&par, &es)[7], Some(7 * 3 + es[7].index()));
+    }
+
+    fn init_per_batch(q: Query<&A>, totals: Res<Totals>) {
+        q.par_iter()
+            .batching_strategy(BatchingStrategy::fixed(10))
+            .for_each_init(
+                || {
+                    totals.inits.fetch_add(1, Ordering::Relaxed);
+                    0usize
+                },
+                |seen_in_batch, _a| {
+                    *seen_in_batch += 1;
+                    assert!(
+                        *seen_in_batch <= 10,
+                        "a scratch value was shared by batches"
+                    );
+                    totals.rows.fetch_add(1, Ordering::Relaxed);
+                },
+            );
+    }
+
+    #[test]
+    #[cfg(not(miri))]
+    fn for_each_init_runs_init_once_per_batch_and_not_per_row() {
+        let (mut world, _) = world_with_a(95);
+        world.insert_resource(Totals::default());
+        in_pool(4, || world.run_system_once(init_per_batch));
+        let totals = world.get_resource::<Totals>().unwrap();
+        assert_eq!(totals.rows.load(Ordering::Relaxed), 95);
+        assert_eq!(totals.inits.load(Ordering::Relaxed), 10, "ceil(95 / 10)");
+    }
+
+    fn par_bump_changed(mut q: Query<Mut<A>, Changed<A>>, totals: Res<Totals>) {
+        q.par_iter_mut().for_each(|mut a| {
+            a.0 += 1;
+            totals.rows.fetch_add(1, Ordering::Relaxed);
+        });
+    }
+
+    #[test]
+    #[cfg(not(miri))]
+    fn a_parallel_systems_own_writes_are_invisible_to_its_next_run_but_others_are_seen() {
+        let (mut world, es) = mixed_world(40);
+        let mut sys = par_bump_changed.into_system();
+        let rows = |world: &World| {
+            world
+                .get_resource::<Totals>()
+                .unwrap()
+                .rows
+                .load(Ordering::Relaxed)
+        };
+        in_pool(4, || sys.run(&mut world));
+        assert_eq!(rows(&world), 40);
+        in_pool(4, || sys.run(&mut world));
+        assert_eq!(rows(&world), 40, "its own writes are not changes to it");
+        world.get_static_mut::<A>(es[21]).unwrap().0 = 900;
+        in_pool(4, || sys.run(&mut world));
+        assert_eq!(rows(&world), 41);
+        assert_eq!(world.get_static::<A>(es[21]).map(|a| a.0), Some(901));
+    }
+
+    fn record_threads(q: Query<&A>, threads: Res<Threads>) {
+        q.par_iter()
+            .batching_strategy(BatchingStrategy::fixed(1))
+            .for_each(|_a| {
+                threads
+                    .0
+                    .lock()
+                    .unwrap()
+                    .insert(std::thread::current().id());
+                std::thread::sleep(std::time::Duration::from_millis(30));
+            });
+    }
+
+    #[test]
+    #[cfg(not(miri))]
+    fn par_iter_really_runs_batches_on_several_threads() {
+        let (mut world, _) = world_with_a(8);
+        world.insert_resource(Threads::default());
+        in_pool(4, || world.run_system_once(record_threads));
+        let used = world
+            .get_resource::<Threads>()
+            .unwrap()
+            .0
+            .lock()
+            .unwrap()
+            .len();
+        assert!(used >= 2, "all 8 batches ran on {used} thread(s)");
+    }
+
+    fn two_writers(mut a: Query<Mut<A>>, mut b: Query<Mut<B>>) {
+        a.par_iter_mut().for_each(|mut a| a.0 += 1);
+        b.par_iter_mut().for_each(|mut b| b.0 += 1000);
+    }
+
+    #[test]
+    #[cfg(not(miri))]
+    fn two_parallel_queries_of_different_components_work_in_one_system() {
+        let (mut world, es) = mixed_world(30);
+        in_pool(3, || world.run_system_once(two_writers));
+        assert_eq!(world.get_static::<A>(es[4]).map(|a| a.0), Some(5));
+        assert_eq!(world.get_static::<B>(es[3]).map(|b| b.0), Some(3 + 1000));
+    }
+
+    fn par_filtered_read(
+        q: Query<(Entity, Ref<A>, Option<&B>), (With<A>, Without<C>)>,
+        totals: Res<Totals>,
+    ) {
+        q.par_iter().for_each(|(e, a, b)| {
+            totals.sum.fetch_add(
+                u64::from(e.index()) + u64::from(a.0) + b.map_or(0, |b| u64::from(b.0)),
+                Ordering::Relaxed,
+            );
+        });
+    }
+
+    fn seq_filtered_read(
+        q: Query<(Entity, Ref<A>, Option<&B>), (With<A>, Without<C>)>,
+        totals: Res<Totals>,
+    ) {
+        for (e, a, b) in q.iter() {
+            totals.sum.fetch_add(
+                u64::from(e.index()) + u64::from(a.0) + b.map_or(0, |b| u64::from(b.0)),
+                Ordering::Relaxed,
+            );
+        }
+    }
+
+    #[test]
+    #[cfg(not(miri))]
+    fn a_filtered_read_with_optional_and_ref_terms_matches_the_sequential_one() {
+        let (mut seq, es) = mixed_world(120);
+        let (mut par, _) = mixed_world(120);
+        for &e in es.iter().step_by(5) {
+            seq.insert_static(e, C(1));
+            par.insert_static(e, C(1));
+        }
+        seq.run_system_once(seq_filtered_read);
+        in_pool(4, || par.run_system_once(par_filtered_read));
+        let total = |w: &World| {
+            w.get_resource::<Totals>()
+                .unwrap()
+                .sum
+                .load(Ordering::Relaxed)
+        };
+        assert!(total(&seq) > 0);
+        assert_eq!(total(&par), total(&seq));
+    }
+
+    fn batches_on_scoped_threads(mut q: Query<(Entity, Mut<A>)>) {
+        let batches = q
+            .par_iter_mut()
+            .batching_strategy(BatchingStrategy::fixed(3))
+            .into_batches();
+        assert!(batches.len() >= 3);
+        std::thread::scope(|scope| {
+            for batch in batches {
+                scope.spawn(move || {
+                    for (e, mut a) in batch {
+                        a.0 = a.0 * 3 + e.index();
+                    }
+                });
+            }
+        });
+    }
+
+    #[test]
+    fn into_batches_hands_out_batches_for_a_pool_of_your_own() {
+        // No rayon here: plain scoped threads, so Miri can run it.
+        let (mut seq, es) = mixed_world(12);
+        let (mut par, _) = mixed_world(12);
+        seq.run_system_once(seq_write);
+        par.run_system_once(batches_on_scoped_threads);
+        assert_eq!(a_values(&par, &es), a_values(&seq, &es));
+        assert_eq!(a_values(&par, &es)[5], Some(5 * 3 + es[5].index()));
+    }
+
+    fn count_default_batches(q: Query<&A>, totals: Res<Totals>) {
+        totals
+            .rows
+            .store(q.par_iter().into_batches().len(), Ordering::Relaxed);
+    }
+
+    #[test]
+    #[cfg(not(miri))]
+    fn the_default_batching_sizes_batches_for_the_pool_it_runs_in() {
+        // One archetype of 400 rows: one batch per thread by default.
+        for threads in [1usize, 2, 4] {
+            let (mut world, _) = world_with_a(400);
+            world.insert_resource(Totals::default());
+            in_pool(threads, || world.run_system_once(count_default_batches));
+            let batches = world
+                .get_resource::<Totals>()
+                .unwrap()
+                .rows
+                .load(Ordering::Relaxed);
+            assert_eq!(batches, threads, "{threads}-thread pool");
+        }
+    }
+
+    fn par_count_changed(q: Query<Entity, Changed<A>>, totals: Res<Totals>) {
+        q.par_iter().for_each(|_e| {
+            totals.rows.fetch_add(1, Ordering::Relaxed);
+        });
+    }
+
+    #[test]
+    #[cfg(not(miri))]
+    fn a_read_only_parallel_query_measures_changes_since_the_systems_last_run() {
+        let (mut world, es) = mixed_world(40);
+        let mut sys = par_count_changed.into_system();
+        let rows = |world: &World| {
+            world
+                .get_resource::<Totals>()
+                .unwrap()
+                .rows
+                .load(Ordering::Relaxed)
+        };
+        in_pool(4, || sys.run(&mut world));
+        assert_eq!(rows(&world), 40, "everything is new to a first run");
+        in_pool(4, || sys.run(&mut world));
+        assert_eq!(rows(&world), 40, "nothing changed since the first run");
+        world.get_static_mut::<A>(es[9]).unwrap().0 = 1;
+        world.get_static_mut::<A>(es[30]).unwrap().0 = 2;
+        in_pool(4, || sys.run(&mut world));
+        assert_eq!(rows(&world), 42, "exactly the two outside writes");
+    }
 }

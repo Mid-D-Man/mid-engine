@@ -39,6 +39,8 @@
 use std::cell::UnsafeCell;
 use std::marker::PhantomData;
 
+use crate::archetype::QueryBatch;
+use crate::batching::BatchingStrategy;
 use crate::data_filter::DataFilter;
 use crate::query_data::{QueryData, ReadOnlyQueryData};
 use crate::tick::Tick;
@@ -158,6 +160,45 @@ impl<'w> WorldCell<'w> {
             self.world()
                 .archetypes
                 .iter_data_cell::<Q, F>(this_run, last_run)
+        }
+    }
+
+    /// The query `Q` filtered by `F`, cut into independent
+    /// [`QueryBatch`]es that may run on different threads at once: the
+    /// parallel form of [`Self::query_iter_mut`] (it also serves a
+    /// read-only `Q`). Together the batches yield exactly the rows
+    /// `query_iter_mut` yields, each in exactly one batch, with disjoint
+    /// rows between batches. `threads` only sizes the batches; no thread
+    /// is started here. See [`BatchingStrategy`].
+    ///
+    /// A batch can be sent to another thread when `Q::Fetch<'w>` is
+    /// `Send`; this function itself has no such bound, so a single
+    /// thread can run the batches one after another for any query.
+    ///
+    /// # Panics
+    /// If `Q` reads and writes, or writes twice, the same component, or
+    /// if `strategy` needs a thread count and `threads` is zero.
+    ///
+    /// # Safety
+    /// As for [`Self::query_iter_mut`], and additionally, for as long as
+    /// any batch or anything it yielded is live, nothing may change the
+    /// world's structure (spawn, despawn, insert or remove a component):
+    /// the batches hold raw pointers into the columns. (Nothing reachable
+    /// through the cell can; `world_mut` is the exception and is already
+    /// `unsafe`.)
+    pub unsafe fn query_batches<Q: QueryData + 'w, F: DataFilter + 'w>(
+        self,
+        strategy: &BatchingStrategy,
+        threads: usize,
+        this_run: Tick,
+        last_run: Tick,
+    ) -> Vec<QueryBatch<'w, Q, F>> {
+        // SAFETY: shared structure read; the data contract is the
+        // caller's, and `par_batches_cell` spells out what it relies on.
+        unsafe {
+            self.world()
+                .archetypes
+                .par_batches_cell::<Q, F>(this_run, last_run, strategy, threads)
         }
     }
 
@@ -576,6 +617,730 @@ mod tests {
             // Entities 9 and 10 have no B.
             let want: u32 = (0..9u32).chain(11..13).map(|i| 100 + i + 1).sum();
             assert_eq!(total, want);
+        }
+    }
+
+    // ── Parallel batches ─────────────────────────────────────────────
+
+    use crate::batching::BatchingStrategy;
+
+    /// A zero-sized component, for the empty-window edge.
+    #[derive(Debug, PartialEq)]
+    struct Tag;
+
+    /// `ab` entities in {A, B}, `abc` in {A, B, C}, `a` in {A}, `b` in {B}.
+    /// Values are `A(i)`, `B(100 + i)`, `C(200 + i)` for a running `i`.
+    fn sized_world(ab: u32, abc: u32, a: u32, b: u32) -> (World, Vec<Entity>) {
+        let mut world = World::new();
+        let mut es = Vec::new();
+        let mut i = 0u32;
+        for _ in 0..ab {
+            let e = world.spawn();
+            world.insert_static(e, A(i));
+            world.insert_static(e, B(100 + i));
+            es.push(e);
+            i += 1;
+        }
+        for _ in 0..abc {
+            let e = world.spawn();
+            world.insert_static(e, A(i));
+            world.insert_static(e, B(100 + i));
+            world.insert_static(e, C(200 + i));
+            es.push(e);
+            i += 1;
+        }
+        for _ in 0..a {
+            let e = world.spawn();
+            world.insert_static(e, A(i));
+            es.push(e);
+            i += 1;
+        }
+        for _ in 0..b {
+            let e = world.spawn();
+            world.insert_static(e, B(100 + i));
+            es.push(e);
+            i += 1;
+        }
+        (world, es)
+    }
+
+    fn strategies() -> Vec<BatchingStrategy> {
+        vec![
+            BatchingStrategy::new(),
+            BatchingStrategy::new().batches_per_thread(3),
+            BatchingStrategy::fixed(1),
+            BatchingStrategy::fixed(3),
+            BatchingStrategy::fixed(7),
+            BatchingStrategy::fixed(1000),
+            BatchingStrategy::new().min_batch_size(4).max_batch_size(9),
+        ]
+    }
+
+    #[test]
+    fn batches_yield_exactly_the_rows_the_sequential_cell_iterator_yields() {
+        let (mut world, _) = sized_world(20, 9, 5, 4);
+        world.increment_change_tick();
+        let this_run = world.change_tick();
+        let cell = world.as_world_cell();
+        // SAFETY: only readers of this world are live.
+        let mut want: Vec<((u32, u32), u32, u32)> =
+            unsafe { cell.query_iter::<(Entity, &A, &B), ()>(this_run, Tick::default()) }
+                .map(|(e, a, b)| (key(&e), a.0, b.0))
+                .collect();
+        want.sort();
+        assert_eq!(want.len(), 29);
+        for strategy in strategies() {
+            for threads in [1usize, 2, 4, 16] {
+                // SAFETY: as above; the batches are only iterated here.
+                let batches = unsafe {
+                    cell.query_batches::<(Entity, &A, &B), ()>(
+                        &strategy,
+                        threads,
+                        this_run,
+                        Tick::default(),
+                    )
+                };
+                let mut got: Vec<((u32, u32), u32, u32)> = batches
+                    .into_iter()
+                    .flatten()
+                    .map(|(e, a, b)| (key(&e), a.0, b.0))
+                    .collect();
+                got.sort();
+                assert_eq!(got, want, "strategy {strategy:?}, {threads} threads");
+            }
+        }
+    }
+
+    #[test]
+    fn the_batch_count_follows_the_strategy() {
+        let (mut world, _) = sized_world(20, 9, 0, 0);
+        let this_run = world.change_tick();
+        let cell = world.as_world_cell();
+        let count = |strategy: BatchingStrategy, threads: usize| {
+            // SAFETY: nothing else is live; the batches are only counted.
+            unsafe { cell.query_batches::<&A, ()>(&strategy, threads, this_run, Tick::default()) }
+                .len()
+        };
+        // 20 + 9 rows in two archetypes. Fixed 5: 4 windows + 2 windows.
+        assert_eq!(count(BatchingStrategy::fixed(5), 1), 6);
+        // Fixed 100: both archetypes are short, queued into one batch.
+        assert_eq!(count(BatchingStrategy::fixed(100), 1), 1);
+        // Default over 4 threads: ceil(20 / 4) = 5 rows per batch.
+        assert_eq!(count(BatchingStrategy::new(), 4), 6);
+        // One thread: batch size = the largest archetype, 20: the big
+        // archetype alone is one batch and the 9 queue to the end.
+        assert_eq!(count(BatchingStrategy::new(), 1), 2);
+    }
+
+    #[test]
+    fn small_archetypes_are_merged_into_shared_batches() {
+        let mut world = World::new();
+        for combo in 1u32..8 {
+            let e = world.spawn();
+            if combo & 1 != 0 {
+                world.insert_static(e, A(0));
+            }
+            if combo & 2 != 0 {
+                world.insert_static(e, B(0));
+            }
+            if combo & 4 != 0 {
+                world.insert_static(e, C(0));
+            }
+        }
+        let this_run = world.change_tick();
+        let cell = world.as_world_cell();
+        // SAFETY: nothing else is live.
+        let batches = unsafe {
+            cell.query_batches::<Entity, ()>(
+                &BatchingStrategy::fixed(4),
+                1,
+                this_run,
+                Tick::default(),
+            )
+        };
+        // 7 one-row archetypes with batch size 4: [4 windows] [3 windows].
+        assert_eq!(batches.len(), 2);
+        let mut seen: Vec<Entity> = batches.into_iter().flatten().collect();
+        seen.sort_by_key(key);
+        assert_eq!(seen.len(), 7);
+    }
+
+    #[test]
+    fn a_query_with_no_matching_row_has_no_batches() {
+        let (mut world, _) = sized_world(3, 0, 0, 0);
+        let this_run = world.change_tick();
+        let cell = world.as_world_cell();
+        // SAFETY: nothing else is live.
+        unsafe {
+            // No `Other` was ever inserted: nothing can match.
+            assert!(cell
+                .query_batches::<&Other, ()>(&BatchingStrategy::new(), 4, this_run, Tick::default())
+                .is_empty());
+            // `C` exists nowhere in this world but is a known type: the
+            // matched list is empty too.
+            assert!(cell
+                .query_batches::<&C, ()>(&BatchingStrategy::new(), 4, this_run, Tick::default())
+                .is_empty());
+        }
+        let mut empty = World::new();
+        let cell = empty.as_world_cell();
+        // SAFETY: nothing else is live.
+        assert!(unsafe {
+            cell.query_batches::<Entity, ()>(
+                &BatchingStrategy::new(),
+                4,
+                Tick::default(),
+                Tick::default(),
+            )
+        }
+        .is_empty());
+    }
+
+    /// The tick-tracked picture of a world: per entity its values, and
+    /// which entities `Changed<A>` / `Changed<B>` select for `tracker`.
+    #[allow(clippy::type_complexity)]
+    fn snapshot(
+        world: &World,
+        es: &[Entity],
+        tracker: &ChangeTracker,
+    ) -> (
+        Vec<((u32, u32), Option<u32>, Option<u32>, Option<u32>)>,
+        Vec<(u32, u32)>,
+        Vec<(u32, u32)>,
+    ) {
+        let mut values: Vec<_> = es
+            .iter()
+            .filter(|e| world.is_alive(**e))
+            .map(|e| {
+                (
+                    key(e),
+                    world.get_static::<A>(*e).map(|a| a.0),
+                    world.get_static::<B>(*e).map(|b| b.0),
+                    world.get_static::<C>(*e).map(|c| c.0),
+                )
+            })
+            .collect();
+        values.sort();
+        let mut changed_a: Vec<_> = world
+            .query_data_filtered_since::<Entity, Changed<A>>(tracker)
+            .map(|e| key(&e))
+            .collect();
+        changed_a.sort();
+        let mut changed_b: Vec<_> = world
+            .query_data_filtered_since::<Entity, Changed<B>>(tracker)
+            .map(|e| key(&e))
+            .collect();
+        changed_b.sort();
+        (values, changed_a, changed_b)
+    }
+
+    /// Ticks a world forward the way the tests above do and returns the
+    /// tracker standing before the writes.
+    fn arm(world: &mut World) -> ChangeTracker {
+        world.increment_change_tick();
+        let mut tracker = ChangeTracker::new();
+        tracker.update(world);
+        world.increment_change_tick();
+        tracker
+    }
+
+    #[test]
+    fn batches_written_on_separate_threads_match_a_sequential_write() {
+        let (mut seq, es) = sized_world(40, 17, 6, 5);
+        let (mut par, _) = sized_world(40, 17, 6, 5);
+        let seq_tracker = arm(&mut seq);
+        let par_tracker = arm(&mut par);
+
+        for (e, mut a, b) in seq.query_data_mut::<(Entity, Mut<A>, &B)>() {
+            a.0 += b.0 + e.index();
+        }
+
+        let this_run = par.change_tick();
+        let cell = par.as_world_cell();
+        // SAFETY: the only live access to the world; each batch owns its
+        // rows.
+        let batches = unsafe {
+            cell.query_batches::<(Entity, Mut<A>, &B), ()>(
+                &BatchingStrategy::fixed(5),
+                4,
+                this_run,
+                Tick::default(),
+            )
+        };
+        assert!(batches.len() > 4, "the test needs real concurrency");
+        std::thread::scope(|scope| {
+            for batch in batches {
+                scope.spawn(move || {
+                    for (e, mut a, b) in batch {
+                        a.0 += b.0 + e.index();
+                    }
+                });
+            }
+        });
+
+        let (seq_values, seq_a, seq_b) = snapshot(&seq, &es, &seq_tracker);
+        let (par_values, par_a, par_b) = snapshot(&par, &es, &par_tracker);
+        assert_eq!(par_values, seq_values);
+        assert_eq!(par_a, seq_a);
+        assert_eq!(par_b, seq_b);
+        assert_eq!(par_a.len(), 57, "every {{A, B}} and {{A, B, C}} row");
+        assert!(par_b.is_empty(), "B was only read");
+    }
+
+    #[test]
+    fn every_row_is_written_exactly_once_across_threads() {
+        // `a.0 += 1` once per row: any row visited twice shows 2, any
+        // skipped row 0.
+        let (mut world, es) = sized_world(30, 11, 7, 0);
+        let this_run = world.change_tick();
+        let before: Vec<u32> = es
+            .iter()
+            .map(|e| world.get_static::<A>(*e).unwrap().0)
+            .collect();
+        let cell = world.as_world_cell();
+        // SAFETY: the only live access.
+        let batches = unsafe {
+            cell.query_batches::<Mut<A>, ()>(
+                &BatchingStrategy::fixed(4),
+                4,
+                this_run,
+                Tick::default(),
+            )
+        };
+        std::thread::scope(|scope| {
+            for batch in batches {
+                scope.spawn(move || {
+                    for mut a in batch {
+                        a.0 += 1;
+                    }
+                });
+            }
+        });
+        for (e, old) in es.iter().zip(before) {
+            assert_eq!(world.get_static::<A>(*e).unwrap().0, old + 1);
+        }
+    }
+
+    #[test]
+    fn a_batch_can_be_paused_and_finished_on_another_thread() {
+        let (mut world, es) = sized_world(12, 0, 0, 0);
+        let this_run = world.change_tick();
+        let cell = world.as_world_cell();
+        // SAFETY: the only live access.
+        let mut batches = unsafe {
+            cell.query_batches::<(Entity, Mut<A>), ()>(
+                &BatchingStrategy::fixed(12),
+                1,
+                this_run,
+                Tick::default(),
+            )
+        };
+        assert_eq!(batches.len(), 1);
+        let mut batch = batches.pop().unwrap();
+        let mut first = Vec::new();
+        for _ in 0..5 {
+            let (e, mut a) = batch.next().unwrap();
+            a.0 += 1000;
+            first.push(key(&e));
+        }
+        let rest: Vec<(u32, u32)> = std::thread::scope(|scope| {
+            scope
+                .spawn(move || {
+                    let mut seen = Vec::new();
+                    for (e, mut a) in batch {
+                        a.0 += 1000;
+                        seen.push(key(&e));
+                    }
+                    seen
+                })
+                .join()
+                .unwrap()
+        });
+        assert_eq!(first.len() + rest.len(), 12);
+        let mut all: Vec<_> = first.into_iter().chain(rest).collect();
+        all.sort();
+        all.dedup();
+        assert_eq!(all.len(), 12, "no row twice");
+        for (i, e) in es.iter().enumerate() {
+            assert_eq!(world.get_static::<A>(*e).unwrap().0, i as u32 + 1000);
+        }
+    }
+
+    #[test]
+    fn row_filters_work_inside_windows() {
+        // A row filter on a different component than the one written,
+        // with windows that cut the filtered rows at arbitrary places.
+        let build = || {
+            let (mut world, es) = sized_world(23, 10, 0, 0);
+            let tracker = arm(&mut world);
+            // Touch B on every third entity, after the tracker.
+            for (e, mut b) in world.query_data_mut::<(Entity, Mut<B>)>() {
+                if e.index() % 3 == 0 {
+                    b.0 += 1;
+                }
+            }
+            world.increment_change_tick();
+            (world, es, tracker)
+        };
+        let (mut seq, es, seq_tracker) = build();
+        let (mut par, _, par_tracker) = build();
+        for mut a in seq.query_data_mut_filtered_since::<Mut<A>, Changed<B>>(&seq_tracker) {
+            a.0 += 5000;
+        }
+        let this_run = par.change_tick();
+        let last_run = par_tracker.last_run();
+        for strategy in strategies() {
+            // Each strategy on a fresh copy.
+            let (mut par, _, par_tracker) = build();
+            let this_run = par.change_tick();
+            let last_run = par_tracker.last_run();
+            let cell = par.as_world_cell();
+            // SAFETY: the only live access.
+            let batches = unsafe {
+                cell.query_batches::<Mut<A>, Changed<B>>(&strategy, 3, this_run, last_run)
+            };
+            std::thread::scope(|scope| {
+                for batch in batches {
+                    scope.spawn(move || {
+                        for mut a in batch {
+                            a.0 += 5000;
+                        }
+                    });
+                }
+            });
+            let (par_values, par_a, par_b) = snapshot(&par, &es, &par_tracker);
+            let (seq_values, seq_a, seq_b) = snapshot(&seq, &es, &seq_tracker);
+            assert_eq!(par_values, seq_values, "strategy {strategy:?}");
+            assert_eq!(par_a, seq_a);
+            assert_eq!(par_b, seq_b);
+            assert_eq!(par_a.len(), 11, "entities 0, 3, 6, ... of 33");
+        }
+        let _ = (this_run, last_run, &mut par);
+    }
+
+    #[test]
+    fn a_written_component_can_also_be_a_row_filter_in_a_window() {
+        // `Mut<A>` filtered by `Changed<A>`: the filter reads the very
+        // tick slice the term then takes.
+        let build = || {
+            let (mut world, es) = sized_world(19, 6, 0, 0);
+            let tracker = arm(&mut world);
+            for (e, mut a) in world.query_data_mut::<(Entity, Mut<A>)>() {
+                if e.index() % 2 == 1 {
+                    a.0 += 1;
+                }
+            }
+            world.increment_change_tick();
+            (world, es, tracker)
+        };
+        let (mut seq, es, seq_tracker) = build();
+        for mut a in seq.query_data_mut_filtered_since::<Mut<A>, Changed<A>>(&seq_tracker) {
+            a.0 += 7000;
+        }
+        let (mut par, _, par_tracker) = build();
+        let this_run = par.change_tick();
+        let last_run = par_tracker.last_run();
+        let cell = par.as_world_cell();
+        // SAFETY: the only live access.
+        let batches = unsafe {
+            cell.query_batches::<Mut<A>, Changed<A>>(
+                &BatchingStrategy::fixed(4),
+                2,
+                this_run,
+                last_run,
+            )
+        };
+        std::thread::scope(|scope| {
+            for batch in batches {
+                scope.spawn(move || {
+                    for mut a in batch {
+                        a.0 += 7000;
+                    }
+                });
+            }
+        });
+        let (par_values, par_a, _) = snapshot(&par, &es, &par_tracker);
+        let (seq_values, seq_a, _) = snapshot(&seq, &es, &seq_tracker);
+        assert_eq!(par_values, seq_values);
+        assert_eq!(par_a, seq_a);
+        let bumped = par_values
+            .iter()
+            .filter(|(_, a, _, _)| a.map_or(false, |a| a >= 7000))
+            .count();
+        assert_eq!(bumped, 12, "the 12 odd-indexed of 25 entities");
+    }
+
+    #[test]
+    fn tick_terms_and_optional_terms_agree_with_the_sequential_iterator() {
+        let (mut world, _) = sized_world(14, 9, 5, 3);
+        let tracker = arm(&mut world);
+        for (e, mut a) in world.query_data_mut::<(Entity, Mut<A>)>() {
+            if e.index() % 4 == 0 {
+                a.0 += 1;
+            }
+        }
+        world.increment_change_tick();
+        let this_run = world.change_tick();
+        let last_run = tracker.last_run();
+        let cell = world.as_world_cell();
+        type Q<'a> = (
+            Entity,
+            Ref<'a, A>,
+            Added<A>,
+            Changed<A>,
+            Option<&'a C>,
+            Has<B>,
+        );
+        // SAFETY: only readers.
+        let mut want: Vec<_> = unsafe { cell.query_iter::<Q, ()>(this_run, last_run) }
+            .map(|(e, a, added, changed, c, has_b)| {
+                (key(&e), a.0, added, changed, c.map(|c| c.0), has_b)
+            })
+            .collect();
+        want.sort();
+        assert!(want.iter().any(|row| row.3), "some rows changed");
+        assert!(want.iter().any(|row| !row.3), "some rows did not");
+        for strategy in strategies() {
+            // SAFETY: only readers.
+            let batches = unsafe { cell.query_batches::<Q, ()>(&strategy, 4, this_run, last_run) };
+            let mut got: Vec<_> = batches
+                .into_iter()
+                .flatten()
+                .map(|(e, a, added, changed, c, has_b)| {
+                    (key(&e), a.0, added, changed, c.map(|c| c.0), has_b)
+                })
+                .collect();
+            got.sort();
+            assert_eq!(got, want, "strategy {strategy:?}");
+        }
+    }
+
+    #[test]
+    fn a_zero_sized_component_gets_empty_windows_and_real_stamps() {
+        let mut world = World::new();
+        let mut es = Vec::new();
+        for i in 0..9u32 {
+            let e = world.spawn();
+            world.insert_static(e, Tag);
+            world.insert_static(e, A(i));
+            es.push(e);
+        }
+        let tracker = arm(&mut world);
+        let this_run = world.change_tick();
+        let cell = world.as_world_cell();
+        // SAFETY: the only live access.
+        let batches = unsafe {
+            cell.query_batches::<(Mut<Tag>, Mut<A>), ()>(
+                &BatchingStrategy::fixed(2),
+                2,
+                this_run,
+                Tick::default(),
+            )
+        };
+        let mut rows = 0;
+        std::thread::scope(|scope| {
+            let handles: Vec<_> = batches
+                .into_iter()
+                .map(|batch| {
+                    scope.spawn(move || {
+                        let mut n = 0;
+                        for (mut tag, mut a) in batch {
+                            tag.set_changed();
+                            a.0 += 1;
+                            n += 1;
+                        }
+                        n
+                    })
+                })
+                .collect();
+            for handle in handles {
+                rows += handle.join().unwrap();
+            }
+        });
+        assert_eq!(rows, 9);
+        assert_eq!(
+            world
+                .query_data_filtered_since::<Entity, Changed<Tag>>(&tracker)
+                .count(),
+            9
+        );
+        assert_eq!(
+            world
+                .query_data_filtered_since::<Entity, Changed<A>>(&tracker)
+                .count(),
+            9
+        );
+        let _ = es;
+    }
+
+    #[test]
+    #[should_panic(expected = "conflicting access")]
+    fn a_self_conflicting_query_is_refused_before_any_batch_is_made() {
+        let (mut world, _) = sized_world(3, 0, 0, 0);
+        let cell = world.as_world_cell();
+        // SAFETY: refused before anything is touched.
+        let _ = unsafe {
+            cell.query_batches::<(Mut<A>, &A), ()>(
+                &BatchingStrategy::new(),
+                2,
+                Tick::default(),
+                Tick::default(),
+            )
+        };
+    }
+
+    #[test]
+    #[should_panic(expected = "zero threads")]
+    fn zero_threads_is_refused_for_a_sized_strategy() {
+        let (mut world, _) = sized_world(3, 0, 0, 0);
+        let cell = world.as_world_cell();
+        // SAFETY: refused before anything is touched.
+        let _ = unsafe {
+            cell.query_batches::<&A, ()>(
+                &BatchingStrategy::new(),
+                0,
+                Tick::default(),
+                Tick::default(),
+            )
+        };
+    }
+
+    /// A tiny deterministic generator, so a failure names its seed.
+    struct Lcg(u64);
+    impl Lcg {
+        fn next(&mut self) -> u64 {
+            self.0 = self
+                .0
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            self.0 >> 33
+        }
+        fn below(&mut self, n: u64) -> u64 {
+            self.next() % n
+        }
+    }
+
+    #[test]
+    fn a_random_history_agrees_with_the_sequential_iterator_round_by_round() {
+        for seed in 0..6u64 {
+            let mut rng = Lcg(seed + 1);
+            let (mut seq, mut es) = sized_world(17, 9, 6, 5);
+            let (mut par, _) = sized_world(17, 9, 6, 5);
+            let mut shapes_with_rows = [0usize; 4];
+            for round in 0..8 {
+                // Structural churn, identical on both worlds.
+                for _ in 0..rng.below(4) {
+                    let victim = es[rng.below(es.len() as u64) as usize];
+                    match rng.below(3) {
+                        0 => {
+                            seq.despawn(victim);
+                            par.despawn(victim);
+                        }
+                        1 => {
+                            if seq.is_alive(victim) {
+                                seq.insert_static(victim, C(round));
+                                par.insert_static(victim, C(round));
+                            }
+                        }
+                        _ => {
+                            if seq.is_alive(victim) {
+                                seq.remove_static::<B>(victim);
+                                par.remove_static::<B>(victim);
+                            }
+                        }
+                    }
+                }
+                let seq_tracker = arm(&mut seq);
+                let par_tracker = arm(&mut par);
+                // Touch some B on both, after the trackers.
+                let modulus = rng.below(3) + 2;
+                for world in [&mut seq, &mut par] {
+                    for (e, mut b) in world.query_data_mut::<(Entity, Mut<B>)>() {
+                        if u64::from(e.index()) % modulus == 0 {
+                            b.0 += 1;
+                        }
+                    }
+                    world.increment_change_tick();
+                }
+                let strategy =
+                    strategies().swap_remove(rng.below(strategies().len() as u64) as usize);
+                let threads = [1usize, 2, 4][rng.below(3) as usize];
+                let shape = rng.below(4);
+
+                let this_run = par.change_tick();
+                let last_run = par_tracker.last_run();
+                let cell = par.as_world_cell();
+                macro_rules! write_shape {
+                    ($Q:ty, $F:ty, $seq:expr, $par:expr) => {{
+                        for item in seq.query_data_mut_filtered_since::<$Q, $F>(&seq_tracker) {
+                            ($seq)(item);
+                        }
+                        // SAFETY: the only live access to `par`.
+                        let batches = unsafe {
+                            cell.query_batches::<$Q, $F>(&strategy, threads, this_run, last_run)
+                        };
+                        if batches.is_empty() {
+                            // nothing matched
+                        } else {
+                            shapes_with_rows[shape as usize] += 1;
+                        }
+                        std::thread::scope(|scope| {
+                            for batch in batches {
+                                scope.spawn(move || {
+                                    for item in batch {
+                                        ($par)(item);
+                                    }
+                                });
+                            }
+                        });
+                    }};
+                }
+                match shape {
+                    0 => write_shape!(
+                        (Mut<A>, &B),
+                        (),
+                        |(mut a, b): (Mut<A>, &B)| a.0 += b.0,
+                        |(mut a, b): (Mut<A>, &B)| a.0 += b.0
+                    ),
+                    1 => write_shape!(
+                        Mut<A>,
+                        Changed<B>,
+                        |mut a: Mut<A>| a.0 += 5000,
+                        |mut a: Mut<A>| a.0 += 5000
+                    ),
+                    2 => write_shape!(
+                        (Entity, Mut<B>),
+                        (With<A>, Changed<B>),
+                        |(e, mut b): (Entity, Mut<B>)| b.0 += e.index(),
+                        |(e, mut b): (Entity, Mut<B>)| b.0 += e.index()
+                    ),
+                    _ => write_shape!(
+                        Mut<A>,
+                        crate::filter::Or<(Changed<B>, Without<B>)>,
+                        |mut a: Mut<A>| a.0 += 9000,
+                        |mut a: Mut<A>| a.0 += 9000
+                    ),
+                }
+                es.retain(|e| seq.is_alive(*e));
+                let (seq_values, seq_a, seq_b) = snapshot(&seq, &es, &seq_tracker);
+                let (par_values, par_a, par_b) = snapshot(&par, &es, &par_tracker);
+                assert_eq!(
+                    par_values, seq_values,
+                    "seed {seed} round {round} shape {shape}"
+                );
+                assert_eq!(
+                    par_a, seq_a,
+                    "seed {seed} round {round} shape {shape}: Changed<A>"
+                );
+                assert_eq!(
+                    par_b, seq_b,
+                    "seed {seed} round {round} shape {shape}: Changed<B>"
+                );
+            }
+            assert!(
+                shapes_with_rows.iter().all(|&n| n > 0) || seed > 0,
+                "seed 0 should exercise every shape"
+            );
         }
     }
 }

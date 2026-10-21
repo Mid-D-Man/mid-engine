@@ -114,6 +114,7 @@ mod ffi_write;
 use ffi_write::FfiWriter;
 pub use ffi_write::{ComponentFfiError, FfiSpanMut};
 mod iter_data;
+pub use iter_data::QueryBatch;
 pub(crate) use iter_data::{validate_access, TableAccess};
 mod iter_mut;
 
@@ -157,10 +158,42 @@ impl SparseSetIndex for ArchetypeId {
     }
 }
 
+/// A raw handle to the element buffer of one column: what a parallel
+/// iterator keeps instead of the `&mut` the sequential one holds.
+///
+/// Why raw: two threads that each need a `&mut [T]` over *different rows*
+/// of one column may not both obtain it by going through a `&mut Vec<T>`
+/// (or a `&mut Box<dyn Column>`), because two live `&mut` to the same
+/// `Vec` alias even if their elements never meet. So the single thread
+/// that sets a parallel query up takes the `&mut` once, copies this out,
+/// and lets the `&mut` die; each window then builds its own
+/// `&mut [T]` over its own rows from `ptr`, which is what
+/// `slice::split_at_mut` and rayon's `par_chunks_mut` do internally.
+///
+/// `type_id` is the `TypeId` of the concrete column (`Vec<T>`), checked
+/// before a typed slice is built, exactly as the downcast the sequential
+/// path does.
+///
+/// A `RawColumn` is only valid while the world it was taken from is
+/// borrowed and not structurally changed; the types that hold one
+/// (`iter_data.rs`) are constructed only by `unsafe` functions whose
+/// contract says so.
+#[derive(Clone, Copy)]
+struct RawColumn {
+    ptr: *mut u8,
+    len: usize,
+    type_id: TypeId,
+}
+
 /// Type-erased operations one dense column (one component type, within
 /// one [`Table`]) supports. Not meant to be implemented outside this
 /// module — the blanket impl below covers every real case.
 trait Column: Any {
+    /// A raw handle to this column's element buffer: base pointer, length
+    /// and the concrete column type. What the parallel iterators
+    /// (`iter_data.rs`, `QueryBatch`) carve disjoint row windows out of;
+    /// see [`RawColumn`] for why they cannot use a `&mut` for that.
+    fn raw_parts_mut(&mut self) -> RawColumn;
     /// Removes the value at `row` (swap-remove: the last element takes
     /// its place) and drops it.
     fn swap_remove_and_drop(&mut self, row: usize);
@@ -183,6 +216,14 @@ trait Column: Any {
 }
 
 impl<T: 'static> Column for Vec<T> {
+    #[inline]
+    fn raw_parts_mut(&mut self) -> RawColumn {
+        RawColumn {
+            ptr: self.as_mut_ptr().cast::<u8>(),
+            len: self.len(),
+            type_id: TypeId::of::<Vec<T>>(),
+        }
+    }
     fn swap_remove_and_drop(&mut self, row: usize) {
         Vec::swap_remove(self, row);
     }

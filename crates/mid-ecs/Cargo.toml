@@ -47,9 +47,9 @@ bumpalo = { version = "3.20.3", features = ["boxed"], optional = true }
 # the entire tree into the wasm32 graph before this gate existed. Same
 # target-gating pattern already established in
 # crates/mid-net/transport-wasm/Cargo.toml for the same class of problem.
-# `query.rs`'s own eventual rayon-based parallel iteration will need the
-# matching `#[cfg(not(target_arch = "wasm32"))]` code-level split when it's
-# actually built -- not needed yet, query.rs is still a stub.
+# The matching `#[cfg(not(target_arch = "wasm32"))]` code-level split is in
+# system_param.rs (`pool_threads`, `run_batches`): rayon off wasm32, the
+# batches run one after another on the calling thread on wasm32.
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 rayon = "1.8"
 

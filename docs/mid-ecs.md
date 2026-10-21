@@ -155,9 +155,10 @@ dependency graph looks right — the sandbox this was developed in has no
 wasm32 target installed at all, so dependency-graph resolution was as
 far as local verification could go.
 
-`query.rs`'s eventual rayon-based parallel iteration will need the
-matching `#[cfg(not(target_arch = "wasm32"))]` split at the *code* level
-too, once it's actually built — not needed yet, it's still a stub. FFI
+The matching `#[cfg(not(target_arch = "wasm32"))]` split at the *code*
+level exists now, in `system_param.rs` (`pool_threads`, `run_batches`: rayon
+off wasm32, the batches run one after another on the calling thread on
+wasm32); see "Parallel iteration" below. FFI
 work for `mid-ecs` is no longer saved for the end — see the FFI section
 below for the real, incremental strategy and what's already built.
 
@@ -3929,7 +3930,7 @@ other, and running it hands them out as live borrows of one world.
 |---|---|
 | `SystemMeta` | The name (for messages), the registered `FilteredAccessSet`, and the tick of the system's previous run. `add_param_access` registers one parameter's access and panics if it conflicts with one already there. |
 | `SystemParam` (`unsafe trait`) | `State`, `Item<'w, 's>`, `init_state` (registers access), `unsafe get_param` (this run's value from a `WorldCell`), `apply` (deferred work, with `&mut World`). An implementor promises `get_param` makes no access `init_state` did not register. |
-| `Query<'w, 's, Q, F = ()>` | Any `QueryData` filtered by any `DataFilter`. `iter(&self)` for read-only `Q`, `iter_mut(&mut self)` for any. `Added`/`Changed` measure against the system's own previous run. |
+| `Query<'w, 's, Q, F = ()>` | Any `QueryData` filtered by any `DataFilter`. `iter(&self)` for read-only `Q`, `iter_mut(&mut self)` for any, and `par_iter` / `par_iter_mut` for the same on several threads (next section). `Added`/`Changed` measure against the system's own previous run. |
 | `Res<T>`, `ResMut<T>`, `Option<..>` of each | A resource, shared or exclusive. Missing: a panic naming system and type when the system runs, or `None` for the `Option` forms. |
 | `Local<T>` | `T::default()` kept in the system across runs; one per use. |
 | `Commands` | The existing `CommandQueue` as state; applied by `apply` after the system returns. |
@@ -3998,6 +3999,129 @@ section, which applies to these tests too.
 - No benchmark: these are setup-time structures plus one call per parameter per
   run. The per-row cost of a system's query is that of `query_iter` /
   `query_iter_mut`, which are the existing iterators.
+
+### Parallel iteration (`batching.rs`, `QueryBatch`, `Query::par_iter`)
+
+Gap-list item 5. A query can be cut into independent pieces and run on several
+threads: `Query::par_iter()` / `par_iter_mut()` in a system, or
+`WorldCell::query_batches` directly. Bevy's `par_iter` is the reference (its
+`QueryParIter`, `BatchingStrategy`, and the queueing in
+`QueryState::par_fold_init_unchecked_manual`, read from the `Mid-D-Man/bevy`
+fork at 0.20.0-dev); the differences are below.
+
+| piece | what it is |
+|---|---|
+| `BatchingStrategy` (`batching.rs`) | `new()` (about one batch per thread for the largest archetype), `fixed(n)`, `min_batch_size`, `max_batch_size`, `batches_per_thread`; `calc_batch_size(max_items, threads)`. Bevy's knobs and arithmetic. |
+| `plan_batches` (`batching.rs`, crate-private) | Pure function: archetype lengths and a batch size in, batches of row windows out. An archetype at least one batch long is split into batch-sized windows; shorter ones are queued until the queue holds a batch (so many tiny archetypes do not become many tiny tasks). Every row lands in exactly one window of exactly one batch. |
+| `QueryBatch<'w, Q, F>` | An iterator of `Q::Item<'w>` over a few row windows. `Send` when `Q::Fetch<'w>` is. Yields what the sequential iterator yields, for its rows. |
+| `WorldCell::query_batches::<Q, F>(&strategy, threads, this_run, last_run)` | `unsafe`: the query as `Vec<QueryBatch>`. Starts no thread; `threads` only sizes batches. Serves read-only and writing queries. |
+| `Query::par_iter()` / `par_iter_mut()` -> `QueryParIter` | `batching_strategy(..)`, `for_each(Fn(Item))`, `for_each_init(init, Fn(&mut T, Item))` (one `init` per batch), `into_batches()` (to run on a pool of your own). `for_each` runs batches on rayon; a single batch runs inline. |
+
+**The design question and its answer.** Two questions were open before this
+started: the `Send`/`Sync` story, and where the runner lives.
+
+*Send/Sync.* There is no `Component: Send + Sync` bound in this crate (any
+`T: 'static` can be a component), so parallel iteration cannot assume it. A
+`QueryBatch` is `Send` exactly when `Q::Fetch<'w>` is: every typed access to
+component data goes through the terms' `Fetch` (`&'w [T]` for a read term,
+`&'w mut [T]` for `Mut`), so `Fetch: Send` is `T: Sync` for every read term and
+`T: Send` for every written one, which is what moving the access to another
+thread needs. The compiler derives it; nothing here lists types, so a new term
+is covered by what its `Fetch` contains. Two `compile_fail` doctests on
+`QueryParIter` pin it (a `Mut<Rc<_>>` and a `&Cell<_>` query cannot be run in
+parallel); both were confirmed to fail for that reason (E0277 naming `Rc<u32>`
+cannot be sent / `Cell<u32>` cannot be shared), with a passing control.
+`QueryData::State`, `DataFilter::State` and the filter states gained
+`Clone + Send + Sync` bounds (each batch owns a copy); they are plain ids, so
+nothing changed.
+
+*Where the runner lives.* In `mid-ecs`, as the smallest thing that is useful:
+the batching, the soundness argument, and a rayon runner (the dependency was
+already declared here, with a comment saying the code-level wasm32 split would
+be needed when this was built; it is now). `into_batches()` is the seam: a
+schedule executor in `mid-app` (item "mid-app handover") can run batches on
+whatever pool it owns. No scheduler, system ordering or multi-system
+parallelism is built here; that is `mid-app`'s and is not started.
+
+**Why a window is raw (`RawColumn`, `iter_data.rs`).** The sequential mutable
+iterator gives each `Mut` term the whole column as `&mut [T]` and walks it one
+element at a time. Two threads cannot each take that: two live `&mut` to one
+`Vec` alias even if their elements never meet. So the single thread that sets
+the query up (`Archetypes::par_batches_cell`) takes the `&mut` to each written
+column once, copies a raw handle out (`Column::raw_parts_mut`: pointer, length,
+`TypeId` of the concrete `Vec<T>`), and lets the `&mut` die. Each window then
+builds its own `&mut [T]` over its own rows from that pointer, as
+`slice::split_at_mut` and rayon's `par_chunks_mut` do. Written tick columns
+the same way (`RawTicks`). Read columns need nothing special: shared
+references are fine from many threads. The type check the sequential path does
+with a downcast is a `TypeId` comparison here.
+
+A window is a `TableAccess` with a `window: Option<(start, end)>`: `entities`,
+the tick slices and every column the terms ask for are cut to the range, so the
+terms see rows `0..end - start` and are unchanged (`Mut` terms still rely on
+rows arriving in order from the start of their slice). Row filters
+(`Added`/`Changed`) run their pre-pass on the window, so `Mut<A>` +
+`Changed<A>` still reads the ticks before the `Mut` takes them. `IterDataMut`
+is reused as is, with a third `ArchetypeSource` (`WindowSource`).
+
+**Soundness argument, in full.** (1) The batches of one query have pairwise
+disjoint windows (`plan_batches`: exact cover, exhaustively tested over every
+length vector of up to four archetypes of 0..=5 rows against every batch size
+0..=7). (2) Each written window is built once (`take`). (3) A column a query
+writes is never also read by it (`validate_access`, as before), and the
+contract of `query_batches` is the cell's: nothing outside conflicts, and the
+world's structure does not change while a batch is live (the batches hold raw
+pointers into the buffers; nothing reachable through a cell can reallocate
+them, and `world_mut`, the exception, is already `unsafe`). (4) `Send` is
+`Fetch: Send`. The one `unsafe impl` is `QueryBatch: Send`, with this
+argument as its comment.
+
+**Semantics.** Items, filters, tick stamps: the same as the sequential query
+(`Mut` writes stamped with the system's tick, `Added`/`Changed` against its
+previous run). Order between batches is not defined; within a batch, rows are
+in order. `for_each` on a pool of one thread, or with one batch, runs inline.
+Default batch count follows `rayon::current_num_threads()` of the pool the
+call runs in (a test pins one batch per thread for 1, 2 and 4 threads). On
+`wasm32`, `for_each` runs the batches one after another.
+
+**Cost, stated, not measured** (optimization is paused). A call allocates
+O(matched archetypes x written columns) for the raw handles plus one `Vec` for
+the plan and states per batch, and spawns one rayon task per batch; the query
+re-resolves its matched archetypes every call (item 8 debt, same as `iter`).
+So `par_iter` pays off for many rows or for work per row that is not trivial;
+for a few hundred cheap rows the sequential `iter_mut` will win. No benchmark
+exists for it yet.
+
+**Verification.**
+- Tests: 18 for the batching arithmetic (`batching.rs`), 2 for window shapes
+  (`iter_data.rs`), 14 for `query_batches` in `world_cell.rs` (exact row
+  coverage across 7 strategies x 4 thread counts, real threads over batches,
+  a batch paused and finished on another thread, row filters and a written
+  component as its own filter inside windows, tick/optional/`Has` terms, a
+  zero-sized component, panics, and a randomized 6-seed x 8-round
+  differential test against the sequential iterator with structural churn),
+  10 for `par_iter` through real rayon pools in `system.rs`. Lib tests 583 ->
+  627, doctests 14 -> 16 (sandbox, rustc 1.91.1).
+- Mutation testing: 44 mutants, 42 caught. First pass caught 33 of 45; the
+  survivors were 9 real gaps (queue flush at exactly a batch size, window
+  lengths and clamps, read-only `par_iter` ticks), fixed by tests and
+  re-run, and one redundant `.max(1)`, deleted. The 2 remaining are
+  performance-only and behaviourally equivalent: the inline path for a single
+  batch and `with_max_len(1)`.
+- valgrind: 170 lib tests (cell, system, interior, batching, archetype), 0
+  errors, 0 bytes definitely lost; C smoke 201 ok against `.so` and `.a`,
+  clean under `-Wall -Wextra`, valgrind clean.
+- **Not verified:** aliasing. valgrind cannot see Rust aliasing violations and
+  the sandbox has no Miri. The new thread tests live in `world_cell::tests` and
+  `system::tests`, which `mid-ecs-miri.yml`'s default filter already selects
+  (the rayon ones are `cfg(not(miri))`; the `std::thread::scope` ones run
+  under it). Real CI on rustc 1.99.0 and the wasm32 branch of `run_batches`
+  (no wasm32 target in the sandbox; the workflow's "Check wasm32 build" step
+  compiles it) have not seen this either.
+
+**Not done.** `Query::par_get` / `par_many`; a `World`-level parallel query
+(`WorldCell` or a system is the entry); parallel `Commands`; a C counterpart; a
+benchmark against bevy's `par_iter` (paused); the schedule executor (`mid-app`).
 
 ### Writing component data from C (`raw_span_mut`, `write`, `FfiSpanMut`)
 

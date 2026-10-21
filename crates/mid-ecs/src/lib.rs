@@ -1,13 +1,15 @@
 //! mid-ecs — Data-oriented ECS (Structure of Arrays layout)
 //!
 //! Target: 100 000+ entities per core at 60 Hz physics frequency.
-//! Queries parallelised via rayon.
+//! Queries parallelised via rayon (`Query::par_iter`, `QueryBatch`); on
+//! wasm32 the same batches run on the calling thread.
 //!
 //! Multiplayer-first: the sync module marks components for
 //! mid-net replication from day one.
 
 pub mod access;
 pub mod archetype;
+pub mod batching;
 pub mod commands;
 pub mod component;
 pub mod data_filter;
@@ -36,7 +38,8 @@ pub mod world_cell;
 // history, not because the bug risk still applies now that the type is
 // real.
 pub use access::{Access, AccessConflicts, FilteredAccess, FilteredAccessSet};
-pub use archetype::{ArchetypeId, ComponentFfiError, FfiSpanMut};
+pub use archetype::{ArchetypeId, ComponentFfiError, FfiSpanMut, QueryBatch};
+pub use batching::BatchingStrategy;
 pub use commands::{CommandQueue, Commands, EntityCommands};
 pub use component::{ComponentId, SparseShell};
 pub use data_filter::DataFilter;
@@ -47,7 +50,7 @@ pub use system::{
     ExclusiveFunctionSystem, FunctionSystem, IntoSystem, System, SystemParamFunction,
 };
 pub use system_param::{
-    Local, Query, Res, ResMut, SystemMeta, SystemParam, SystemParamItem, SystemState,
+    Local, Query, QueryParIter, Res, ResMut, SystemMeta, SystemParam, SystemParamItem, SystemState,
 };
 pub use tick::{ChangeTracker, Mut, Ref, Tick};
 pub use transform::{GlobalTransform, GlobalTransformLWC};
