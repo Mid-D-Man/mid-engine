@@ -43,6 +43,7 @@ use crate::archetype::QueryBatch;
 use crate::batching::BatchingStrategy;
 use crate::data_filter::DataFilter;
 use crate::query_data::{QueryData, ReadOnlyQueryData};
+use crate::removal::RemovalLog;
 use crate::tick::Tick;
 use crate::world::World;
 
@@ -80,6 +81,19 @@ impl<'w> WorldCell<'w> {
     unsafe fn world(self) -> &'w World {
         // SAFETY: see above; the pointer came from a live `&'w mut World`.
         unsafe { &*self.world }
+    }
+
+    /// The removal log, shared: what `RemovedComponents` reads.
+    ///
+    /// # Safety
+    /// As for [`Self::world`]. The log is only ever written by structural
+    /// changes, which take `&mut World` and so cannot happen while the
+    /// cell exists (the exception, `world_mut`, is `unsafe` and already
+    /// excludes every other access).
+    #[inline]
+    pub(crate) unsafe fn removals(self) -> &'w RemovalLog {
+        // SAFETY: as above.
+        unsafe { &self.world().removals }
     }
 
     /// The whole world, exclusively: for work that takes `&mut World`

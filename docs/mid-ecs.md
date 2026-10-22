@@ -4123,6 +4123,101 @@ exists for it yet.
 (`WorldCell` or a system is the entry); parallel `Commands`; a C counterpart; a
 benchmark against bevy's `par_iter` (paused); the schedule executor (`mid-app`).
 
+### Removal tracking (`removal.rs`, `RemovedComponents`)
+
+Gap-list item 6, stage 6a. A removed component leaves nothing in storage, so
+"which entities lost a `T` since I last looked" needs a record. Stages still to
+come: component hooks, then events/messages and observers (see "Not done").
+
+| piece | what it is |
+|---|---|
+| `World::track_removals::<T>()` | Starts recording removals of `T`. Idempotent; removals before the first call are not recorded. |
+| `World::removed_since::<T>(&tracker)` | The entities that lost a `T` after `tracker`'s last update, oldest first. The counterpart of `query_changed`. **Panics** if `T` is not tracked: nothing would ever have been recorded and an empty answer would hide that. |
+| `RemovedComponents<'w, T>` (system param) | `iter()`, `len()`, `is_empty()`: removals since *this system's* previous run. Calls `track_removals::<T>()` when the system is set up. No component or resource access to register, so it never conflicts. |
+| `World::trim_removals(tick)` / `clear_removals()` / `removal_count::<T>()` / `tracks_removals::<T>()` | Housekeeping and diagnostics. |
+
+**What counts as a removal.** `remove`, `remove_static`, `remove_bundle` (every
+member, only when the whole bundle was present and was removed),
+`remove_static_by_id` / `remove_static_by_ids` (the FFI byte paths; only on
+`Ok`, and `..._ids` is all-or-nothing), `Commands` doing any of these, and a
+`despawn` (one entry per tracked component the entity held, in either storage).
+A removal of something not there (missing component, dead entity, never
+registered type), a refused removal, and **replacing a value by inserting over
+it** are not removals. Works for a type in either storage. An entity removed
+twice appears twice, and may since have been despawned or its slot reused:
+check liveness if it matters. Audited: every removal entry point outside
+`world.rs` (`commands.rs`, `ffi.rs`) goes through those `World` methods, so
+these are all the sites.
+
+**Three choices, each the opposite of bevy's** (bevy: `RemovedComponents` over
+per-component double-buffered messages, a cursor per reader, flipped by
+`clear_trackers`):
+
+- *Ticks, not message cursors.* A removal is stamped with the world's change
+  tick, and a reader sees entries newer than its own `last_run`, exactly like
+  `Added`/`Changed`. Every reader (a system, or code holding a `ChangeTracker`)
+  gets its own window with no per-reader state and no double buffer. As for
+  change detection, a system's own `Commands` apply after its run, at the
+  world's later tick (`System::run` advances the tick *before* running), so a
+  removal it queues is seen on its next run.
+- *Opt-in per type.* Removal is in the benchmarked migration paths. A world
+  that tracks nothing pays one `is_empty` check per removal; only a tracked
+  type pays a lookup and a push. The check is `RemovalLog::is_active`.
+  Untracked despawn is the original loop unchanged.
+- *Keyed by `TypeId`.* The archetype storage and the Sparse Shell have
+  separate `ComponentId` spaces and a type uses exactly one storage per world,
+  so the type is the one key both agree on, and a reader can name it before
+  anything of that type has been inserted. The FFI byte paths and despawn only
+  have `ComponentId`s, so both storages gained a dense reverse map
+  (`Archetypes::type_ids`, `SparseShell::type_ids`), pushed at registration;
+  `Archetypes::components_of(entity)` reads a despawned entity's signature, and
+  `SparseShell::remove_entity_from_all_collecting` reports what a despawn took.
+
+**Housekeeping is the caller's job, and it matters.** Nothing trims the log:
+only whoever owns *all* the readers knows the oldest `last_run` any of them
+still holds. Pass that to `trim_removals`. A type that is removed often and
+never trimmed grows its log without bound (bevy bounds this by flipping two
+buffers each frame; there is no frame owner in `mid-ecs`, so `mid-app`'s
+schedule is the natural caller). `removal_count::<T>()` is there to watch it.
+`since` scans the whole retained log rather than stopping at the first old
+entry: an entry stamped after the reader's `this_run` is "not newer" by the
+wrapping comparison and must not hide older ones before it. Trimming keeps
+the scan short.
+
+**Cost, stated, not measured** (optimization is paused): an untracked world
+pays the `is_empty` check per removal and one `Vec::push` per newly
+registered component type (the reverse maps). A tracked type pays a hash
+lookup and a 16-byte push per removal; a tracked despawn also reads the
+entity's signature and walks the Sparse columns.
+
+**Verification.**
+- Tests: 26 in `removal.rs`: the log in isolation (including the
+  future-stamped-entry case and trim), both storages, bundles (partial bundle
+  records nothing), despawn across both storages with an untracked type
+  alongside, the FFI by-id paths and a refused all-or-nothing one,
+  no-op removals that must not record, replacement-is-not-removal, the system
+  parameter (windows, own `Commands`, set-up after a removal, two systems and
+  two types, `len`/`is_empty`), and a randomized 8-seed x 300-op history
+  checked against an independent model (a map of who holds what) for every
+  tracker taken along the way, with one type tracked only from the middle of
+  the history and a trim at a middle tracker. Lib tests 627 -> 653, doctests
+  16 -> 17 (sandbox, rustc 1.91.1).
+- Mutation testing: 43 live mutants, 43 caught. First pass: 43 run, 41
+  caught, one failed to compile (redone as a different mutant, caught) and one
+  survived: a real gap (a refused `remove_static_by_ids` recording its
+  members), fixed by a test and re-run.
+- No `unsafe` was added except `WorldCell::removals`, a shared read of a field
+  that only `&mut World` operations write (same contract as `world()`); so
+  there is no valgrind or Miri result specific to this stage.
+
+**Not done.**
+- Component hooks (`on_add`/`on_insert`/`on_replace`/`on_remove`/`on_despawn`),
+  events/messages and observers (the rest of item 6).
+- A C-API counterpart (`track_removals` / a removed-entities buffer).
+- Removal tracking for resources.
+- A notification for *replacement* (insert over an existing value).
+- Any automatic trimming (needs a frame owner: `mid-app`).
+
 ### Writing component data from C (`raw_span_mut`, `write`, `FfiSpanMut`)
 
 The open question the mutable queries left: the C span pointer is `const`, and a

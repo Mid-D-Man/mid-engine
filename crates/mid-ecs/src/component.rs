@@ -169,6 +169,10 @@ pub struct SparseShell {
     component_ids: HashMap<TypeId, ComponentId>,
     columns: SparseSet<ComponentId, Box<dyn ComponentColumn>>,
     next_id: u32,
+    /// The reverse of `component_ids`, indexed by id (ids are dense):
+    /// what a despawn needs to name the types it removed (removal
+    /// tracking, `removal.rs`).
+    type_ids: Vec<TypeId>,
     /// Populated only for component types opted into FFI exposure via
     /// [`Self::register_ffi`] -- most types will never have an entry
     /// here, which is the point (see [`FfiSpanAccessor`]'s doc comment).
@@ -197,6 +201,7 @@ impl SparseShell {
             component_ids: HashMap::new(),
             columns: SparseSet::new(),
             next_id: 0,
+            type_ids: Vec::new(),
             ffi_accessors: HashMap::new(),
             ffi_entity_accessors: HashMap::new(),
             ffi_names: HashMap::new(),
@@ -215,6 +220,7 @@ impl SparseShell {
             let id = ComponentId(self.next_id);
             self.next_id += 1;
             self.component_ids.insert(type_id, id);
+            self.type_ids.push(type_id);
             id
         }
     }
@@ -327,6 +333,24 @@ impl SparseShell {
     pub(crate) fn remove_entity_from_all(&mut self, entity: Entity) {
         for (_, column) in self.columns.iter_mut() {
             column.remove_entity(entity);
+        }
+    }
+
+    /// [`Self::remove_entity_from_all`] that also pushes the type of every
+    /// component it actually removed onto `removed`: what a despawn needs
+    /// when removal tracking is on. Kept separate so the untracked
+    /// despawn stays the loop above, unchanged.
+    pub(crate) fn remove_entity_from_all_collecting(
+        &mut self,
+        entity: Entity,
+        removed: &mut Vec<TypeId>,
+    ) {
+        for (id, column) in self.columns.iter_mut() {
+            if column.remove_entity(entity) {
+                if let Some(&type_id) = self.type_ids.get(id.as_u32() as usize) {
+                    removed.push(type_id);
+                }
+            }
         }
     }
 

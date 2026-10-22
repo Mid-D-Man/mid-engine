@@ -567,6 +567,11 @@ pub(crate) struct Archetypes {
     /// Sparse-Shell-vs-Archetype-Core architectural split.
     component_ids: TypeIdMap<ComponentId>,
     next_component_id: u32,
+    /// The reverse of `component_ids`: the type each id was assigned to,
+    /// indexed by the id (ids are dense and handed out in order). Lets a
+    /// path that only has a `ComponentId` (the FFI byte paths, a
+    /// despawned entity's signature) name the type for removal tracking.
+    type_ids: Vec<TypeId>,
     /// Populated only for component types opted into FFI exposure via
     /// [`Self::register_ffi`] — mirrors `SparseShell`'s own field of the
     /// same name exactly (`component.rs`), same reasoning: most types
@@ -600,6 +605,7 @@ impl Archetypes {
             next_id: 1,
             component_ids: TypeIdMap::default(),
             next_component_id: 0,
+            type_ids: Vec::new(),
             ffi_accessors: HashMap::new(),
             ffi_writers: HashMap::new(),
             ffi_names: HashMap::new(),
@@ -616,8 +622,23 @@ impl Archetypes {
             let id = ComponentId(self.next_component_id);
             self.next_component_id += 1;
             self.component_ids.insert(type_id, id);
+            self.type_ids.push(type_id);
             id
         }
+    }
+
+    /// The type `id` was assigned to, if this registry issued it.
+    pub(crate) fn type_id_of(&self, id: ComponentId) -> Option<TypeId> {
+        self.type_ids.get(id.as_u32() as usize).copied()
+    }
+
+    /// The component ids `entity` currently has (its archetype's
+    /// signature); empty for an entity this registry does not hold.
+    pub(crate) fn components_of(&self, entity: Entity) -> &[ComponentId] {
+        self.locations
+            .get(entity)
+            .and_then(|location| self.archetypes.get(location.archetype_id))
+            .map_or(&[], |archetype| archetype.component_ids.as_slice())
     }
 
     /// Looks up `T`'s `ComponentId` without registering it — `None` if

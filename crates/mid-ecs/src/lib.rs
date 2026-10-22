@@ -19,6 +19,7 @@ mod hash;
 mod interior;
 pub mod query;
 pub mod query_data;
+mod removal;
 pub mod resource;
 mod scratch;
 pub mod sync;
@@ -50,7 +51,8 @@ pub use system::{
     ExclusiveFunctionSystem, FunctionSystem, IntoSystem, System, SystemParamFunction,
 };
 pub use system_param::{
-    Local, Query, QueryParIter, Res, ResMut, SystemMeta, SystemParam, SystemParamItem, SystemState,
+    Local, Query, QueryParIter, RemovedComponents, Res, ResMut, SystemMeta, SystemParam,
+    SystemParamItem, SystemState,
 };
 pub use tick::{ChangeTracker, Mut, Ref, Tick};
 pub use transform::{GlobalTransform, GlobalTransformLWC};

@@ -25,7 +25,7 @@
 //! parameters (nest them for more). `SystemState` runs a parameter set
 //! outside any system.
 
-use std::any::type_name;
+use std::any::{type_name, TypeId};
 use std::borrow::Cow;
 use std::marker::PhantomData;
 use std::ops::{Deref, DerefMut};
@@ -36,8 +36,9 @@ use crate::batching::BatchingStrategy;
 use crate::commands::{CommandQueue, Commands};
 use crate::data_filter::DataFilter;
 use crate::query_data::{QueryData, ReadOnlyQueryData};
+use crate::removal::RemovalLog;
 use crate::tick::Tick;
-use crate::world::World;
+use crate::world::{Entity, World};
 use crate::world_cell::WorldCell;
 
 // ── SystemMeta ───────────────────────────────────────────────────────
@@ -149,6 +150,97 @@ pub unsafe trait SystemParam: Sized {
 
 /// `P`'s value for one run.
 pub type SystemParamItem<'w, 's, P> = <P as SystemParam>::Item<'w, 's>;
+
+// ── RemovedComponents ────────────────────────────────────────────────
+
+/// The entities that lost a component of type `T` since this system last
+/// ran (or, on its first run, since removals of `T` began to be recorded,
+/// which is when the system was set up).
+///
+/// "Lost" means removed (`remove`, `remove_static`, a bundle, the FFI byte
+/// paths, through `Commands` or directly) or taken with a despawned entity,
+/// in either storage. Replacing a value by inserting over it is not a
+/// removal. An entity removed twice appears twice; it may since have been
+/// despawned or its slot reused, so check `World::is_alive` through a
+/// query if that matters.
+///
+/// The window is the system's own previous run, as for `Added`/`Changed`:
+/// removals queued by this system's own `Commands` are applied after its
+/// run and so are seen on its next one. Nothing trims the log: see
+/// [`World::trim_removals`].
+///
+/// ```
+/// use mid_ecs::{IntoSystem, RemovedComponents, System, World};
+///
+/// struct Health(u32);
+///
+/// fn reaper(removed: RemovedComponents<Health>) {
+///     for entity in removed.iter() {
+///         let _ = entity; // clean up whatever pointed at it
+///     }
+/// }
+///
+/// let mut world = World::new();
+/// let e = world.spawn();
+/// world.insert_static(e, Health(3));
+/// let mut system = reaper.into_system();
+/// system.initialize(&mut world);
+/// world.remove_static::<Health>(e);
+/// system.run(&mut world);
+/// ```
+pub struct RemovedComponents<'w, T: 'static> {
+    log: &'w RemovalLog,
+    last_run: Tick,
+    this_run: Tick,
+    _marker: PhantomData<fn() -> T>,
+}
+
+impl<T: 'static> RemovedComponents<'_, T> {
+    /// The entities, oldest removal first.
+    pub fn iter(&self) -> impl Iterator<Item = Entity> + '_ {
+        self.log
+            .since(TypeId::of::<T>(), self.last_run, self.this_run)
+    }
+
+    /// How many removals there are to read (not how many distinct
+    /// entities).
+    pub fn len(&self) -> usize {
+        self.iter().count()
+    }
+
+    /// Whether there is nothing to read.
+    pub fn is_empty(&self) -> bool {
+        self.iter().next().is_none()
+    }
+}
+
+// SAFETY: reads only the removal log, which is written only by structural
+// changes (`&mut World`: Commands applied between runs, or an exclusive
+// system, which conflicts with every parameter). There is no component or
+// resource access to register, so nothing can conflict with it.
+unsafe impl<T: 'static> SystemParam for RemovedComponents<'_, T> {
+    type State = ();
+    type Item<'w, 's> = RemovedComponents<'w, T>;
+
+    fn init_state(world: &mut World, _meta: &mut SystemMeta) -> Self::State {
+        world.track_removals::<T>();
+    }
+
+    unsafe fn get_param<'w, 's>(
+        _state: &'s mut Self::State,
+        meta: &SystemMeta,
+        world: WorldCell<'w>,
+        this_run: Tick,
+    ) -> Self::Item<'w, 's> {
+        RemovedComponents {
+            // SAFETY: as for the impl.
+            log: unsafe { world.removals() },
+            last_run: meta.last_run,
+            this_run,
+            _marker: PhantomData,
+        }
+    }
+}
 
 // ── Query ────────────────────────────────────────────────────────────
 

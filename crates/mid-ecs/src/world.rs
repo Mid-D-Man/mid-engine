@@ -40,8 +40,9 @@ use zerocopy::{FromBytes, Immutable, IntoBytes, KnownLayout};
 use crate::archetype::{ArchetypeId, Archetypes, Bundle, ComponentFfiError, FfiSpanMut};
 use crate::component::{ComponentId, SparseShell};
 use crate::hash::TypeIdMap;
+use crate::removal::RemovalLog;
 use crate::resource::{ResourceFfiError, ResourceId, Resources};
-use crate::tick::Tick;
+use crate::tick::{ChangeTracker, Tick};
 
 /// A handle to an entity. Detects its own staleness after despawn — a
 /// thin wrapper over `mid_collections::GenerationalIndex`, not a
@@ -206,6 +207,8 @@ pub struct World {
     pub(crate) archetypes: Archetypes,
     pub(crate) sync: crate::sync::SyncRegistry,
     pub(crate) resources: Resources,
+    /// Opt-in log of component removals (`removal.rs`).
+    pub(crate) removals: RemovalLog,
     storage_claims: StorageClaims,
     change_tick: Tick,
 }
@@ -219,6 +222,7 @@ impl World {
             archetypes: Archetypes::new(),
             sync: crate::sync::SyncRegistry::new(),
             resources: Resources::new(),
+            removals: RemovalLog::default(),
             storage_claims: StorageClaims::default(),
             change_tick: Tick::new(1),
         }
@@ -233,6 +237,7 @@ impl World {
             archetypes: Archetypes::new(),
             sync: crate::sync::SyncRegistry::new(),
             resources: Resources::new(),
+            removals: RemovalLog::default(),
             storage_claims: StorageClaims::default(),
             change_tick: Tick::new(1),
         }
@@ -264,9 +269,32 @@ impl World {
         if !self.is_alive(entity) {
             return false;
         }
-        self.components.remove_entity_from_all(entity);
+        if self.removals.is_active() {
+            self.record_despawn_removals(entity);
+        } else {
+            self.components.remove_entity_from_all(entity);
+        }
         self.archetypes.despawn(entity);
         self.entities.deallocate(entity.0)
+    }
+
+    /// The despawn of an entity, when removal tracking is on: removes its
+    /// Sparse Shell components, and records every component it held in
+    /// either storage as removed (the archetype ones are read off its
+    /// signature before the archetype despawn takes them).
+    fn record_despawn_removals(&mut self, entity: Entity) {
+        let tick = self.change_tick;
+        for &id in self.archetypes.components_of(entity) {
+            if let Some(type_id) = self.archetypes.type_id_of(id) {
+                self.removals.record(type_id, entity, tick);
+            }
+        }
+        let mut sparse = Vec::new();
+        self.components
+            .remove_entity_from_all_collecting(entity, &mut sparse);
+        for type_id in sparse {
+            self.removals.record(type_id, entity, tick);
+        }
     }
 
     /// Whether `entity` is still alive.
@@ -331,7 +359,12 @@ impl World {
         if !self.is_alive(entity) {
             return None;
         }
-        self.components.remove(entity)
+        let removed = self.components.remove(entity);
+        if removed.is_some() && self.removals.is_active() {
+            self.removals
+                .record(TypeId::of::<T>(), entity, self.change_tick);
+        }
+        removed
     }
 
     /// Whether `entity` is alive and currently has a `T` component
@@ -465,7 +498,12 @@ impl World {
             return None;
         }
         let id = self.archetypes.existing_component_id::<T>()?;
-        self.archetypes.remove(entity, id)
+        let removed = self.archetypes.remove(entity, id);
+        if removed.is_some() && self.removals.is_active() {
+            self.removals
+                .record(TypeId::of::<T>(), entity, self.change_tick);
+        }
+        removed
     }
 
     /// Removes every element of `B` as one atomic structural change,
@@ -484,7 +522,22 @@ impl World {
         if !self.is_alive(entity) {
             return None;
         }
-        self.archetypes.remove_bundle(entity)
+        let ids = if self.removals.is_active() {
+            B::existing_component_ids(&self.archetypes)
+        } else {
+            None
+        };
+        let removed = self.archetypes.remove_bundle(entity);
+        if removed.is_some() {
+            if let Some(ids) = ids {
+                for &id in ids.iter() {
+                    if let Some(type_id) = self.archetypes.type_id_of(id) {
+                        self.removals.record(type_id, entity, self.change_tick);
+                    }
+                }
+            }
+        }
+        removed
     }
 
     /// Looks up `entity`'s archetype-tracked `T` component, if attached
@@ -526,6 +579,70 @@ impl World {
     pub fn increment_change_tick(&mut self) -> Tick {
         self.change_tick = Tick::new(self.change_tick.get().wrapping_add(1));
         self.change_tick
+    }
+
+    // ── Removal tracking (`removal.rs`) ──────────────────────────────
+
+    /// Starts recording removals of component type `T`: from now on,
+    /// every time a `T` is removed from an entity (by `remove` /
+    /// `remove_static` / a bundle / the FFI byte paths) or goes with its
+    /// entity's despawn, the entity and the world's change tick are
+    /// logged. Idempotent. Removals before the first call are not
+    /// recorded; a `RemovedComponents<T>` system parameter calls this
+    /// when its system is set up.
+    ///
+    /// Works for a type in either storage. Replacing a value by inserting
+    /// over it is not a removal.
+    pub fn track_removals<T: 'static>(&mut self) {
+        self.removals.track(TypeId::of::<T>());
+    }
+
+    /// Whether removals of `T` are being recorded.
+    pub fn tracks_removals<T: 'static>(&self) -> bool {
+        self.removals.is_tracked(TypeId::of::<T>())
+    }
+
+    /// The entities that lost a `T` after `tracker`'s last update, oldest
+    /// first: an entity removed twice appears twice, and an entity may
+    /// since have been despawned or its slot reused, so check
+    /// [`Self::is_alive`] if it matters. The counterpart of
+    /// `query_changed` for removals.
+    ///
+    /// # Panics
+    /// If `T` is not tracked ([`Self::track_removals`]): nothing would
+    /// ever have been recorded, and an empty answer would hide that.
+    pub fn removed_since<T: 'static>(
+        &self,
+        tracker: &ChangeTracker,
+    ) -> impl Iterator<Item = Entity> + '_ {
+        let type_id = TypeId::of::<T>();
+        assert!(
+            self.removals.is_tracked(type_id),
+            "removals of `{}` are not tracked: call `World::track_removals::<{}>()` first",
+            std::any::type_name::<T>(),
+            std::any::type_name::<T>(),
+        );
+        self.removals
+            .since(type_id, tracker.last_run(), self.change_tick)
+    }
+
+    /// How many removals of `T` the log currently holds (0 if untracked).
+    pub fn removal_count<T: 'static>(&self) -> usize {
+        self.removals.len(TypeId::of::<T>())
+    }
+
+    /// Drops every logged removal that a reader whose last run was
+    /// `at_or_before` (or later) could no longer see anyway. The log is
+    /// never trimmed on its own, because only whoever owns *all* the
+    /// readers knows the oldest `last_run` among them: pass that. Without
+    /// trimming, the log of a type removed often grows without bound.
+    pub fn trim_removals(&mut self, at_or_before: Tick) {
+        self.removals.trim(at_or_before, self.change_tick);
+    }
+
+    /// Drops every logged removal. Tracked types stay tracked.
+    pub fn clear_removals(&mut self) {
+        self.removals.clear();
     }
 
     /// Whether `entity` is alive and currently has an archetype-tracked
@@ -684,7 +801,13 @@ impl World {
         if !self.is_alive(entity) {
             return Err(ComponentFfiError::NotAlive);
         }
-        self.archetypes.remove_row(entity, component_id)
+        let result = self.archetypes.remove_row(entity, component_id);
+        if result.is_ok() && self.removals.is_active() {
+            if let Some(type_id) = self.archetypes.type_id_of(component_id) {
+                self.removals.record(type_id, entity, self.change_tick);
+            }
+        }
+        result
     }
 
     /// Checks, changing nothing, a list of components an id-driven bundle
@@ -753,7 +876,15 @@ impl World {
         if !self.is_alive(entity) {
             return Err(ComponentFfiError::NotAlive);
         }
-        self.archetypes.remove_many_rows(entity, ids)
+        let result = self.archetypes.remove_many_rows(entity, ids);
+        if result.is_ok() && self.removals.is_active() {
+            for &id in ids {
+                if let Some(type_id) = self.archetypes.type_id_of(id) {
+                    self.removals.record(type_id, entity, self.change_tick);
+                }
+            }
+        }
+        result
     }
 
     /// Copies `bytes` in as `entity`'s `component_id` value and stamps
