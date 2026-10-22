@@ -659,6 +659,19 @@ impl Archetypes {
     /// Detaches `component_id` from `entity` for the FFI: the id-driven
     /// counterpart of `World::remove_static`, for components registered
     /// writable. The one-component case of [`Self::remove_many_rows`].
+    /// Whether [`Self::remove_many_rows`] of `ids` from `entity` would
+    /// remove something: the list passes the same checks (known, writable,
+    /// no duplicates), is not empty, and the entity has all of them. Reads
+    /// only: what the before-removal hooks need to decide whether to fire,
+    /// so a refused removal never runs a hook.
+    pub(crate) fn would_remove_rows(&self, entity: Entity, ids: &[ComponentId]) -> bool {
+        if ids.is_empty() || self.check_list(ids.iter().map(|id| (*id, None))).is_err() {
+            return false;
+        }
+        let have = self.components_of(entity);
+        ids.iter().all(|id| have.contains(id))
+    }
+
     pub(crate) fn remove_row(
         &mut self,
         entity: Entity,

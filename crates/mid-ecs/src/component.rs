@@ -145,6 +145,8 @@ trait ComponentColumn: Any {
     /// Removes `entity`'s data from this column, if present. Returns
     /// whether anything was actually removed.
     fn remove_entity(&mut self, entity: Entity) -> bool;
+    /// Whether `entity` has data in this column.
+    fn contains_entity(&self, entity: Entity) -> bool;
     fn as_any(&self) -> &dyn Any;
     fn as_any_mut(&mut self) -> &mut dyn Any;
 }
@@ -152,6 +154,9 @@ trait ComponentColumn: Any {
 impl<T: 'static> ComponentColumn for SparseSet<Entity, T> {
     fn remove_entity(&mut self, entity: Entity) -> bool {
         self.remove(entity).is_some()
+    }
+    fn contains_entity(&self, entity: Entity) -> bool {
+        self.get(entity).is_some()
     }
     fn as_any(&self) -> &dyn Any {
         self
@@ -333,6 +338,19 @@ impl SparseShell {
     pub(crate) fn remove_entity_from_all(&mut self, entity: Entity) {
         for (_, column) in self.columns.iter_mut() {
             column.remove_entity(entity);
+        }
+    }
+
+    /// Pushes the type of every component `entity` has here onto `out`
+    /// without touching anything: what the despawn hooks need to know
+    /// before the despawn happens.
+    pub(crate) fn type_ids_of(&self, entity: Entity, out: &mut Vec<TypeId>) {
+        for (id, column) in self.columns.iter() {
+            if column.contains_entity(entity) {
+                if let Some(&type_id) = self.type_ids.get(id.as_u32() as usize) {
+                    out.push(type_id);
+                }
+            }
         }
     }
 

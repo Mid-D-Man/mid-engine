@@ -16,6 +16,7 @@ pub mod data_filter;
 pub mod ffi;
 pub mod filter;
 mod hash;
+pub mod hooks;
 mod interior;
 pub mod query;
 pub mod query_data;
@@ -45,6 +46,7 @@ pub use commands::{CommandQueue, Commands, EntityCommands};
 pub use component::{ComponentId, SparseShell};
 pub use data_filter::DataFilter;
 pub use filter::{Or, QueryFilter, With, Without};
+pub use hooks::{ComponentHook, ComponentHooks, DeferredWorld, HookContext};
 pub use query_data::{Added, Changed, Has, QueryData, ReadOnlyQueryData};
 pub use resource::{ResourceFfiError, ResourceId};
 pub use system::{

@@ -40,6 +40,9 @@ use zerocopy::{FromBytes, Immutable, IntoBytes, KnownLayout};
 use crate::archetype::{ArchetypeId, Archetypes, Bundle, ComponentFfiError, FfiSpanMut};
 use crate::component::{ComponentId, SparseShell};
 use crate::hash::TypeIdMap;
+use crate::hooks::{
+    ComponentHooks, DeferredWorld, HookContext, HookKind, HookRegistry, MAX_HOOK_ROUNDS,
+};
 use crate::removal::RemovalLog;
 use crate::resource::{ResourceFfiError, ResourceId, Resources};
 use crate::tick::{ChangeTracker, Tick};
@@ -209,6 +212,8 @@ pub struct World {
     pub(crate) resources: Resources,
     /// Opt-in log of component removals (`removal.rs`).
     pub(crate) removals: RemovalLog,
+    /// Component hooks and the commands they have queued (`hooks.rs`).
+    pub(crate) hooks: HookRegistry,
     storage_claims: StorageClaims,
     change_tick: Tick,
 }
@@ -223,6 +228,7 @@ impl World {
             sync: crate::sync::SyncRegistry::new(),
             resources: Resources::new(),
             removals: RemovalLog::default(),
+            hooks: HookRegistry::default(),
             storage_claims: StorageClaims::default(),
             change_tick: Tick::new(1),
         }
@@ -238,6 +244,7 @@ impl World {
             sync: crate::sync::SyncRegistry::new(),
             resources: Resources::new(),
             removals: RemovalLog::default(),
+            hooks: HookRegistry::default(),
             storage_claims: StorageClaims::default(),
             change_tick: Tick::new(1),
         }
@@ -269,13 +276,24 @@ impl World {
         if !self.is_alive(entity) {
             return false;
         }
+        let hooked = self.hooks.is_active();
+        if hooked {
+            let types = self.entity_type_ids(entity);
+            if !types.is_empty() {
+                self.fire_removed(entity, &types, true);
+            }
+        }
         if self.removals.is_active() {
             self.record_despawn_removals(entity);
         } else {
             self.components.remove_entity_from_all(entity);
         }
         self.archetypes.despawn(entity);
-        self.entities.deallocate(entity.0)
+        let despawned = self.entities.deallocate(entity.0);
+        if hooked {
+            self.flush_hook_commands();
+        }
+        despawned
     }
 
     /// The despawn of an entity, when removal tracking is on: removes its
@@ -332,7 +350,20 @@ impl World {
             return None;
         }
         self.storage_claims.claim::<T>(StorageKind::Sparse);
-        self.components.insert(entity, component)
+        let hooked = self.hooks.is_active();
+        let type_id = TypeId::of::<T>();
+        if hooked && self.components.get::<T>(entity).is_some() {
+            self.run_hook(HookKind::Discard, type_id, entity);
+        }
+        let old = self.components.insert(entity, component);
+        if hooked {
+            if old.is_none() {
+                self.run_hook(HookKind::Add, type_id, entity);
+            }
+            self.run_hook(HookKind::Insert, type_id, entity);
+            self.flush_hook_commands();
+        }
+        old
     }
 
     /// Looks up `entity`'s `T` component, if attached and `entity` is
@@ -359,10 +390,17 @@ impl World {
         if !self.is_alive(entity) {
             return None;
         }
+        let hooked = self.hooks.is_active();
+        if hooked && self.components.get::<T>(entity).is_some() {
+            self.fire_removed(entity, &[TypeId::of::<T>()], false);
+        }
         let removed = self.components.remove(entity);
         if removed.is_some() && self.removals.is_active() {
             self.removals
                 .record(TypeId::of::<T>(), entity, self.change_tick);
+        }
+        if hooked {
+            self.flush_hook_commands();
         }
         removed
     }
@@ -441,8 +479,14 @@ impl World {
         }
         self.storage_claims.claim::<T>(StorageKind::Archetype);
         let id = self.archetypes.component_id::<T>();
-        self.archetypes
-            .insert(entity, id, component, self.change_tick)
+        let inserted = self
+            .archetypes
+            .insert(entity, id, component, self.change_tick);
+        if inserted && self.hooks.is_active() {
+            self.fire_added(entity, &[TypeId::of::<T>()]);
+            self.flush_hook_commands();
+        }
+        inserted
     }
 
     /// Inserts every element of `bundle` as one atomic structural
@@ -478,6 +522,11 @@ impl World {
         let entity = Entity(self.entities.allocate());
         self.archetypes
             .spawn_bundle(entity, bundle, self.change_tick);
+        if self.hooks.is_active() {
+            let types = self.bundle_type_ids::<B>();
+            self.fire_added(entity, &types);
+            self.flush_hook_commands();
+        }
         entity
     }
 
@@ -486,8 +535,15 @@ impl World {
         if !self.is_alive(entity) {
             return false;
         }
-        self.archetypes
-            .insert_bundle(entity, bundle, self.change_tick)
+        let inserted = self
+            .archetypes
+            .insert_bundle(entity, bundle, self.change_tick);
+        if inserted && self.hooks.is_active() {
+            let types = self.bundle_type_ids::<B>();
+            self.fire_added(entity, &types);
+            self.flush_hook_commands();
+        }
+        inserted
     }
 
     /// Removes and returns `entity`'s archetype-tracked `T` component,
@@ -498,10 +554,17 @@ impl World {
             return None;
         }
         let id = self.archetypes.existing_component_id::<T>()?;
+        let hooked = self.hooks.is_active();
+        if hooked && self.archetypes.components_of(entity).contains(&id) {
+            self.fire_removed(entity, &[TypeId::of::<T>()], false);
+        }
         let removed = self.archetypes.remove(entity, id);
         if removed.is_some() && self.removals.is_active() {
             self.removals
                 .record(TypeId::of::<T>(), entity, self.change_tick);
+        }
+        if hooked {
+            self.flush_hook_commands();
         }
         removed
     }
@@ -522,13 +585,28 @@ impl World {
         if !self.is_alive(entity) {
             return None;
         }
-        let ids = if self.removals.is_active() {
+        let hooked = self.hooks.is_active();
+        let ids = if hooked || self.removals.is_active() {
             B::existing_component_ids(&self.archetypes)
         } else {
             None
         };
+        if hooked {
+            if let Some(ids) = &ids {
+                // The same condition `Archetypes::remove_bundle` removes
+                // under: every member registered and present.
+                let have = self.archetypes.components_of(entity);
+                if ids.iter().all(|id| have.contains(id)) {
+                    let types: Vec<TypeId> = ids
+                        .iter()
+                        .filter_map(|&id| self.archetypes.type_id_of(id))
+                        .collect();
+                    self.fire_removed(entity, &types, false);
+                }
+            }
+        }
         let removed = self.archetypes.remove_bundle(entity);
-        if removed.is_some() {
+        if removed.is_some() && self.removals.is_active() {
             if let Some(ids) = ids {
                 for &id in ids.iter() {
                     if let Some(type_id) = self.archetypes.type_id_of(id) {
@@ -536,6 +614,9 @@ impl World {
                     }
                 }
             }
+        }
+        if hooked {
+            self.flush_hook_commands();
         }
         removed
     }
@@ -579,6 +660,106 @@ impl World {
     pub fn increment_change_tick(&mut self) -> Tick {
         self.change_tick = Tick::new(self.change_tick.get().wrapping_add(1));
         self.change_tick
+    }
+
+    // ── Component hooks (`hooks.rs`) ─────────────────────────────────
+
+    /// The hooks of component type `T`, to set: `world
+    /// .register_component_hooks::<T>().on_add(f).on_remove(g)`. See
+    /// [`ComponentHooks`] for what each fires on and in what order. Takes
+    /// effect for changes made after the call; nothing fires
+    /// retroactively. Works for a type in either storage.
+    pub fn register_component_hooks<T: 'static>(&mut self) -> &mut ComponentHooks {
+        self.hooks.entry(TypeId::of::<T>())
+    }
+
+    /// Runs `type_id`'s `kind` hook for `entity`, if it has one.
+    fn run_hook(&mut self, kind: HookKind, type_id: TypeId, entity: Entity) {
+        if let Some(hook) = self.hooks.get(type_id).and_then(|h| h.of(kind)) {
+            hook(
+                &mut DeferredWorld::new(self),
+                HookContext { entity, type_id },
+            );
+        }
+    }
+
+    /// The hooks for components just added: every `on_add`, then every
+    /// `on_insert`.
+    fn fire_added(&mut self, entity: Entity, types: &[TypeId]) {
+        for &type_id in types {
+            self.run_hook(HookKind::Add, type_id, entity);
+        }
+        for &type_id in types {
+            self.run_hook(HookKind::Insert, type_id, entity);
+        }
+    }
+
+    /// The hooks for components about to be removed (still in place):
+    /// for a despawn every `on_despawn`, then every `on_discard`, then
+    /// every `on_remove`.
+    fn fire_removed(&mut self, entity: Entity, types: &[TypeId], despawn: bool) {
+        if despawn {
+            for &type_id in types {
+                self.run_hook(HookKind::Despawn, type_id, entity);
+            }
+        }
+        for &type_id in types {
+            self.run_hook(HookKind::Discard, type_id, entity);
+        }
+        for &type_id in types {
+            self.run_hook(HookKind::Remove, type_id, entity);
+        }
+    }
+
+    /// The types behind `ids` (archetype `ComponentId`s).
+    fn types_of_ids(&self, ids: &[ComponentId]) -> Vec<TypeId> {
+        ids.iter()
+            .filter_map(|&id| self.archetypes.type_id_of(id))
+            .collect()
+    }
+
+    /// The types of the members of `B`, once they are registered.
+    #[allow(private_bounds)]
+    fn bundle_type_ids<B: Bundle>(&self) -> Vec<TypeId> {
+        B::existing_component_ids(&self.archetypes)
+            .map_or_else(Vec::new, |ids| self.types_of_ids(&ids))
+    }
+
+    /// Every component type `entity` has, in either storage.
+    fn entity_type_ids(&self, entity: Entity) -> Vec<TypeId> {
+        let mut types = self.types_of_ids(self.archetypes.components_of(entity));
+        self.components.type_ids_of(entity, &mut types);
+        types
+    }
+
+    /// Applies the commands hooks have queued, round after round (their
+    /// own hooks may queue more), once the operation that fired the hooks
+    /// is done. A nested operation inside that loop leaves it to the loop.
+    ///
+    /// # Panics
+    /// After `MAX_HOOK_ROUNDS` rounds without the queue emptying: a hook
+    /// that always queues a structural change whose own hook queues
+    /// another. The remaining commands are dropped first.
+    pub(crate) fn flush_hook_commands(&mut self) {
+        if self.hooks.flushing || self.hooks.pending.is_empty() {
+            return;
+        }
+        self.hooks.flushing = true;
+        let mut rounds = 0usize;
+        while !self.hooks.pending.is_empty() {
+            rounds += 1;
+            if rounds > MAX_HOOK_ROUNDS {
+                self.hooks.flushing = false;
+                self.hooks.pending = Default::default();
+                panic!(
+                    "commands queued by component hooks did not settle after {MAX_HOOK_ROUNDS} rounds: \
+                     a hook that always queues a structural change whose own hook queues another?"
+                );
+            }
+            let mut queue = std::mem::take(&mut self.hooks.pending);
+            queue.apply(self);
+        }
+        self.hooks.flushing = false;
     }
 
     // ── Removal tracking (`removal.rs`) ──────────────────────────────
@@ -774,8 +955,16 @@ impl World {
         if !self.is_alive(entity) {
             return Err(ComponentFfiError::NotAlive);
         }
-        self.archetypes
-            .insert_row_bytes(entity, component_id, bytes, self.change_tick)
+        let result =
+            self.archetypes
+                .insert_row_bytes(entity, component_id, bytes, self.change_tick);
+        if result.is_ok() && self.hooks.is_active() {
+            if let Some(type_id) = self.archetypes.type_id_of(component_id) {
+                self.fire_added(entity, &[type_id]);
+            }
+            self.flush_hook_commands();
+        }
+        result
     }
 
     /// Detaches `component_id` from `entity` and drops its value: the
@@ -801,11 +990,19 @@ impl World {
         if !self.is_alive(entity) {
             return Err(ComponentFfiError::NotAlive);
         }
+        let hooked = self.hooks.is_active();
+        if hooked && self.archetypes.would_remove_rows(entity, &[component_id]) {
+            let types = self.types_of_ids(&[component_id]);
+            self.fire_removed(entity, &types, false);
+        }
         let result = self.archetypes.remove_row(entity, component_id);
         if result.is_ok() && self.removals.is_active() {
             if let Some(type_id) = self.archetypes.type_id_of(component_id) {
                 self.removals.record(type_id, entity, self.change_tick);
             }
+        }
+        if hooked {
+            self.flush_hook_commands();
         }
         result
     }
@@ -852,8 +1049,16 @@ impl World {
         if !self.is_alive(entity) {
             return Err(ComponentFfiError::NotAlive);
         }
-        self.archetypes
-            .insert_many_bytes(entity, entries, self.change_tick)
+        let result = self
+            .archetypes
+            .insert_many_bytes(entity, entries, self.change_tick);
+        if result.is_ok() && !entries.is_empty() && self.hooks.is_active() {
+            let ids: Vec<ComponentId> = entries.iter().map(|(id, _)| *id).collect();
+            let types = self.types_of_ids(&ids);
+            self.fire_added(entity, &types);
+            self.flush_hook_commands();
+        }
+        result
     }
 
     /// Detaches several components from `entity` in *one* structural change
@@ -876,6 +1081,11 @@ impl World {
         if !self.is_alive(entity) {
             return Err(ComponentFfiError::NotAlive);
         }
+        let hooked = self.hooks.is_active();
+        if hooked && self.archetypes.would_remove_rows(entity, ids) {
+            let types = self.types_of_ids(ids);
+            self.fire_removed(entity, &types, false);
+        }
         let result = self.archetypes.remove_many_rows(entity, ids);
         if result.is_ok() && self.removals.is_active() {
             for &id in ids {
@@ -883,6 +1093,9 @@ impl World {
                     self.removals.record(type_id, entity, self.change_tick);
                 }
             }
+        }
+        if hooked {
+            self.flush_hook_commands();
         }
         result
     }

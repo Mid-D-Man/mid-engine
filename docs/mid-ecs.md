@@ -4126,8 +4126,9 @@ benchmark against bevy's `par_iter` (paused); the schedule executor (`mid-app`).
 ### Removal tracking (`removal.rs`, `RemovedComponents`)
 
 Gap-list item 6, stage 6a. A removed component leaves nothing in storage, so
-"which entities lost a `T` since I last looked" needs a record. Stages still to
-come: component hooks, then events/messages and observers (see "Not done").
+"which entities lost a `T` since I last looked" needs a record. Stage 6b,
+component hooks, is the next section; events/messages and observers are still
+to come (see "Not done").
 
 | piece | what it is |
 |---|---|
@@ -4211,12 +4212,123 @@ entity's signature and walks the Sparse columns.
   there is no valgrind or Miri result specific to this stage.
 
 **Not done.**
-- Component hooks (`on_add`/`on_insert`/`on_replace`/`on_remove`/`on_despawn`),
-  events/messages and observers (the rest of item 6).
+- Events/messages and observers (the rest of item 6). Component hooks are the
+  next section.
 - A C-API counterpart (`track_removals` / a removed-entities buffer).
 - Removal tracking for resources.
 - A notification for *replacement* (insert over an existing value).
 - Any automatic trimming (needs a frame owner: `mid-app`).
+
+### Component hooks (`hooks.rs`, `ComponentHooks`, `DeferredWorld`)
+
+Gap-list item 6, stage 6b. A hook is a function that runs when a component is
+added to, overwritten on, or removed from an entity: the component type's own
+constructor and destructor. Names and orders follow the `Mid-D-Man/bevy` fork
+(0.20.0-dev `lifecycle.rs`: Add, Insert, Discard, Remove, Despawn).
+
+| piece | what it is |
+|---|---|
+| `World::register_component_hooks::<T>()` | Returns `&mut ComponentHooks`; set with `.on_add(f).on_insert(f).on_discard(f).on_remove(f).on_despawn(f)`. One hook per kind per type: setting a kind twice **panics**. Not retroactive. |
+| `ComponentHook` | `fn(&mut DeferredWorld<'_>, HookContext)`: a plain `fn`, no captures (keep state in a resource), as in bevy. |
+| `HookContext` | `{ entity, type_id }`. |
+| `DeferredWorld` | What a hook gets instead of `&mut World`: `is_alive`, `change_tick`, `get_static(_mut)`, `has_static`, `get(_mut)` (Sparse Shell), `get_resource(_mut)`, and `commands()`. **No** `spawn`, `despawn`, `insert*` or `remove*` (a `compile_fail` doctest pins it; confirmed E0599 in a scratch crate, with a compiling control). |
+
+| hook | fires | relative to the change |
+|---|---|---|
+| `on_add` | a component is added to an entity that did not have it | after |
+| `on_insert` | a component is added or overwritten | after (and after `on_add`) |
+| `on_discard` | a component is removed, or overwritten | before: the old value is still readable |
+| `on_remove` | a component is removed and not replaced | before (and after `on_discard`) |
+| `on_despawn` | each component of an entity being despawned | before |
+
+For a despawn: every `on_despawn`, then every `on_discard`, then every
+`on_remove`, all before anything is removed. For a bundle: every `on_add`, then
+every `on_insert` (and every discard, then every remove, on removal). The order
+between components of one kind is not defined.
+
+**Where they fire.** Every structural `World` method, in either storage and on
+the FFI byte paths (keyed by `TypeId`, with the same reverse map removal
+tracking added): `insert_static`, `insert` (Sparse Shell), `spawn_bundle`,
+`insert_bundle`, `insert_static_bytes(_many)`, `remove_static`, `remove`,
+`remove_bundle`, `remove_static_by_id(s)`, `despawn`; and so `Commands`, which
+apply through those. Audited with the removal-tracking audit: nothing outside
+`world.rs` reaches the archetype layer directly. A refused or no-op operation
+fires nothing. Before-hooks only fire when the removal *will* succeed:
+`Archetypes::would_remove_rows` is the read-only form of the FFI removal's own
+validation (known, writable, no duplicates, entity has all), so a refused
+all-or-nothing removal never runs a hook.
+
+**Overwrite differs by storage.** Archetype-storage `insert_static` never
+overwrites (it returns `false` if the entity already has the component), so
+there `on_discard` fires only on removal and despawn. The Sparse Shell
+`insert` over an existing value is an overwrite: `on_discard` (old value),
+then `on_insert` (new), no `on_add`. Writing through `get_static_mut` or
+`write_static_component_bytes` is a mutation, not an insert, and fires nothing
+(use `Changed` for that).
+
+**Why `DeferredWorld`.** A hook runs inside a structural operation. If it could
+spawn, despawn, insert or remove it could invalidate what the operation is in
+the middle of (an entity's archetype row, the list being iterated). So hooks
+read and write *values* and queue *structure*. The queue is the world's
+(`HookRegistry::pending`); it is applied when the **outermost** operation has
+finished, round after round: the commands' own hooks may queue more.
+`flushing` stops a nested operation's own flush from running the queue
+re-entrantly; the loop that is already running picks the new commands up.
+**A chain that never settles panics** after 1000 rounds ("did not settle"), the
+rest of the queue is dropped and the flag reset first, so the world stays
+usable (a test pins that). A hook that panics leaves the operation half done;
+the world is not unwind-safe across a hook panic.
+
+**Design choices.**
+- *`fn` pointers, one per kind.* Bevy's model. The alternatives (closures,
+  several hooks per kind) either capture state invisibly or fight over order;
+  several independent reactions belong in one hook, or in a system reading
+  `Added`/`RemovedComponents`.
+- *Keyed by `TypeId`, hooks looked up only when something is registered.* A
+  world without hooks pays one `is_empty` check (`HookRegistry::is_active`) per
+  structural operation, in the benchmarked insert and migration paths; a world
+  with hooks pays a lookup per component per operation, plus, for a despawn or
+  a bundle, building the list of the entity's or bundle's types.
+- *Hooks run at the `World` layer, not in the archetype layer.* The archetype
+  code stays exactly as benchmarked; the operations are wrapped, not changed.
+
+**Cost, stated, not measured** (optimization is paused): the `is_empty` check
+above on every structural operation, and nothing else for a world with no hooks.
+
+**Verification.**
+- Tests: 27 in `hooks.rs`: each hook's value and order at its point (the value
+  in place for before-hooks, after-hooks seeing the new one), no-ops and
+  refusals firing nothing (dead entity, existing component, wrong size,
+  read-only, duplicate, absent, partial bundle), both storages, bundles,
+  despawn grouping across both storages, the FFI byte paths and their refusals,
+  hooks changing values (stamped), reaching the Sparse Shell, resources and the
+  tick, queued commands applied **at every one of the 12 structural operation
+  sites** (13 cases, one world, in order), a three-link chain that settles, a runaway
+  chain stopped with the world still usable, double registration refused per
+  kind, hooks per type, not retroactive, `Commands` from a system, and next to
+  `RemovedComponents`; plus a randomized 8-seed x 300-operation history checked
+  against a model that predicts the exact set of hooks and the required order
+  for every operation (and that each hook saw a live entity and the value in
+  place). Lib tests 653 -> 680, doctests 17 -> 18 (sandbox, rustc 1.91.1).
+- Mutation testing: 56 mutants, 56 caught. Main pass of 44: 5 survivors, all
+  real gaps (a hook observing a *dead* entity or a positive `has_static`; the
+  despawn flush; the flush flag not resetting between operations; a chain of
+  more than one round), fixed by tests; the 5 `assert!` anchors for the
+  double-registration mutants did not match the formatted source and were
+  re-run once fixed (caught). Then one mutant per `flush_hook_commands()` call
+  site (12), all caught individually.
+- No `unsafe` was added in this stage, so no valgrind or Miri result is
+  specific to it. The C smoke (201 ok) and the `ffi::` tests run unchanged
+  against the wrapped operations.
+
+**Not done.**
+- Events/messages and observers (the rest of item 6).
+- A C API for hooks: C cannot register a Rust `fn`, so this needs a C callback
+  type, a place to keep its user data, and the safety rules for calling back
+  into C from inside a structural operation. Same for removal tracking.
+- Hooks for resources, and `on_insert` for in-place writes.
+- Caller location and the component id in `HookContext` (bevy has both).
+- A defined order between components of one kind.
 
 ### Writing component data from C (`raw_span_mut`, `write`, `FfiSpanMut`)
 
