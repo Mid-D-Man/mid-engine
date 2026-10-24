@@ -4415,9 +4415,9 @@ Not benchmarked: performance work is paused.
 
 - Hooks: a C callback type, user data per component, and a restricted handle
   for the callback are a design decision, not a wrapper.
-- A mutable C query iterator, and reserved entity ids / an `Entity`-returning
-  queued spawn. (Filtered `Added` / `Changed` queries across archetypes are
-  built: see the next section.)
+- A C query iterator and a queued spawn that returns an `Entity`, decided
+  against: see "In-place mutable rows (`row_mut`)" below. (Filtered `Added` /
+  `Changed` queries across archetypes are built: see the next section.)
 - Removal tracking for resources, and any automatic trimming (needs a frame
   owner: `mid-app`).
 
@@ -4533,8 +4533,8 @@ benchmarked: performance work is paused.
 
 **Not done (C side).**
 
-- A mutable C query iterator, and reserved entity ids / an `Entity`-returning
-  queued spawn.
+- A C query iterator and a queued `Entity`-returning spawn, decided against:
+  see "In-place mutable rows (`row_mut`)" below.
 - Nested filters (an `Or` of tuples) and any value-returning terms: the C caller
   reads values through the spans at the rows returned, and `Ref` / `Mut` terms
   have no C form.
@@ -4647,10 +4647,102 @@ a command queue), and never past `count` elements of `stride` bytes.
   a value that exists. Built in the next pass: "Inserting a component from C"
   below, direct and queued.
 - **A C-side mutable *query*** (a row iterator with automatic stamping).
-  `raw_span_mut` is the bulk form: C iterates the span itself.
+  `raw_span_mut` is the bulk form: C iterates the span itself. Answered later by
+  `row_mut` plus a row list: see "In-place mutable rows (`row_mut`)" below.
 - **The Sparse Shell.** Its spans stay read-only; it has no ticks, so there is
   nothing to stamp, and a writable registration for it was not asked for.
 - **No benchmark.** Optimization is paused.
+
+### In-place mutable rows (`row_mut`), and the two items not built
+
+Two carried-over C items, decided together: a mutable query iterator and
+reserved entity ids / an `Entity`-returning queued spawn. One new function, one
+pinned guarantee, and a reasoned "no" for the rest.
+
+**`mid_ecs_world_static_component_row_mut(world, entity, component_id,
+out_span)`** (Rust: `World::static_component_row_mut`) hands out a writable,
+one-element span over one entity's value and stamps exactly that row *changed*
+(not added) at the current tick: the C counterpart of `get_static_mut`, which
+also stamps on access rather than on write. It is the in-place form of `write`
+(which copies bytes in) and the precise form of `raw_span_mut` (which stamps
+every row). The span has `count == 1` and `stride` the component's size, with
+the usual validity contract (until the next call that changes that archetype's
+storage) and the usual same-tick rule for the write. Errors, in this order:
+`NotAlive`, `UnknownId`, `NotWritable`, `Absent` (in C: `NOT_ALIVE`,
+`NOT_FOUND`, `NOT_WRITABLE`, `NOT_FOUND`); `*out_span` is untouched and nothing
+is stamped on an error. No component hook fires (a mutation is not an insert,
+as for `get_static_mut`). The core stays safe code: the pointer is
+`span.ptr.wrapping_add(row * stride)`, computed from the same writer function
+`raw_span_mut` uses, and only the `extern "C"` wrapper touches raw pointers.
+
+The use is a filtered mutation done exactly: take the rows from
+`mid_ecs_world_static_query_since` (or the `*_rows` functions), call `row_mut`
+for each row you really write, and a `Changed` consumer sees those rows and no
+others. It follows the rule the bulk design already set ("no write now, mark
+rows later"): the stamp comes *before* the pointer does, so there is still no
+third mode in which forgetting a call loses a write.
+
+**A C mutable query iterator is not built.** Its two halves are already there.
+The exact half is `query_since` plus `row_mut`. The bulk half is
+`raw_span_mut`: if C walks every row, every row is changed, so the
+over-reporting is the truth. A cursor in between would need a rule for what a
+structural change does to a cursor held across it (an epoch checked on every
+`next`), would cost a call per row exactly as `row_mut` does, and would stamp
+each row it yields, written or not, so it could not be more exact than
+`row_mut` over a filtered list. State to get wrong for no gain.
+
+**Reserved entity ids: `mid_ecs_world_spawn` already is the reservation.** It
+returns a real, live id at once, and the C command queue takes explicit
+entities (`mid_ecs_commands_static_component_insert(queue, world, entity, ...)`),
+so a caller can spawn now, use the id in queued commands before `apply`, and
+store it in other components' bytes. Two properties are pinned by tests, in
+Rust and in C. First, spawning does not move any other archetype's storage: an
+empty entity lands in the empty archetype, and a span of another archetype has
+the same `(ptr, stride, count)` after the spawn, so reserving ids in the middle
+of walking spans is safe (a *queued insert applying* is not: it migrates the
+entity and invalidates the destination's spans, as always). Second, the
+difference from a queued spawn: the entity exists immediately and nothing takes
+it back; `mid_ecs_commands_clear` and `_free` do not despawn it, so an
+unused reservation must be despawned by the caller.
+
+What is *not* built is the queue-only version, an id handed out without the
+world being touched. That is bevy's design and needs
+`GenerationalIndexAllocator::allocate` to work without `&mut` (an atomic
+cursor over the free list and a flush step), a change to `mid-collections`.
+"Decision: deferred spawn targets a slot, not a reserved entity" in the command
+queue section rejected it for Rust for the benefit it buys only when systems
+hold `&World` and a buffer together. C changes nothing there: it always has the
+world pointer, so it can always spawn.
+
+**Verified (sandbox, rustc 1.91.1).**
+
+- Seven new Rust tests (`ffi::` 95 -> 102, lib 699 -> 706): exactly one row
+  stamped, the others untouched, nothing Added, the pointer equal to
+  read-only-span base plus `row * stride`, and the bulk form over-reporting as
+  the contrast; every error, in order, with the span untouched and nothing
+  stamped (and the NULL arguments); a stale handle whose slot was reused never
+  stamping the new occupant; the exact Rust error variants (which C folds
+  together); no `on_insert` hook firing, with a real insert firing it as the
+  sensitivity check; the reservation guarantees above; and a differential test
+  driving 300 steps of random accesses through two identical worlds, one via
+  C `row_mut` and one via `get_static_mut`, with tick steps and tracker
+  updates, comparing the `Changed<A>` and `Changed<B>` sets at every step
+  (including accesses to a component the entity lacks, which must stamp
+  nothing in both).
+- `test.c`: 257 -> 276 `ok:` lines, 0 `FAIL:`, against both the shared and the
+  static library (`-Wall -Wextra` clean).
+- Mutation testing: 18 mutants of the new code (every error guard and error
+  variant, the stamp, the stamped row, the stamped field, the tick, the
+  pointer and its row offset, `count`, `stride`, the liveness check, and each
+  line of the C wrapper), 18 caught, 0 survived.
+
+**Not done.**
+
+- A batch form (`row_mut` for a list of entities in one call) to cut the
+  per-row FFI cost. Not measured, so not built: performance work is paused.
+- The Sparse Shell, throughout: it has no ticks to stamp and no writable
+  registration.
+- Hooks: a callback design, not a wrapper.
 
 ### Inserting a component from C (`insert`, queued inserts, `queued_spawn`)
 
@@ -4766,6 +4858,8 @@ header and the C checks. `ComponentFfiError` gains `AlreadyPresent`.
   separate design: it has to validate a list of ids and sizes as a unit.
 - **Reserved entity ids / an `Entity`-returning queued spawn.** Slots address
   the queued spawns, but the real entity is still only known after apply.
+  (Settled later: `mid_ecs_world_spawn` is the reservation; see "In-place
+  mutable rows (`row_mut`)" below.)
 - **Removing a component from C.** Built in the next pass: "Removing a component
   from C" below, direct and queued.
 - **The Sparse Shell**, as for writes.
@@ -4872,6 +4966,8 @@ rustfmt wanted from the previous pass.
   closes the family.
 - **Reserved entity ids / an `Entity`-returning queued spawn.** Slots address
   the queued spawns, but the real entity is still only known after apply.
+  (Settled later: `mid_ecs_world_spawn` is the reservation; see "In-place
+  mutable rows (`row_mut`)" below.)
 - **The Sparse Shell.**
 - **No benchmark.** A queued removal boxes one closure. Optimization is paused.
 
@@ -5007,5 +5103,6 @@ functions, the value struct, the status), and `ffi-smoke-test/`.
   queued spawns, but the real entity is still only known after apply.
 - **A C-side mutable query iterator.** `raw_span_mut` is the bulk form; C walks
   the span itself.
+  (Both settled later: see "In-place mutable rows (`row_mut`)" below.)
 - **The Sparse Shell**, throughout.
 - **No benchmark.** Optimization is paused.

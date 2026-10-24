@@ -992,6 +992,113 @@ int main(void) {
         mid_ecs_world_free(qw);
     }
 
+    // --- In-place mutable rows: row_mut stamps exactly the row it hands out ---
+    {
+        MidEcsWorld *mw = mid_ecs_test_write_fixture_world_new();
+        uint32_t mu_health = mid_ecs_world_lookup_ffi_static_component_id(mw, "FfiHealthStatic");
+        uint32_t mu_flag_a = mid_ecs_world_lookup_ffi_static_component_id(mw, "FfiFlagA");
+        uint32_t mu_flag_b = mid_ecs_world_lookup_ffi_static_component_id(mw, "FfiFlagB");
+
+        // Two entities hold only Health; one holds Health and FlagA.
+        uint32_t mu_plain_arch[4], mu_flag_arch[4];
+        CHECK(mid_ecs_world_archetypes_matching_static(mw, &mu_health, 1, &mu_flag_a, 1, NULL, 0, mu_plain_arch, 4) == 1
+                  && mid_ecs_world_archetypes_matching_static(mw, &mu_health, 1, NULL, 0, &mu_flag_a, 1, mu_flag_arch, 4) == 1,
+              "row_mut fixture: one {Health} archetype and one {Health, FlagA} archetype");
+        uint64_t mu_plain[4], mu_flagged[4];
+        CHECK(mid_ecs_world_static_component_entity_ids(mw, mu_plain_arch[0], mu_health, mu_plain, 4) == 2
+                  && mid_ecs_world_static_component_entity_ids(mw, mu_flag_arch[0], mu_health, mu_flagged, 4) == 1,
+              "two plain entities, one flagged");
+
+        uint32_t mu_t0 = mid_ecs_world_change_tick(mw);
+        mid_ecs_world_increment_change_tick(mw);
+
+        MidEcsFfiSpanMut mu_span = { 0 };
+        CHECK(mid_ecs_world_static_component_row_mut(mw, mu_plain[1], mu_health, &mu_span) == MID_ECS_OK
+                  && mu_span.count == 1 && mu_span.stride == sizeof(uint32_t) && mu_span.ptr != NULL,
+              "row_mut hands out one writable Health slot");
+        *(uint32_t *)mu_span.ptr = 4242;
+
+        // Exactly that row is Changed, and nothing is Added.
+        uint32_t mu_health_only[1] = { mu_health };
+        MidEcsRowFilter mu_changed = { .all_changed_ids = mu_health_only, .all_changed_len = 1 };
+        MidEcsMatchedRow mu_rows[8];
+        CHECK(mid_ecs_world_static_query_since(mw, mu_t0, &mu_changed, mu_rows, 8) == 1 && mu_rows[0].entity == mu_plain[1],
+              "only the row row_mut handed out is Changed");
+        MidEcsRowFilter mu_added = { .all_added_ids = mu_health_only, .all_added_len = 1 };
+        CHECK(mid_ecs_world_static_query_since(mw, mu_t0, &mu_added, NULL, 0) == 0,
+              "a mutation is not an addition");
+
+        // The pointer is that row of the read-only span, and the write landed.
+        MidEcsFfiSpan mu_ro;
+        CHECK(mid_ecs_world_static_component_raw_span(mw, mu_rows[0].archetype_id, mu_health, &mu_ro) == MID_ECS_OK
+                  && (const uint8_t *)mu_ro.ptr + (size_t)mu_rows[0].row * mu_ro.stride == (const uint8_t *)mu_span.ptr
+                  && *(const uint32_t *)((const uint8_t *)mu_ro.ptr + (size_t)mu_rows[0].row * mu_ro.stride) == 4242,
+              "the slot is the row's slot in the read-only span, holding the written value");
+
+        // Contrast: the bulk form stamps every row of the archetype.
+        MidEcsFfiSpanMut mu_bulk = { 0 };
+        CHECK(mid_ecs_world_static_component_raw_span_mut(mw, mu_plain_arch[0], mu_health, &mu_bulk) == MID_ECS_OK
+                  && mid_ecs_world_static_query_since(mw, mu_t0, &mu_changed, NULL, 0) == 2,
+              "raw_span_mut over-reports: both {Health} rows are Changed after it");
+
+        // Errors, in order, with *out_span untouched.
+        MidEcsFfiSpanMut mu_untouched = { (uint8_t *)0xDEAD, 7, 9 };
+        MidEcsFfiSpanMut mu_probe;
+        int mu_ok = 1;
+        int32_t mu_codes[5];
+        uint64_t mu_bogus = 0x7FFFFFFFFFFFFFFFull;
+        mu_probe = mu_untouched;
+        mu_codes[0] = mid_ecs_world_static_component_row_mut(mw, mu_bogus, mu_health, &mu_probe);
+        mu_ok = mu_ok && mu_probe.ptr == mu_untouched.ptr && mu_probe.count == 9;
+        mu_probe = mu_untouched;
+        mu_codes[1] = mid_ecs_world_static_component_row_mut(mw, mu_plain[0], 9999, &mu_probe);
+        mu_ok = mu_ok && mu_probe.ptr == mu_untouched.ptr && mu_probe.count == 9;
+        mu_probe = mu_untouched;
+        mu_codes[2] = mid_ecs_world_static_component_row_mut(mw, mu_flagged[0], mu_flag_a, &mu_probe);
+        mu_ok = mu_ok && mu_probe.ptr == mu_untouched.ptr && mu_probe.count == 9;
+        mu_probe = mu_untouched;
+        mu_codes[3] = mid_ecs_world_static_component_row_mut(mw, mu_plain[0], mu_flag_b, &mu_probe);
+        mu_ok = mu_ok && mu_probe.ptr == mu_untouched.ptr && mu_probe.count == 9;
+        mu_probe = mu_untouched;
+        mu_codes[4] = mid_ecs_world_static_component_row_mut(mw, mu_plain[0], mu_flag_a, &mu_probe);
+        mu_ok = mu_ok && mu_probe.ptr == mu_untouched.ptr && mu_probe.count == 9;
+        CHECK(mu_codes[0] == MID_ECS_NOT_ALIVE, "a dead handle is MID_ECS_NOT_ALIVE");
+        CHECK(mu_codes[1] == MID_ECS_NOT_FOUND, "an id never registered is MID_ECS_NOT_FOUND");
+        CHECK(mu_codes[2] == MID_ECS_NOT_WRITABLE, "a read-only component is MID_ECS_NOT_WRITABLE");
+        CHECK(mu_codes[3] == MID_ECS_NOT_FOUND, "an alive entity without the component is MID_ECS_NOT_FOUND");
+        CHECK(mu_codes[4] == MID_ECS_NOT_WRITABLE, "read-only is decided before absence");
+        CHECK(mu_ok, "*out_span is untouched by every error");
+        CHECK(mid_ecs_world_static_component_row_mut(NULL, mu_plain[0], mu_health, &mu_probe) == MID_ECS_NULL_POINTER
+                  && mid_ecs_world_static_component_row_mut(mw, mu_plain[0], mu_health, NULL) == MID_ECS_NULL_POINTER,
+              "a NULL world or out_span is MID_ECS_NULL_POINTER");
+
+        // Reserved ids: mid_ecs_world_spawn already is the reservation. The id is real at
+        // once, spawning leaves other archetypes' spans where they were, and queued commands
+        // may use the id before the queue is applied.
+        MidEcsFfiSpan mu_before, mu_after;
+        CHECK(mid_ecs_world_static_component_raw_span(mw, mu_flag_arch[0], mu_health, &mu_before) == MID_ECS_OK,
+              "span of the flagged archetype before the spawn");
+        uint64_t mu_reserved = mid_ecs_world_spawn(mw);
+        CHECK(mid_ecs_world_is_alive(mw, mu_reserved), "a spawned id is real at once");
+        CHECK(mid_ecs_world_static_component_raw_span(mw, mu_flag_arch[0], mu_health, &mu_after) == MID_ECS_OK
+                  && mu_after.ptr == mu_before.ptr && mu_after.count == mu_before.count,
+              "spawning an empty entity does not move another archetype's span");
+        MidEcsCommands *mu_q = mid_ecs_commands_new();
+        uint32_t mu_value = 99;
+        CHECK(mid_ecs_commands_static_component_insert(mu_q, mw, mu_reserved, mu_health, (const uint8_t *)&mu_value, sizeof mu_value) == MID_ECS_OK
+                  && mid_ecs_commands_apply(mu_q, mw, NULL, 0) == 0
+                  && mid_ecs_world_static_component_row_mut(mw, mu_reserved, mu_health, &mu_span) == MID_ECS_OK
+                  && *(const uint32_t *)mu_span.ptr == 99,
+              "a queued insert on the reserved id applies and the value is there");
+        mid_ecs_commands_clear(mu_q);
+        mid_ecs_commands_free(mu_q);
+        uint64_t mu_unused = mid_ecs_world_spawn(mw);
+        CHECK(mid_ecs_world_is_alive(mw, mu_unused) && mid_ecs_world_despawn(mw, mu_unused) == MID_ECS_OK
+                  && !mid_ecs_world_is_alive(mw, mu_unused),
+              "a reservation is not a queued spawn: nothing takes it back but despawn");
+        mid_ecs_world_free(mw);
+    }
+
     // --- Filtered change queries: rows added/changed since last_run, across archetypes ---
     {
         MidEcsWorld *qw = mid_ecs_test_write_fixture_world_new();

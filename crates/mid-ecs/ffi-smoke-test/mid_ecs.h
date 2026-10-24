@@ -455,7 +455,7 @@ int32_t mid_ecs_world_clear_removals(MidEcsWorld *world);
 // WRITABLE (World::register_ffi_static_component_writable), which requires
 // the type to accept any bit pattern, so nothing C writes can be an invalid
 // value.
-// Two ways to write, for two needs:
+// Three ways to write, for three needs:
 //   * raw_span_mut (bulk): a writable span over one archetype's column.
 //     C cannot tell Rust which rows it then writes through a raw pointer,
 //     so EVERY row of that column is stamped changed (not added) at the
@@ -464,6 +464,8 @@ int32_t mid_ecs_world_clear_removals(MidEcsWorld *world);
 //     write. Do the writes in the same tick.
 //   * write (precise): copies one value into one entity's component and
 //     stamps exactly that row. Use it for a few rows.
+//   * row_mut (precise, in place): a pointer to one entity's value with
+//     exactly that row stamped. Use it to mutate a filtered row list.
 
 // Writable counterpart of mid_ecs_world_static_component_raw_span: writes a
 // span over component_id's column in archetype_id's table to *out_span.
@@ -475,6 +477,26 @@ int32_t mid_ecs_world_clear_removals(MidEcsWorld *world);
 // archetype's storage (spawn, despawn, insert/remove, applying a command
 // queue). Never write past count elements of stride bytes.
 int32_t mid_ecs_world_static_component_raw_span_mut(MidEcsWorld *world, uint32_t archetype_id, uint32_t component_id, MidEcsFfiSpanMut *out_span);
+
+// One entity's component_id value, writable IN PLACE, with exactly that row
+// stamped changed (not added) at the current tick: the precise form of
+// raw_span_mut, and the C counterpart of Rust's get_static_mut (the stamp
+// happens when the span is handed out, not when you write through it, so do
+// the write in the same tick). *out_span has count 1 and stride the
+// component's size. This is how to mutate a filtered subset in place: take
+// the rows from mid_ecs_world_static_query_since (or the *_rows functions),
+// then call this for each row you really mean to write; a Changed consumer
+// then sees those rows and no others. To touch every row of an archetype,
+// raw_span_mut stamps them all in one call. There is no C query *iterator*:
+// a cursor would need an invalidation rule for no gain over a row list.
+// MID_ECS_OK; MID_ECS_NULL_POINTER (NULL world or out_span);
+// MID_ECS_NOT_ALIVE (a dead or stale entity; it never reaches the new
+// occupant of a reused slot); MID_ECS_NOT_FOUND (id never registered for
+// FFI, or the entity is alive but lacks the component); MID_ECS_NOT_WRITABLE
+// (registered read-only), checked in that order. *out_span is untouched and
+// nothing is stamped on an error. No component hook fires (a mutation, not
+// an insert). Same invalidation contract as the other spans.
+int32_t mid_ecs_world_static_component_row_mut(MidEcsWorld *world, uint64_t entity, uint32_t component_id, MidEcsFfiSpanMut *out_span);
 
 // Copies len bytes from bytes in as entity's component_id value and stamps
 // exactly that row changed (not added) at the current tick. len must equal

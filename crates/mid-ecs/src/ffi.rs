@@ -2473,6 +2473,62 @@ pub unsafe extern "C" fn mid_ecs_world_static_component_raw_span_mut(
     })
 }
 
+/// A writable span over one entity's `component_id` value, with exactly
+/// that row stamped *changed* (not added) at the world's current tick: the
+/// in-place form of [`mid_ecs_world_static_component_write`], and the
+/// C counterpart of Rust's `get_static_mut` (stamped when the span is
+/// handed out, not when it is written). It is the precise way to mutate
+/// a filtered subset in place: take the rows from
+/// [`mid_ecs_world_static_query_since`] (or the `*_rows` functions), then
+/// call this for each one you actually mean to write, so a `Changed`
+/// consumer sees those rows and no others. To touch every row of an
+/// archetype, [`mid_ecs_world_static_component_raw_span_mut`] is the bulk
+/// form (it stamps them all in one call).
+///
+/// On success `*out_span` is a span with `count == 1` and `stride` the
+/// component's size; write `stride` bytes at `ptr`. Do the write in the
+/// same tick (a write after `mid_ecs_world_increment_change_tick` is not
+/// stamped with the new tick), and it is valid until the next call that
+/// changes that archetype's storage (spawn, despawn, an insert or remove,
+/// applying a command queue). Asking twice for the same row hands out the
+/// same pointer and stamps it again. No component hook fires: this is a
+/// mutation, not an insert.
+///
+/// Returns `MidEcsStatus::Ok`, `NullPointer`, `NotAlive` (a dead or stale
+/// entity; it never reaches a different entity that reused the slot),
+/// `NotFound` (the component id was never registered for FFI, or the
+/// entity is alive but does not have it), or `NotWritable` (registered
+/// read-only), checked in that order. `*out_span` is untouched and nothing
+/// is stamped on an error.
+///
+/// # Safety
+/// `world` and `out_span` must both be non-null; `world` a valid handle
+/// from `mid_ecs_world_new`, `out_span` valid for one `FfiSpanMut` write.
+#[no_mangle]
+pub unsafe extern "C" fn mid_ecs_world_static_component_row_mut(
+    world: *mut MidEcsWorld,
+    entity: u64,
+    component_id: u32,
+    out_span: *mut FfiSpanMut,
+) -> i32 {
+    ffi_guard(|| {
+        if world.is_null() || out_span.is_null() {
+            return MidEcsStatus::NullPointer as i32;
+        }
+        let world = unsafe { &mut *world };
+        match world.0.static_component_row_mut(
+            Entity::from_ffi(entity),
+            ComponentId::from_u32(component_id),
+        ) {
+            Ok(span) => {
+                unsafe { ptr::write(out_span, span) };
+                MidEcsStatus::Ok as i32
+            }
+            Err(error) => component_status(error),
+        }
+    })
+}
+
 /// Copies `len` bytes from `bytes` in as `entity`'s `component_id` value
 /// and stamps exactly that row *changed* (not added) at the world's
 /// current tick: the precise counterpart of
@@ -7332,5 +7388,543 @@ mod tests {
             assert!(non_empty[k] >= 10, "case {k}: only {} non-empty steps", non_empty[k]);
             assert!(empty[k] >= 10, "case {k}: only {} empty steps", empty[k]);
         }
+    }
+
+    // ── in-place mutable rows (C API) ────────────────────────────────
+
+    use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
+
+    #[derive(
+        Debug, Clone, Copy, PartialEq, zerocopy::FromBytes, IntoBytes, KnownLayout, Immutable,
+    )]
+    #[repr(C)]
+    struct MwA {
+        v: u32,
+    }
+
+    #[derive(
+        Debug, Clone, Copy, PartialEq, zerocopy::FromBytes, IntoBytes, KnownLayout, Immutable,
+    )]
+    #[repr(C)]
+    struct MwB {
+        v: u32,
+    }
+
+    /// Registered read-only: it can be tracked and read, never written.
+    #[derive(Debug, Clone, Copy, PartialEq, IntoBytes, KnownLayout, Immutable)]
+    #[repr(C)]
+    struct MwRo {
+        v: u32,
+    }
+
+    const SPAN_SENTINEL: FfiSpanMut = FfiSpanMut {
+        ptr: 0xDEAD as *mut u8,
+        stride: 7,
+        count: 9,
+    };
+
+    /// `MwA`, `MwB` writable and `MwRo` read-only. Five entities:
+    /// `e[0]` = {A, B, Ro}, `e[1]`, `e[2]`, `e[4]` = {A}, `e[3]` = {A, B},
+    /// with `A.v == 10 + index`; the tick is advanced once after building.
+    struct MwWorld {
+        ptr: *mut MidEcsWorld,
+        a: u32,
+        b: u32,
+        ro: u32,
+        e: Vec<Entity>,
+    }
+
+    impl MwWorld {
+        fn new() -> Self {
+            let ptr = mid_ecs_world_new();
+            // SAFETY: `ptr` is non-null, just created, freed in `Drop`.
+            let w = unsafe { &mut (*ptr).0 };
+            let a = w
+                .register_ffi_static_component_writable::<MwA>("MwA")
+                .as_u32();
+            let b = w
+                .register_ffi_static_component_writable::<MwB>("MwB")
+                .as_u32();
+            let ro = w.register_ffi_static_component::<MwRo>("MwRo").as_u32();
+            let mut e = Vec::new();
+            for i in 0..5u32 {
+                let en = w.spawn();
+                w.insert_static(en, MwA { v: 10 + i });
+                if i == 0 || i == 3 {
+                    w.insert_static(en, MwB { v: 20 + i });
+                }
+                if i == 0 {
+                    w.insert_static(en, MwRo { v: 30 });
+                }
+                e.push(en);
+            }
+            w.increment_change_tick();
+            Self { ptr, a, b, ro, e }
+        }
+
+        fn rust(&mut self) -> &mut World {
+            // SAFETY: `ptr` is a live handle owned by `self`.
+            unsafe { &mut (*self.ptr).0 }
+        }
+
+        fn now(&self) -> u32 {
+            // SAFETY: `ptr` is a live handle owned by `self`.
+            unsafe { mid_ecs_world_change_tick(self.ptr) }
+        }
+
+        fn advance(&self) -> u32 {
+            // SAFETY: `ptr` is a live handle owned by `self`.
+            unsafe { mid_ecs_world_increment_change_tick(self.ptr) }
+        }
+
+        /// `row_mut` on a fresh sentinel span; returns the status and the
+        /// span (still the sentinel on an error).
+        fn row_mut(&self, entity: u64, id: u32) -> (i32, FfiSpanMut) {
+            let mut span = SPAN_SENTINEL;
+            // SAFETY: `ptr` is live; `span` is valid for one write.
+            let status = unsafe {
+                mid_ecs_world_static_component_row_mut(self.ptr, entity, id, &mut span)
+            };
+            (status, span)
+        }
+
+        /// Entities of every row of `id` changed after `last_run`, through
+        /// the C filtered query, sorted.
+        fn changed(&self, last_run: u32, id: u32) -> Vec<u64> {
+            let ids = [id];
+            let f = MidEcsRowFilter {
+                with_ids: ptr::null(),
+                with_len: 0,
+                without_ids: ptr::null(),
+                without_len: 0,
+                any_of_ids: ptr::null(),
+                any_of_len: 0,
+                all_added_ids: ptr::null(),
+                all_added_len: 0,
+                all_changed_ids: ids.as_ptr(),
+                all_changed_len: 1,
+                any_added_ids: ptr::null(),
+                any_added_len: 0,
+                any_changed_ids: ptr::null(),
+                any_changed_len: 0,
+            };
+            let mut buf = vec![SENTINEL; 16];
+            // SAFETY: `ptr` is live; `f` borrows `ids`; `buf` is valid for 16.
+            let n = unsafe {
+                mid_ecs_world_static_query_since(self.ptr, last_run, &f, buf.as_mut_ptr(), 16)
+            };
+            assert!(n >= 0, "query_since returned {n}");
+            let mut v: Vec<u64> = buf[..n as usize].iter().map(|m| m.entity).collect();
+            v.sort_unstable();
+            v
+        }
+    }
+
+    impl Drop for MwWorld {
+        fn drop(&mut self) {
+            // SAFETY: `ptr` is the live handle `new` created, freed once.
+            unsafe { mid_ecs_world_free(self.ptr) };
+        }
+    }
+
+    #[test]
+    fn row_mut_hands_out_one_writable_row_and_stamps_only_it() {
+        let mut w = MwWorld::new();
+        let t0 = w.now();
+        w.advance();
+        let e = w.e.clone();
+
+        let (status, span) = w.row_mut(e[2].as_ffi(), w.a);
+        assert_eq!(status, OK);
+        assert_eq!((span.count, span.stride), (1, 4));
+        assert!(!span.ptr.is_null());
+        // SAFETY: the span is one live, 4-byte, writable `MwA` slot; no
+        // structural change has happened since it was handed out.
+        unsafe { ptr::write_unaligned(span.ptr as *mut u32, 77) };
+
+        assert_eq!(w.rust().get_static::<MwA>(e[2]).unwrap().v, 77);
+        for i in [0, 1, 3, 4] {
+            assert_eq!(
+                w.rust().get_static::<MwA>(e[i]).unwrap().v,
+                10 + i as u32,
+                "entity {i} must be untouched"
+            );
+        }
+        assert_eq!(w.changed(t0, w.a), vec![e[2].as_ffi()], "exactly that row");
+        // A mutation is not an insert: nothing is Added.
+        let a_id = [w.a];
+        let added = MidEcsRowFilter {
+            all_added_ids: a_id.as_ptr(),
+            all_added_len: 1,
+            with_ids: ptr::null(),
+            with_len: 0,
+            without_ids: ptr::null(),
+            without_len: 0,
+            any_of_ids: ptr::null(),
+            any_of_len: 0,
+            all_changed_ids: ptr::null(),
+            all_changed_len: 0,
+            any_added_ids: ptr::null(),
+            any_added_len: 0,
+            any_changed_ids: ptr::null(),
+            any_changed_len: 0,
+        };
+        // SAFETY: `w.ptr` is live; `added` borrows `a_id`.
+        assert_eq!(
+            unsafe { mid_ecs_world_static_query_since(w.ptr, t0, &added, ptr::null_mut(), 0) },
+            0
+        );
+
+        // The pointer is the row: read-only span base + row * stride.
+        let mut rows = [SENTINEL; 4];
+        let ids = [w.a];
+        let f = MidEcsRowFilter {
+            all_changed_ids: ids.as_ptr(),
+            all_changed_len: 1,
+            ..added
+        };
+        let f = MidEcsRowFilter {
+            all_added_ids: ptr::null(),
+            all_added_len: 0,
+            ..f
+        };
+        // SAFETY: `w.ptr` is live; `f` borrows `ids`; `rows` is valid for 4.
+        let n = unsafe {
+            mid_ecs_world_static_query_since(w.ptr, t0, &f, rows.as_mut_ptr(), 4)
+        };
+        assert_eq!(n, 1);
+        let mut ro = FfiSpan {
+            ptr: ptr::null(),
+            stride: 0,
+            count: 0,
+        };
+        // SAFETY: `w.ptr` is live; `ro` is valid for one write.
+        assert_eq!(
+            unsafe {
+                mid_ecs_world_static_component_raw_span(w.ptr, rows[0].archetype_id, w.a, &mut ro)
+            },
+            OK
+        );
+        assert_eq!(
+            span.ptr as usize,
+            ro.ptr as usize + rows[0].row as usize * ro.stride
+        );
+
+        // Contrast: the bulk form stamps every row of the archetype.
+        let mut bulk = SPAN_SENTINEL;
+        // SAFETY: `w.ptr` is live; `bulk` is valid for one write.
+        assert_eq!(
+            unsafe {
+                mid_ecs_world_static_component_raw_span_mut(
+                    w.ptr,
+                    rows[0].archetype_id,
+                    w.a,
+                    &mut bulk,
+                )
+            },
+            OK
+        );
+        assert_eq!(
+            w.changed(t0, w.a),
+            {
+                let mut v = vec![e[1].as_ffi(), e[2].as_ffi(), e[4].as_ffi()];
+                v.sort_unstable();
+                v
+            },
+            "raw_span_mut over-reports the whole {{A}} archetype"
+        );
+    }
+
+    #[test]
+    fn row_mut_errors_come_in_order_and_touch_nothing() {
+        let mut w = MwWorld::new();
+        let t0 = w.now();
+        w.advance();
+        let e = w.e.clone();
+        w.rust().despawn(e[4]);
+        let dead = e[4].as_ffi();
+
+        // NotAlive first, whatever else is wrong.
+        for id in [w.a, 9999, w.ro] {
+            assert_eq!(w.row_mut(dead, id).0, NOT_ALIVE, "id {id}");
+        }
+        // Then UnknownId, then NotWritable, then Absent.
+        assert_eq!(w.row_mut(e[1].as_ffi(), 9999).0, NOT_FOUND);
+        assert_eq!(w.row_mut(e[0].as_ffi(), w.ro).0, NOT_WRITABLE);
+        assert_eq!(
+            w.row_mut(e[1].as_ffi(), w.ro).0,
+            NOT_WRITABLE,
+            "read-only is decided before absence"
+        );
+        assert_eq!(w.row_mut(e[1].as_ffi(), w.b).0, NOT_FOUND, "alive, no B");
+
+        for (status, span) in [
+            w.row_mut(dead, w.a),
+            w.row_mut(e[1].as_ffi(), 9999),
+            w.row_mut(e[0].as_ffi(), w.ro),
+            w.row_mut(e[1].as_ffi(), w.b),
+        ] {
+            assert!(status < 0);
+            assert_eq!(span, SPAN_SENTINEL, "out_span untouched on an error");
+        }
+        assert_eq!(w.changed(t0, w.a), Vec::<u64>::new(), "nothing stamped");
+        assert_eq!(w.changed(t0, w.b), Vec::<u64>::new(), "nothing stamped");
+
+        // NULL pointers.
+        let mut span = SPAN_SENTINEL;
+        // SAFETY: the NULL cases are the documented ones.
+        unsafe {
+            assert_eq!(
+                mid_ecs_world_static_component_row_mut(ptr::null_mut(), e[1].as_ffi(), w.a, &mut span),
+                NULL_POINTER
+            );
+            assert_eq!(
+                mid_ecs_world_static_component_row_mut(w.ptr, e[1].as_ffi(), w.a, ptr::null_mut()),
+                NULL_POINTER
+            );
+        }
+        assert_eq!(w.changed(t0, w.a), Vec::<u64>::new());
+    }
+
+    #[test]
+    fn row_mut_never_reaches_the_new_occupant_of_a_reused_slot() {
+        let mut w = MwWorld::new();
+        let stale = w.e[1];
+        w.rust().despawn(stale);
+        let n = w.rust().spawn();
+        w.rust().insert_static(n, MwA { v: 5 });
+        w.advance();
+        let t1 = w.now();
+        w.advance();
+
+        assert_eq!(w.row_mut(stale.as_ffi(), w.a).0, NOT_ALIVE);
+        assert_eq!(
+            w.changed(t1, w.a),
+            Vec::<u64>::new(),
+            "the stale handle stamped nobody"
+        );
+        // Sensitivity: the live handle does work.
+        assert_eq!(w.row_mut(n.as_ffi(), w.a).0, OK);
+        assert_eq!(w.changed(t1, w.a), vec![n.as_ffi()]);
+    }
+
+    #[test]
+    fn row_mut_stamps_exactly_what_get_static_mut_stamps() {
+        // Two identical worlds, driven by the same random accesses: one
+        // through the C `row_mut`, the other through `get_static_mut`.
+        let mut c = MwWorld::new();
+        let mut r = MwWorld::new();
+        let mut tracker_c = ChangeTracker::new();
+        let mut tracker_r = ChangeTracker::new();
+        let mut rng = Xs(0xC0FF_EE12_3456_789B);
+        let (mut touched, mut skipped) = (0usize, 0usize);
+
+        for step in 0..300u32 {
+            for _ in 0..1 + rng.next(3) {
+                let i = rng.next(5);
+                let on_b = rng.next(2) == 0;
+                let value = step + 1000;
+                let (ce, re) = (c.e[i], r.e[i]);
+                let (status, span) = c.row_mut(ce.as_ffi(), if on_b { c.b } else { c.a });
+                let got_r = if on_b {
+                    r.rust().get_static_mut::<MwB>(re).map(|x| x.v = value)
+                } else {
+                    r.rust().get_static_mut::<MwA>(re).map(|x| x.v = value)
+                };
+                assert_eq!(status == OK, got_r.is_some(), "step {step}: both or neither");
+                if status == OK {
+                    touched += 1;
+                    // SAFETY: the span is one live writable `u32` slot.
+                    unsafe { ptr::write_unaligned(span.ptr as *mut u32, value) };
+                } else {
+                    skipped += 1;
+                }
+            }
+            if rng.next(3) == 0 {
+                c.advance();
+                r.advance();
+            }
+            if rng.next(4) == 0 {
+                tracker_c.update(c.rust());
+                tracker_r.update(r.rust());
+                c.advance();
+                r.advance();
+            }
+            let changed = |w: &mut MwWorld, t: &ChangeTracker| -> (HashSet<usize>, HashSet<usize>) {
+                let es = w.e.clone();
+                let pos = |ids: HashSet<Entity>| -> HashSet<usize> {
+                    ids.iter()
+                        .map(|x| es.iter().position(|y| y == x).expect("known entity"))
+                        .collect()
+                };
+                let a: HashSet<Entity> = w
+                    .rust()
+                    .query_data_filtered_since::<Entity, Changed<MwA>>(t)
+                    .collect();
+                let b: HashSet<Entity> = w
+                    .rust()
+                    .query_data_filtered_since::<Entity, Changed<MwB>>(t)
+                    .collect();
+                (pos(a), pos(b))
+            };
+            assert_eq!(
+                changed(&mut c, &tracker_c),
+                changed(&mut r, &tracker_r),
+                "step {step}"
+            );
+        }
+        assert!(touched > 100 && skipped > 20, "touched {touched}, skipped {skipped}");
+        for i in 0..5 {
+            let (ce, re) = (c.e[i], r.e[i]);
+            assert_eq!(
+                c.rust().get_static::<MwA>(ce).map(|x| x.v),
+                r.rust().get_static::<MwA>(re).map(|x| x.v)
+            );
+        }
+    }
+
+    static MW_INSERT_HOOK_CALLS: AtomicUsize = AtomicUsize::new(0);
+
+    #[test]
+    fn row_mut_fires_no_component_hook() {
+        let mut w = MwWorld::new();
+        w.rust()
+            .register_component_hooks::<MwA>()
+            .on_insert(|_, _| {
+                MW_INSERT_HOOK_CALLS.fetch_add(1, AtomicOrdering::SeqCst);
+            });
+        let before = MW_INSERT_HOOK_CALLS.load(AtomicOrdering::SeqCst);
+        assert_eq!(w.row_mut(w.e[2].as_ffi(), w.a).0, OK);
+        assert_eq!(
+            MW_INSERT_HOOK_CALLS.load(AtomicOrdering::SeqCst),
+            before,
+            "a mutation is not an insert"
+        );
+        // Sensitivity: a real insert does fire it.
+        let n = w.rust().spawn();
+        w.rust().insert_static(n, MwA { v: 1 });
+        assert_eq!(MW_INSERT_HOOK_CALLS.load(AtomicOrdering::SeqCst), before + 1);
+    }
+
+    #[test]
+    fn a_spawned_entity_is_a_reservation_that_leaves_other_spans_valid() {
+        // The C answer to "reserved entity ids": `mid_ecs_world_spawn` hands
+        // out a real id immediately, so a caller needs no queue-returned one.
+        let mut w = MwWorld::new();
+        let mut base = FfiSpan {
+            ptr: ptr::null(),
+            stride: 0,
+            count: 0,
+        };
+        // The {A}-only archetype, which holds e[1], e[2] and e[4].
+        let (with, without) = ([w.a], [w.b, w.ro]);
+        let mut found = [u32::MAX; 4];
+        // SAFETY: `w.ptr` is live; every list is valid for its length.
+        let n = unsafe {
+            mid_ecs_world_archetypes_matching_static(
+                w.ptr,
+                with.as_ptr(),
+                1,
+                without.as_ptr(),
+                2,
+                ptr::null(),
+                0,
+                found.as_mut_ptr(),
+                4,
+            )
+        };
+        assert_eq!(n, 1);
+        let only_a = found[0];
+        // SAFETY: `w.ptr` is live; `base` is valid for one write.
+        assert_eq!(
+            unsafe { mid_ecs_world_static_component_raw_span(w.ptr, only_a, w.a, &mut base) },
+            OK
+        );
+        let count_before = unsafe { mid_ecs_world_entity_count(w.ptr) };
+
+        // SAFETY: `w.ptr` is live.
+        let reserved = unsafe { mid_ecs_world_spawn(w.ptr) };
+        assert_ne!(reserved, 0);
+        // SAFETY: `w.ptr` is live; `again` is valid for one write.
+        let mut again = FfiSpan {
+            ptr: ptr::null(),
+            stride: 0,
+            count: 0,
+        };
+        unsafe {
+            assert!(mid_ecs_world_is_alive(w.ptr, reserved));
+            assert_eq!(mid_ecs_world_entity_count(w.ptr), count_before + 1);
+            assert_eq!(
+                mid_ecs_world_static_component_raw_span(w.ptr, only_a, w.a, &mut again),
+                OK
+            );
+        }
+        assert_eq!(
+            (again.ptr, again.stride, again.count),
+            (base.ptr, base.stride, base.count),
+            "spawning an empty entity does not move another archetype's storage"
+        );
+
+        // The reserved id is usable in queued commands straight away, and
+        // can be stored in other data before the queue is applied.
+        // SAFETY: `w.ptr` is live; `q` is a fresh queue freed below.
+        unsafe {
+            let q = mid_ecs_commands_new();
+            let bytes = 99u32.to_ne_bytes();
+            assert_eq!(
+                mid_ecs_commands_static_component_insert(q, w.ptr, reserved, w.a, bytes.as_ptr(), 4),
+                OK
+            );
+            assert_eq!(mid_ecs_commands_apply(q, w.ptr, ptr::null_mut(), 0), 0);
+            mid_ecs_commands_free(q);
+        }
+        assert_eq!(
+            w.rust().get_static::<MwA>(Entity::from_ffi(reserved)).unwrap().v,
+            99
+        );
+
+        // Not a queued spawn: clearing a queue does not take it back, so a
+        // reservation that is never used must be despawned by the caller.
+        // SAFETY: `w.ptr` is live; `q` is a fresh queue freed below.
+        unsafe {
+            let unused = mid_ecs_world_spawn(w.ptr);
+            let q = mid_ecs_commands_new();
+            mid_ecs_commands_clear(q);
+            mid_ecs_commands_free(q);
+            assert!(mid_ecs_world_is_alive(w.ptr, unused));
+            assert_eq!(mid_ecs_world_despawn(w.ptr, unused), OK);
+            assert!(!mid_ecs_world_is_alive(w.ptr, unused));
+        }
+    }
+
+    #[test]
+    fn world_row_mut_reports_the_documented_error_variants() {
+        // Through the C mapping `UnknownId` and `Absent` are both NOT_FOUND;
+        // the Rust variants are distinct and ordered.
+        let mut w = MwWorld::new();
+        let e = w.e.clone();
+        let a = ComponentId::from_u32(w.a);
+        let b = ComponentId::from_u32(w.b);
+        let ro = ComponentId::from_u32(w.ro);
+        let world = w.rust();
+        world.despawn(e[4]);
+        assert_eq!(
+            world.static_component_row_mut(e[4], a),
+            Err(ComponentFfiError::NotAlive)
+        );
+        assert_eq!(
+            world.static_component_row_mut(e[1], ComponentId::from_u32(9999)),
+            Err(ComponentFfiError::UnknownId)
+        );
+        assert_eq!(
+            world.static_component_row_mut(e[1], ro),
+            Err(ComponentFfiError::NotWritable)
+        );
+        assert_eq!(
+            world.static_component_row_mut(e[1], b),
+            Err(ComponentFfiError::Absent)
+        );
+        let span = world.static_component_row_mut(e[2], a).expect("e[2] has A");
+        assert_eq!((span.count, span.stride), (1, 4));
     }
 }

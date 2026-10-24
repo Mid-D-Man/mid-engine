@@ -359,6 +359,61 @@ impl Archetypes {
         Ok(())
     }
 
+    /// A one-element writable span over `entity`'s `component_id` value, and
+    /// that row (only) stamped changed at `this_run`: the in-place sibling
+    /// of [`Self::write_row_bytes`], and the C counterpart of
+    /// `World::get_static_mut` (stamp on access, not on write). `entity`
+    /// must already be known alive (the caller, `World`, checks, for the
+    /// stale-handle reason given at [`Self::write_row_bytes`]).
+    ///
+    /// Errors, in this order: `UnknownId` (never registered for FFI),
+    /// `NotWritable` (registered read-only), `Absent` (the entity lacks the
+    /// component). Nothing is stamped on any error. The pointer is
+    /// computed with `wrapping_add`, so the core stays safe code; it
+    /// points `row * stride` bytes into the column's span.
+    pub(crate) fn row_span_mut(
+        &mut self,
+        entity: Entity,
+        component_id: ComponentId,
+        this_run: Tick,
+    ) -> Result<FfiSpanMut, ComponentFfiError> {
+        if !self.ffi_accessors.contains_key(&component_id) {
+            return Err(ComponentFfiError::UnknownId);
+        }
+        let writer = *self
+            .ffi_writers
+            .get(&component_id)
+            .ok_or(ComponentFfiError::NotWritable)?;
+        let location = *self
+            .locations
+            .get(entity)
+            .ok_or(ComponentFfiError::Absent)?;
+        let archetype = self
+            .archetypes
+            .get_mut(location.archetype_id)
+            .expect("a located entity's archetype exists");
+        let Table { columns, ticks, .. } = &mut archetype.table;
+        let column = columns
+            .get_mut(component_id)
+            .ok_or(ComponentFfiError::Absent)?;
+        let whole = (writer.span_mut)(column.as_any_mut());
+        assert!(
+            location.row < whole.count,
+            "a located entity's row exists in each of its archetype's columns"
+        );
+        if let Some(stamp) = ticks
+            .get_mut(component_id)
+            .and_then(|row_ticks| row_ticks.as_mut_slice().get_mut(location.row))
+        {
+            stamp.changed = this_run;
+        }
+        Ok(FfiSpanMut {
+            ptr: whole.ptr.wrapping_add(location.row * whole.stride),
+            stride: whole.stride,
+            count: 1,
+        })
+    }
+
     /// The byte size a write or insert of `component_id` must have, if it
     /// is registered writable. Lets a caller (the FFI command queue) check
     /// registration and size without an entity.

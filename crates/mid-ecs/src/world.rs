@@ -1124,6 +1124,35 @@ impl World {
             .write_row_bytes(entity, component_id, bytes, self.change_tick)
     }
 
+    /// A one-element writable span over `entity`'s `component_id` value,
+    /// with exactly that row stamped changed at the current tick: the
+    /// in-place form of [`Self::write_static_component_bytes`], and the
+    /// FFI counterpart of [`Self::get_static_mut`] (stamped when the span
+    /// is handed out, not when it is written, and `changed`, not `added`).
+    /// Together with the row list [`Self::static_component_changed_rows`]
+    /// and friends produce, it is the precise way to mutate a filtered
+    /// subset in place; [`Self::static_component_raw_span_mut`] is the bulk
+    /// form that stamps every row.
+    ///
+    /// The span has `count == 1`, `stride` the component's size, and is
+    /// valid until the next call that changes that archetype's storage.
+    /// Errors, checked in this order: [`ComponentFfiError::NotAlive`],
+    /// [`ComponentFfiError::UnknownId`] (never registered),
+    /// [`ComponentFfiError::NotWritable`], [`ComponentFfiError::Absent`]
+    /// (alive, but without this component). Nothing is stamped on an error.
+    /// No component hook fires: this is a mutation, not an insert.
+    pub fn static_component_row_mut(
+        &mut self,
+        entity: Entity,
+        component_id: ComponentId,
+    ) -> Result<FfiSpanMut, ComponentFfiError> {
+        if !self.is_alive(entity) {
+            return Err(ComponentFfiError::NotAlive);
+        }
+        self.archetypes
+            .row_span_mut(entity, component_id, self.change_tick)
+    }
+
     /// Entity-correlation counterpart to
     /// [`Self::static_component_raw_span`] — thin wrapper over
     /// `Archetypes::entity_ids`, for the same `(archetype_id,
