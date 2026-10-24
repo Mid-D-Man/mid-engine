@@ -992,6 +992,258 @@ int main(void) {
         mid_ecs_world_free(qw);
     }
 
+    // --- Filtered change queries: rows added/changed since last_run, across archetypes ---
+    {
+        MidEcsWorld *qw = mid_ecs_test_write_fixture_world_new();
+        uint32_t qf_health = mid_ecs_world_lookup_ffi_static_component_id(qw, "FfiHealthStatic");
+        uint32_t qf_flag_a = mid_ecs_world_lookup_ffi_static_component_id(qw, "FfiFlagA");
+        uint32_t qf_flag_b = mid_ecs_world_lookup_ffi_static_component_id(qw, "FfiFlagB");
+
+        // The fixture's three entities: {Health} twice and {Health, FlagA} once.
+        uint32_t qf_plain_arch[4], qf_flag_arch[4];
+        CHECK(mid_ecs_world_archetypes_matching_static(qw, &qf_health, 1, &qf_flag_a, 1, NULL, 0, qf_plain_arch, 4) == 1
+                  && mid_ecs_world_archetypes_matching_static(qw, &qf_health, 1, NULL, 0, &qf_flag_a, 1, qf_flag_arch, 4) == 1,
+              "filter fixture: one {Health} archetype and one {Health, FlagA} archetype");
+        uint64_t qf_plain[4], qf_flagged[4];
+        CHECK(mid_ecs_world_static_component_entity_ids(qw, qf_plain_arch[0], qf_health, qf_plain, 4) == 2
+                  && mid_ecs_world_static_component_entity_ids(qw, qf_flag_arch[0], qf_health, qf_flagged, 4) == 1,
+              "two entities hold only Health, one holds Health and FlagA");
+
+        // Nothing has changed since the fixture settled.
+        uint32_t qf_t0 = mid_ecs_world_change_tick(qw);
+        uint32_t qf_health_only[1] = { qf_health };
+        MidEcsRowFilter qf_changed = { .all_changed_ids = qf_health_only, .all_changed_len = 1 };
+        MidEcsMatchedRow qf_rows[8];
+        CHECK(mid_ecs_world_static_query_since(qw, qf_t0, &qf_changed, qf_rows, 8) == 0,
+              "a tracker that has just read the tick sees no changed Health");
+
+        // One step: Health 9 on the first plain entity and on the flagged one.
+        mid_ecs_world_increment_change_tick(qw);
+        uint32_t nine = 9;
+        CHECK(mid_ecs_world_static_component_write(qw, qf_plain[0], qf_health, (const uint8_t *)&nine, sizeof nine) == MID_ECS_OK
+                  && mid_ecs_world_static_component_write(qw, qf_flagged[0], qf_health, (const uint8_t *)&nine, sizeof nine) == MID_ECS_OK,
+              "write Health on two entities in different archetypes");
+        CHECK(mid_ecs_world_static_query_since(qw, qf_t0, &qf_changed, NULL, 0) == 2,
+              "NULL buffer queries the count: two changed rows across two archetypes");
+        CHECK(mid_ecs_world_static_query_since(qw, qf_t0, &qf_changed, qf_rows, 8) == 2
+                  && qf_rows[0].archetype_id != qf_rows[1].archetype_id,
+              "the two rows are in different archetypes");
+        int qf_found_plain = 0, qf_found_flagged = 0, qf_values_ok = 1;
+        for (int i = 0; i < 2; i++) {
+            MidEcsFfiSpan span;
+            if (mid_ecs_world_static_component_raw_span(qw, qf_rows[i].archetype_id, qf_health, &span) != MID_ECS_OK) {
+                qf_values_ok = 0;
+                continue;
+            }
+            const uint32_t *hp = (const uint32_t *)((const uint8_t *)span.ptr + (size_t)qf_rows[i].row * span.stride);
+            qf_values_ok = qf_values_ok && *hp == 9;
+            qf_found_plain += qf_rows[i].entity == qf_plain[0];
+            qf_found_flagged += qf_rows[i].entity == qf_flagged[0];
+        }
+        CHECK(qf_found_plain == 1 && qf_found_flagged == 1,
+              "the rows name the two written entities");
+        CHECK(qf_values_ok, "each row indexes the archetype's span at the written value");
+
+        // Structural lists narrow it.
+        uint32_t qf_flag_only[1] = { qf_flag_a };
+        MidEcsRowFilter qf_with = { .with_ids = qf_flag_only, .with_len = 1, .all_changed_ids = qf_health_only, .all_changed_len = 1 };
+        CHECK(mid_ecs_world_static_query_since(qw, qf_t0, &qf_with, qf_rows, 8) == 1 && qf_rows[0].entity == qf_flagged[0],
+              "with FlagA: only the flagged entity");
+        MidEcsRowFilter qf_without = { .without_ids = qf_flag_only, .without_len = 1, .all_changed_ids = qf_health_only, .all_changed_len = 1 };
+        CHECK(mid_ecs_world_static_query_since(qw, qf_t0, &qf_without, qf_rows, 8) == 1 && qf_rows[0].entity == qf_plain[0],
+              "without FlagA: only the plain entity");
+
+        // all_* is an AND, any_* an OR; FlagA was never written.
+        uint32_t qf_both[2] = { qf_health, qf_flag_a };
+        MidEcsRowFilter qf_all2 = { .all_changed_ids = qf_both, .all_changed_len = 2 };
+        CHECK(mid_ecs_world_static_query_since(qw, qf_t0, &qf_all2, NULL, 0) == 0,
+              "all_changed [Health, FlagA]: FlagA did not change, so no row (and the {Health} archetype lacks it)");
+        MidEcsRowFilter qf_any2 = { .any_changed_ids = qf_both, .any_changed_len = 2 };
+        CHECK(mid_ecs_world_static_query_since(qw, qf_t0, &qf_any2, NULL, 0) == 2,
+              "any_changed [Health, FlagA]: the changed Health qualifies both rows");
+        MidEcsRowFilter qf_any_flag = { .any_changed_ids = qf_flag_only, .any_changed_len = 1 };
+        CHECK(mid_ecs_world_static_query_since(qw, qf_t0, &qf_any_flag, NULL, 0) == 0,
+              "any_changed [FlagA] alone: nothing");
+
+        // Added versus changed: inserting FlagB is an addition, a write is not.
+        uint32_t flag_b_value = 5;
+        CHECK(mid_ecs_world_static_component_insert(qw, qf_plain[1], qf_flag_b, (const uint8_t *)&flag_b_value, sizeof flag_b_value) == MID_ECS_OK,
+              "insert FlagB on the second plain entity");
+        uint32_t qf_flag_b_only[1] = { qf_flag_b };
+        MidEcsRowFilter qf_added_b = { .all_added_ids = qf_flag_b_only, .all_added_len = 1 };
+        CHECK(mid_ecs_world_static_query_since(qw, qf_t0, &qf_added_b, qf_rows, 8) == 1 && qf_rows[0].entity == qf_plain[1],
+              "all_added [FlagB]: the entity it was inserted on");
+        MidEcsRowFilter qf_added_health = { .all_added_ids = qf_health_only, .all_added_len = 1 };
+        CHECK(mid_ecs_world_static_query_since(qw, qf_t0, &qf_added_health, NULL, 0) == 0,
+              "all_added [Health]: a write is not an addition, and a migration does not re-add");
+        MidEcsRowFilter qf_mixed = { .any_added_ids = qf_flag_b_only, .any_added_len = 1, .any_changed_ids = qf_health_only, .any_changed_len = 1 };
+        CHECK(mid_ecs_world_static_query_since(qw, qf_t0, &qf_mixed, NULL, 0) == 3,
+              "any_added [FlagB] + any_changed [Health] is one group: three rows");
+
+        // The window.
+        CHECK(mid_ecs_world_static_query_since(qw, mid_ecs_world_change_tick(qw), &qf_changed, NULL, 0) == 0,
+              "last_run = the current tick: nothing is newer");
+        CHECK(mid_ecs_world_static_query_since(qw, 0, &qf_changed, NULL, 0) == 3,
+              "last_run 0 sees every Health row");
+
+        // Buffers and errors.
+        CHECK(mid_ecs_world_static_query_since(qw, qf_t0, &qf_changed, qf_rows, 1) == MID_ECS_BUFFER_TOO_SMALL,
+              "a too-small buffer is MID_ECS_BUFFER_TOO_SMALL, not a partial fill");
+        MidEcsRowFilter qf_empty = { 0 };
+        CHECK(mid_ecs_world_static_query_since(qw, 0, &qf_empty, NULL, 0) == MID_ECS_INVALID_ARGUMENT,
+              "no change term at all is MID_ECS_INVALID_ARGUMENT");
+        uint32_t qf_bogus[1] = { 9999 };
+        MidEcsRowFilter qf_bad_id = { .all_changed_ids = qf_bogus, .all_changed_len = 1 };
+        CHECK(mid_ecs_world_static_query_since(qw, 0, &qf_bad_id, NULL, 0) == MID_ECS_NOT_FOUND,
+              "an unregistered id in a change list is MID_ECS_NOT_FOUND");
+        MidEcsRowFilter qf_bad_with = { .with_ids = qf_bogus, .with_len = 1, .all_changed_ids = qf_health_only, .all_changed_len = 1 };
+        CHECK(mid_ecs_world_static_query_since(qw, 0, &qf_bad_with, NULL, 0) == 0,
+              "an unknown id in the structural with list just matches nothing");
+        MidEcsRowFilter qf_null_list = { .all_changed_len = 1 };
+        CHECK(mid_ecs_world_static_query_since(qw, 0, &qf_null_list, NULL, 0) == MID_ECS_NULL_POINTER
+                  && mid_ecs_world_static_query_since(NULL, 0, &qf_changed, NULL, 0) == MID_ECS_NULL_POINTER
+                  && mid_ecs_world_static_query_since(qw, 0, NULL, NULL, 0) == MID_ECS_NULL_POINTER,
+              "a NULL list pointer with a length, a NULL world and a NULL filter are MID_ECS_NULL_POINTER");
+        mid_ecs_world_free(qw);
+    }
+
+    // --- Removal tracking: which entities lost a component ---
+    {
+        MidEcsWorld *rw = mid_ecs_test_write_fixture_world_new();
+        uint32_t rm_health = mid_ecs_world_lookup_ffi_static_component_id(rw, "FfiHealthStatic");
+        uint32_t rm_flag_a = mid_ecs_world_lookup_ffi_static_component_id(rw, "FfiFlagA");
+
+        // The three fixture entities, found through the archetypes holding Health.
+        uint32_t rm_arch[8];
+        int32_t rm_arch_n = mid_ecs_world_archetypes_matching_static(rw, &rm_health, 1, NULL, 0, NULL, 0, rm_arch, 8);
+        uint64_t rm_ents[8];
+        size_t rm_ent_n = 0;
+        for (int32_t i = 0; i < rm_arch_n; i++) {
+            int32_t n = mid_ecs_world_static_component_entity_ids(rw, rm_arch[i], rm_health, rm_ents + rm_ent_n, 8 - rm_ent_n);
+            if (n > 0) {
+                rm_ent_n += (size_t)n;
+            }
+        }
+        CHECK(rm_ent_n == 3, "removal fixture: three entities hold Health");
+
+        uint64_t rm_out[8];
+        CHECK(mid_ecs_world_static_component_tracks_removals(rw, rm_health) == 0,
+              "removals of Health are not tracked to begin with");
+        CHECK(mid_ecs_world_static_component_removal_count(rw, rm_health) == 0,
+              "an untracked component's removal count is 0");
+        CHECK(mid_ecs_world_static_component_removed_since(rw, rm_health, 0, rm_out, 8) == MID_ECS_NOT_TRACKED,
+              "removed_since on an untracked component is MID_ECS_NOT_TRACKED, not an empty list");
+        CHECK(mid_ecs_world_static_component_track_removals(rw, rm_health) == MID_ECS_OK
+                  && mid_ecs_world_static_component_tracks_removals(rw, rm_health) == 1,
+              "track_removals starts recording Health removals");
+        CHECK(mid_ecs_world_static_component_track_removals(rw, rm_health) == MID_ECS_OK,
+              "tracking twice is fine");
+        CHECK(mid_ecs_world_static_component_track_removals(rw, rm_flag_a) == MID_ECS_OK,
+              "tracking needs only a valid id, not a writable component");
+        CHECK(mid_ecs_world_static_component_removed_since(rw, rm_health, 0, NULL, 0) == 0,
+              "tracked and nothing removed yet: 0");
+
+        uint32_t rm_t0 = mid_ecs_world_change_tick(rw);
+        mid_ecs_world_increment_change_tick(rw);
+        CHECK(mid_ecs_world_static_component_remove(rw, rm_ents[0], rm_health) == MID_ECS_OK,
+              "remove Health from the first entity");
+        CHECK(mid_ecs_world_static_component_removed_since(rw, rm_health, rm_t0, NULL, 0) == 1
+                  && mid_ecs_world_static_component_removed_since(rw, rm_health, rm_t0, rm_out, 8) == 1
+                  && rm_out[0] == rm_ents[0],
+              "removed_since reports exactly that entity");
+        CHECK(mid_ecs_world_is_alive(rw, rm_ents[0]), "losing a component does not despawn the entity");
+
+        CHECK(mid_ecs_world_despawn(rw, rm_ents[1]) == MID_ECS_OK, "despawn the second entity");
+        CHECK(mid_ecs_world_static_component_removed_since(rw, rm_health, rm_t0, rm_out, 8) == 2
+                  && rm_out[0] == rm_ents[0] && rm_out[1] == rm_ents[1],
+              "a despawn records its components too, oldest first");
+
+        CHECK(mid_ecs_world_static_component_remove(rw, rm_ents[0], rm_health) == MID_ECS_NOT_FOUND
+                  && mid_ecs_world_static_component_removal_count(rw, rm_health) == 2,
+              "a refused removal (the entity no longer has Health) records nothing");
+
+        // The window: removals at or before last_run are not reported.
+        uint32_t rm_t1 = mid_ecs_world_change_tick(rw);
+        CHECK(mid_ecs_world_static_component_removed_since(rw, rm_health, rm_t1, NULL, 0) == 0,
+              "nothing was removed after the current tick");
+        mid_ecs_world_increment_change_tick(rw);
+        CHECK(mid_ecs_world_static_component_remove(rw, rm_ents[2], rm_health) == MID_ECS_OK,
+              "remove Health from the third entity, a tick later");
+        CHECK(mid_ecs_world_static_component_removed_since(rw, rm_health, rm_t1, rm_out, 8) == 1
+                  && rm_out[0] == rm_ents[2],
+              "only the removal after rm_t1 is reported");
+        CHECK(mid_ecs_world_static_component_removed_since(rw, rm_health, 0, rm_out, 8) == 3,
+              "last_run 0 reports all three");
+        CHECK(mid_ecs_world_static_component_removed_since(rw, rm_health, 0, rm_out, 2) == MID_ECS_BUFFER_TOO_SMALL,
+              "a too-small buffer is MID_ECS_BUFFER_TOO_SMALL, not a partial fill");
+
+        // Trimming drops what a reader at rm_t1 could not see; the component stays tracked.
+        CHECK(mid_ecs_world_trim_removals(rw, rm_t1) == MID_ECS_OK
+                  && mid_ecs_world_static_component_removal_count(rw, rm_health) == 1
+                  && mid_ecs_world_static_component_tracks_removals(rw, rm_health) == 1,
+              "trim_removals drops the old entries and keeps the component tracked");
+
+        // Errors.
+        CHECK(mid_ecs_world_static_component_track_removals(rw, 9999) == MID_ECS_NOT_FOUND
+                  && mid_ecs_world_static_component_tracks_removals(rw, 9999) == MID_ECS_NOT_FOUND
+                  && mid_ecs_world_static_component_removal_count(rw, 9999) == MID_ECS_NOT_FOUND
+                  && mid_ecs_world_static_component_removed_since(rw, 9999, 0, NULL, 0) == MID_ECS_NOT_FOUND,
+              "an id this world never issued is MID_ECS_NOT_FOUND, for all four functions");
+        CHECK(mid_ecs_world_static_component_track_removals(NULL, rm_health) == MID_ECS_NULL_POINTER
+                  && mid_ecs_world_static_component_tracks_removals(NULL, rm_health) == MID_ECS_NULL_POINTER
+                  && mid_ecs_world_static_component_removal_count(NULL, rm_health) == MID_ECS_NULL_POINTER
+                  && mid_ecs_world_static_component_removed_since(NULL, rm_health, 0, NULL, 0) == MID_ECS_NULL_POINTER
+                  && mid_ecs_world_trim_removals(NULL, 0) == MID_ECS_NULL_POINTER
+                  && mid_ecs_world_clear_removals(NULL) == MID_ECS_NULL_POINTER,
+              "a NULL world is MID_ECS_NULL_POINTER");
+        mid_ecs_world_free(rw);
+
+        // Both id spaces, on the Sparse-Shell + Archetype-Core fixture. A despawn
+        // removes the entity's components from both storages.
+        MidEcsWorld *sw = mid_ecs_test_fixture_world_new();
+        uint32_t rm_sparse = mid_ecs_world_lookup_ffi_component_id(sw, "FfiHealth");
+        uint32_t rm_static = mid_ecs_world_lookup_ffi_static_component_id(sw, "FfiHealthStatic");
+        uint64_t rm_sparse_ents[4];
+        CHECK(mid_ecs_world_component_entity_ids(sw, rm_sparse, rm_sparse_ents, 4) == 2,
+              "the fixture has two entities with the Sparse-Shell Health");
+
+        // Tracking one id space does not track the other, even when the numbers match.
+        CHECK(mid_ecs_world_static_component_track_removals(sw, rm_static) == MID_ECS_OK
+                  && mid_ecs_world_component_tracks_removals(sw, rm_sparse) == 0,
+              "tracking the Archetype-Core component does not track the Sparse-Shell one");
+        CHECK(mid_ecs_world_component_removed_since(sw, rm_sparse, 0, rm_out, 8) == MID_ECS_NOT_TRACKED,
+              "Sparse-Shell removed_since is MID_ECS_NOT_TRACKED until tracked");
+        CHECK(mid_ecs_world_component_track_removals(sw, rm_sparse) == MID_ECS_OK
+                  && mid_ecs_world_component_tracks_removals(sw, rm_sparse) == 1,
+              "track the Sparse-Shell component too");
+
+        uint32_t rm_s0 = mid_ecs_world_change_tick(sw);
+        mid_ecs_world_increment_change_tick(sw);
+        CHECK(mid_ecs_world_despawn(sw, rm_sparse_ents[0]) == MID_ECS_OK, "despawn one fixture entity");
+        CHECK(mid_ecs_world_component_removed_since(sw, rm_sparse, rm_s0, rm_out, 8) == 1
+                  && rm_out[0] == rm_sparse_ents[0],
+              "the Sparse-Shell removal is recorded by the despawn");
+        CHECK(mid_ecs_world_static_component_removed_since(sw, rm_static, rm_s0, rm_out, 8) == 1
+                  && rm_out[0] == rm_sparse_ents[0],
+              "and so is the Archetype-Core one");
+        CHECK(mid_ecs_world_component_removal_count(sw, rm_sparse) == 1
+                  && mid_ecs_world_component_removal_count(sw, 9999) == MID_ECS_NOT_FOUND
+                  && mid_ecs_world_component_removed_since(sw, 9999, 0, NULL, 0) == MID_ECS_NOT_FOUND
+                  && mid_ecs_world_component_track_removals(NULL, rm_sparse) == MID_ECS_NULL_POINTER,
+              "Sparse-Shell count, NOT_FOUND and NULL world behave like the Archetype-Core ones");
+
+        CHECK(mid_ecs_world_clear_removals(sw) == MID_ECS_OK
+                  && mid_ecs_world_component_removal_count(sw, rm_sparse) == 0
+                  && mid_ecs_world_static_component_removal_count(sw, rm_static) == 0
+                  && mid_ecs_world_component_tracks_removals(sw, rm_sparse) == 1,
+              "clear_removals empties every log and keeps both components tracked");
+        mid_ecs_world_increment_change_tick(sw);
+        CHECK(mid_ecs_world_despawn(sw, rm_sparse_ents[1]) == MID_ECS_OK
+                  && mid_ecs_world_component_removal_count(sw, rm_sparse) == 1,
+              "still recording after a clear");
+        mid_ecs_world_free(sw);
+    }
+
     printf("\n=== %d check(s) failed ===\n", failures);
     return failures == 0 ? 0 : 1;
 }

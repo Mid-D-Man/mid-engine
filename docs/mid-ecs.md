@@ -4214,7 +4214,6 @@ entity's signature and walks the Sparse columns.
 **Not done.**
 - Events/messages and observers (the rest of item 6). Component hooks are the
   next section.
-- A C-API counterpart (`track_removals` / a removed-entities buffer).
 - Removal tracking for resources.
 - A notification for *replacement* (insert over an existing value).
 - Any automatic trimming (needs a frame owner: `mid-app`).
@@ -4325,10 +4324,221 @@ above on every structural operation, and nothing else for a world with no hooks.
 - Events/messages and observers (the rest of item 6).
 - A C API for hooks: C cannot register a Rust `fn`, so this needs a C callback
   type, a place to keep its user data, and the safety rules for calling back
-  into C from inside a structural operation. Same for removal tracking.
+  into C from inside a structural operation. (Removal tracking's C API is
+  built: see "C API for removal tracking" below.)
 - Hooks for resources, and `on_insert` for in-place writes.
 - Caller location and the component id in `HookContext` (bevy has both).
 - A defined order between components of one kind.
+
+### C API for removal tracking (`ffi.rs`)
+
+The C counterpart of removal tracking, gap-list item 6a. Ten functions, each a
+thin wrapper: the caller's numeric component id is resolved to the `TypeId` the
+log is keyed by, then the same `RemovalLog` the Rust API uses is read or
+written, so the C and Rust views of one world cannot disagree. `world.rs` is
+untouched; `component.rs` gains a short `SparseShell::type_id_of` (the
+reverse of its type-to-id map, which only the Archetype side exposed).
+
+| C function (Archetype Core / Sparse Shell) | Rust counterpart |
+|---|---|
+| `mid_ecs_world_static_component_track_removals` / `mid_ecs_world_component_track_removals` | `World::track_removals::<T>()` |
+| `..._tracks_removals` (both families) | `World::tracks_removals::<T>()`; `1` or `0` |
+| `..._removal_count` (both families) | `World::removal_count::<T>()` |
+| `..._removed_since` (both families) | `World::removed_since::<T>(&tracker)`, into a caller buffer |
+| `mid_ecs_world_trim_removals` / `mid_ecs_world_clear_removals` | `World::trim_removals(tick)` / `clear_removals()` |
+
+**Conventions, all copied from the `_added_rows` / `_changed_rows` family.**
+
+- *The tracker is a plain `uint32_t last_run`* the caller keeps: read
+  `mid_ecs_world_change_tick` after handling a batch, pass it next time, and
+  call `mid_ecs_world_increment_change_tick` once per step (a removal in the
+  same tick as `last_run` is not reported). No tracker object exists on the C
+  side, for the reason none exists for the row functions.
+- *NULL buffer queries the count*; a too-small buffer is `BufferTooSmall` and
+  writes nothing; only the first `count` elements of a bigger buffer are
+  written. Entries are packed `uint64_t` entity handles, oldest first, one per
+  removal.
+- *Two id spaces, two families.* The Archetype Core and the Sparse Shell number
+  their components separately (both start at 0), so tracking Archetype-Core id
+  0 does not track Sparse-Shell id 0. A test pins this with a world where the
+  two spaces collide on purpose.
+- *`NotFound`* is an id this world never issued in that space; `NullPointer` a
+  null world. Tracking needs only a valid id, not a writable registration: a
+  read-only component can be tracked, it just cannot be removed from C.
+
+**A new status, `NotTracked` (-10, `MID_ECS_NOT_TRACKED`).** `removed_since` on
+a component nobody tracked is its own code rather than `NotFound` or an empty
+list: nothing was ever recorded, and either of the other two would hide that.
+It is the C form of the Rust `removed_since` panic ("an empty answer would hide
+that"). A count of an untracked component is `0` (matching `removal_count`), not
+an error. The code is appended, so no existing value moves.
+
+**What is recorded** is exactly what the Rust side records (see "Removal
+tracking" above): a successful C removal (`..._remove`, `..._remove_many`, a
+queued one at `mid_ecs_commands_apply`) and a despawn, which records every
+tracked component the entity still held, in both storages. A refused removal
+(entity lacks the component, read-only component, unknown id, dead handle, a
+bad member of a list) and a replacement (`..._write`, a refused `..._insert`)
+record nothing.
+
+**Cost.** `removed_since` with a buffer collects the answer into a `Vec` before
+the capacity check, so a too-small buffer leaves the caller's memory untouched;
+the NULL-buffer count walks the log without allocating. Untracked worlds pay
+nothing new (the one `is_empty` check per removal is the Rust side's, unchanged).
+Not benchmarked: performance work is paused.
+
+**Verified (sandbox, rustc 1.91.1).**
+
+- Eight new Rust tests in `ffi.rs` (lib 680 -> 688, `ffi::` 76 -> 84; doctests unchanged at 18): opt-in
+  per component and idempotent, with the id spaces kept apart; the three
+  failure codes plus every function on a NULL world; every C removal path
+  (direct, queued, list, despawn) cross-checked against the Rust API's
+  `removed_since` and `removal_count`; refused and no-op removals recording
+  nothing (absent component, read-only, unknown id, dead handle, three
+  all-or-nothing lists, an overwrite, a refused insert); the `last_run`
+  window including a reused entity appearing once per removal; trim and clear
+  keeping components tracked; the buffer conventions; and Sparse-Shell
+  removals staying apart from the Archetype Core.
+- `test.c`: 201 -> 233 `ok:` lines, 0 `FAIL:`, against both the shared and the
+  static library (`-Wall -Wextra` clean). Valgrind on the smoke binary: no
+  errors. Valgrind on the 84 `ffi::` lib tests: no invalid access or
+  uninitialised read; the only report is a 48-byte "possibly lost" inside
+  libtest's own thread set-up.
+- Mutation testing (run against the same code on the commit before hooks landed; `ffi.rs` and the `component.rs` hunk are unchanged since): 40 mutants of the new code (every wrapper's id space, every
+  null check, every `NotFound` and `NotTracked` return, the window, the
+  capacity check and copy, order, trim and clear, and the two `type_id_of`
+  lookups), 40 caught, 0 survived, 0 compile errors; a neutral control mutant
+  survived as it should. A 41st, the `NotTracked` value drifting from the
+  header, is caught by `test.c`.
+
+**Not done (C side).**
+
+- Hooks: a C callback type, user data per component, and a restricted handle
+  for the callback are a design decision, not a wrapper.
+- A mutable C query iterator, and reserved entity ids / an `Entity`-returning
+  queued spawn. (Filtered `Added` / `Changed` queries across archetypes are
+  built: see the next section.)
+- Removal tracking for resources, and any automatic trimming (needs a frame
+  owner: `mid-app`).
+
+### C API for filtered change queries (`ffi.rs`)
+
+The C counterpart of `Added` / `Changed` filters composed with `With` /
+`Without` / `Or` (gap-list item 3), the item carried over from the row
+functions. A C caller had `..._added_rows` / `..._changed_rows` for one
+component of one archetype and `mid_ecs_world_archetypes_matching_static` for
+the structure, so "`Changed<A>` with `B`, without `C`" meant writing the loop
+and the set algebra by hand. One function now does it:
+`mid_ecs_world_static_query_since(world, last_run, &filter, out_rows, cap)`.
+
+The filter is a `MidEcsRowFilter`: seven `(pointer, length)` lists of
+Archetype-Core component ids.
+
+| list | meaning | Rust |
+|---|---|---|
+| `with`, `without`, `any_of` | structural, decided once per archetype | `With`, `Without`, `Or` of `With` (as `archetypes_matching_static`) |
+| `all_added` | every listed component's value was inserted after `last_run` | a tuple of `Added<T>` |
+| `all_changed` | every listed component inserted or mutated after `last_run` | a tuple of `Changed<T>` |
+| `any_added` + `any_changed` | at least one listed component qualifies; the two lists are *one* group | `Or<(Added<A>, Changed<B>, ...)>` |
+
+A row must pass the structural lists, every `all_*` id and, if either `any_*`
+list is non-empty, at least one `any_*` id. Each result is a
+`MidEcsMatchedRow { uint64_t entity; uint32_t archetype_id; uint32_t row; }`:
+`row` is element `row` of the span and `entity_ids` of that archetype, with the
+`*_rows` validity contract. Archetypes come in the order
+`archetypes_matching_static` yields them, rows ascending within one.
+
+**Design choices.**
+
+- *A filter struct, not fifteen arguments.* Seven same-typed pointer/length
+  pairs in a positional call swap silently (`with` and `without` compile
+  either way); designated initializers cannot. Zero-initialize the struct and
+  set only the lists in use. It is read once and not retained. Adding a list
+  later means a new struct, since a new field would change the layout.
+- *No new query engine.* The function asks the existing per-archetype row
+  functions (`static_component_added_rows` / `_changed_rows`, what the C
+  `*_rows` functions call) for each structurally matching archetype, then
+  intersects the ascending row lists for `all_*` and unions them for `any_*`.
+  It agrees with the `*_rows` functions by construction, and `world.rs` and the
+  Rust query machinery are untouched.
+- *The semantics are `data_filter.rs`'s.* `Added<T>` / `Changed<T>` require the
+  archetype to hold `T`; an `Or` member whose component the archetype lacks is
+  false for its rows; an archetype holding none of the members has no row.
+  Nesting (an `Or` of tuples, as in `Or<(Added<A>, (With<A>, Without<B>))>`) is
+  not expressible: one AND group and one OR group.
+- *Unregistered ids in a change list are `NotFound`, up front.* The same
+  condition under which the `*_rows` functions say `NotFound`, checked before
+  anything is written, because a typo'd id would otherwise read as "nothing
+  changed" (the reasoning of `NotTracked` above). The structural lists keep the
+  lenient rule `archetypes_matching_static` already has: an unknown id in `with`
+  or `any_of` matches nothing, in `without` it is ignored. The check needs
+  "registered for FFI", which no `Archetypes` method exposed, so
+  `Archetypes::is_ffi_registered` (one line, in `archetype/ffi_write.rs`) was
+  added; an id issued only through the typed API is not registered.
+- *A new status, `InvalidArgument` (-11, `MID_ECS_INVALID_ARGUMENT`).* All four
+  change lists empty has no component to read rows through (and `all_*` /
+  `any_*` empty would otherwise mean "every row", which this function cannot
+  enumerate without one). The purely structural query is
+  `archetypes_matching_static`. Appended, so no value moves.
+
+**Cost.** Per structurally matching archetype, one row list per listed id (one
+tick read per row per id) and linear merges; the answer is collected into a
+`Vec` before the capacity check so a too-small buffer writes nothing. Not
+benchmarked: performance work is paused.
+
+**Verified (sandbox, rustc 1.91.1).**
+
+- Eleven new Rust tests (`ffi::` 84 -> 95): added versus changed across
+  archetypes with rows checked against `entity_ids` and the stored values; a
+  mutation counts as changed but not added; `all_*` as an intersection that rules
+  out archetypes lacking a component; `any_*` as a union where an absent member is
+  false, the two lists form one group, and two members of one list may qualify
+  different rows of one archetype; the `all_*` and `any_*` groups combining; the structural lists composing with
+  the change terms (including the lenient unknown-id rule); the `last_run` window
+  (the same tick is not newer, `0` sees everything); every error (`NotFound` for
+  each of the four change lists and for an id registered only through the typed
+  API, `InvalidArgument`, `NullPointer` for the world, the filter and each of the
+  seven lists) with nothing written; the buffer conventions; and a component listed
+  twice not duplicating rows. The central one is differential: 500 steps of random
+  spawns, despawns, insertions, removals and writes across three components with
+  tick steps and tracker updates, and at every step ten filter shapes
+  (`Changed<A>`, `Added<A>`, `Or` of two `Changed`, a tuple of two `Changed`, an
+  `Added` with a `Changed`, `Changed` with `With<B>` and with `Without<B>`, an `Or`
+  mixing `Added` and `Changed`, an `Or` under `With`, and a `Changed` beside an
+  `Or`) compared with
+  `query_data_filtered_since` in Rust, each required to give both empty and
+  non-empty answers at least ten times, every row checked against `entity_ids`.
+  Lib 688 -> 699, doctests unchanged at 18.
+- `test.c`: 233 -> 257 `ok:` lines, 0 `FAIL:`, against both the shared and
+  the static library (`-Wall -Wextra` clean); the new block covers the changed
+  rows across two archetypes read back through the span, `with` / `without`, the
+  AND and the OR, an insert (added) against a write (not added) including a
+  migration not re-adding, the mixed group, the window, the buffer and every
+  error code. Valgrind on the smoke binary: no errors. Valgrind on the 95 `ffi::`
+  lib tests: no invalid access or uninitialised read; the only report is the
+  48-byte "possibly lost" inside libtest's own thread set-up.
+- Mutation testing: 39 mutants of the new code (both list readers, the
+  intersection and union merges, the narrowing, which row function each list asks
+  for, the source component, the group logic, every null check and return code,
+  the validation of each change list, the structural arguments, the fields of a
+  result row, the capacity check, copy and count, and `is_ffi_registered`),
+  all caught, none survived. The first pass caught 35 of 39: two survivors were real
+  test gaps (two members of one `any_added` list qualifying different rows of one
+  archetype, and `all_*` combined with `any_*`), fixed with a test each and a
+  tenth differential shape; one was an equivalent mutant (a "holds none of the
+  `any_*` components" check that the entity-source lookup and an empty
+  intersection already make unobservable), so the check was removed as dead code;
+  one did not compile and was redone. A 40th mutant, the `InvalidArgument` value
+  drifting from the header, is caught by `test.c`.
+
+**Not done (C side).**
+
+- A mutable C query iterator, and reserved entity ids / an `Entity`-returning
+  queued spawn.
+- Nested filters (an `Or` of tuples) and any value-returning terms: the C caller
+  reads values through the spans at the rows returned, and `Ref` / `Mut` terms
+  have no C form.
+- Hooks (see above): a callback design, not a wrapper.
 
 ### Writing component data from C (`raw_span_mut`, `write`, `FfiSpanMut`)
 

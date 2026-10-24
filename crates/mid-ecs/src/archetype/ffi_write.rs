@@ -235,6 +235,13 @@ where
 }
 
 impl Archetypes {
+    /// Whether `id` was registered for the FFI (`register_ffi_static_component`
+    /// and its writable form), i.e. whether the untyped id-based accessors
+    /// can see it at all. An id issued only through the typed API is not.
+    pub(crate) fn is_ffi_registered(&self, id: ComponentId) -> bool {
+        self.ffi_accessors.contains_key(&id)
+    }
+
     /// Opts `T` into FFI span exposure under `name` *and* into writes from
     /// C: the read-only registration ([`Self::register_ffi`]) plus a
     /// writer. `T: FromBytes` is the extra bound, see the module docs.

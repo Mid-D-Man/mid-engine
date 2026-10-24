@@ -57,6 +57,7 @@
 use std::ffi::CStr;
 use std::os::raw::c_char;
 use std::panic::{catch_unwind, AssertUnwindSafe};
+use std::any::TypeId;
 use std::ptr;
 use std::slice;
 
@@ -121,6 +122,14 @@ pub enum MidEcsStatus {
     /// component twice. The whole list is rejected before any entity is
     /// looked at, and nothing changes.
     Duplicate = -9,
+    /// `removed_since` for a component whose removals nobody asked to
+    /// track (`mid_ecs_world_*_track_removals` was never called for it):
+    /// nothing was ever recorded, so an empty list would be a silent
+    /// lie. The Rust `World::removed_since` panics in the same case.
+    NotTracked = -10,
+    /// An argument combination that cannot mean anything: a filtered
+    /// change query with no change term (nothing to read rows through).
+    InvalidArgument = -11,
 }
 
 fn ffi_guard(f: impl FnOnce() -> i32) -> i32 {
@@ -1723,6 +1732,678 @@ pub unsafe extern "C" fn mid_ecs_world_static_component_changed_rows(
             out_capacity,
         )
     }
+}
+
+// ── Filtered change queries ──────────────────────────────────────────
+//
+// The C counterpart of Rust's `query_data_filtered_since` with
+// `Added`/`Changed` filters composed with `With`/`Without`/`Or` (see
+// `data_filter.rs`). It is not a new query engine: it asks the existing
+// per-archetype row functions (`static_component_added_rows` /
+// `static_component_changed_rows`, the ones behind
+// `mid_ecs_world_static_component_added_rows` / `_changed_rows`) and
+// combines their ascending row lists, so a row means exactly what it
+// means there.
+
+/// The filter of [`mid_ecs_world_static_query_since`]: seven `(pointer,
+/// length)` lists of Archetype-Core component ids. A list of length `0`
+/// is empty (its pointer may then be NULL); a NULL pointer with a nonzero
+/// length is a `NullPointer` error.
+///
+/// Structural, the same three lists as
+/// [`mid_ecs_world_archetypes_matching_static`] (archetype-level, decided
+/// once per archetype): `with` (all present), `without` (none present),
+/// `any_of` (at least one present, when non-empty).
+///
+/// Row-level, at least one id in total across these four lists:
+/// - `all_added`: the row's value of *every* listed component was inserted
+///   after `last_run` (Rust: a tuple of `Added<T>`).
+/// - `all_changed`: every listed component's value was inserted or
+///   mutated after `last_run` (a tuple of `Changed<T>`).
+/// - `any_added` and `any_changed`, together: *at least one* listed
+///   component qualifies (Rust: `Or<(Added<A>, Changed<B>, ...)>`). A
+///   member whose component the archetype lacks counts as not qualifying;
+///   an archetype holding none of the listed components has no matching
+///   row.
+///
+/// A row must satisfy the structural lists, every `all_*` id, and, if
+/// either `any_*` list is non-empty, at least one `any_*` id.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct MidEcsRowFilter {
+    pub with_ids: *const u32,
+    pub with_len: usize,
+    pub without_ids: *const u32,
+    pub without_len: usize,
+    pub any_of_ids: *const u32,
+    pub any_of_len: usize,
+    pub all_added_ids: *const u32,
+    pub all_added_len: usize,
+    pub all_changed_ids: *const u32,
+    pub all_changed_len: usize,
+    pub any_added_ids: *const u32,
+    pub any_added_len: usize,
+    pub any_changed_ids: *const u32,
+    pub any_changed_len: usize,
+}
+
+/// One row found by [`mid_ecs_world_static_query_since`]: the entity, and
+/// where it sits. `row` is element `row` of
+/// [`mid_ecs_world_static_component_raw_span`] and
+/// [`mid_ecs_world_static_component_entity_ids`] for `archetype_id` and any
+/// component that archetype holds.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MidEcsMatchedRow {
+    pub entity: u64,
+    pub archetype_id: u32,
+    pub row: u32,
+}
+
+/// Reads one `(pointer, length)` id list out of a C filter: `None` for a
+/// NULL pointer with a nonzero length.
+///
+/// # Safety
+/// A non-null `ptr` must be valid for `len` `u32` elements.
+unsafe fn filter_ids(ptr: *const u32, len: usize) -> Option<Vec<ComponentId>> {
+    if len == 0 {
+        return Some(Vec::new());
+    }
+    if ptr.is_null() {
+        return None;
+    }
+    Some(
+        unsafe { slice::from_raw_parts(ptr, len) }
+            .iter()
+            .map(|&id| ComponentId::from_u32(id))
+            .collect(),
+    )
+}
+
+/// The intersection of two strictly ascending row lists.
+fn rows_intersect(a: &[u32], b: &[u32]) -> Vec<u32> {
+    let (mut i, mut j) = (0, 0);
+    let mut out = Vec::new();
+    while i < a.len() && j < b.len() {
+        match a[i].cmp(&b[j]) {
+            std::cmp::Ordering::Less => i += 1,
+            std::cmp::Ordering::Greater => j += 1,
+            std::cmp::Ordering::Equal => {
+                out.push(a[i]);
+                i += 1;
+                j += 1;
+            }
+        }
+    }
+    out
+}
+
+/// The union of two strictly ascending row lists.
+fn rows_union(a: &[u32], b: &[u32]) -> Vec<u32> {
+    let (mut i, mut j) = (0, 0);
+    let mut out = Vec::with_capacity(a.len() + b.len());
+    while i < a.len() && j < b.len() {
+        match a[i].cmp(&b[j]) {
+            std::cmp::Ordering::Less => {
+                out.push(a[i]);
+                i += 1;
+            }
+            std::cmp::Ordering::Greater => {
+                out.push(b[j]);
+                j += 1;
+            }
+            std::cmp::Ordering::Equal => {
+                out.push(a[i]);
+                i += 1;
+                j += 1;
+            }
+        }
+    }
+    out.extend_from_slice(&a[i..]);
+    out.extend_from_slice(&b[j..]);
+    out
+}
+
+/// Narrows `rows` to its intersection with `found` (`None` is "no
+/// constraint yet": `found` becomes the list).
+fn narrow_rows(rows: &mut Option<Vec<u32>>, found: Vec<u32>) {
+    *rows = Some(match rows.take() {
+        None => found,
+        Some(current) => rows_intersect(&current, &found),
+    });
+}
+
+/// The row-level part of a filter, for one archetype: the component to
+/// read entity ids through, and the surviving rows (possibly none). `None`
+/// if the archetype lacks an `all_*` component, or holds none of the listed
+/// components at all (so there is nothing to read rows or entities through).
+fn matched_rows_in(
+    world: &World,
+    archetype: ArchetypeId,
+    last_run: Tick,
+    all_added: &[ComponentId],
+    all_changed: &[ComponentId],
+    any_added: &[ComponentId],
+    any_changed: &[ComponentId],
+) -> Option<(ComponentId, Vec<u32>)> {
+    let mut source: Option<ComponentId> = None;
+    let mut rows: Option<Vec<u32>> = None;
+    for &id in all_added {
+        let found = world.static_component_added_rows(archetype, id, last_run)?;
+        source.get_or_insert(id);
+        narrow_rows(&mut rows, found);
+    }
+    for &id in all_changed {
+        let found = world.static_component_changed_rows(archetype, id, last_run)?;
+        source.get_or_insert(id);
+        narrow_rows(&mut rows, found);
+    }
+    if !any_added.is_empty() || !any_changed.is_empty() {
+        let mut union: Vec<u32> = Vec::new();
+        for &id in any_added {
+            if let Some(found) = world.static_component_added_rows(archetype, id, last_run) {
+                source.get_or_insert(id);
+                union = rows_union(&union, &found);
+            }
+        }
+        for &id in any_changed {
+            if let Some(found) = world.static_component_changed_rows(archetype, id, last_run) {
+                source.get_or_insert(id);
+                union = rows_union(&union, &found);
+            }
+        }
+        narrow_rows(&mut rows, union);
+    }
+    Some((source?, rows?))
+}
+
+/// The rows, across every archetype that matches the structural part of
+/// `filter`, whose component values were added or changed after `last_run`
+/// as the row-level part of `filter` demands (the C counterpart of Rust's
+/// `query_data_filtered_since` with `Added`/`Changed` filters, composed
+/// with `With`/`Without`/`Or`). One call replaces the loop a C caller
+/// otherwise writes: enumerate archetypes with
+/// [`mid_ecs_world_archetypes_matching_static`], ask
+/// [`mid_ecs_world_static_component_added_rows`] /
+/// [`mid_ecs_world_static_component_changed_rows`] for each, and intersect
+/// or union the row lists. See [`MidEcsRowFilter`] for what each list
+/// means.
+///
+/// Results are written into `out_rows`, archetypes in the order
+/// [`mid_ecs_world_archetypes_matching_static`] yields them and rows
+/// ascending within one. Each [`MidEcsMatchedRow`] names the entity and its
+/// `(archetype_id, row)`; the row indexes the spans a C caller reads, with
+/// the same validity contract as the `*_rows` functions (until the next
+/// call that changes that archetype's storage).
+///
+/// `last_run` is a change tick the caller kept, exactly as for the `*_rows`
+/// functions.
+///
+/// Same NULL-buffer-queries-count idiom as the other enumerations: a NULL
+/// `out_rows` returns the count, a too-small buffer returns
+/// `MidEcsStatus::BufferTooSmall` and writes nothing.
+///
+/// Returns the count (`>= 0`), or a negative `MidEcsStatus`:
+/// - `NullPointer`: a null `world` or `filter`, or a list with a NULL
+///   pointer and a nonzero length.
+/// - `InvalidArgument`: the four change lists are all empty. With no
+///   component to read the rows through there is nothing to ask; use
+///   [`mid_ecs_world_archetypes_matching_static`] for a purely structural
+///   query.
+/// - `NotFound`: an id in a change list was never registered for FFI in the
+///   Archetype Core (the condition under which the `*_rows` functions say
+///   `NotFound`). Checked up front, before anything is written. A typo'd id
+///   would otherwise read as "nothing changed". The structural lists keep
+///   their own lenient rule: an unknown id there matches nothing (`with`,
+///   `any_of`) or is ignored (`without`).
+/// - `BufferTooSmall`.
+///
+/// # Safety
+/// `world` must be a valid, non-null handle from `mid_ecs_world_new`.
+/// `filter` must point to a valid [`MidEcsRowFilter`] whose non-null
+/// pointers are each valid for their length in `uint32_t` elements. If
+/// `out_rows` is non-null, it must be valid for `out_capacity`
+/// [`MidEcsMatchedRow`] elements.
+#[no_mangle]
+pub unsafe extern "C" fn mid_ecs_world_static_query_since(
+    world: *const MidEcsWorld,
+    last_run: u32,
+    filter: *const MidEcsRowFilter,
+    out_rows: *mut MidEcsMatchedRow,
+    out_capacity: usize,
+) -> i32 {
+    ffi_guard(|| {
+        if world.is_null() || filter.is_null() {
+            return MidEcsStatus::NullPointer as i32;
+        }
+        let world = unsafe { &*world };
+        let f = unsafe { &*filter };
+        let lists = unsafe {
+            (
+                filter_ids(f.with_ids, f.with_len),
+                filter_ids(f.without_ids, f.without_len),
+                filter_ids(f.any_of_ids, f.any_of_len),
+                filter_ids(f.all_added_ids, f.all_added_len),
+                filter_ids(f.all_changed_ids, f.all_changed_len),
+                filter_ids(f.any_added_ids, f.any_added_len),
+                filter_ids(f.any_changed_ids, f.any_changed_len),
+            )
+        };
+        let (
+            Some(with),
+            Some(without),
+            Some(any_of),
+            Some(all_added),
+            Some(all_changed),
+            Some(any_added),
+            Some(any_changed),
+        ) = lists
+        else {
+            return MidEcsStatus::NullPointer as i32;
+        };
+        if all_added.is_empty()
+            && all_changed.is_empty()
+            && any_added.is_empty()
+            && any_changed.is_empty()
+        {
+            return MidEcsStatus::InvalidArgument as i32;
+        }
+        let terms = all_added
+            .iter()
+            .chain(&all_changed)
+            .chain(&any_added)
+            .chain(&any_changed);
+        for &id in terms {
+            if !world.0.archetypes.is_ffi_registered(id) {
+                return MidEcsStatus::NotFound as i32;
+            }
+        }
+
+        let last_run = Tick::new(last_run);
+        let mut matched: Vec<MidEcsMatchedRow> = Vec::new();
+        for archetype in world.0.archetypes_matching_static(&with, &without, &any_of) {
+            let Some((source, rows)) = matched_rows_in(
+                &world.0,
+                archetype,
+                last_run,
+                &all_added,
+                &all_changed,
+                &any_added,
+                &any_changed,
+            ) else {
+                continue;
+            };
+            if rows.is_empty() {
+                continue;
+            }
+            let entities = world
+                .0
+                .static_component_entity_ids(archetype, source)
+                .unwrap_or_default();
+            for row in rows {
+                matched.push(MidEcsMatchedRow {
+                    entity: entities[row as usize],
+                    archetype_id: archetype.as_u32(),
+                    row,
+                });
+            }
+        }
+        if out_rows.is_null() {
+            return matched.len() as i32;
+        }
+        if matched.len() > out_capacity {
+            return MidEcsStatus::BufferTooSmall as i32;
+        }
+        let out = unsafe { slice::from_raw_parts_mut(out_rows, matched.len()) };
+        out.copy_from_slice(&matched);
+        matched.len() as i32
+    })
+}
+
+// ── Removal tracking ─────────────────────────────────────────────────
+//
+// The C counterpart of `World::track_removals` / `removed_since` /
+// `removal_count` / `trim_removals` / `clear_removals` (`removal.rs`).
+// Every function is a thin wrapper: it resolves the caller's numeric
+// component id to the `TypeId` the log is keyed by, then calls the same
+// `RemovalLog` the Rust API uses, so the two views cannot disagree.
+
+/// Which of the two independent `ComponentId` spaces a removal-tracking
+/// call's id belongs to. The Archetype Core and the Sparse Shell number
+/// their components separately (both start at 0), so the same integer can
+/// name a different component in each.
+#[derive(Clone, Copy)]
+enum IdSpace {
+    /// Archetype Core: the `mid_ecs_world_static_component_*` functions.
+    Static,
+    /// Sparse Shell: the `mid_ecs_world_component_*` functions.
+    Sparse,
+}
+
+/// The type `component_id` was issued for in `space`, or `None` if this
+/// world never issued that id there.
+fn removal_type_id(world: &World, space: IdSpace, component_id: u32) -> Option<TypeId> {
+    let id = ComponentId::from_u32(component_id);
+    match space {
+        IdSpace::Static => world.archetypes.type_id_of(id),
+        IdSpace::Sparse => world.components.type_id_of(id),
+    }
+}
+
+/// Shared body of the two `*_track_removals` functions.
+///
+/// # Safety
+/// As those two functions.
+unsafe fn removal_track(world: *mut MidEcsWorld, space: IdSpace, component_id: u32) -> i32 {
+    ffi_guard(|| {
+        if world.is_null() {
+            return MidEcsStatus::NullPointer as i32;
+        }
+        let world = unsafe { &mut *world };
+        let Some(type_id) = removal_type_id(&world.0, space, component_id) else {
+            return MidEcsStatus::NotFound as i32;
+        };
+        world.0.removals.track(type_id);
+        MidEcsStatus::Ok as i32
+    })
+}
+
+/// Shared body of the two `*_tracks_removals` functions.
+///
+/// # Safety
+/// As those two functions.
+unsafe fn removal_tracks(world: *const MidEcsWorld, space: IdSpace, component_id: u32) -> i32 {
+    ffi_guard(|| {
+        if world.is_null() {
+            return MidEcsStatus::NullPointer as i32;
+        }
+        let world = unsafe { &*world };
+        let Some(type_id) = removal_type_id(&world.0, space, component_id) else {
+            return MidEcsStatus::NotFound as i32;
+        };
+        i32::from(world.0.removals.is_tracked(type_id))
+    })
+}
+
+/// Shared body of the two `*_removal_count` functions.
+///
+/// # Safety
+/// As those two functions.
+unsafe fn removal_count(world: *const MidEcsWorld, space: IdSpace, component_id: u32) -> i32 {
+    ffi_guard(|| {
+        if world.is_null() {
+            return MidEcsStatus::NullPointer as i32;
+        }
+        let world = unsafe { &*world };
+        let Some(type_id) = removal_type_id(&world.0, space, component_id) else {
+            return MidEcsStatus::NotFound as i32;
+        };
+        world.0.removals.len(type_id) as i32
+    })
+}
+
+/// Shared body of the two `*_removed_since` functions.
+///
+/// # Safety
+/// As those two functions.
+unsafe fn removal_since(
+    world: *const MidEcsWorld,
+    space: IdSpace,
+    component_id: u32,
+    last_run: u32,
+    out_entities: *mut u64,
+    out_capacity: usize,
+) -> i32 {
+    ffi_guard(|| {
+        if world.is_null() {
+            return MidEcsStatus::NullPointer as i32;
+        }
+        let world = unsafe { &*world };
+        let Some(type_id) = removal_type_id(&world.0, space, component_id) else {
+            return MidEcsStatus::NotFound as i32;
+        };
+        if !world.0.removals.is_tracked(type_id) {
+            return MidEcsStatus::NotTracked as i32;
+        }
+        let removed = world
+            .0
+            .removals
+            .since(type_id, Tick::new(last_run), world.0.change_tick());
+        if out_entities.is_null() {
+            return removed.count() as i32;
+        }
+        let entities: Vec<u64> = removed.map(Entity::as_ffi).collect();
+        if entities.len() > out_capacity {
+            return MidEcsStatus::BufferTooSmall as i32;
+        }
+        let out = unsafe { slice::from_raw_parts_mut(out_entities, entities.len()) };
+        out.copy_from_slice(&entities);
+        entities.len() as i32
+    })
+}
+
+/// Starts recording removals of the Archetype-Core component
+/// `component_id` (the C counterpart of `World::track_removals`): from
+/// now on, every time an entity loses that component (through any of the
+/// removal functions, a queued removal, or its own despawn) the entity
+/// and the world's change tick are logged, and
+/// [`mid_ecs_world_static_component_removed_since`] reports them.
+/// Idempotent. Removals before the first call are not recorded. Replacing
+/// a value (`mid_ecs_world_static_component_write`) is not a removal, and
+/// a refused removal (`NotFound`, `NotWritable`, `NotAlive`, ...) records
+/// nothing.
+///
+/// Tracking needs only that the id is one this world issued; the
+/// component need not be registered writable.
+///
+/// Returns `MidEcsStatus::Ok`, `NullPointer` (null `world`), or
+/// `NotFound` (this world never issued `component_id` in the Archetype
+/// Core).
+///
+/// # Safety
+/// `world` must be a valid, non-null handle from `mid_ecs_world_new`.
+#[no_mangle]
+pub unsafe extern "C" fn mid_ecs_world_static_component_track_removals(
+    world: *mut MidEcsWorld,
+    component_id: u32,
+) -> i32 {
+    unsafe { removal_track(world, IdSpace::Static, component_id) }
+}
+
+/// Whether removals of the Archetype-Core component `component_id` are
+/// being recorded: `1` if so, `0` if not. A negative `MidEcsStatus`
+/// (`NullPointer`, `NotFound`) otherwise, as for
+/// [`mid_ecs_world_static_component_track_removals`].
+///
+/// # Safety
+/// `world` must be a valid, non-null handle from `mid_ecs_world_new`.
+#[no_mangle]
+pub unsafe extern "C" fn mid_ecs_world_static_component_tracks_removals(
+    world: *const MidEcsWorld,
+    component_id: u32,
+) -> i32 {
+    unsafe { removal_tracks(world, IdSpace::Static, component_id) }
+}
+
+/// How many removals of the Archetype-Core component `component_id` the
+/// log currently holds: `0` for a component nobody tracks. A negative
+/// `MidEcsStatus` (`NullPointer`, `NotFound`) otherwise, as for
+/// [`mid_ecs_world_static_component_track_removals`].
+///
+/// # Safety
+/// `world` must be a valid, non-null handle from `mid_ecs_world_new`.
+#[no_mangle]
+pub unsafe extern "C" fn mid_ecs_world_static_component_removal_count(
+    world: *const MidEcsWorld,
+    component_id: u32,
+) -> i32 {
+    unsafe { removal_count(world, IdSpace::Static, component_id) }
+}
+
+/// The entities that lost the Archetype-Core component `component_id`
+/// after `last_run` (the C counterpart of `World::removed_since`), as
+/// packed `uint64_t` entity handles written into `out_entities`, oldest
+/// first. An entity removed, given the component again and removed again
+/// appears once per removal. The entity may since have been despawned or
+/// its slot reused: check `mid_ecs_world_is_alive` if it matters.
+///
+/// `last_run` is a change tick the caller kept, exactly as for
+/// [`mid_ecs_world_static_component_added_rows`]: a removal is reported
+/// if it happened in a tick newer than `last_run`, so read
+/// [`mid_ecs_world_change_tick`] after handling one batch and pass it next
+/// time, and call [`mid_ecs_world_increment_change_tick`] once per step of
+/// the caller's loop (a removal in the same tick as `last_run` is not
+/// reported). `0` reports every removal still in the log.
+///
+/// Same NULL-buffer-queries-count idiom as the other enumerations: a NULL
+/// `out_entities` returns the count, a too-small buffer returns
+/// `MidEcsStatus::BufferTooSmall` and writes nothing.
+///
+/// Returns the count (`>= 0`), or a negative `MidEcsStatus`: `NullPointer`,
+/// `NotFound` (this world never issued `component_id` in the Archetype
+/// Core), `NotTracked` (nobody called
+/// [`mid_ecs_world_static_component_track_removals`] for it: nothing was
+/// ever recorded, and an empty list would hide that), or `BufferTooSmall`.
+///
+/// The log is never trimmed on its own: see [`mid_ecs_world_trim_removals`].
+///
+/// # Safety
+/// `world` must be a valid, non-null handle from `mid_ecs_world_new`. If
+/// `out_entities` is non-null, it must be valid for `out_capacity`
+/// `uint64_t` elements.
+#[no_mangle]
+pub unsafe extern "C" fn mid_ecs_world_static_component_removed_since(
+    world: *const MidEcsWorld,
+    component_id: u32,
+    last_run: u32,
+    out_entities: *mut u64,
+    out_capacity: usize,
+) -> i32 {
+    unsafe {
+        removal_since(
+            world,
+            IdSpace::Static,
+            component_id,
+            last_run,
+            out_entities,
+            out_capacity,
+        )
+    }
+}
+
+/// As [`mid_ecs_world_static_component_track_removals`], for a
+/// Sparse-Shell component id (the id space of
+/// [`mid_ecs_world_lookup_ffi_component_id`]). The two spaces are
+/// independent: tracking Archetype-Core id `0` does not track Sparse-Shell
+/// id `0`.
+///
+/// # Safety
+/// `world` must be a valid, non-null handle from `mid_ecs_world_new`.
+#[no_mangle]
+pub unsafe extern "C" fn mid_ecs_world_component_track_removals(
+    world: *mut MidEcsWorld,
+    component_id: u32,
+) -> i32 {
+    unsafe { removal_track(world, IdSpace::Sparse, component_id) }
+}
+
+/// As [`mid_ecs_world_static_component_tracks_removals`], for a
+/// Sparse-Shell component id.
+///
+/// # Safety
+/// `world` must be a valid, non-null handle from `mid_ecs_world_new`.
+#[no_mangle]
+pub unsafe extern "C" fn mid_ecs_world_component_tracks_removals(
+    world: *const MidEcsWorld,
+    component_id: u32,
+) -> i32 {
+    unsafe { removal_tracks(world, IdSpace::Sparse, component_id) }
+}
+
+/// As [`mid_ecs_world_static_component_removal_count`], for a
+/// Sparse-Shell component id.
+///
+/// # Safety
+/// `world` must be a valid, non-null handle from `mid_ecs_world_new`.
+#[no_mangle]
+pub unsafe extern "C" fn mid_ecs_world_component_removal_count(
+    world: *const MidEcsWorld,
+    component_id: u32,
+) -> i32 {
+    unsafe { removal_count(world, IdSpace::Sparse, component_id) }
+}
+
+/// As [`mid_ecs_world_static_component_removed_since`], for a
+/// Sparse-Shell component id. The Sparse Shell keeps no per-value ticks,
+/// so this is the only change-detection-style query it has from C; the
+/// removal ticks are the world's own, shared with the Archetype Core.
+///
+/// # Safety
+/// As [`mid_ecs_world_static_component_removed_since`].
+#[no_mangle]
+pub unsafe extern "C" fn mid_ecs_world_component_removed_since(
+    world: *const MidEcsWorld,
+    component_id: u32,
+    last_run: u32,
+    out_entities: *mut u64,
+    out_capacity: usize,
+) -> i32 {
+    unsafe {
+        removal_since(
+            world,
+            IdSpace::Sparse,
+            component_id,
+            last_run,
+            out_entities,
+            out_capacity,
+        )
+    }
+}
+
+/// Drops every logged removal, of every tracked component, that a reader
+/// whose last run was `at_or_before` (or later) could no longer see anyway
+/// (the C counterpart of `World::trim_removals`). Nothing trims the log
+/// automatically, because only whoever owns *all* the readers knows the
+/// oldest `last_run` any of them still holds: pass that. Without
+/// trimming, the log of a component removed often grows without bound.
+/// Tracked components stay tracked.
+///
+/// Returns `MidEcsStatus::Ok`, or `NullPointer`.
+///
+/// # Safety
+/// `world` must be a valid, non-null handle from `mid_ecs_world_new`.
+#[no_mangle]
+pub unsafe extern "C" fn mid_ecs_world_trim_removals(
+    world: *mut MidEcsWorld,
+    at_or_before: u32,
+) -> i32 {
+    ffi_guard(|| {
+        if world.is_null() {
+            return MidEcsStatus::NullPointer as i32;
+        }
+        let world = unsafe { &mut *world };
+        world.0.trim_removals(Tick::new(at_or_before));
+        MidEcsStatus::Ok as i32
+    })
+}
+
+/// Drops every logged removal (the C counterpart of
+/// `World::clear_removals`). Tracked components stay tracked.
+///
+/// Returns `MidEcsStatus::Ok`, or `NullPointer`.
+///
+/// # Safety
+/// `world` must be a valid, non-null handle from `mid_ecs_world_new`.
+#[no_mangle]
+pub unsafe extern "C" fn mid_ecs_world_clear_removals(world: *mut MidEcsWorld) -> i32 {
+    ffi_guard(|| {
+        if world.is_null() {
+            return MidEcsStatus::NullPointer as i32;
+        }
+        let world = unsafe { &mut *world };
+        world.0.clear_removals();
+        MidEcsStatus::Ok as i32
+    })
 }
 
 fn component_status(error: ComponentFfiError) -> i32 {
@@ -5302,6 +5983,1354 @@ mod tests {
             assert!(matching_ids(f.world, &[f.flag_b], &[]).is_empty());
             mid_ecs_commands_free(commands);
             mid_ecs_world_free(f.world);
+        }
+    }
+
+    // ── removal tracking (C API) ─────────────────────────────────────
+
+    const OK: i32 = MidEcsStatus::Ok as i32;
+    const NULL_POINTER: i32 = MidEcsStatus::NullPointer as i32;
+    const NOT_ALIVE: i32 = MidEcsStatus::NotAlive as i32;
+    const NOT_FOUND: i32 = MidEcsStatus::NotFound as i32;
+    const BUFFER_TOO_SMALL: i32 = MidEcsStatus::BufferTooSmall as i32;
+    const NOT_WRITABLE: i32 = MidEcsStatus::NotWritable as i32;
+    const ALREADY_PRESENT: i32 = MidEcsStatus::AlreadyPresent as i32;
+    const NOT_TRACKED: i32 = MidEcsStatus::NotTracked as i32;
+
+    /// Archetype-Core components for the removal tests: `RmHp` and `RmMp`
+    /// writable, `RmRo` read-only. `RmCn` lives in the Sparse Shell.
+    #[derive(
+        Debug, Clone, Copy, PartialEq, zerocopy::FromBytes, IntoBytes, KnownLayout, Immutable,
+    )]
+    #[repr(C)]
+    struct RmHp {
+        v: u32,
+    }
+
+    #[derive(
+        Debug, Clone, Copy, PartialEq, zerocopy::FromBytes, IntoBytes, KnownLayout, Immutable,
+    )]
+    #[repr(C)]
+    struct RmMp {
+        v: u32,
+    }
+
+    #[derive(Debug, Clone, Copy, PartialEq, IntoBytes, KnownLayout, Immutable)]
+    #[repr(C)]
+    struct RmRo {
+        v: u32,
+    }
+
+    #[derive(Debug, Clone, Copy, PartialEq, IntoBytes, KnownLayout, Immutable)]
+    #[repr(C)]
+    struct RmCn {
+        v: u32,
+    }
+
+    /// A world for the removal tests. Three entities:
+    /// `e[0]` = {Hp, Mp, Ro, Cn}, `e[1]` = {Hp, Cn}, `e[2]` = {Hp}.
+    /// The Archetype-Core ids are `hp = 0`, `mp = 1`, `ro = 2` and the
+    /// only Sparse-Shell id is `cn = 0`: the two spaces deliberately
+    /// collide numerically.
+    struct RmWorld {
+        ptr: *mut MidEcsWorld,
+        hp: u32,
+        mp: u32,
+        ro: u32,
+        cn: u32,
+        e: [u64; 3],
+    }
+
+    impl RmWorld {
+        fn new() -> Self {
+            let ptr = mid_ecs_world_new();
+            // SAFETY: `ptr` is non-null, just created, freed in `Drop`.
+            let w = unsafe { &mut (*ptr).0 };
+            let hp = w
+                .register_ffi_static_component_writable::<RmHp>("RmHp")
+                .as_u32();
+            let mp = w
+                .register_ffi_static_component_writable::<RmMp>("RmMp")
+                .as_u32();
+            let ro = w.register_ffi_static_component::<RmRo>("RmRo").as_u32();
+            let cn = w.register_ffi_component::<RmCn>("RmCn").as_u32();
+            let e0 = w.spawn();
+            let e1 = w.spawn();
+            let e2 = w.spawn();
+            w.insert_static(e0, RmHp { v: 1 });
+            w.insert_static(e0, RmMp { v: 1 });
+            w.insert_static(e0, RmRo { v: 1 });
+            w.insert(e0, RmCn { v: 1 });
+            w.insert_static(e1, RmHp { v: 2 });
+            w.insert(e1, RmCn { v: 2 });
+            w.insert_static(e2, RmHp { v: 3 });
+            assert_eq!((hp, mp, ro, cn), (0, 1, 2, 0));
+            Self {
+                ptr,
+                hp,
+                mp,
+                ro,
+                cn,
+                e: [e0.as_ffi(), e1.as_ffi(), e2.as_ffi()],
+            }
+        }
+
+        fn rust(&mut self) -> &mut World {
+            // SAFETY: `ptr` is a live handle owned by `self`.
+            unsafe { &mut (*self.ptr).0 }
+        }
+
+        fn tick(&self) -> u32 {
+            // SAFETY: `ptr` is a live handle owned by `self`.
+            unsafe { mid_ecs_world_change_tick(self.ptr) }
+        }
+
+        fn advance(&self) -> u32 {
+            // SAFETY: `ptr` is a live handle owned by `self`.
+            unsafe { mid_ecs_world_increment_change_tick(self.ptr) }
+        }
+
+        fn track_static(&self, id: u32) {
+            // SAFETY: `ptr` is a live handle owned by `self`.
+            assert_eq!(
+                unsafe { mid_ecs_world_static_component_track_removals(self.ptr, id) },
+                OK
+            );
+        }
+
+        fn track_sparse(&self, id: u32) {
+            // SAFETY: `ptr` is a live handle owned by `self`.
+            assert_eq!(
+                unsafe { mid_ecs_world_component_track_removals(self.ptr, id) },
+                OK
+            );
+        }
+
+        fn remove(&self, entity: u64, id: u32) -> i32 {
+            // SAFETY: `ptr` is a live handle owned by `self`.
+            unsafe { mid_ecs_world_static_component_remove(self.ptr, entity, id) }
+        }
+
+        fn despawn(&self, entity: u64) {
+            // SAFETY: `ptr` is a live handle owned by `self`.
+            assert_eq!(unsafe { mid_ecs_world_despawn(self.ptr, entity) }, OK);
+        }
+
+        fn static_count(&self, id: u32) -> i32 {
+            // SAFETY: `ptr` is a live handle owned by `self`.
+            unsafe { mid_ecs_world_static_component_removal_count(self.ptr, id) }
+        }
+
+        fn sparse_count(&self, id: u32) -> i32 {
+            // SAFETY: `ptr` is a live handle owned by `self`.
+            unsafe { mid_ecs_world_component_removal_count(self.ptr, id) }
+        }
+
+        /// `removed_since` the way a C caller drives it: count with a NULL
+        /// buffer, then fill a buffer of exactly that size, and check the
+        /// two calls agree.
+        fn since(&self, sparse: bool, id: u32, last_run: u32) -> Vec<u64> {
+            let call = |out: *mut u64, cap: usize| {
+                // SAFETY: `ptr` is a live handle; `out` is NULL or valid
+                // for `cap` elements (the caller below guarantees it).
+                unsafe {
+                    if sparse {
+                        mid_ecs_world_component_removed_since(self.ptr, id, last_run, out, cap)
+                    } else {
+                        mid_ecs_world_static_component_removed_since(
+                            self.ptr, id, last_run, out, cap,
+                        )
+                    }
+                }
+            };
+            let n = call(ptr::null_mut(), 0);
+            assert!(n >= 0, "removed_since returned status {n}");
+            let mut buf = vec![u64::MAX; n as usize];
+            assert_eq!(call(buf.as_mut_ptr(), buf.len()), n);
+            buf
+        }
+    }
+
+    impl Drop for RmWorld {
+        fn drop(&mut self) {
+            // SAFETY: `ptr` is the live handle `new` created, freed once.
+            unsafe { mid_ecs_world_free(self.ptr) };
+        }
+    }
+
+    #[test]
+    fn removal_tracking_is_per_component_idempotent_and_keeps_the_id_spaces_apart() {
+        let w = RmWorld::new();
+        // SAFETY: `w.ptr` is a live handle for this whole block.
+        unsafe {
+            for id in [w.hp, w.mp, w.ro] {
+                assert_eq!(mid_ecs_world_static_component_tracks_removals(w.ptr, id), 0);
+            }
+            assert_eq!(mid_ecs_world_component_tracks_removals(w.ptr, w.cn), 0);
+
+            assert_eq!(mid_ecs_world_static_component_track_removals(w.ptr, w.hp), OK);
+            assert_eq!(mid_ecs_world_static_component_tracks_removals(w.ptr, w.hp), 1);
+            assert_eq!(
+                mid_ecs_world_static_component_tracks_removals(w.ptr, w.mp),
+                0,
+                "tracking one component does not track another"
+            );
+            assert_eq!(
+                mid_ecs_world_component_tracks_removals(w.ptr, w.cn),
+                0,
+                "Archetype-Core id 0 is tracked; Sparse-Shell id 0 is a different component"
+            );
+
+            // Idempotent, and nothing logged yet.
+            assert_eq!(mid_ecs_world_static_component_track_removals(w.ptr, w.hp), OK);
+            assert_eq!(w.static_count(w.hp), 0);
+
+            // Tracking needs no writable registration: Ro is read-only.
+            assert_eq!(mid_ecs_world_static_component_track_removals(w.ptr, w.ro), OK);
+            assert_eq!(mid_ecs_world_static_component_tracks_removals(w.ptr, w.ro), 1);
+
+            assert_eq!(mid_ecs_world_component_track_removals(w.ptr, w.cn), OK);
+            assert_eq!(mid_ecs_world_component_tracks_removals(w.ptr, w.cn), 1);
+            assert_eq!(
+                mid_ecs_world_static_component_tracks_removals(w.ptr, w.mp),
+                0,
+                "tracking a Sparse-Shell id leaves the Archetype Core alone"
+            );
+        }
+    }
+
+    #[test]
+    fn removal_queries_distinguish_untracked_unknown_and_null() {
+        let w = RmWorld::new();
+        let mut buf = [u64::MAX; 4];
+        // SAFETY: `w.ptr` is a live handle; `buf` is valid for 4 elements.
+        unsafe {
+            // Registered but untracked: a count of 0, and a loud NotTracked
+            // for the list (nothing was ever recorded).
+            assert_eq!(w.static_count(w.mp), 0);
+            assert_eq!(
+                mid_ecs_world_static_component_removed_since(
+                    w.ptr,
+                    w.mp,
+                    0,
+                    buf.as_mut_ptr(),
+                    4
+                ),
+                NOT_TRACKED
+            );
+            assert_eq!(
+                mid_ecs_world_static_component_removed_since(w.ptr, w.mp, 0, ptr::null_mut(), 0),
+                NOT_TRACKED
+            );
+            assert_eq!(
+                mid_ecs_world_component_removed_since(w.ptr, w.cn, 0, buf.as_mut_ptr(), 4),
+                NOT_TRACKED
+            );
+            assert_eq!(buf, [u64::MAX; 4], "nothing written on NotTracked");
+
+            // An id this world never issued, in either space. `w.ro` (2) is
+            // a real Archetype-Core id but not a Sparse-Shell one.
+            for id in [9999, MID_ECS_INVALID_ID] {
+                assert_eq!(mid_ecs_world_static_component_track_removals(w.ptr, id), NOT_FOUND);
+                assert_eq!(mid_ecs_world_static_component_tracks_removals(w.ptr, id), NOT_FOUND);
+                assert_eq!(mid_ecs_world_static_component_removal_count(w.ptr, id), NOT_FOUND);
+                assert_eq!(
+                    mid_ecs_world_static_component_removed_since(
+                        w.ptr,
+                        id,
+                        0,
+                        ptr::null_mut(),
+                        0
+                    ),
+                    NOT_FOUND
+                );
+                assert_eq!(mid_ecs_world_component_track_removals(w.ptr, id), NOT_FOUND);
+                assert_eq!(mid_ecs_world_component_tracks_removals(w.ptr, id), NOT_FOUND);
+                assert_eq!(mid_ecs_world_component_removal_count(w.ptr, id), NOT_FOUND);
+                assert_eq!(
+                    mid_ecs_world_component_removed_since(w.ptr, id, 0, ptr::null_mut(), 0),
+                    NOT_FOUND
+                );
+            }
+            assert_eq!(mid_ecs_world_component_track_removals(w.ptr, w.ro), NOT_FOUND);
+            assert_eq!(mid_ecs_world_component_tracks_removals(w.ptr, w.ro), NOT_FOUND);
+
+            // A NULL world, for every function.
+            let null_w = ptr::null_mut::<MidEcsWorld>();
+            assert_eq!(mid_ecs_world_static_component_track_removals(null_w, 0), NULL_POINTER);
+            assert_eq!(mid_ecs_world_static_component_tracks_removals(null_w, 0), NULL_POINTER);
+            assert_eq!(mid_ecs_world_static_component_removal_count(null_w, 0), NULL_POINTER);
+            assert_eq!(
+                mid_ecs_world_static_component_removed_since(null_w, 0, 0, ptr::null_mut(), 0),
+                NULL_POINTER
+            );
+            assert_eq!(mid_ecs_world_component_track_removals(null_w, 0), NULL_POINTER);
+            assert_eq!(mid_ecs_world_component_tracks_removals(null_w, 0), NULL_POINTER);
+            assert_eq!(mid_ecs_world_component_removal_count(null_w, 0), NULL_POINTER);
+            assert_eq!(
+                mid_ecs_world_component_removed_since(null_w, 0, 0, ptr::null_mut(), 0),
+                NULL_POINTER
+            );
+            assert_eq!(mid_ecs_world_trim_removals(null_w, 0), NULL_POINTER);
+            assert_eq!(mid_ecs_world_clear_removals(null_w), NULL_POINTER);
+        }
+    }
+
+    #[test]
+    fn removals_are_recorded_from_every_c_removal_path_and_match_the_rust_view() {
+        let mut w = RmWorld::new();
+        w.track_static(w.hp);
+        w.track_static(w.mp);
+        w.track_sparse(w.cn);
+        let t0 = w.tick();
+        w.advance();
+        let [e0, e1, e2] = w.e;
+
+        // A direct removal.
+        assert_eq!(w.remove(e0, w.hp), OK);
+        assert_eq!(w.since(false, w.hp, t0), vec![e0]);
+
+        // A queued removal records when it runs, not when it is queued.
+        // SAFETY: `w.ptr` is live; `q` is a fresh queue freed below.
+        unsafe {
+            let q = mid_ecs_commands_new();
+            assert_eq!(mid_ecs_commands_static_component_remove(q, w.ptr, e1, w.hp), OK);
+            assert_eq!(w.since(false, w.hp, t0), vec![e0], "queued, not yet run");
+            assert_eq!(mid_ecs_commands_apply(q, w.ptr, ptr::null_mut(), 0), 0);
+            mid_ecs_commands_free(q);
+        }
+        assert_eq!(w.since(false, w.hp, t0), vec![e0, e1]);
+
+        // A list removal records each member.
+        let ids = [w.mp];
+        // SAFETY: `w.ptr` is live; `ids` is valid for 1 element.
+        assert_eq!(
+            unsafe { mid_ecs_world_static_component_remove_many(w.ptr, e0, ids.as_ptr(), 1) },
+            OK
+        );
+        assert_eq!(w.since(false, w.mp, t0), vec![e0]);
+
+        // A despawn records the components the entity still had, in both
+        // storages: e2's Hp, and e1's Cn (e1's Hp is already gone, so no
+        // second Hp record for it).
+        w.despawn(e2);
+        w.despawn(e1);
+        assert_eq!(w.since(false, w.hp, t0), vec![e0, e1, e2]);
+        assert_eq!(w.since(true, w.cn, t0), vec![e1]);
+
+        // The Rust API reads the very same log.
+        let rust: Vec<u64> = w
+            .rust()
+            .removed_since::<RmHp>(&crate::tick::ChangeTracker::new())
+            .map(Entity::as_ffi)
+            .collect();
+        assert_eq!(rust, w.since(false, w.hp, 0));
+        assert_eq!(w.rust().removal_count::<RmHp>() as i32, w.static_count(w.hp));
+        assert_eq!(w.rust().removal_count::<RmCn>() as i32, w.sparse_count(w.cn));
+    }
+
+    #[test]
+    fn refused_and_no_op_removals_record_nothing() {
+        let mut w = RmWorld::new();
+        for id in [w.hp, w.mp, w.ro] {
+            w.track_static(id);
+        }
+        w.track_sparse(w.cn);
+        w.advance();
+        let [e0, e1, e2] = w.e;
+
+        // SAFETY: `w.ptr` is live; every pointer below is valid for its length.
+        unsafe {
+            // The entity lacks the component.
+            assert_eq!(w.remove(e2, w.mp), NOT_FOUND);
+            // A component registered read-only cannot be removed from C.
+            assert_eq!(w.remove(e0, w.ro), NOT_WRITABLE);
+            // An id this world never issued.
+            assert_eq!(w.remove(e0, 9999), NOT_FOUND);
+            // A handle that is not alive.
+            assert_eq!(w.remove(u64::MAX, w.hp), NOT_ALIVE);
+
+            // All-or-nothing lists: one bad member refuses the whole list,
+            // so the good members record nothing either.
+            let with_read_only = [w.hp, w.mp, w.ro];
+            assert_eq!(
+                mid_ecs_world_static_component_remove_many(w.ptr, e0, with_read_only.as_ptr(), 3),
+                NOT_WRITABLE
+            );
+            let with_absent = [w.hp, w.mp];
+            assert!(
+                mid_ecs_world_static_component_remove_many(w.ptr, e1, with_absent.as_ptr(), 2) < 0,
+                "e1 has no Mp"
+            );
+            let duplicate = [w.hp, w.hp];
+            assert!(
+                mid_ecs_world_static_component_remove_many(w.ptr, e0, duplicate.as_ptr(), 2) < 0
+            );
+
+            // Replacing a value, and a refused insert, are not removals.
+            let bytes = 7u32.to_ne_bytes();
+            assert_eq!(
+                mid_ecs_world_static_component_write(w.ptr, e0, w.hp, bytes.as_ptr(), 4),
+                OK
+            );
+            assert_eq!(
+                mid_ecs_world_static_component_insert(w.ptr, e0, w.hp, bytes.as_ptr(), 4),
+                ALREADY_PRESENT
+            );
+        }
+        for id in [w.hp, w.mp, w.ro] {
+            assert_eq!(w.static_count(id), 0, "static component {id}");
+        }
+        assert_eq!(w.sparse_count(w.cn), 0);
+        // And the refused ones really left the data alone.
+        assert!(w.rust().has_static::<RmMp>(crate::world::Entity::from_ffi(e0)));
+        assert!(w.rust().has_static::<RmHp>(crate::world::Entity::from_ffi(e1)));
+    }
+
+    #[test]
+    fn removed_since_windows_by_last_run_and_reports_each_removal_of_a_reused_entity() {
+        let mut w = RmWorld::new();
+        w.track_static(w.hp);
+        let t0 = w.tick();
+        let e0 = w.e[0];
+
+        let t_first = w.advance();
+        assert_eq!(w.remove(e0, w.hp), OK);
+        w.advance();
+        w.rust()
+            .insert_static(crate::world::Entity::from_ffi(e0), RmHp { v: 9 });
+        let t_second = w.advance();
+        assert_eq!(w.remove(e0, w.hp), OK);
+
+        assert_eq!(w.since(false, w.hp, 0), vec![e0, e0], "once per removal");
+        assert_eq!(w.since(false, w.hp, t0), vec![e0, e0]);
+        assert_eq!(
+            w.since(false, w.hp, t_first),
+            vec![e0],
+            "a removal in the same tick as last_run is not newer"
+        );
+        assert_eq!(w.since(false, w.hp, t_first + 1), vec![e0]);
+        assert_eq!(w.since(false, w.hp, t_second), Vec::<u64>::new());
+        assert_eq!(w.since(false, w.hp, w.tick()), Vec::<u64>::new());
+    }
+
+    #[test]
+    fn trim_and_clear_drop_entries_but_keep_components_tracked() {
+        let mut w = RmWorld::new();
+        w.track_static(w.hp);
+        w.track_static(w.mp);
+        let [e0, e1, e2] = w.e;
+        let ids = [w.mp];
+
+        w.advance(); // tick 2
+        assert_eq!(w.remove(e0, w.hp), OK);
+        let t3 = w.advance(); // tick 3
+        assert_eq!(w.remove(e1, w.hp), OK);
+        // SAFETY: `w.ptr` is live; `ids` is valid for 1 element.
+        assert_eq!(
+            unsafe { mid_ecs_world_static_component_remove_many(w.ptr, e0, ids.as_ptr(), 1) },
+            OK
+        );
+        w.advance(); // tick 4
+        w.despawn(e2);
+        assert_eq!((w.static_count(w.hp), w.static_count(w.mp)), (3, 1));
+
+        // Trim as of tick 3: everything not newer than 3 goes, in every
+        // tracked component's log.
+        // SAFETY: `w.ptr` is a live handle.
+        assert_eq!(unsafe { mid_ecs_world_trim_removals(w.ptr, t3) }, OK);
+        assert_eq!((w.static_count(w.hp), w.static_count(w.mp)), (1, 0));
+        assert_eq!(w.since(false, w.hp, 0), vec![e2]);
+
+        // SAFETY: `w.ptr` is a live handle.
+        assert_eq!(unsafe { mid_ecs_world_clear_removals(w.ptr) }, OK);
+        assert_eq!((w.static_count(w.hp), w.static_count(w.mp)), (0, 0));
+        // SAFETY: `w.ptr` is a live handle.
+        unsafe {
+            assert_eq!(mid_ecs_world_static_component_tracks_removals(w.ptr, w.hp), 1);
+            assert_eq!(mid_ecs_world_static_component_tracks_removals(w.ptr, w.mp), 1);
+        }
+        // Still recording after a clear.
+        w.rust()
+            .insert_static(crate::world::Entity::from_ffi(e1), RmHp { v: 5 });
+        w.advance();
+        assert_eq!(w.remove(e1, w.hp), OK);
+        assert_eq!(w.since(false, w.hp, 0), vec![e1]);
+    }
+
+    #[test]
+    fn removed_since_follows_the_buffer_conventions() {
+        let w = RmWorld::new();
+        w.track_static(w.hp);
+        w.advance();
+        let [e0, e1, e2] = w.e;
+        assert_eq!(w.remove(e0, w.hp), OK);
+        assert_eq!(w.remove(e1, w.hp), OK);
+        w.despawn(e2);
+
+        // SAFETY: `w.ptr` is live; every buffer is valid for its capacity.
+        unsafe {
+            assert_eq!(
+                mid_ecs_world_static_component_removed_since(w.ptr, w.hp, 0, ptr::null_mut(), 0),
+                3,
+                "a NULL buffer queries the count"
+            );
+
+            let mut small = [u64::MAX; 2];
+            assert_eq!(
+                mid_ecs_world_static_component_removed_since(
+                    w.ptr,
+                    w.hp,
+                    0,
+                    small.as_mut_ptr(),
+                    2
+                ),
+                BUFFER_TOO_SMALL
+            );
+            assert_eq!(small, [u64::MAX; 2], "no partial fill");
+
+            let mut exact = [u64::MAX; 3];
+            assert_eq!(
+                mid_ecs_world_static_component_removed_since(
+                    w.ptr,
+                    w.hp,
+                    0,
+                    exact.as_mut_ptr(),
+                    3
+                ),
+                3
+            );
+            assert_eq!(exact, [e0, e1, e2], "oldest first");
+
+            let mut roomy = [u64::MAX; 5];
+            assert_eq!(
+                mid_ecs_world_static_component_removed_since(
+                    w.ptr,
+                    w.hp,
+                    0,
+                    roomy.as_mut_ptr(),
+                    5
+                ),
+                3
+            );
+            assert_eq!(&roomy[..3], &[e0, e1, e2]);
+            assert_eq!(&roomy[3..], &[u64::MAX; 2], "only the count is written");
+
+            // An empty answer is 0, with a zero-capacity buffer too.
+            let after = w.tick();
+            let mut none = [u64::MAX; 1];
+            assert_eq!(
+                mid_ecs_world_static_component_removed_since(
+                    w.ptr,
+                    w.hp,
+                    after,
+                    none.as_mut_ptr(),
+                    0
+                ),
+                0
+            );
+            assert_eq!(none, [u64::MAX]);
+        }
+    }
+
+    #[test]
+    fn sparse_shell_removals_are_tracked_apart_from_the_archetype_core() {
+        let mut w = RmWorld::new();
+        w.track_sparse(w.cn);
+        w.advance();
+        let [e0, e1, _] = w.e;
+
+        // A Sparse-Shell removal through the Rust API shows up in C...
+        assert!(w
+            .rust()
+            .remove::<RmCn>(crate::world::Entity::from_ffi(e0))
+            .is_some());
+        assert_eq!(w.since(true, w.cn, 0), vec![e0]);
+        // ...and does not leak into the Archetype-Core component that
+        // happens to share the numeric id.
+        assert_eq!(w.static_count(w.hp), 0);
+        // SAFETY: `w.ptr` is a live handle.
+        assert_eq!(
+            unsafe { mid_ecs_world_static_component_tracks_removals(w.ptr, w.hp) },
+            0
+        );
+
+        // Track the Archetype-Core side too; each log keeps its own entries.
+        w.track_static(w.hp);
+        w.advance();
+        assert!(w
+            .rust()
+            .remove_static::<RmHp>(crate::world::Entity::from_ffi(e1))
+            .is_some());
+        assert_eq!(w.since(false, w.hp, 0), vec![e1]);
+        assert_eq!(w.since(true, w.cn, 0), vec![e0]);
+    }
+
+    // ── filtered change queries (C API) ──────────────────────────────
+
+    use std::collections::HashSet;
+
+    use crate::data_filter::DataFilter;
+    use crate::query_data::{Added, Changed};
+    use crate::tick::ChangeTracker;
+
+    const INVALID_ARGUMENT: i32 = MidEcsStatus::InvalidArgument as i32;
+
+    #[derive(
+        Debug, Clone, Copy, PartialEq, zerocopy::FromBytes, IntoBytes, KnownLayout, Immutable,
+    )]
+    #[repr(C)]
+    struct QA {
+        v: u32,
+    }
+
+    #[derive(
+        Debug, Clone, Copy, PartialEq, zerocopy::FromBytes, IntoBytes, KnownLayout, Immutable,
+    )]
+    #[repr(C)]
+    struct QB {
+        v: u32,
+    }
+
+    #[derive(
+        Debug, Clone, Copy, PartialEq, zerocopy::FromBytes, IntoBytes, KnownLayout, Immutable,
+    )]
+    #[repr(C)]
+    struct QC {
+        v: u32,
+    }
+
+    /// Used only through the typed API: never registered for FFI.
+    #[derive(Debug, Clone, Copy, PartialEq)]
+    struct QD(u32);
+
+    /// A filter described with owned lists, so the raw `MidEcsRowFilter`
+    /// can borrow from it for one call.
+    #[derive(Default, Clone)]
+    struct Q {
+        with: Vec<u32>,
+        without: Vec<u32>,
+        any_of: Vec<u32>,
+        all_added: Vec<u32>,
+        all_changed: Vec<u32>,
+        any_added: Vec<u32>,
+        any_changed: Vec<u32>,
+    }
+
+    impl Q {
+        fn raw(&self) -> MidEcsRowFilter {
+            MidEcsRowFilter {
+                with_ids: self.with.as_ptr(),
+                with_len: self.with.len(),
+                without_ids: self.without.as_ptr(),
+                without_len: self.without.len(),
+                any_of_ids: self.any_of.as_ptr(),
+                any_of_len: self.any_of.len(),
+                all_added_ids: self.all_added.as_ptr(),
+                all_added_len: self.all_added.len(),
+                all_changed_ids: self.all_changed.as_ptr(),
+                all_changed_len: self.all_changed.len(),
+                any_added_ids: self.any_added.as_ptr(),
+                any_added_len: self.any_added.len(),
+                any_changed_ids: self.any_changed.as_ptr(),
+                any_changed_len: self.any_changed.len(),
+            }
+        }
+    }
+
+    const SENTINEL: MidEcsMatchedRow = MidEcsMatchedRow {
+        entity: u64::MAX,
+        archetype_id: u32::MAX,
+        row: u32::MAX,
+    };
+
+    /// A world with `QA`, `QB`, `QC` registered for FFI. `with_entities`
+    /// builds six entities (`e[0]`, `e[1]` in `{A}`, `e[2]`, `e[3]` in
+    /// `{A, B}`, `e[4]` in `{B}`, `e[5]` in `{A, B, C}`) and then advances
+    /// the tick, so a tracker that reads `now()` afterwards sees nothing.
+    struct QWorld {
+        ptr: *mut MidEcsWorld,
+        a: u32,
+        b: u32,
+        c: u32,
+        e: Vec<Entity>,
+    }
+
+    impl QWorld {
+        fn new(with_entities: bool) -> Self {
+            let ptr = mid_ecs_world_new();
+            // SAFETY: `ptr` is non-null, just created, freed in `Drop`.
+            let w = unsafe { &mut (*ptr).0 };
+            let a = w.register_ffi_static_component::<QA>("QA").as_u32();
+            let b = w.register_ffi_static_component::<QB>("QB").as_u32();
+            let c = w.register_ffi_static_component::<QC>("QC").as_u32();
+            let mut e = Vec::new();
+            if with_entities {
+                for i in 0..6u32 {
+                    let en = w.spawn();
+                    if i != 4 {
+                        w.insert_static(en, QA { v: i });
+                    }
+                    if i >= 2 {
+                        w.insert_static(en, QB { v: i });
+                    }
+                    if i == 5 {
+                        w.insert_static(en, QC { v: i });
+                    }
+                    e.push(en);
+                }
+                w.increment_change_tick();
+            }
+            Self { ptr, a, b, c, e }
+        }
+
+        fn rust(&mut self) -> &mut World {
+            // SAFETY: `ptr` is a live handle owned by `self`.
+            unsafe { &mut (*self.ptr).0 }
+        }
+
+        fn now(&self) -> u32 {
+            // SAFETY: `ptr` is a live handle owned by `self`.
+            unsafe { mid_ecs_world_change_tick(self.ptr) }
+        }
+
+        fn advance(&self) -> u32 {
+            // SAFETY: `ptr` is a live handle owned by `self`.
+            unsafe { mid_ecs_world_increment_change_tick(self.ptr) }
+        }
+
+        fn write_a(&mut self, i: usize, v: u32) {
+            let e = self.e[i];
+            self.rust().get_static_mut::<QA>(e).expect("has QA").v = v;
+        }
+
+        fn write_b(&mut self, i: usize, v: u32) {
+            let e = self.e[i];
+            self.rust().get_static_mut::<QB>(e).expect("has QB").v = v;
+        }
+
+        fn write_c(&mut self, i: usize, v: u32) {
+            let e = self.e[i];
+            self.rust().get_static_mut::<QC>(e).expect("has QC").v = v;
+        }
+
+        /// Runs the C query the way a C caller does (count with a NULL
+        /// buffer, then fill one of exactly that size) and checks the
+        /// two calls agree and that every row names the entity that
+        /// really sits there.
+        fn query(&self, last_run: u32, q: &Q) -> Vec<MidEcsMatchedRow> {
+            let f = q.raw();
+            // SAFETY: `ptr` is live; `f` borrows from `q`, which outlives the call.
+            let n = unsafe {
+                mid_ecs_world_static_query_since(self.ptr, last_run, &f, ptr::null_mut(), 0)
+            };
+            assert!(n >= 0, "query_since returned status {n}");
+            let mut buf = vec![SENTINEL; n as usize];
+            // SAFETY: as above; `buf` is valid for `n` elements.
+            let got = unsafe {
+                mid_ecs_world_static_query_since(self.ptr, last_run, &f, buf.as_mut_ptr(), buf.len())
+            };
+            assert_eq!(got, n);
+            for pair in buf.windows(2) {
+                assert!(
+                    pair[0].archetype_id < pair[1].archetype_id
+                        || (pair[0].archetype_id == pair[1].archetype_id
+                            && pair[0].row < pair[1].row),
+                    "rows must be ordered by archetype, then ascending row: {pair:?}"
+                );
+            }
+            for m in &buf {
+                assert_eq!(self.entity_at(m.archetype_id, m.row), m.entity, "{m:?}");
+            }
+            buf
+        }
+
+        /// The entity at `(archetype, row)`, read through whichever of the
+        /// three components that archetype holds.
+        fn entity_at(&self, archetype: u32, row: u32) -> u64 {
+            for id in [self.a, self.b, self.c] {
+                // SAFETY: `ptr` is live; a NULL buffer queries the count.
+                let n = unsafe {
+                    mid_ecs_world_static_component_entity_ids(
+                        self.ptr,
+                        archetype,
+                        id,
+                        ptr::null_mut(),
+                        0,
+                    )
+                };
+                if n >= 0 {
+                    let mut ids = vec![0u64; n as usize];
+                    // SAFETY: `ids` is valid for `n` elements.
+                    let got = unsafe {
+                        mid_ecs_world_static_component_entity_ids(
+                            self.ptr,
+                            archetype,
+                            id,
+                            ids.as_mut_ptr(),
+                            ids.len(),
+                        )
+                    };
+                    assert_eq!(got, n);
+                    return ids[row as usize];
+                }
+            }
+            panic!("no component of archetype {archetype} found");
+        }
+
+        fn entities(&self, last_run: u32, q: &Q) -> Vec<u64> {
+            let mut v: Vec<u64> = self.query(last_run, q).iter().map(|m| m.entity).collect();
+            v.sort_unstable();
+            v
+        }
+    }
+
+    impl Drop for QWorld {
+        fn drop(&mut self) {
+            // SAFETY: `ptr` is the live handle `new` created, freed once.
+            unsafe { mid_ecs_world_free(self.ptr) };
+        }
+    }
+
+    fn ffi_set(entities: &[Entity]) -> Vec<u64> {
+        let mut v: Vec<u64> = entities.iter().map(|e| e.as_ffi()).collect();
+        v.sort_unstable();
+        v
+    }
+
+    #[test]
+    fn since_added_finds_new_entities_across_archetypes_with_aligned_rows() {
+        let mut w = QWorld::new(true);
+        let t0 = w.now();
+        w.advance();
+        let n1 = w.rust().spawn();
+        w.rust().insert_static(n1, QA { v: 70 });
+        let n2 = w.rust().spawn();
+        w.rust().insert_static(n2, QA { v: 71 });
+        w.rust().insert_static(n2, QB { v: 72 });
+
+        let added_a = Q {
+            all_added: vec![w.a],
+            ..Q::default()
+        };
+        let rows = w.query(t0, &added_a);
+        assert_eq!(rows.len(), 2);
+        let archetypes: HashSet<u32> = rows.iter().map(|m| m.archetype_id).collect();
+        assert_eq!(archetypes.len(), 2, "one row in {{A}}, one in {{A, B}}");
+        for m in &rows {
+            let value = w
+                .rust()
+                .get_static::<QA>(Entity::from_ffi(m.entity))
+                .expect("has QA")
+                .v;
+            assert!(value == 70 || value == 71, "row {m:?} holds {value}");
+        }
+        assert_eq!(w.entities(t0, &added_a), ffi_set(&[n1, n2]));
+
+        let added_b = Q {
+            all_added: vec![w.b],
+            ..Q::default()
+        };
+        assert_eq!(w.entities(t0, &added_b), ffi_set(&[n2]));
+        assert_eq!(w.entities(w.now(), &added_a), Vec::<u64>::new());
+    }
+
+    #[test]
+    fn since_changed_includes_inserts_and_mutations_but_added_only_inserts() {
+        let mut w = QWorld::new(true);
+        let t0 = w.now();
+        w.advance();
+        w.write_a(1, 100);
+        w.write_a(2, 101);
+        let n = w.rust().spawn();
+        w.rust().insert_static(n, QA { v: 5 });
+        let e = w.e.clone();
+
+        let changed = Q {
+            all_changed: vec![w.a],
+            ..Q::default()
+        };
+        assert_eq!(w.entities(t0, &changed), ffi_set(&[e[1], e[2], n]));
+        let added = Q {
+            all_added: vec![w.a],
+            ..Q::default()
+        };
+        assert_eq!(
+            w.entities(t0, &added),
+            ffi_set(&[n]),
+            "a mutation is not an addition"
+        );
+    }
+
+    #[test]
+    fn all_terms_intersect_and_rule_out_archetypes_lacking_a_component() {
+        let mut w = QWorld::new(true);
+        let t0 = w.now();
+        w.advance();
+        w.write_a(2, 1);
+        w.write_b(2, 1); // e[2] {A, B}: both changed
+        w.write_a(3, 1); // e[3] {A, B}: only A
+        w.write_a(1, 1); // e[1] {A}: A changed, no B at all
+        let e = w.e.clone();
+
+        let both = Q {
+            all_changed: vec![w.a, w.b],
+            ..Q::default()
+        };
+        assert_eq!(w.entities(t0, &both), ffi_set(&[e[2]]));
+
+        // Added and Changed combine: everything here was inserted before t0,
+        // so nothing is Added, however much changed.
+        let mixed = Q {
+            all_added: vec![w.a],
+            all_changed: vec![w.b],
+            ..Q::default()
+        };
+        assert_eq!(w.entities(t0, &mixed), Vec::<u64>::new());
+        let n = w.rust().spawn();
+        w.rust().insert_static(n, QA { v: 1 });
+        w.rust().insert_static(n, QB { v: 1 });
+        assert_eq!(w.entities(t0, &mixed), ffi_set(&[n]));
+    }
+
+    #[test]
+    fn any_terms_union_and_a_member_the_archetype_lacks_counts_as_false() {
+        let mut w = QWorld::new(true);
+        let t0 = w.now();
+        w.advance();
+        w.write_a(1, 1); // {A}
+        w.write_b(4, 1); // {B}
+        w.write_b(3, 1); // {A, B}, via B
+        let e = w.e.clone();
+
+        let either = Q {
+            any_changed: vec![w.a, w.b],
+            ..Q::default()
+        };
+        assert_eq!(w.entities(t0, &either), ffi_set(&[e[1], e[3], e[4]]));
+
+        // An archetype holding none of the listed components has no row.
+        let only_c = Q {
+            any_changed: vec![w.c],
+            ..Q::default()
+        };
+        assert_eq!(w.entities(t0, &only_c), Vec::<u64>::new());
+        w.write_c(5, 1);
+        assert_eq!(w.entities(t0, &only_c), ffi_set(&[e[5]]));
+
+        // any_added and any_changed form ONE group.
+        let n = w.rust().spawn();
+        w.rust().insert_static(n, QA { v: 9 });
+        let mixed = Q {
+            any_added: vec![w.a],
+            any_changed: vec![w.b],
+            ..Q::default()
+        };
+        // n is Added in A; e[3] and e[4] have a changed B. e[1] has a changed A
+        // that is not an Added one, and e[5] has only a changed C.
+        assert_eq!(w.entities(t0, &mixed), ffi_set(&[n, e[3], e[4]]));
+
+        // Two members of the same any_added list both count, including when
+        // they qualify different rows of one archetype: e[4] ({B}) gains an A
+        // and e[0] ({A}) gains a B, so both land in {A, B}, each with exactly
+        // one Added member.
+        let m = w.rust().spawn();
+        w.rust().insert_static(m, QB { v: 9 });
+        w.rust().insert_static(e[4], QA { v: 9 });
+        w.rust().insert_static(e[0], QB { v: 9 });
+        let two_added = Q {
+            any_added: vec![w.a, w.b],
+            ..Q::default()
+        };
+        assert_eq!(w.entities(t0, &two_added), ffi_set(&[n, m, e[4], e[0]]));
+    }
+
+    #[test]
+    fn the_all_and_any_groups_combine() {
+        let mut w = QWorld::new(true);
+        let t0 = w.now();
+        w.advance();
+        w.write_a(2, 1);
+        w.write_b(2, 1); // {A, B}: A and B changed
+        w.write_a(3, 1); // {A, B}: A changed, neither B nor C
+        w.write_a(5, 1);
+        w.write_c(5, 1); // {A, B, C}: A and C changed
+        w.write_a(0, 1); // {A}: A changed, but the archetype holds no B or C
+        w.write_b(4, 1); // {B}: B changed, but no A
+        let e = w.e.clone();
+        let q = Q {
+            all_changed: vec![w.a],
+            any_changed: vec![w.b, w.c],
+            ..Q::default()
+        };
+        assert_eq!(w.entities(t0, &q), ffi_set(&[e[2], e[5]]));
+    }
+
+    #[test]
+    fn structural_lists_compose_with_the_change_terms() {
+        let mut w = QWorld::new(true);
+        let t0 = w.now();
+        w.advance();
+        for i in [0, 2, 5] {
+            w.write_a(i, 1);
+        }
+        let e = w.e.clone();
+        let base = Q {
+            all_changed: vec![w.a],
+            ..Q::default()
+        };
+        assert_eq!(w.entities(t0, &base), ffi_set(&[e[0], e[2], e[5]]));
+        let q = |f: &dyn Fn(&mut Q)| {
+            let mut q = base.clone();
+            f(&mut q);
+            q
+        };
+        assert_eq!(
+            w.entities(t0, &q(&|q| q.with = vec![w.b])),
+            ffi_set(&[e[2], e[5]])
+        );
+        assert_eq!(
+            w.entities(t0, &q(&|q| q.without = vec![w.b])),
+            ffi_set(&[e[0]])
+        );
+        assert_eq!(
+            w.entities(t0, &q(&|q| {
+                q.with = vec![w.b];
+                q.without = vec![w.c];
+            })),
+            ffi_set(&[e[2]])
+        );
+        assert_eq!(
+            w.entities(t0, &q(&|q| q.any_of = vec![w.c])),
+            ffi_set(&[e[5]])
+        );
+        // The structural lists keep their lenient rule for unknown ids.
+        assert_eq!(
+            w.entities(t0, &q(&|q| q.with = vec![9999])),
+            Vec::<u64>::new()
+        );
+        assert_eq!(
+            w.entities(t0, &q(&|q| q.without = vec![9999])),
+            ffi_set(&[e[0], e[2], e[5]])
+        );
+    }
+
+    #[test]
+    fn the_window_follows_last_run_and_zero_sees_everything() {
+        let mut w = QWorld::new(true);
+        let t0 = w.now();
+        let t1 = w.advance();
+        w.write_a(1, 1);
+        let q = Q {
+            all_changed: vec![w.a],
+            ..Q::default()
+        };
+        let e1 = w.e[1].as_ffi();
+        assert_eq!(w.entities(t0, &q), vec![e1]);
+        assert_eq!(
+            w.entities(t1, &q),
+            Vec::<u64>::new(),
+            "a change in the same tick as last_run is not newer"
+        );
+        assert_eq!(w.entities(0, &q).len(), 5, "a fresh tracker sees every A row");
+    }
+
+    #[test]
+    fn errors_are_reported_before_anything_is_written() {
+        let mut w = QWorld::new(true);
+        // An id that exists in the Archetype Core but was never registered
+        // for FFI: only the typed API has seen `QD`.
+        let n = w.rust().spawn();
+        w.rust().insert_static(n, QD(1));
+        let qd_id = (0..16u32)
+            .find(|&i| {
+                w.rust()
+                    .archetypes
+                    .type_id_of(ComponentId::from_u32(i))
+                    == Some(std::any::TypeId::of::<QD>())
+            })
+            .expect("QD was issued an id");
+        assert!(!w.rust().archetypes.is_ffi_registered(ComponentId::from_u32(qd_id)));
+
+        let ok = Q {
+            all_changed: vec![w.a],
+            ..Q::default()
+        };
+        let mut out = [SENTINEL; 4];
+        let mut call = |last_run: u32, q: &Q| {
+            let f = q.raw();
+            // SAFETY: `w.ptr` is live; `f` borrows from `q`; `out` is valid for 4.
+            unsafe {
+                mid_ecs_world_static_query_since(w.ptr, last_run, &f, out.as_mut_ptr(), 4)
+            }
+        };
+
+        // NotFound: an id in any of the four change lists.
+        for id in [9999, MID_ECS_INVALID_ID, qd_id] {
+            for q in [
+                Q { all_added: vec![id], ..ok.clone() },
+                Q { all_changed: vec![w.a, id], ..Q::default() },
+                Q { any_added: vec![id], ..ok.clone() },
+                Q { any_changed: vec![w.a, id], ..ok.clone() },
+            ] {
+                assert_eq!(call(0, &q), NOT_FOUND, "id {id}");
+            }
+        }
+        // InvalidArgument: no change term, even with structural lists.
+        assert_eq!(call(0, &Q::default()), INVALID_ARGUMENT);
+        assert_eq!(
+            call(0, &Q { with: vec![w.a], without: vec![w.b], any_of: vec![w.c], ..Q::default() }),
+            INVALID_ARGUMENT
+        );
+        assert_eq!(out, [SENTINEL; 4], "nothing written on an error");
+
+        // NullPointer: world, filter, and a NULL list with a nonzero length.
+        let f = ok.raw();
+        // SAFETY: the NULL cases are the documented ones; `f` is valid.
+        unsafe {
+            assert_eq!(
+                mid_ecs_world_static_query_since(ptr::null(), 0, &f, ptr::null_mut(), 0),
+                NULL_POINTER
+            );
+            assert_eq!(
+                mid_ecs_world_static_query_since(w.ptr, 0, ptr::null(), ptr::null_mut(), 0),
+                NULL_POINTER
+            );
+            for broken in 0..7 {
+                let mut g = f;
+                match broken {
+                    0 => (g.with_ids, g.with_len) = (ptr::null(), 1),
+                    1 => (g.without_ids, g.without_len) = (ptr::null(), 1),
+                    2 => (g.any_of_ids, g.any_of_len) = (ptr::null(), 1),
+                    3 => (g.all_added_ids, g.all_added_len) = (ptr::null(), 1),
+                    4 => (g.all_changed_ids, g.all_changed_len) = (ptr::null(), 1),
+                    5 => (g.any_added_ids, g.any_added_len) = (ptr::null(), 1),
+                    _ => (g.any_changed_ids, g.any_changed_len) = (ptr::null(), 1),
+                }
+                assert_eq!(
+                    mid_ecs_world_static_query_since(w.ptr, 0, &g, ptr::null_mut(), 0),
+                    NULL_POINTER,
+                    "list {broken}"
+                );
+            }
+            // NULL with length 0 is an empty list, not an error.
+            let mut g = f;
+            g.with_ids = ptr::null();
+            g.with_len = 0;
+            assert!(mid_ecs_world_static_query_since(w.ptr, 0, &g, ptr::null_mut(), 0) >= 0);
+        }
+    }
+
+    #[test]
+    fn query_since_follows_the_buffer_conventions() {
+        let mut w = QWorld::new(true);
+        let t0 = w.now();
+        w.advance();
+        for i in [0, 1, 2] {
+            w.write_a(i, 1);
+        }
+        let q = Q {
+            all_changed: vec![w.a],
+            ..Q::default()
+        };
+        let f = q.raw();
+        // SAFETY: `w.ptr` is live; `f` borrows from `q`; every buffer is valid for its capacity.
+        unsafe {
+            assert_eq!(
+                mid_ecs_world_static_query_since(w.ptr, t0, &f, ptr::null_mut(), 0),
+                3,
+                "a NULL buffer queries the count"
+            );
+            let mut small = [SENTINEL; 2];
+            assert_eq!(
+                mid_ecs_world_static_query_since(w.ptr, t0, &f, small.as_mut_ptr(), 2),
+                BUFFER_TOO_SMALL
+            );
+            assert_eq!(small, [SENTINEL; 2], "no partial fill");
+            let mut roomy = [SENTINEL; 5];
+            assert_eq!(
+                mid_ecs_world_static_query_since(w.ptr, t0, &f, roomy.as_mut_ptr(), 5),
+                3
+            );
+            assert!(roomy[..3].iter().all(|m| *m != SENTINEL));
+            assert_eq!(&roomy[3..], &[SENTINEL; 2], "only the count is written");
+            // An empty answer is 0, even into a zero-capacity buffer.
+            let mut none = [SENTINEL; 1];
+            assert_eq!(
+                mid_ecs_world_static_query_since(w.ptr, w.now(), &f, none.as_mut_ptr(), 0),
+                0
+            );
+            assert_eq!(none, [SENTINEL]);
+        }
+    }
+
+    #[test]
+    fn a_component_listed_twice_does_not_duplicate_rows() {
+        let mut w = QWorld::new(true);
+        let t0 = w.now();
+        w.advance();
+        w.write_a(2, 1);
+        let q = Q {
+            all_changed: vec![w.a, w.a],
+            any_changed: vec![w.a, w.a, w.b],
+            ..Q::default()
+        };
+        assert_eq!(w.query(t0, &q).len(), 1);
+    }
+
+    /// xorshift64: enough randomness for a history generator.
+    struct Xs(u64);
+
+    impl Xs {
+        fn next(&mut self, n: usize) -> usize {
+            self.0 ^= self.0 << 13;
+            self.0 ^= self.0 >> 7;
+            self.0 ^= self.0 << 17;
+            (self.0 % n as u64) as usize
+        }
+    }
+
+    #[test]
+    fn the_c_query_matches_the_typed_rust_queries_over_a_random_history() {
+        let mut w = QWorld::new(false);
+        let (a, b, c) = (w.a, w.b, w.c);
+        let mut tracker = ChangeTracker::new();
+        let mut last_run = 0u32;
+        let mut alive: Vec<Entity> = Vec::new();
+        let mut rng = Xs(0x9E37_79B9_7F4A_7C15);
+        let mut non_empty = [0usize; 10];
+        let mut empty = [0usize; 10];
+
+        for step in 0..500u32 {
+            for _ in 0..1 + rng.next(4) {
+                let pick = if alive.is_empty() { 0 } else { rng.next(alive.len()) };
+                match rng.next(12) {
+                    0 | 1 => {
+                        let e = w.rust().spawn();
+                        w.rust().insert_static(e, QA { v: step });
+                        if rng.next(2) == 0 {
+                            w.rust().insert_static(e, QB { v: step });
+                        }
+                        if rng.next(4) == 0 {
+                            w.rust().insert_static(e, QC { v: step });
+                        }
+                        alive.push(e);
+                    }
+                    2 if !alive.is_empty() => {
+                        let e = alive.swap_remove(pick);
+                        w.rust().despawn(e);
+                    }
+                    3 if !alive.is_empty() => {
+                        w.rust().insert_static(alive[pick], QB { v: step });
+                    }
+                    4 if !alive.is_empty() => {
+                        w.rust().remove_static::<QB>(alive[pick]);
+                    }
+                    5 if !alive.is_empty() => {
+                        w.rust().remove_static::<QA>(alive[pick]);
+                    }
+                    6 if !alive.is_empty() => {
+                        w.rust().insert_static(alive[pick], QC { v: step });
+                    }
+                    7 if !alive.is_empty() => {
+                        w.rust().remove_static::<QC>(alive[pick]);
+                    }
+                    8 | 9 if !alive.is_empty() => {
+                        if let Some(x) = w.rust().get_static_mut::<QA>(alive[pick]) {
+                            x.v += 1;
+                        }
+                    }
+                    10 if !alive.is_empty() => {
+                        if let Some(x) = w.rust().get_static_mut::<QB>(alive[pick]) {
+                            x.v += 1;
+                        }
+                    }
+                    11 if !alive.is_empty() => {
+                        if let Some(x) = w.rust().get_static_mut::<QC>(alive[pick]) {
+                            x.v += 1;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            if rng.next(3) == 0 {
+                w.advance();
+            }
+            if rng.next(4) == 0 {
+                tracker.update(w.rust());
+                last_run = tracker.last_run().get();
+                w.advance();
+            }
+            assert_eq!(tracker.last_run().get(), last_run);
+
+            fn typed<F: DataFilter + 'static>(
+                w: &mut QWorld,
+                tracker: &ChangeTracker,
+            ) -> HashSet<u64> {
+                w.rust()
+                    .query_data_filtered_since::<Entity, F>(tracker)
+                    .map(|e| e.as_ffi())
+                    .collect()
+            }
+            let cases: [(HashSet<u64>, Q); 10] = [
+                (
+                    typed::<Changed<QA>>(&mut w, &tracker),
+                    Q { all_changed: vec![a], ..Q::default() },
+                ),
+                (
+                    typed::<Added<QA>>(&mut w, &tracker),
+                    Q { all_added: vec![a], ..Q::default() },
+                ),
+                (
+                    typed::<Or<(Changed<QA>, Changed<QB>)>>(&mut w, &tracker),
+                    Q { any_changed: vec![a, b], ..Q::default() },
+                ),
+                (
+                    typed::<(Changed<QA>, Changed<QB>)>(&mut w, &tracker),
+                    Q { all_changed: vec![a, b], ..Q::default() },
+                ),
+                (
+                    typed::<(Added<QA>, Changed<QB>)>(&mut w, &tracker),
+                    Q { all_added: vec![a], all_changed: vec![b], ..Q::default() },
+                ),
+                (
+                    typed::<(Changed<QA>, With<QB>)>(&mut w, &tracker),
+                    Q { all_changed: vec![a], with: vec![b], ..Q::default() },
+                ),
+                (
+                    typed::<(Changed<QA>, Without<QB>)>(&mut w, &tracker),
+                    Q { all_changed: vec![a], without: vec![b], ..Q::default() },
+                ),
+                (
+                    typed::<Or<(Added<QA>, Changed<QC>)>>(&mut w, &tracker),
+                    Q { any_added: vec![a], any_changed: vec![c], ..Q::default() },
+                ),
+                (
+                    typed::<(Or<(Changed<QB>, Changed<QC>)>, With<QA>)>(&mut w, &tracker),
+                    Q { any_changed: vec![b, c], with: vec![a], ..Q::default() },
+                ),
+                (
+                    typed::<(Changed<QA>, Or<(Changed<QB>, Changed<QC>)>)>(&mut w, &tracker),
+                    Q { all_changed: vec![a], any_changed: vec![b, c], ..Q::default() },
+                ),
+            ];
+            for (k, (expected, q)) in cases.iter().enumerate() {
+                let rows = w.query(last_run, q);
+                let got: HashSet<u64> = rows.iter().map(|m| m.entity).collect();
+                assert_eq!(got.len(), rows.len(), "step {step}, case {k}: an entity twice");
+                assert_eq!(&got, expected, "step {step}, case {k}");
+                if expected.is_empty() {
+                    empty[k] += 1;
+                } else {
+                    non_empty[k] += 1;
+                }
+            }
+        }
+        // The history must have produced both kinds of answer for every
+        // shape, or the comparison proves little.
+        for k in 0..10 {
+            assert!(non_empty[k] >= 10, "case {k}: only {} non-empty steps", non_empty[k]);
+            assert!(empty[k] >= 10, "case {k}: only {} empty steps", empty[k]);
         }
     }
 }

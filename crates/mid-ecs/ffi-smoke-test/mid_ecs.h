@@ -39,6 +39,8 @@ extern "C" {
 #define MID_ECS_NOT_WRITABLE   -7
 #define MID_ECS_ALREADY_PRESENT -8
 #define MID_ECS_DUPLICATE       -9
+#define MID_ECS_NOT_TRACKED    -10
+#define MID_ECS_INVALID_ARGUMENT -11
 
 // Sentinel component_id/archetype_id meaning "not found" -- returned by
 // the lookup_ffi_* functions below. Not 0: 0 is a real, valid id for
@@ -311,6 +313,140 @@ int32_t mid_ecs_world_static_component_added_rows(const MidEcsWorld *world, uint
 // from C through mid_ecs_world_static_component_raw_span_mut and
 // mid_ecs_world_static_component_write below.
 int32_t mid_ecs_world_static_component_changed_rows(const MidEcsWorld *world, uint32_t archetype_id, uint32_t component_id, uint32_t last_run, uint32_t *out_rows, size_t out_capacity);
+
+// --- Filtered change queries: rows added/changed since last_run, across archetypes ---
+//
+// One call replaces the loop a caller otherwise writes: enumerate archetypes
+// with mid_ecs_world_archetypes_matching_static, ask *_added_rows /
+// *_changed_rows for each, then intersect or union the row lists. The C
+// counterpart of Rust's Added/Changed filters combined with
+// With/Without/Or. All ids are Archetype Core ids.
+//
+// Seven (pointer, length) lists. A length of 0 is an empty list (the pointer
+// may then be NULL); a NULL pointer with a nonzero length is
+// MID_ECS_NULL_POINTER. Zero-initialize the struct and set only the lists you
+// need: MidEcsRowFilter f = { .all_changed_ids = ids, .all_changed_len = 1 };
+//
+//   Structural, decided once per archetype (as in
+//   mid_ecs_world_archetypes_matching_static):
+//     with     every id present        without  no id present
+//     any_of   at least one present, when non-empty
+//   Row-level, at least one id in total across these four lists:
+//     all_added    every listed component's value was INSERTED after last_run
+//     all_changed  every listed component's value was inserted or mutated
+//                  after last_run
+//     any_added /  at least one listed component qualifies, the two lists
+//     any_changed  forming ONE group. A listed component the archetype lacks
+//                  counts as not qualifying; an archetype holding none of
+//                  them has no matching row.
+//   A row must pass the structural lists, every all_* id, and, if either any_*
+//   list is non-empty, at least one any_* id.
+typedef struct {
+    const uint32_t *with_ids;
+    size_t with_len;
+    const uint32_t *without_ids;
+    size_t without_len;
+    const uint32_t *any_of_ids;
+    size_t any_of_len;
+    const uint32_t *all_added_ids;
+    size_t all_added_len;
+    const uint32_t *all_changed_ids;
+    size_t all_changed_len;
+    const uint32_t *any_added_ids;
+    size_t any_added_len;
+    const uint32_t *any_changed_ids;
+    size_t any_changed_len;
+} MidEcsRowFilter;
+
+// One result row: the entity, and where it sits. row is element row of
+// mid_ecs_world_static_component_raw_span and _entity_ids for archetype_id and
+// any component that archetype holds.
+typedef struct {
+    uint64_t entity;
+    uint32_t archetype_id;
+    uint32_t row;
+} MidEcsMatchedRow;
+
+// Writes the matching rows into out_rows and returns how many: archetypes in
+// the order mid_ecs_world_archetypes_matching_static yields them, rows
+// ascending within one. last_run is a change tick you kept, as for the
+// *_rows functions (0 sees everything; a change in the same tick as last_run
+// is not reported). NULL out_rows returns the count; a too-small buffer is
+// MID_ECS_BUFFER_TOO_SMALL and nothing is written. Row indices are valid
+// against the spans only until the next call that changes that archetype's
+// storage.
+//   MID_ECS_NULL_POINTER     NULL world or filter, or a list with a NULL pointer
+//                            and a nonzero length.
+//   MID_ECS_INVALID_ARGUMENT all four change lists are empty (use
+//                            mid_ecs_world_archetypes_matching_static for a
+//                            purely structural query).
+//   MID_ECS_NOT_FOUND        an id in a change list was never registered for
+//                            FFI. Checked first, so a typo'd id is an error
+//                            rather than "nothing changed". An unknown id in
+//                            a structural list matches nothing (with, any_of)
+//                            or is ignored (without).
+int32_t mid_ecs_world_static_query_since(const MidEcsWorld *world, uint32_t last_run, const MidEcsRowFilter *filter, MidEcsMatchedRow *out_rows, size_t out_capacity);
+
+// --- Removal tracking: which entities lost a component ---
+//
+// A removed component leaves nothing in storage, so "which entities lost X
+// since I last looked" needs a record. Opt in per component with
+// *_track_removals; from then on every removal of that component (any of the
+// removal functions, a queued removal, or the entity's despawn) logs the
+// entity and the world's change tick, and *_removed_since reports the ones
+// newer than a tick the caller kept: the same last_run convention as
+// mid_ecs_world_static_component_added_rows. Call
+// mid_ecs_world_increment_change_tick once per step of your loop; a removal
+// in the same tick as last_run is not reported. Replacing a value
+// (mid_ecs_world_static_component_write) is not a removal, and a refused
+// removal records nothing.
+//
+// Two id spaces, two families: mid_ecs_world_static_component_* takes
+// Archetype Core ids (mid_ecs_world_lookup_ffi_static_component_id),
+// mid_ecs_world_component_* takes Sparse Shell ids
+// (mid_ecs_world_lookup_ffi_component_id). The spaces are independent: the
+// same integer can name a different component in each, and tracking one does
+// not track the other.
+//
+// Returns of the per-component functions: MID_ECS_NULL_POINTER on a NULL
+// world; MID_ECS_NOT_FOUND if this world never issued that id in that space.
+
+// Starts recording removals of the component. Idempotent. Removals before the
+// first call are not recorded. Needs only a valid id, not a writable
+// component. MID_ECS_OK on success.
+int32_t mid_ecs_world_static_component_track_removals(MidEcsWorld *world, uint32_t component_id);
+int32_t mid_ecs_world_component_track_removals(MidEcsWorld *world, uint32_t component_id);
+
+// 1 if removals of the component are being recorded, 0 if not.
+int32_t mid_ecs_world_static_component_tracks_removals(const MidEcsWorld *world, uint32_t component_id);
+int32_t mid_ecs_world_component_tracks_removals(const MidEcsWorld *world, uint32_t component_id);
+
+// How many removals the log holds for the component; 0 if it is not tracked.
+int32_t mid_ecs_world_static_component_removal_count(const MidEcsWorld *world, uint32_t component_id);
+int32_t mid_ecs_world_component_removal_count(const MidEcsWorld *world, uint32_t component_id);
+
+// Writes, oldest first, the packed entity handles that lost the component
+// after last_run into out_entities, and returns how many. An entity removed
+// twice appears twice. The entity may since have been despawned or its slot
+// reused: check mid_ecs_world_is_alive if it matters. last_run 0 reports
+// everything still in the log. NULL out_entities returns the count; a
+// too-small buffer is MID_ECS_BUFFER_TOO_SMALL and nothing is written.
+// MID_ECS_NOT_TRACKED if *_track_removals was never called for the component:
+// nothing was ever recorded, and an empty list would hide that.
+int32_t mid_ecs_world_static_component_removed_since(const MidEcsWorld *world, uint32_t component_id, uint32_t last_run, uint64_t *out_entities, size_t out_capacity);
+int32_t mid_ecs_world_component_removed_since(const MidEcsWorld *world, uint32_t component_id, uint32_t last_run, uint64_t *out_entities, size_t out_capacity);
+
+// Drops every logged removal of every tracked component that a reader whose
+// last run was at_or_before (or later) could no longer see. Nothing trims the
+// log automatically: only the owner of all the readers knows the oldest
+// last_run any of them still holds, so pass that. Without trimming, the log
+// of a component removed often grows without bound. Tracked components stay
+// tracked. MID_ECS_OK, or MID_ECS_NULL_POINTER.
+int32_t mid_ecs_world_trim_removals(MidEcsWorld *world, uint32_t at_or_before);
+
+// Drops every logged removal. Tracked components stay tracked.
+// MID_ECS_OK, or MID_ECS_NULL_POINTER.
+int32_t mid_ecs_world_clear_removals(MidEcsWorld *world);
 
 // --- Writing component data from C ---
 //

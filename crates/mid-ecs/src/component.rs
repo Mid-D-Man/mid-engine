@@ -372,6 +372,13 @@ impl SparseShell {
         }
     }
 
+    /// The type `id` was assigned to, if this registry issued it. The
+    /// reverse of the type-to-id map: lets a numeric id from the C side
+    /// name the `TypeId` the removal log is keyed by (`removal.rs`).
+    pub(crate) fn type_id_of(&self, id: ComponentId) -> Option<TypeId> {
+        self.type_ids.get(id.as_u32() as usize).copied()
+    }
+
     /// Opts `T` into FFI span exposure under `name` — the FFI-facing
     /// counterpart to Rust's own generic `component_id::<T>()`. Must be
     /// called from Rust (this is generic; an `extern "C"` function
