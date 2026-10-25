@@ -35,7 +35,7 @@ use crate::archetype::QueryBatch;
 use crate::batching::BatchingStrategy;
 use crate::commands::{CommandQueue, Commands};
 use crate::data_filter::DataFilter;
-use crate::query_data::{QueryData, ReadOnlyQueryData};
+use crate::query_data::{QueryData, QueryEntityError, QuerySingleError, ReadOnlyQueryData};
 use crate::removal::RemovalLog;
 use crate::tick::Tick;
 use crate::world::{Entity, World};
@@ -350,6 +350,178 @@ impl<'w, 's, Q: QueryData + 'static, F: DataFilter + 'static> Query<'w, 's, Q, F
             strategy: BatchingStrategy::new(),
             _marker: PhantomData,
         }
+    }
+
+    /// The item the query yields for `entity`, reading: the by-entity form
+    /// of [`Self::iter`]. Every rule of an iteration holds: the entity's
+    /// archetype must hold what the terms need and pass `With` / `Without` /
+    /// `Or`, and a row-level `Added` / `Changed` filter must keep its row.
+    ///
+    /// Errors: [`QueryEntityError::NoSuchEntity`] if the entity is not alive
+    /// (a stale handle whose slot was reused is not alive, and never finds
+    /// the new occupant), [`QueryEntityError::QueryDoesNotMatch`] if it is
+    /// alive but the query does not match it.
+    ///
+    /// Each call resolves the query's component ids and builds a one-row
+    /// window, so it costs more than a step of an iteration; it is not
+    /// benchmarked (optimization is paused). Cached query state (gap-list
+    /// item 8) would take the setup out of the call.
+    pub fn get<'a>(&'a self, entity: Entity) -> Result<Q::Item<'a>, QueryEntityError>
+    where
+        Q: ReadOnlyQueryData,
+    {
+        let cell: WorldCell<'a> = self.world;
+        // SAFETY: as for `iter`: this parameter's registered access was
+        // checked against every other parameter's, and `&self` stops a
+        // writing lookup of this same query from starting meanwhile.
+        unsafe { cell.query_get::<Q, F>(entity, self.this_run, self.last_run) }
+    }
+
+    /// The item the query yields for `entity`, with write access to the
+    /// `Mut` terms (stamped with the system's tick when written through).
+    /// Borrows the query exclusively, like [`Self::iter_mut`], so a second
+    /// `get_mut` cannot start while the first item is live; for several
+    /// entities at once use [`Self::get_many_mut`]. Errors as for
+    /// [`Self::get`].
+    ///
+    /// Two lookups of one entity at once would hand out two `&mut` to one
+    /// row, and the borrow checker refuses them:
+    ///
+    /// ```compile_fail
+    /// use mid_ecs::{Mut, Query, SystemState, World};
+    /// struct Hp(u32);
+    /// let mut world = World::new();
+    /// let e = world.spawn();
+    /// world.insert_static(e, Hp(1));
+    /// let mut state = SystemState::<Query<Mut<Hp>>>::new(&mut world);
+    /// let mut q = state.get(&mut world);
+    /// let first = q.get_mut(e);
+    /// let second = q.get_mut(e); // error: `q` is already borrowed mutably
+    /// drop((first, second));
+    /// ```
+    pub fn get_mut<'a>(&'a mut self, entity: Entity) -> Result<Q::Item<'a>, QueryEntityError> {
+        let cell: WorldCell<'a> = self.world;
+        // SAFETY: as for `iter_mut`, for the access `Q` makes; `&mut self`
+        // makes this the only lookup or iteration of this query while the
+        // item is live.
+        unsafe { cell.query_get_mut::<Q, F>(entity, self.this_run, self.last_run) }
+    }
+
+    /// The items for several entities at once, reading. A repeated entity
+    /// is fine here (readers can share). The first entity that cannot be
+    /// found is the error.
+    pub fn get_many<'a, const N: usize>(
+        &'a self,
+        entities: [Entity; N],
+    ) -> Result<[Q::Item<'a>; N], QueryEntityError>
+    where
+        Q: ReadOnlyQueryData,
+    {
+        let mut items = Vec::with_capacity(N);
+        for entity in entities {
+            items.push(self.get(entity)?);
+        }
+        match <[Q::Item<'a>; N]>::try_from(items) {
+            Ok(array) => Ok(array),
+            Err(_) => unreachable!("exactly N items were pushed"),
+        }
+    }
+
+    /// The items for several entities at once, with write access to the
+    /// `Mut` terms. The entities must be pairwise distinct (a repeat is
+    /// [`QueryEntityError::AliasedMutability`], checked before anything is
+    /// looked up), so no row is handed out twice. The first entity that
+    /// cannot be found is the error.
+    pub fn get_many_mut<'a, const N: usize>(
+        &'a mut self,
+        entities: [Entity; N],
+    ) -> Result<[Q::Item<'a>; N], QueryEntityError> {
+        for i in 0..N {
+            for j in 0..i {
+                if entities[i] == entities[j] {
+                    return Err(QueryEntityError::AliasedMutability(entities[i]));
+                }
+            }
+        }
+        let cell: WorldCell<'a> = self.world;
+        let mut items = Vec::with_capacity(N);
+        for entity in entities {
+            // SAFETY: as for `get_mut`; the entities are pairwise distinct,
+            // so no two items share a row, and `&mut self` makes this the
+            // only lookup or iteration of this query.
+            items.push(unsafe { cell.query_get_mut::<Q, F>(entity, self.this_run, self.last_run) }?);
+        }
+        match <[Q::Item<'a>; N]>::try_from(items) {
+            Ok(array) => Ok(array),
+            Err(_) => unreachable!("exactly N items were pushed"),
+        }
+    }
+
+    /// The items for the entities `entities` lists, in that order,
+    /// reading. An entity that is not alive or that the query does not
+    /// match is skipped, not an error (use [`Self::get`] to learn which).
+    pub fn iter_many<'a, I>(&'a self, entities: I) -> impl Iterator<Item = Q::Item<'a>> + 'a
+    where
+        Q: ReadOnlyQueryData,
+        I: IntoIterator<Item = Entity>,
+        I::IntoIter: 'a,
+    {
+        let cell: WorldCell<'a> = self.world;
+        let (this_run, last_run) = (self.this_run, self.last_run);
+        entities.into_iter().filter_map(move |entity| {
+            // SAFETY: as for `get`.
+            unsafe { cell.query_get::<Q, F>(entity, this_run, last_run) }.ok()
+        })
+    }
+
+    /// The one item the query yields, reading, or
+    /// [`QuerySingleError::NoEntities`] / [`QuerySingleError::MultipleEntities`].
+    pub fn single<'a>(&'a self) -> Result<Q::Item<'a>, QuerySingleError>
+    where
+        Q: ReadOnlyQueryData,
+    {
+        let mut rows = self.iter();
+        let first = rows.next().ok_or(QuerySingleError::NoEntities)?;
+        match rows.next() {
+            None => Ok(first),
+            Some(_) => Err(QuerySingleError::MultipleEntities),
+        }
+    }
+
+    /// The one item the query yields, with write access to the `Mut`
+    /// terms; errors as for [`Self::single`]. Looking for the second item
+    /// to rule out `MultipleEntities` writes nothing and stamps nothing.
+    pub fn single_mut<'a>(&'a mut self) -> Result<Q::Item<'a>, QuerySingleError> {
+        let mut rows = self.iter_mut();
+        let first = rows.next().ok_or(QuerySingleError::NoEntities)?;
+        match rows.next() {
+            None => Ok(first),
+            Some(_) => Err(QuerySingleError::MultipleEntities),
+        }
+    }
+
+    /// Whether the query matches `entity` (alive, in a matching archetype,
+    /// past any row-level filter), without fetching anything: the same
+    /// answer for a reading and a writing query, and it takes no borrow of
+    /// the data.
+    pub fn contains(&self, entity: Entity) -> bool {
+        let cell: WorldCell<'_> = self.world;
+        // SAFETY: reads change ticks only, and only for a row-level
+        // filter; those reads are part of this query's registered access.
+        unsafe { cell.query_contains::<Q, F>(entity, self.this_run, self.last_run) }
+    }
+
+    /// How many rows the query matches, counted without fetching anything
+    /// (the same number `iter().count()` gives, for a writing query too).
+    pub fn count(&self) -> usize {
+        let cell: WorldCell<'_> = self.world;
+        // SAFETY: as for `contains`.
+        unsafe { cell.query_count::<Q, F>(self.this_run, self.last_run) }
+    }
+
+    /// Whether the query matches no row.
+    pub fn is_empty(&self) -> bool {
+        self.count() == 0
     }
 }
 
@@ -862,5 +1034,472 @@ impl<P: SystemParam + 'static> SystemState<P> {
     /// `world`.
     pub fn apply(&mut self, world: &mut World) {
         P::apply(&mut self.state, &self.meta, world);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::{HashMap, HashSet};
+
+    use super::*;
+    use crate::filter::{Or, With, Without};
+    use crate::query_data::{Added, Changed, Has, QueryEntityError, QuerySingleError};
+    use crate::tick::Mut;
+
+    #[derive(Debug, Clone, Copy, PartialEq)]
+    struct A(u32);
+    #[derive(Debug, Clone, Copy, PartialEq)]
+    struct B(u32);
+    #[derive(Debug, Clone, Copy, PartialEq)]
+    struct C(u32);
+
+    /// Entities: `e[0]` {A}, `e[1]` {A, B}, `e[2]` {B}, `e[3]` {A, B, C},
+    /// `e[4]` {A}, with `A.0 == 10 + index`.
+    fn world5() -> (World, Vec<Entity>) {
+        let mut world = World::new();
+        let mut es = Vec::new();
+        for i in 0..5u32 {
+            let e = world.spawn();
+            if i != 2 {
+                world.insert_static(e, A(10 + i));
+            }
+            if i == 1 || i == 2 || i == 3 {
+                world.insert_static(e, B(20 + i));
+            }
+            if i == 3 {
+                world.insert_static(e, C(30 + i));
+            }
+            es.push(e);
+        }
+        world.increment_change_tick();
+        (world, es)
+    }
+
+    #[test]
+    fn get_returns_the_entitys_item_and_applies_archetype_level_rules() {
+        let (mut world, e) = world5();
+        let mut s = SystemState::<Query<(Entity, &A)>>::new(&mut world);
+        let q = s.get(&mut world);
+        assert_eq!(q.get(e[0]), Ok((e[0], &A(10))));
+        assert_eq!(q.get(e[3]), Ok((e[3], &A(13))));
+        assert_eq!(
+            q.get(e[2]),
+            Err(QueryEntityError::QueryDoesNotMatch(e[2])),
+            "{{B}} has no A"
+        );
+        drop(q);
+
+        let mut s = SystemState::<Query<&A, With<B>>>::new(&mut world);
+        let q = s.get(&mut world);
+        assert_eq!(q.get(e[1]), Ok(&A(11)));
+        assert_eq!(q.get(e[0]), Err(QueryEntityError::QueryDoesNotMatch(e[0])));
+        drop(q);
+
+        let mut s = SystemState::<Query<&A, Without<B>>>::new(&mut world);
+        let q = s.get(&mut world);
+        assert_eq!(q.get(e[0]), Ok(&A(10)));
+        assert_eq!(q.get(e[1]), Err(QueryEntityError::QueryDoesNotMatch(e[1])));
+        drop(q);
+
+        // Option and Has terms never exclude an entity.
+        let mut s = SystemState::<Query<(Option<&B>, Has<C>)>>::new(&mut world);
+        let q = s.get(&mut world);
+        assert_eq!(q.get(e[0]), Ok((None, false)));
+        assert_eq!(q.get(e[3]), Ok((Some(&B(23)), true)));
+    }
+
+    #[test]
+    fn get_reports_dead_entities_and_never_reaches_a_reused_slot() {
+        let (mut world, e) = world5();
+        world.despawn(e[1]);
+        let stale = e[4];
+        world.despawn(stale);
+        let new = world.spawn();
+        world.insert_static(new, A(999));
+        let mut s = SystemState::<Query<&A>>::new(&mut world);
+        let q = s.get(&mut world);
+        assert_eq!(q.get(e[1]), Err(QueryEntityError::NoSuchEntity(e[1])));
+        assert_eq!(q.get(stale), Err(QueryEntityError::NoSuchEntity(stale)));
+        assert_eq!(q.get(new), Ok(&A(999)));
+        assert!(!q.contains(stale));
+        assert!(q.contains(new));
+    }
+
+    #[test]
+    fn get_applies_row_level_filters_and_agrees_with_contains_and_count() {
+        let (mut world, e) = world5();
+        let mut s = SystemState::<Query<&A, Changed<A>>>::new(&mut world);
+        // First call: everything counts as new.
+        let q = s.get(&mut world);
+        assert_eq!(q.count(), 4);
+        drop(q);
+        world.increment_change_tick();
+        world.get_static_mut::<A>(e[1]).unwrap().0 = 77;
+        world.get_static_mut::<A>(e[4]).unwrap().0 = 78;
+        let q = s.get(&mut world);
+        assert_eq!(q.get(e[1]), Ok(&A(77)));
+        assert_eq!(q.get(e[4]), Ok(&A(78)));
+        assert_eq!(q.get(e[0]), Err(QueryEntityError::QueryDoesNotMatch(e[0])));
+        assert_eq!(q.get(e[2]), Err(QueryEntityError::QueryDoesNotMatch(e[2])));
+        assert!(q.contains(e[1]) && !q.contains(e[0]) && !q.contains(e[2]));
+        assert_eq!(q.count(), 2);
+        assert!(!q.is_empty());
+        drop(q);
+        // Nothing changed since the last call.
+        let q = s.get(&mut world);
+        assert!(q.is_empty());
+        assert_eq!(q.get(e[1]), Err(QueryEntityError::QueryDoesNotMatch(e[1])));
+    }
+
+    #[test]
+    fn get_mut_stamps_only_when_written_through_and_only_that_row() {
+        let (mut world, e) = world5();
+        let mut watch = SystemState::<Query<(Entity, &A), Changed<A>>>::new(&mut world);
+        drop(watch.get(&mut world));
+        world.increment_change_tick();
+
+        let mut s = SystemState::<Query<Mut<A>>>::new(&mut world);
+        let mut q = s.get(&mut world);
+        {
+            // Reading through a `Mut` does not stamp.
+            let item = q.get_mut(e[3]).unwrap();
+            assert_eq!(item.0, 13);
+        }
+        {
+            let mut item = q.get_mut(e[4]).unwrap();
+            item.0 = 55;
+        }
+        assert_eq!(
+            q.get_mut(e[2]).err(),
+            Some(QueryEntityError::QueryDoesNotMatch(e[2]))
+        );
+        drop(q);
+        let q = watch.get(&mut world);
+        let changed: Vec<Entity> = q.iter().map(|(en, _)| en).collect();
+        assert_eq!(changed, vec![e[4]], "only the row that was written");
+        assert_eq!(world.get_static::<A>(e[4]), Some(&A(55)));
+    }
+
+    #[test]
+    fn get_many_reads_and_get_many_mut_refuses_a_repeated_entity() {
+        let (mut world, e) = world5();
+        let mut s = SystemState::<Query<(Entity, &A)>>::new(&mut world);
+        let q = s.get(&mut world);
+        assert_eq!(
+            q.get_many([e[0], e[3], e[0]]),
+            Ok([(e[0], &A(10)), (e[3], &A(13)), (e[0], &A(10))]),
+            "readers may repeat an entity"
+        );
+        assert_eq!(
+            q.get_many([e[3], e[4], e[0]]),
+            Ok([(e[3], &A(13)), (e[4], &A(14)), (e[0], &A(10))]),
+            "in the order asked for"
+        );
+        assert_eq!(
+            q.get_many([e[0], e[2], e[3]]),
+            Err(QueryEntityError::QueryDoesNotMatch(e[2]))
+        );
+        drop(q);
+
+        let mut s = SystemState::<Query<Mut<A>>>::new(&mut world);
+        let mut q = s.get(&mut world);
+        assert_eq!(
+            q.get_many_mut([e[0], e[1], e[0]]).err(),
+            Some(QueryEntityError::AliasedMutability(e[0]))
+        );
+        let [mut a, mut b] = q.get_many_mut([e[0], e[4]]).unwrap();
+        std::mem::swap(&mut a.0, &mut b.0);
+        drop((a, b));
+        assert_eq!(
+            q.get_many_mut([e[0], e[2]]).err(),
+            Some(QueryEntityError::QueryDoesNotMatch(e[2]))
+        );
+        drop(q);
+        assert_eq!(world.get_static::<A>(e[0]), Some(&A(14)));
+        assert_eq!(world.get_static::<A>(e[4]), Some(&A(10)));
+    }
+
+    #[test]
+    fn iter_many_follows_the_list_and_skips_what_does_not_match() {
+        let (mut world, e) = world5();
+        world.despawn(e[4]);
+        let mut s = SystemState::<Query<(Entity, &A)>>::new(&mut world);
+        let q = s.get(&mut world);
+        let got: Vec<Entity> = q
+            .iter_many([e[3], e[2], e[0], e[4], e[3]])
+            .map(|(en, _)| en)
+            .collect();
+        assert_eq!(got, vec![e[3], e[0], e[3]], "list order, skips {{B}} and the dead");
+    }
+
+    #[test]
+    fn single_and_single_mut_say_none_one_or_many_and_a_refusal_writes_nothing() {
+        let mut world = World::new();
+        let mut watch = SystemState::<Query<Entity, Changed<A>>>::new(&mut world);
+        let mut s = SystemState::<Query<Mut<A>>>::new(&mut world);
+        assert_eq!(s.get(&mut world).single_mut().err(), Some(QuerySingleError::NoEntities));
+        let e1 = world.spawn();
+        world.insert_static(e1, A(1));
+        let e2 = world.spawn();
+        world.insert_static(e2, A(2));
+        world.increment_change_tick();
+        drop(watch.get(&mut world));
+        world.increment_change_tick();
+        {
+            let mut q = s.get(&mut world);
+            assert_eq!(q.single_mut().err(), Some(QuerySingleError::MultipleEntities));
+        }
+        assert!(
+            watch.get(&mut world).is_empty(),
+            "looking for a second item wrote and stamped nothing"
+        );
+        world.despawn(e2);
+        {
+            let mut q = s.get(&mut world);
+            q.single_mut().unwrap().0 = 5;
+        }
+        assert_eq!(world.get_static::<A>(e1), Some(&A(5)));
+        let mut r = SystemState::<Query<&A>>::new(&mut world);
+        assert_eq!(r.get(&mut world).single(), Ok(&A(5)));
+        world.insert_static(e2, A(1));
+    }
+
+    #[test]
+    fn a_query_over_a_type_the_world_never_saw_matches_nothing() {
+        #[derive(Debug, PartialEq)]
+        struct Never(u32);
+        let (mut world, e) = world5();
+        let mut s = SystemState::<Query<&Never>>::new(&mut world);
+        let q = s.get(&mut world);
+        assert_eq!(
+            q.get(e[0]),
+            Err(QueryEntityError::QueryDoesNotMatch(e[0]))
+        );
+        assert!(!q.contains(e[0]));
+        assert_eq!(q.count(), 0);
+        assert!(q.is_empty());
+        drop(q);
+        let mut s = SystemState::<Query<(&A, &Never)>>::new(&mut world);
+        let q = s.get(&mut world);
+        assert_eq!(
+            q.get(e[0]),
+            Err(QueryEntityError::QueryDoesNotMatch(e[0])),
+            "one satisfiable term does not rescue an unsatisfiable one"
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "WorldCell::query_get: conflicting access")]
+    fn a_query_that_reads_and_writes_one_component_panics_before_any_lookup() {
+        let (mut world, e) = world5();
+        let tick = world.change_tick();
+        let cell = world.as_world_cell();
+        // Looked up on an entity that does not even match: the check comes
+        // first, as it does for an iteration.
+        // SAFETY: nothing else touches the world; the call panics before
+        // it reads anything.
+        let _ = unsafe { cell.query_get_mut::<(&A, Mut<A>), ()>(e[2], tick, tick) };
+    }
+
+    #[test]
+    fn a_query_that_requires_two_components_does_not_match_an_entity_with_one() {
+        let (mut world, e) = world5();
+        let mut s = SystemState::<Query<(&A, &B)>>::new(&mut world);
+        let q = s.get(&mut world);
+        assert_eq!(q.get(e[1]), Ok((&A(11), &B(21))));
+        assert_eq!(q.get(e[0]), Err(QueryEntityError::QueryDoesNotMatch(e[0])));
+        assert_eq!(q.get(e[2]), Err(QueryEntityError::QueryDoesNotMatch(e[2])));
+    }
+
+    #[test]
+    fn single_reads_one_item_and_says_none_or_many() {
+        let mut world = World::new();
+        let mut s = SystemState::<Query<&A>>::new(&mut world);
+        assert_eq!(s.get(&mut world).single(), Err(QuerySingleError::NoEntities));
+        let e1 = world.spawn();
+        world.insert_static(e1, A(1));
+        assert_eq!(s.get(&mut world).single(), Ok(&A(1)));
+        let e2 = world.spawn();
+        world.insert_static(e2, A(2));
+        assert_eq!(
+            s.get(&mut world).single(),
+            Err(QuerySingleError::MultipleEntities)
+        );
+    }
+
+    #[test]
+    fn get_many_mut_stamps_only_the_rows_written_through() {
+        let (mut world, e) = world5();
+        let mut watch = SystemState::<Query<Entity, Changed<A>>>::new(&mut world);
+        drop(watch.get(&mut world));
+        world.increment_change_tick();
+        let mut s = SystemState::<Query<Mut<A>>>::new(&mut world);
+        {
+            let mut q = s.get(&mut world);
+            let [mut a, b] = q.get_many_mut([e[0], e[4]]).unwrap();
+            a.0 = 1;
+            assert_eq!(b.0, 14, "read through, not written");
+        }
+        let changed: Vec<Entity> = watch.get(&mut world).iter().collect();
+        assert_eq!(changed, vec![e[0]]);
+        assert_eq!(world.get_static::<A>(e[0]), Some(&A(1)));
+    }
+
+    /// xorshift64: enough randomness for a history generator.
+    struct Xs(u64);
+
+    impl Xs {
+        fn next(&mut self, n: usize) -> usize {
+            self.0 ^= self.0 << 13;
+            self.0 ^= self.0 >> 7;
+            self.0 ^= self.0 << 17;
+            (self.0 % n as u64) as usize
+        }
+    }
+
+    /// For one read-only query shape, at one moment: every entity ever
+    /// created (alive or not) must be found by `get` exactly when an
+    /// iteration yields it, with the same item, and `contains`, `count`,
+    /// `is_empty` and `iter_many` must agree. Returns the match count.
+    macro_rules! check_shape {
+        ($world:expr, $state:expr, $all:expr, $alive:expr, $label:expr) => {{
+            let q = $state.get(&mut $world);
+            let expected: HashMap<Entity, _> = q.iter().map(|item| (item.0, item)).collect();
+            for &e in $all.iter() {
+                match q.get(e) {
+                    Ok(item) => assert_eq!(Some(&item), expected.get(&e), "{}: {e:?}", $label),
+                    Err(QueryEntityError::NoSuchEntity(x)) => {
+                        assert_eq!(x, e);
+                        assert!(!$alive.contains(&e), "{}: {e:?} is alive", $label);
+                        assert!(!expected.contains_key(&e));
+                    }
+                    Err(QueryEntityError::QueryDoesNotMatch(x)) => {
+                        assert_eq!(x, e);
+                        assert!($alive.contains(&e), "{}: {e:?} is dead", $label);
+                        assert!(!expected.contains_key(&e));
+                    }
+                    Err(other) => panic!("{}: unexpected {other:?}", $label),
+                }
+                assert_eq!(q.contains(e), expected.contains_key(&e), "{}: {e:?}", $label);
+            }
+            assert_eq!(q.count(), expected.len(), "{}", $label);
+            assert_eq!(q.is_empty(), expected.is_empty(), "{}", $label);
+            let in_order: Vec<_> = $all.iter().filter_map(|e| expected.get(e).copied()).collect();
+            let many: Vec<_> = q.iter_many($all.iter().copied()).collect();
+            assert_eq!(many, in_order, "{}: iter_many", $label);
+            expected.len()
+        }};
+    }
+
+    #[test]
+    fn get_contains_count_and_iter_many_agree_with_iteration_over_a_random_history() {
+        let mut world = World::new();
+        let mut all: Vec<Entity> = Vec::new();
+        let seed = world.spawn();
+        world.insert_static(seed, A(0));
+        world.insert_static(seed, B(0));
+        world.insert_static(seed, C(0));
+        all.push(seed);
+        let mut s1 = SystemState::<Query<(Entity, &A)>>::new(&mut world);
+        let mut s2 = SystemState::<Query<(Entity, &A, &B)>>::new(&mut world);
+        let mut s3 = SystemState::<Query<(Entity, &A), Without<B>>>::new(&mut world);
+        let mut s4 = SystemState::<Query<(Entity, Option<&C>), With<A>>>::new(&mut world);
+        let mut s5 = SystemState::<Query<(Entity, &A), Changed<A>>>::new(&mut world);
+        let mut s6 =
+            SystemState::<Query<(Entity, &A, &B), Or<(Added<A>, Changed<B>)>>>::new(&mut world);
+        let mut rng = Xs(0xA11C_E5EE_D5EE_D123);
+        let (mut non_empty, mut empty) = ([0usize; 6], [0usize; 6]);
+
+        for step in 0..400u32 {
+            // One tick per step, before its changes, so what a step changes
+            // is newer than the previous step's `get` and the tracked
+            // shapes see it.
+            world.increment_change_tick();
+            for _ in 0..1 + rng.next(4) {
+                let alive: Vec<Entity> = all.iter().copied().filter(|e| world.is_alive(*e)).collect();
+                let pick = if alive.is_empty() { 0 } else { rng.next(alive.len()) };
+                match rng.next(11) {
+                    0 | 1 => {
+                        let e = world.spawn();
+                        if rng.next(4) != 0 {
+                            world.insert_static(e, A(step));
+                        }
+                        if rng.next(2) == 0 {
+                            world.insert_static(e, B(step));
+                        }
+                        if rng.next(4) == 0 {
+                            world.insert_static(e, C(step));
+                        }
+                        all.push(e);
+                    }
+                    2 if !alive.is_empty() => {
+                        world.despawn(alive[pick]);
+                    }
+                    3 if !alive.is_empty() => {
+                        world.insert_static(alive[pick], B(step));
+                    }
+                    4 if !alive.is_empty() => {
+                        world.remove_static::<B>(alive[pick]);
+                    }
+                    5 if !alive.is_empty() => {
+                        world.insert_static(alive[pick], A(step));
+                    }
+                    6 if !alive.is_empty() => {
+                        world.remove_static::<A>(alive[pick]);
+                    }
+                    7 | 8 if !alive.is_empty() => {
+                        if let Some(x) = world.get_static_mut::<A>(alive[pick]) {
+                            x.0 += 1;
+                        }
+                    }
+                    9 if !alive.is_empty() => {
+                        if let Some(x) = world.get_static_mut::<B>(alive[pick]) {
+                            x.0 += 1;
+                        }
+                    }
+                    10 if !alive.is_empty() => {
+                        world.insert_static(alive[pick], C(step));
+                    }
+                    _ => {}
+                }
+            }
+            let alive: HashSet<Entity> = all.iter().copied().filter(|e| world.is_alive(*e)).collect();
+            let counts = [
+                check_shape!(world, s1, all, alive, "(Entity, &A)"),
+                check_shape!(world, s2, all, alive, "(Entity, &A, &B)"),
+                check_shape!(world, s3, all, alive, "(Entity, &A) Without<B>"),
+                check_shape!(world, s4, all, alive, "(Entity, Option<&C>) With<A>"),
+                check_shape!(world, s5, all, alive, "(Entity, &A) Changed<A>"),
+                check_shape!(world, s6, all, alive, "(Entity, &A, &B) Or<Added<A>, Changed<B>>"),
+            ];
+            for (k, n) in counts.into_iter().enumerate() {
+                if n == 0 {
+                    empty[k] += 1;
+                } else {
+                    non_empty[k] += 1;
+                }
+            }
+        }
+        // The history must have made every shape match something, and the
+        // two row-level-filtered shapes (4 and 5) also match nothing often
+        // enough, or the comparison proves little.
+        for k in 0..6 {
+            assert!(non_empty[k] >= 10, "shape {k}: {} non-empty steps", non_empty[k]);
+        }
+        for k in [4, 5] {
+            assert!(empty[k] >= 10, "shape {k}: {} empty steps", empty[k]);
+        }
+    }
+
+    #[test]
+    fn count_and_contains_work_for_a_writing_query_and_match_its_read_only_twin() {
+        let (mut world, e) = world5();
+        let mut writer = SystemState::<Query<Mut<A>, Without<C>>>::new(&mut world);
+        let mut reader = SystemState::<Query<&A, Without<C>>>::new(&mut world);
+        let w = writer.get(&mut world);
+        assert_eq!(w.count(), 4 - 1, "e[3] has C");
+        assert!(w.contains(e[0]) && !w.contains(e[3]) && !w.contains(e[2]));
+        drop(w);
+        assert_eq!(reader.get(&mut world).count(), 3);
     }
 }

@@ -182,6 +182,57 @@ pub trait QueryData: sealed::Sealed {
 /// `World::query_data_mut` does not.
 pub trait ReadOnlyQueryData: QueryData {}
 
+/// Why looking one entity up in a query ([`crate::Query::get`] and its
+/// relatives) found nothing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum QueryEntityError {
+    /// The entity is not alive: it never existed, it was despawned, or it
+    /// is a stale handle whose slot was reused.
+    NoSuchEntity(Entity),
+    /// The entity is alive, but the query does not match it: its archetype
+    /// lacks a component a term requires, or fails a `With` / `Without` /
+    /// `Or` filter, or a row-level `Added` / `Changed` filter rejects its
+    /// row.
+    QueryDoesNotMatch(Entity),
+    /// The same entity was listed twice in a `get_many_mut` call, which
+    /// would hand out two `&mut` to one row.
+    AliasedMutability(Entity),
+}
+
+impl std::fmt::Display for QueryEntityError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NoSuchEntity(e) => write!(f, "the entity {e:?} is not alive"),
+            Self::QueryDoesNotMatch(e) => write!(f, "the query does not match the entity {e:?}"),
+            Self::AliasedMutability(e) => {
+                write!(f, "the entity {e:?} was requested twice for mutable access")
+            }
+        }
+    }
+}
+
+impl std::error::Error for QueryEntityError {}
+
+/// Why [`crate::Query::single`] / `single_mut` found no single match.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum QuerySingleError {
+    /// The query matches no entity.
+    NoEntities,
+    /// The query matches more than one entity.
+    MultipleEntities,
+}
+
+impl std::fmt::Display for QuerySingleError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NoEntities => f.write_str("the query matches no entity"),
+            Self::MultipleEntities => f.write_str("the query matches more than one entity"),
+        }
+    }
+}
+
+impl std::error::Error for QuerySingleError {}
+
 /// One component access a query declares. Hidden: machinery for the
 /// conflict check and the mutable iterator's column plan.
 #[doc(hidden)]

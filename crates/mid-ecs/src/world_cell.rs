@@ -39,13 +39,13 @@
 use std::cell::UnsafeCell;
 use std::marker::PhantomData;
 
-use crate::archetype::QueryBatch;
+use crate::archetype::{LookupMiss, QueryBatch};
 use crate::batching::BatchingStrategy;
 use crate::data_filter::DataFilter;
-use crate::query_data::{QueryData, ReadOnlyQueryData};
+use crate::query_data::{QueryData, QueryEntityError, ReadOnlyQueryData};
 use crate::removal::RemovalLog;
 use crate::tick::Tick;
-use crate::world::World;
+use crate::world::{Entity, World};
 
 /// A copyable, `unsafe`-to-use handle on a [`World`]. See the module docs
 /// for the rule every method relies on.
@@ -214,6 +214,110 @@ impl<'w> WorldCell<'w> {
                 .archetypes
                 .par_batches_cell::<Q, F>(this_run, last_run, strategy, threads)
         }
+    }
+
+    /// The item the read-only query `Q` filtered by `F` yields for
+    /// `entity`, or why there is none. See [`Self::query_get_mut`] for a
+    /// query that writes.
+    ///
+    /// # Safety
+    /// As for [`Self::query_iter`], for as long as the returned item is
+    /// live.
+    pub unsafe fn query_get<Q: ReadOnlyQueryData + 'w, F: DataFilter + 'w>(
+        self,
+        entity: Entity,
+        this_run: Tick,
+        last_run: Tick,
+    ) -> Result<Q::Item<'w>, QueryEntityError> {
+        // SAFETY: the contract is the caller's; a read-only `Q` writes
+        // nothing, so it is the one `query_iter` states.
+        unsafe { self.query_get_any::<Q, F>(entity, this_run, last_run) }
+    }
+
+    /// The item any query `Q` (reads and writes) filtered by `F` yields
+    /// for `entity`, or why there is none. Writes through `Mut` terms are
+    /// stamped `this_run`.
+    ///
+    /// # Panics
+    /// If `Q` reads and writes, or writes twice, the same component.
+    ///
+    /// # Safety
+    /// As for [`Self::query_iter_mut`], for as long as the returned item
+    /// is live; in particular, while it is live nothing may look the same
+    /// entity up again for a query that writes (it would hand out a second
+    /// `&mut` to the same row).
+    pub unsafe fn query_get_mut<Q: QueryData + 'w, F: DataFilter + 'w>(
+        self,
+        entity: Entity,
+        this_run: Tick,
+        last_run: Tick,
+    ) -> Result<Q::Item<'w>, QueryEntityError> {
+        // SAFETY: the contract is the caller's.
+        unsafe { self.query_get_any::<Q, F>(entity, this_run, last_run) }
+    }
+
+    /// # Safety
+    /// The contract of whichever public method calls this.
+    unsafe fn query_get_any<Q: QueryData + 'w, F: DataFilter + 'w>(
+        self,
+        entity: Entity,
+        this_run: Tick,
+        last_run: Tick,
+    ) -> Result<Q::Item<'w>, QueryEntityError> {
+        // SAFETY: shared structure read; the data contract is the caller's.
+        let world = unsafe { self.world() };
+        if !world.is_alive(entity) {
+            return Err(QueryEntityError::NoSuchEntity(entity));
+        }
+        // SAFETY: `get_data_cell` spells out what it relies on and this
+        // forwards it.
+        match unsafe {
+            world
+                .archetypes
+                .get_data_cell::<Q, F>(entity, this_run, last_run)
+        } {
+            Ok(item) => Ok(item),
+            Err(LookupMiss::NoLocation) => Err(QueryEntityError::NoSuchEntity(entity)),
+            Err(LookupMiss::DoesNotMatch) => Err(QueryEntityError::QueryDoesNotMatch(entity)),
+        }
+    }
+
+    /// Whether query `Q` filtered by `F` matches `entity` (alive, in a
+    /// matching archetype, and past any row-level filter). Builds no item,
+    /// so it is the same for a reading and a writing `Q`.
+    ///
+    /// # Safety
+    /// For the duration of the call, nothing may write the change ticks of
+    /// a component a row-level filter of `F` reads (the access `F` declares
+    /// already forbids it).
+    pub unsafe fn query_contains<Q: QueryData + 'w, F: DataFilter + 'w>(
+        self,
+        entity: Entity,
+        this_run: Tick,
+        last_run: Tick,
+    ) -> bool {
+        // SAFETY: shared structure read; the tick contract is the caller's.
+        let world = unsafe { self.world() };
+        world.is_alive(entity)
+            && world
+                .archetypes
+                .matches_entity::<Q, F>(entity, this_run, last_run)
+    }
+
+    /// How many rows query `Q` filtered by `F` matches, counted without
+    /// building any item.
+    ///
+    /// # Safety
+    /// As for [`Self::query_contains`].
+    pub unsafe fn query_count<Q: QueryData + 'w, F: DataFilter + 'w>(
+        self,
+        this_run: Tick,
+        last_run: Tick,
+    ) -> usize {
+        // SAFETY: shared structure read; the tick contract is the caller's.
+        unsafe { self.world() }
+            .archetypes
+            .count_matching::<Q, F>(this_run, last_run)
     }
 
     /// The resource of type `T`, shared.

@@ -47,7 +47,9 @@ pub use component::{ComponentId, SparseShell};
 pub use data_filter::DataFilter;
 pub use filter::{Or, QueryFilter, With, Without};
 pub use hooks::{ComponentHook, ComponentHooks, DeferredWorld, HookContext};
-pub use query_data::{Added, Changed, Has, QueryData, ReadOnlyQueryData};
+pub use query_data::{
+    Added, Changed, Has, QueryData, QueryEntityError, QuerySingleError, ReadOnlyQueryData,
+};
 pub use resource::{ResourceFfiError, ResourceId};
 pub use system::{
     ExclusiveFunctionSystem, FunctionSystem, IntoSystem, System, SystemParamFunction,

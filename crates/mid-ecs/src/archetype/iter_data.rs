@@ -1092,6 +1092,169 @@ impl Archetypes {
     }
 }
 
+/// Why [`Archetypes::get_data_cell`] returned no item.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LookupMiss {
+    /// The archetypes hold no location for the entity.
+    NoLocation,
+    /// It has one, but the query's terms or filter do not match it.
+    DoesNotMatch,
+}
+
+impl Archetypes {
+    /// The archetype and row `entity` is in, if the query (`state`,
+    /// `filter`) matches that archetype: the same archetype-level test
+    /// `plan_matches` makes for every archetype, made for one. A row-level
+    /// filter is *not* applied here.
+    ///
+    /// `entity` must already be known alive: locations are keyed by slot, so
+    /// a stale handle would find the slot's new occupant (the reason
+    /// `World` checks before calling `write_row_bytes`).
+    fn locate_matching<Q: QueryData, F: DataFilter>(
+        &self,
+        entity: Entity,
+        state: &Q::State,
+        filter: &F::State,
+    ) -> Result<(&Archetype, usize), LookupMiss> {
+        let location = *self.locations.get(entity).ok_or(LookupMiss::NoLocation)?;
+        let archetype = self
+            .archetypes
+            .get(location.archetype_id)
+            .ok_or(LookupMiss::NoLocation)?;
+        if !Q::is_satisfiable(state) {
+            return Err(LookupMiss::DoesNotMatch);
+        }
+        let mut required = Vec::new();
+        Q::collect_required(state, &mut required);
+        let signature = &archetype.component_ids;
+        let keep = required.iter().all(|c| signature.contains(c))
+            && F::matches_component_set(filter, &|c| signature.contains(&c));
+        if keep {
+            Ok((archetype, location.row))
+        } else {
+            Err(LookupMiss::DoesNotMatch)
+        }
+    }
+
+    /// The query's state and filter state, resolved against this world's
+    /// registered component types.
+    fn query_states<Q: QueryData, F: DataFilter>(&self) -> (Q::State, F::State) {
+        let resolve = |type_id| self.component_ids.get(&type_id).copied();
+        (Q::get_state(&resolve), F::get_state(&resolve))
+    }
+
+    /// The item query `Q` filtered by `F` yields for `entity`, if it yields
+    /// one: the one-row form of [`Self::par_batches_cell`]. It builds a
+    /// single window over the entity's row and runs the same iterator over
+    /// it, so every rule of a normal iteration holds unchanged: the
+    /// archetype-level match, the row-level `Added` / `Changed` filter,
+    /// `Mut` writes stamped `this_run`, `Ref` ticks.
+    ///
+    /// `entity` must already be known alive (see [`Self::locate_matching`]).
+    ///
+    /// # Panics
+    /// If `Q` reads and writes, or writes twice, the same component, as the
+    /// iterators do (checked before anything is looked up).
+    ///
+    /// # Safety
+    /// For as long as the returned item is live: no `&mut Archetypes` or
+    /// `&mut World` exists, the world's structure is not changed, and no
+    /// other access conflicts with this query's own as
+    /// `FilteredAccess::of_query` describes it; and, if `Q` writes, nothing
+    /// else obtains the same row's written components (a second lookup of
+    /// the same entity for a writing `Q` must wait for this item to drop).
+    pub(crate) unsafe fn get_data_cell<'a, Q: QueryData + 'a, F: DataFilter + 'a>(
+        &'a self,
+        entity: Entity,
+        this_run: Tick,
+        last_run: Tick,
+    ) -> Result<Q::Item<'a>, LookupMiss> {
+        let (state, filter) = self.query_states::<Q, F>();
+        let mut entries = Vec::new();
+        Q::collect_access(&state, &mut entries);
+        validate_access("WorldCell::query_get", &entries);
+        let (archetype, row) = self.locate_matching::<Q, F>(entity, &state, &filter)?;
+        let mut filter_ticks = Vec::new();
+        F::collect_tick_reads(&filter, &mut filter_ticks);
+        let plan = build_plan(&entries, &filter_ticks);
+        // SAFETY: this function's contract.
+        let (written, written_ticks) = unsafe { capture_written(archetype, &plan) };
+        let window = WindowDesc {
+            archetype,
+            rows: row..row + 1,
+            written,
+            written_ticks,
+        };
+        let mut one = IterDataMut::<Q, F, _> {
+            source: WindowSource {
+                windows: vec![window].into_iter(),
+            },
+            state,
+            filter,
+            plan,
+            table: TableAccess::exclusive(this_run, last_run),
+            fetch: None,
+            row: 0,
+            len: 0,
+            rows: Vec::new(),
+            next_selected: 0,
+        };
+        one.next().ok_or(LookupMiss::DoesNotMatch)
+    }
+
+    /// Whether query `Q` filtered by `F` matches `entity`: what
+    /// [`Self::get_data_cell`] would find, without building an item (so it
+    /// works for a writing `Q` too, and takes no column handle). An
+    /// entity with no location does not match.
+    ///
+    /// `entity` must already be known alive (see [`Self::locate_matching`]).
+    /// Reads change ticks only, and only for a row-level filter.
+    pub(crate) fn matches_entity<Q: QueryData, F: DataFilter>(
+        &self,
+        entity: Entity,
+        this_run: Tick,
+        last_run: Tick,
+    ) -> bool {
+        let (state, filter) = self.query_states::<Q, F>();
+        let Ok((archetype, row)) = self.locate_matching::<Q, F>(entity, &state, &filter) else {
+            return false;
+        };
+        if !F::TRACKED {
+            return true;
+        }
+        let table = TableAccess::shared(archetype, this_run, last_run);
+        let fetch = F::init_fetch(&filter, &table);
+        F::matches_row(&fetch, row)
+    }
+
+    /// How many rows query `Q` filtered by `F` matches: what iterating it
+    /// would yield, counted without building any item (so it works for a
+    /// writing `Q` too). Reads change ticks only, and only for a row-level
+    /// filter.
+    pub(crate) fn count_matching<Q: QueryData, F: DataFilter>(
+        &self,
+        this_run: Tick,
+        last_run: Tick,
+    ) -> usize {
+        let (_state, filter, matched) = plan_matches::<Q, F>(self);
+        let mut total = 0;
+        for id in matched {
+            let archetype = self.archetypes.get(id).expect(
+                "the precomputed matched list only ever contains real, currently-existing archetype ids",
+            );
+            if F::TRACKED {
+                let table = TableAccess::shared(archetype, this_run, last_run);
+                let mut rows = Vec::new();
+                select_rows::<F>(&filter, &table, &mut rows);
+                total += rows.len();
+            } else {
+                total += archetype.table.entities.len();
+            }
+        }
+        total
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

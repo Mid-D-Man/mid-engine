@@ -3992,13 +3992,109 @@ section, which applies to these tests too.
   `System::access`, `run_unchecked` and `apply_deferred`; `mid-app`, which still
   stores `Box<dyn FnMut(&mut World)>` and uses the Sparse Shell API, is
   untouched. Parallel execution (item 5) also has to decide `Send`/`Sync`.
-- Systems return nothing (no `In`/`Out`), there is no `ParamSet`, no
-  `Query::get(entity)` or `single`, and no cached matched archetypes: every
-  `iter` re-resolves them, like the `query_data` methods (item 8).
+- Systems return nothing (no `In`/`Out`), there is no `ParamSet`, and no cached
+  matched archetypes: every `iter` and every lookup re-resolves them, like the
+  `query_data` methods (item 8). (`Query::get`, `single`, `contains`, `count` and
+  friends are built: see "Looking entities up in a query".)
 - Resources have no change detection (item 8); `Res`/`ResMut` carry none.
 - No benchmark: these are setup-time structures plus one call per parameter per
   run. The per-row cost of a system's query is that of `query_iter` /
   `query_iter_mut`, which are the existing iterators.
+
+### Looking entities up in a query (`Query::get`, `single`, `contains`, `count`, ...)
+
+`Query` had `iter`, `iter_mut`, `par_iter` and `par_iter_mut` and nothing else:
+no way to ask about one entity, which nearly every real system does. Ten
+methods now sit beside them, with bevy's names and meanings.
+
+| method | does | error |
+|---|---|---|
+| `get(e)` / `get_mut(e)` | the item for one entity | `QueryEntityError` |
+| `get_many([e; N])` / `get_many_mut([e; N])` | the items for N entities, in order | `QueryEntityError` |
+| `iter_many(entities)` | the items for a list, skipping non-matches | none |
+| `single()` / `single_mut()` | the one item | `QuerySingleError` |
+| `contains(e)` | whether the query matches `e`, without fetching | none |
+| `count()` / `is_empty()` | how many rows match, without fetching | none |
+
+`QueryEntityError` is `NoSuchEntity(e)` (not alive: never existed, despawned, or
+a stale handle whose slot was reused), `QueryDoesNotMatch(e)` (alive, but the
+archetype lacks a required component or fails a `With` / `Without` / `Or`
+filter, or a row-level `Added` / `Changed` filter rejects the row) and
+`AliasedMutability(e)` (the same entity twice in `get_many_mut`).
+`QuerySingleError` is `NoEntities` or `MultipleEntities`.
+
+**A lookup is a one-row iteration.** Nothing about matching was re-implemented.
+`Archetypes::get_data_cell` builds a single window over the entity's row (the
+`WindowDesc` that `par_iter` uses for batches) and runs the same `IterDataMut`
+over it, so the archetype-level test, the row filter, `Ref` ticks and `Mut`
+stamping are the iteration's by construction, and so is the access contract.
+`contains` and `count` build no item at all: `matches_entity` and
+`count_matching` evaluate the archetype-level test and the row filter only
+(reading ticks, nothing else), so they work for a writing query and take no
+column handle.
+
+**Liveness is checked first.** Locations are keyed by slot, so a stale handle
+would find the slot's new occupant; `WorldCell` checks `is_alive` before looking
+anything up, the same reason `write_row_bytes` has its caller check. Pinned by a
+test in which a stale handle meets a new entity with the same slot.
+
+**Borrowing is bevy's.** `get` borrows the query shared and needs a read-only
+`Q`; `get_mut` borrows it exclusively, so a second `get_mut` while the first
+item is live is refused at compile time (a `compile_fail` doctest, checked to
+fail with E0499 and to compile once the first item is dropped). Several
+entities at once go through `get_many_mut`, which refuses a repeat before
+looking anything up (an O(N^2) scan of a const-sized array), so no row is
+handed out twice. `single_mut` looks ahead for a second item to rule out
+`MultipleEntities`; that item is built and dropped without being written
+through, so it stamps nothing (pinned).
+
+**A query that reads and writes one component panics** in a lookup exactly as in
+an iteration, and before the entity is looked up, whether or not it matches
+(pinned through `WorldCell::query_get_mut`; a `Query` parameter cannot reach it,
+because `SystemState::new` refuses such a query).
+
+**Cost.** Each `get` resolves the query's component ids (one hash lookup per
+term), builds the plan vectors and one window; it is not a step of an iteration.
+Not benchmarked (optimization is paused). Cached query state (item 8) is the
+fix, and would serve `contains` and `count` too.
+
+**Verified (sandbox, rustc 1.91.1).**
+
+- Fourteen new tests (lib 706 -> 720, doctests 18 -> 19):
+  archetype-level matching including `With` / `Without` / `Option` / `Has`; dead
+  and stale handles; row-level `Changed` through `get`, `contains` and `count`;
+  `get_mut` stamping only the row written through, and not for a read; `get_many`
+  keeping order and allowing repeats; `get_many_mut` refusing a repeat,
+  writing disjoint rows and stamping only what was written; `iter_many` order and
+  skipping; `single` and `single_mut` in all three outcomes, with the refused
+  look-ahead stamping nothing; `count` and `contains` on a writing query; a query
+  over a type the world never saw; one satisfiable term not rescuing an
+  unsatisfiable one; the self-conflicting query panicking first. The central test
+  is differential: 400 steps of random spawns, despawns, insertions, removals,
+  writes and ticks, and at every step six read-only query shapes (`&A`, `&A, &B`,
+  `Without<B>`, `Option<&C>` under `With<A>`, `Changed<A>`, and an `Or` of `Added`
+  and `Changed`), each checked for every entity ever created, alive or not:
+  `get` is `Ok` exactly when iteration yields the entity, with the same item,
+  and otherwise says dead or does-not-match correctly; `contains` agrees;
+  `count`, `is_empty` and `iter_many` agree with iteration. Every shape must
+  match something often enough, and the two row-filtered shapes must also match
+  nothing often enough, or the test fails.
+- Mutation testing: 32 mutants of the new code (every guard in the
+  archetype-level match, the window, the tick arguments of every method, the
+  liveness checks, the error mapping, both counters, `get_many` order, the
+  duplicate scan, `single`'s three outcomes), all caught, none survived. The first pass left three survivors, each a missing test
+  (`single()`'s two error outcomes and the tick arguments of `get_many_mut`); the tests
+  were added and the whole suite rerun. Valgrind over the `system_param::` and
+  `world_cell::` lib tests (the window code is raw pointers): no invalid access or
+  uninitialised read; the only report is the 48-byte "possibly lost" inside
+  libtest's own thread set-up.
+
+**Not done.**
+
+- `iter_many_mut` (a lending iterator, so a different shape), `get_unchecked`,
+  `Query::transmute` / `as_readonly`, `ParamSet`.
+- `EntityRef` / `EntityMut` (whole-entity access by type), a separate gap.
+- Lookups in the Sparse Shell, which has no query terms.
 
 ### Parallel iteration (`batching.rs`, `QueryBatch`, `Query::par_iter`)
 
