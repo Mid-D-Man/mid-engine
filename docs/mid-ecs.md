@@ -4322,13 +4322,56 @@ above on every structural operation, and nothing else for a world with no hooks.
 
 **Not done.**
 - Events/messages and observers (the rest of item 6).
-- A C API for hooks: C cannot register a Rust `fn`, so this needs a C callback
-  type, a place to keep its user data, and the safety rules for calling back
-  into C from inside a structural operation. (Removal tracking's C API is
-  built: see "C API for removal tracking" below.)
+- A C API for hooks: decided against for now, with what C uses instead and the
+  design if a need appears: see "Component hooks from C" below. (Removal
+  tracking's C API is built: see "C API for removal tracking".)
 - Hooks for resources, and `on_insert` for in-place writes.
 - Caller location and the component id in `HookContext` (bevy has both).
 - A defined order between components of one kind.
+
+### Component hooks from C: not exposed, for now
+
+**Decision.** C does not get hook callbacks. What a hook gives that polling
+does not is running synchronously inside the structural operation, and reading
+the old value before it goes. Those are the parts a C binding makes expensive
+(a callback ABI, a restricted handle, re-entrancy rules), nobody has asked for
+them from C, and what polling does give is already built. A hook's other main
+use, a component type keeping its own invariants like a constructor and
+destructor, mostly does not arise for components C registers: they are plain
+byte data (`IntoBytes`, and `FromBytes` where C may write them), so there is
+rarely a destructor to run.
+
+**What a C caller uses instead.**
+
+| hook | C today | not visible from C |
+|---|---|---|
+| `on_add` | `mid_ecs_world_static_query_since` with `all_added` | an add and a removal between two polls (the removal log keeps the entity, the `Added` is gone); Sparse-Shell adds, which have no ticks |
+| `on_insert` | `all_changed` (an insert or a mutation; Archetype-Core insert never overwrites) | a Sparse-Shell overwrite (no ticks, and C cannot insert there) |
+| `on_remove`, `on_despawn` | `track_removals` / `removed_since`, both storages; a despawn records every tracked component | the removed value |
+| `on_discard` | the removal half, as above | the old value; an overwrite is not recorded as a removal |
+
+What is lost, then, is exactly three things: the value of a component as it
+goes, running in order inside the operation, and Sparse-Shell adds and
+overwrites.
+
+**If a concrete need appears, two steps, cheapest first.** Neither is built.
+
+1. *Capture removed bytes in the removal log* (opt-in per component): answers
+   "what was the old value" with no callback and no re-entrancy. It costs
+   memory in proportion to the removal rate, trimmed with the log like the
+   entities are.
+2. *Callbacks.* Rust hooks are plain `fn` (no captures), so a C callback would
+   sit behind one static trampoline per kind that reads a C table (callback and
+   `user_data`, per component and kind, set once as in Rust) kept as a world
+   resource. It needs, beyond that: a restricted handle with untyped value
+   access by component id (`DeferredWorld` has only typed access today) and the
+   command queue; a rule that a callback must not call the real world handle,
+   which is mid-mutation (documented, or enforced with an in-hook flag that the
+   mutating entry points check and answer with a new status); a rule that it
+   must return normally (no `longjmp`, no C++ exception); and a decision
+   whether to cover both id spaces, as the other C families do. A Rust panic
+   in a hook already surfaces as `InternalPanic` with the operation half done
+   (hooks are not unwind-safe, as documented above). Not prototyped.
 
 ### C API for removal tracking (`ffi.rs`)
 
@@ -4413,8 +4456,7 @@ Not benchmarked: performance work is paused.
 
 **Not done (C side).**
 
-- Hooks: a C callback type, user data per component, and a restricted handle
-  for the callback are a design decision, not a wrapper.
+- Hooks from C: decided against for now, see "Component hooks from C" above.
 - A C query iterator and a queued spawn that returns an `Entity`, decided
   against: see "In-place mutable rows (`row_mut`)" below. (Filtered `Added` /
   `Changed` queries across archetypes are built: see the next section.)
@@ -4538,7 +4580,7 @@ benchmarked: performance work is paused.
 - Nested filters (an `Or` of tuples) and any value-returning terms: the C caller
   reads values through the spans at the rows returned, and `Ref` / `Mut` terms
   have no C form.
-- Hooks (see above): a callback design, not a wrapper.
+- Hooks from C: decided against for now, see "Component hooks from C" above.
 
 ### Writing component data from C (`raw_span_mut`, `write`, `FfiSpanMut`)
 
@@ -4742,7 +4784,7 @@ world pointer, so it can always spawn.
   per-row FFI cost. Not measured, so not built: performance work is paused.
 - The Sparse Shell, throughout: it has no ticks to stamp and no writable
   registration.
-- Hooks: a callback design, not a wrapper.
+- Hooks from C: decided against for now, see "Component hooks from C" above.
 
 ### Inserting a component from C (`insert`, queued inserts, `queued_spawn`)
 
