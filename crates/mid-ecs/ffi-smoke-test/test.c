@@ -358,6 +358,68 @@ int main(void) {
     CHECK(mid_ecs_world_resource_remove(rw, time_id) == MID_ECS_NOT_FOUND, "removing it again is MID_ECS_NOT_FOUND");
     mid_ecs_world_free(rw);
 
+    // --- Resource change detection: added / changed since a tick you kept ---
+    {
+        MidEcsWorld *cw = mid_ecs_test_resource_fixture_world_new();
+        uint32_t cd_time = mid_ecs_world_lookup_ffi_resource_id(cw, "FfiTime");
+        uint32_t cd_gravity = mid_ecs_world_lookup_ffi_resource_id(cw, "FfiGravity");
+        uint32_t cd_t0 = mid_ecs_world_change_tick(cw);
+
+        CHECK(mid_ecs_world_resource_added_since(cw, cd_time, 0) == 1
+                  && mid_ecs_world_resource_changed_since(cw, cd_time, 0) == 1,
+              "an inserted resource is added and changed since tick 0");
+        CHECK(mid_ecs_world_resource_added_since(cw, cd_gravity, 0) == 0
+                  && mid_ecs_world_resource_changed_since(cw, cd_gravity, 0) == 0,
+              "a registered but not inserted resource is neither");
+        CHECK(mid_ecs_world_resource_added_since(cw, cd_time, cd_t0) == 0,
+              "a change in the same tick as last_run is not reported");
+
+        mid_ecs_world_increment_change_tick(cw);
+        float cd_g = 9.8f;
+        CHECK(mid_ecs_world_resource_write(cw, cd_gravity, (const uint8_t *)&cd_g, sizeof cd_g) == MID_ECS_OK
+                  && mid_ecs_world_resource_added_since(cw, cd_gravity, cd_t0) == 1
+                  && mid_ecs_world_resource_changed_since(cw, cd_gravity, cd_t0) == 1
+                  && mid_ecs_world_resource_changed_since(cw, cd_time, cd_t0) == 0,
+              "writing an absent resource adds it; the other resource is untouched");
+
+        uint32_t cd_t1 = mid_ecs_world_change_tick(cw);
+        mid_ecs_world_increment_change_tick(cw);
+        float cd_g2 = 1.6f;
+        CHECK(mid_ecs_world_resource_write(cw, cd_gravity, (const uint8_t *)&cd_g2, sizeof cd_g2) == MID_ECS_OK
+                  && mid_ecs_world_resource_added_since(cw, cd_gravity, cd_t1) == 0
+                  && mid_ecs_world_resource_changed_since(cw, cd_gravity, cd_t1) == 1,
+              "replacing a value is a change, not an addition");
+
+        MidEcsFfiSpan cd_span;
+        mid_ecs_world_resource_raw_span(cw, cd_gravity, &cd_span);
+        uint32_t cd_t2 = mid_ecs_world_change_tick(cw);
+        mid_ecs_world_increment_change_tick(cw);
+        CHECK(mid_ecs_world_resource_changed_since(cw, cd_gravity, cd_t2) == 0,
+              "reading through a span is not a change");
+
+        CHECK(mid_ecs_world_resource_remove(cw, cd_gravity) == MID_ECS_OK
+                  && mid_ecs_world_resource_changed_since(cw, cd_gravity, cd_t2) == 0,
+              "a removed resource is neither added nor changed");
+        mid_ecs_world_increment_change_tick(cw);
+        CHECK(mid_ecs_world_resource_write(cw, cd_gravity, (const uint8_t *)&cd_g, sizeof cd_g) == MID_ECS_OK
+                  && mid_ecs_world_resource_added_since(cw, cd_gravity, cd_t2) == 1,
+              "removed and written again is a new addition");
+
+        CHECK(mid_ecs_world_resource_added_since(cw, 999, 0) == MID_ECS_NOT_FOUND
+                  && mid_ecs_world_resource_changed_since(cw, 999, 0) == MID_ECS_NOT_FOUND,
+              "a resource_id that was never issued is MID_ECS_NOT_FOUND");
+        CHECK(mid_ecs_world_resource_added_since(NULL, cd_time, 0) == MID_ECS_NULL_POINTER
+                  && mid_ecs_world_resource_changed_since(NULL, cd_time, 0) == MID_ECS_NULL_POINTER,
+              "a NULL world is MID_ECS_NULL_POINTER");
+        uint32_t cd_t3 = mid_ecs_world_change_tick(cw);
+        mid_ecs_world_increment_change_tick(cw);
+        uint8_t cd_short[2] = { 1, 2 };
+        CHECK(mid_ecs_world_resource_write(cw, cd_gravity, cd_short, sizeof cd_short) == MID_ECS_SIZE_MISMATCH
+                  && mid_ecs_world_resource_changed_since(cw, cd_gravity, cd_t3) == 0,
+              "a refused write stamps nothing");
+        mid_ecs_world_free(cw);
+    }
+
     // --- Change detection: added / changed rows ---
     MidEcsWorld *cw = mid_ecs_test_change_fixture_world_new();
     uint32_t ch_id = mid_ecs_world_lookup_ffi_static_component_id(cw, "FfiHealthStatic");

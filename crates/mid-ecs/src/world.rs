@@ -45,7 +45,7 @@ use crate::hooks::{
 };
 use crate::removal::RemovalLog;
 use crate::resource::{ResourceFfiError, ResourceId, Resources};
-use crate::tick::{ChangeTracker, Tick};
+use crate::tick::{ChangeTracker, Tick, CHECK_TICK_THRESHOLD};
 
 /// A handle to an entity. Detects its own staleness after despawn — a
 /// thin wrapper over `mid_collections::GenerationalIndex`, not a
@@ -216,6 +216,9 @@ pub struct World {
     pub(crate) hooks: HookRegistry,
     storage_claims: StorageClaims,
     change_tick: Tick,
+    /// The change tick at which every stored tick was last clamped
+    /// ([`Self::check_change_ticks`]).
+    last_check_tick: Tick,
 }
 
 impl World {
@@ -231,6 +234,7 @@ impl World {
             hooks: HookRegistry::default(),
             storage_claims: StorageClaims::default(),
             change_tick: Tick::new(1),
+            last_check_tick: Tick::ZERO,
         }
     }
 
@@ -247,6 +251,7 @@ impl World {
             hooks: HookRegistry::default(),
             storage_claims: StorageClaims::default(),
             change_tick: Tick::new(1),
+            last_check_tick: Tick::ZERO,
         }
     }
 
@@ -657,9 +662,48 @@ impl World {
     /// is called at least once, every [`crate::ChangeTracker`] reads
     /// every component currently present as added/changed (see
     /// [`crate::ChangeTracker::new`]).
+    ///
+    /// Every [`CHECK_TICK_THRESHOLD`] ticks this also runs
+    /// [`Self::check_change_ticks`], so the world's own stored ticks never
+    /// get old enough to wrap.
     pub fn increment_change_tick(&mut self) -> Tick {
         self.change_tick = Tick::new(self.change_tick.get().wrapping_add(1));
+        if self.change_tick.relative_to(self.last_check_tick).get() >= CHECK_TICK_THRESHOLD {
+            self.check_change_ticks();
+        }
         self.change_tick
+    }
+
+    /// Keeps every tick the world stores (the inserted and changed tick of
+    /// each component value, each resource's, each entry of the removal
+    /// log) within [`crate::MAX_CHANGE_AGE`] of the current tick, clamping
+    /// anything older to exactly that age. A tick is a wrapping `u32`;
+    /// without this a value that went untouched for 2^32 ticks would look
+    /// brand new (see `tick.rs`). [`Self::increment_change_tick`] calls it
+    /// every [`CHECK_TICK_THRESHOLD`] ticks, so there is rarely a reason to
+    /// call it directly. It does not reach ticks held outside the world:
+    /// see [`crate::System::check_change_tick`] and
+    /// [`ChangeTracker::check_tick`].
+    pub fn check_change_ticks(&mut self) {
+        let now = self.change_tick;
+        self.archetypes.check_ticks(now);
+        self.resources.check_ticks(now);
+        self.removals.check_ticks(now);
+        self.last_check_tick = now;
+    }
+
+    /// The change tick at which [`Self::check_change_ticks`] last ran
+    /// (zero before the first). Whoever holds ticks outside the world can
+    /// re-check them when this changes, or on their own cadence.
+    pub fn last_check_tick(&self) -> Tick {
+        self.last_check_tick
+    }
+
+    /// Jumps the change tick to `tick`, for tests of wraparound that
+    /// cannot afford 2^32 increments.
+    #[cfg(test)]
+    pub(crate) fn set_change_tick(&mut self, tick: Tick) {
+        self.change_tick = tick;
     }
 
     // ── Component hooks (`hooks.rs`) ─────────────────────────────────
@@ -1274,8 +1318,12 @@ impl World {
     /// Stores `value` as the world's resource of type `T`, returning the
     /// previous one if there was one. A type can be a resource and a
     /// component at the same time; the two are separate.
+    ///
+    /// A new resource is stamped added and changed at the current tick;
+    /// replacing one keeps its added tick and stamps it changed (see
+    /// [`Self::resource_added`], [`Self::resource_changed`]).
     pub fn insert_resource<T: 'static>(&mut self, value: T) -> Option<T> {
-        self.resources.insert(value)
+        self.resources.insert(value, self.change_tick)
     }
 
     /// The world's resource of type `T`, if one has been inserted.
@@ -1283,9 +1331,32 @@ impl World {
         self.resources.get::<T>()
     }
 
-    /// Mutable access to the world's resource of type `T`, if any.
+    /// Mutable access to the world's resource of type `T`, if any. The
+    /// resource is stamped *changed* at the current tick when this is
+    /// called, whether or not the caller then writes (the same rule as
+    /// [`Self::get_static_mut`]; a system's `ResMut` stamps only when it
+    /// is written through).
     pub fn get_resource_mut<T: 'static>(&mut self) -> Option<&mut T> {
-        self.resources.get_mut::<T>()
+        self.resources.get_mut::<T>(self.change_tick)
+    }
+
+    /// Whether the resource `T` was inserted after `tracker`'s last-checked
+    /// tick (`false` if there is none): the resource form of
+    /// [`Self::query_added`].
+    pub fn resource_added<T: 'static>(&self, tracker: &ChangeTracker) -> bool {
+        self.resources
+            .ticks::<T>()
+            .is_some_and(|t| t.is_added(tracker.last_run(), self.change_tick))
+    }
+
+    /// Whether the resource `T` was inserted, replaced, handed out by
+    /// [`Self::get_resource_mut`] or written from C after `tracker`'s
+    /// last-checked tick (`false` if there is none): the resource form of
+    /// [`Self::query_changed`].
+    pub fn resource_changed<T: 'static>(&self, tracker: &ChangeTracker) -> bool {
+        self.resources
+            .ticks::<T>()
+            .is_some_and(|t| t.is_changed(tracker.last_run(), self.change_tick))
     }
 
     /// Removes and returns the world's resource of type `T`, if any.
@@ -1327,13 +1398,44 @@ impl World {
     }
 
     /// Copies `bytes` in as the registered resource's value, inserting it
-    /// if absent. `bytes` must be exactly the registered type's size.
+    /// if absent. `bytes` must be exactly the registered type's size. An
+    /// existing resource is stamped changed, a new one added and changed.
     pub fn write_resource_bytes(
         &mut self,
         id: ResourceId,
         bytes: &[u8],
     ) -> Result<(), ResourceFfiError> {
-        self.resources.ffi_write(id, bytes)
+        self.resources.ffi_write(id, bytes, self.change_tick)
+    }
+
+    /// Whether the registered resource was inserted after `last_run`
+    /// (`false` if it is registered but not inserted): the by-id form of
+    /// [`Self::resource_added`] for a caller that holds a last-run tick
+    /// rather than a [`ChangeTracker`]. `UnknownId` for an id never issued.
+    pub fn resource_added_since(
+        &self,
+        id: ResourceId,
+        last_run: Tick,
+    ) -> Result<bool, ResourceFfiError> {
+        Ok(self
+            .resources
+            .ffi_ticks(id)?
+            .is_some_and(|t| t.is_added(last_run, self.change_tick)))
+    }
+
+    /// Whether the registered resource was inserted, replaced, handed out
+    /// by [`Self::get_resource_mut`] or written from C after `last_run`
+    /// (`false` if it is registered but not inserted); the by-id form of
+    /// [`Self::resource_changed`].
+    pub fn resource_changed_since(
+        &self,
+        id: ResourceId,
+        last_run: Tick,
+    ) -> Result<bool, ResourceFfiError> {
+        Ok(self
+            .resources
+            .ffi_ticks(id)?
+            .is_some_and(|t| t.is_changed(last_run, self.change_tick)))
     }
 
     /// Removes the registered resource's value. `Absent` if the type is
@@ -2767,5 +2869,175 @@ mod tests {
         assert_eq!(changed, vec![entities[5]]);
         assert_eq!(w.get_static::<Vigor>(entities[5]), Some(&Vigor { hp: 500 }));
         assert_eq!(w.get_static::<Vigor>(entities[0]), Some(&Vigor { hp: 0 }));
+    }
+
+    use crate::tick::MAX_CHANGE_AGE;
+
+    // ── resource change detection and the tick scan ──────────────────
+
+    #[derive(Debug, PartialEq)]
+    struct Cfg(u32);
+    #[derive(Debug, PartialEq)]
+    struct W1(u32);
+    #[derive(Debug, PartialEq)]
+    struct W2(u32);
+
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        zerocopy::FromBytes,
+        zerocopy::IntoBytes,
+        zerocopy::KnownLayout,
+        zerocopy::Immutable,
+    )]
+    #[repr(C)]
+    struct FfiCfg {
+        v: u32,
+    }
+
+    #[test]
+    fn resource_added_and_changed_follow_a_tracker() {
+        let mut w = World::new();
+        let mut t = ChangeTracker::new();
+        assert!(!w.resource_added::<Cfg>(&t) && !w.resource_changed::<Cfg>(&t), "none yet");
+
+        w.insert_resource(Cfg(1));
+        assert!(w.resource_added::<Cfg>(&t) && w.resource_changed::<Cfg>(&t));
+
+        t.update(&w);
+        w.increment_change_tick();
+        assert!(!w.resource_added::<Cfg>(&t) && !w.resource_changed::<Cfg>(&t));
+
+        // Replacing is a change, not an addition.
+        w.insert_resource(Cfg(2));
+        assert!(!w.resource_added::<Cfg>(&t) && w.resource_changed::<Cfg>(&t));
+
+        t.update(&w);
+        w.increment_change_tick();
+        let _ = w.get_resource::<Cfg>();
+        assert!(!w.resource_changed::<Cfg>(&t), "reading is not a change");
+        let _ = w.get_resource_mut::<Cfg>();
+        assert!(!w.resource_added::<Cfg>(&t) && w.resource_changed::<Cfg>(&t));
+
+        // Removed and inserted again: a new addition.
+        t.update(&w);
+        w.increment_change_tick();
+        w.remove_resource::<Cfg>();
+        assert!(!w.resource_changed::<Cfg>(&t), "gone");
+        w.insert_resource(Cfg(3));
+        assert!(w.resource_added::<Cfg>(&t) && w.resource_changed::<Cfg>(&t));
+    }
+
+    #[test]
+    fn a_resource_written_from_c_is_added_when_new_and_changed_when_replaced() {
+        let mut w = World::new();
+        let id = w.register_ffi_resource::<FfiCfg>("FfiCfg");
+        let mut t = ChangeTracker::new();
+        w.write_resource_bytes(id, &7u32.to_ne_bytes()).unwrap();
+        assert!(w.resource_added::<FfiCfg>(&t));
+        t.update(&w);
+        w.increment_change_tick();
+        w.write_resource_bytes(id, &8u32.to_ne_bytes()).unwrap();
+        assert!(!w.resource_added::<FfiCfg>(&t) && w.resource_changed::<FfiCfg>(&t));
+        t.update(&w);
+        w.increment_change_tick();
+        assert!(w.write_resource_bytes(id, &[1]).is_err());
+        assert!(!w.resource_changed::<FfiCfg>(&t), "a refused write stamps nothing");
+    }
+
+    #[test]
+    fn check_change_ticks_clamps_components_resources_and_the_removal_log() {
+        let mut w = World::new();
+        w.set_change_tick(Tick::new(100));
+        let e = w.spawn();
+        w.insert_static(e, W1(1));
+        w.insert_resource(Cfg(1));
+        w.track_removals::<W2>();
+        let e2 = w.spawn();
+        w.insert_static(e2, W2(1));
+        w.remove_static::<W2>(e2);
+
+        // 3.5e9 ticks later: everything stamped at tick 100 is older than
+        // MAX_CHANGE_AGE. A tracker that last ran MAX_CHANGE_AGE + 1 ticks
+        // ago is "newer" than a clamped stamp but not than the real one.
+        let now = Tick::new(100u32.wrapping_add(3_500_000_000));
+        w.set_change_tick(now);
+        let tracker = ChangeTracker::at(Tick::new(now.get().wrapping_sub(MAX_CHANGE_AGE + 1)));
+        let seen = |w: &mut World| {
+            (
+                w.query_data_filtered_since::<Entity, crate::Changed<W1>>(&tracker)
+                    .count(),
+                w.resource_changed::<Cfg>(&tracker),
+                w.removed_since::<W2>(&tracker).count(),
+            )
+        };
+        assert_eq!(seen(&mut w), (0, false, 0), "unchecked, they read as very old");
+
+        w.check_change_ticks();
+        assert_eq!(seen(&mut w), (1, true, 1), "clamped to exactly MAX_CHANGE_AGE");
+        assert_eq!(w.last_check_tick(), now);
+
+        // A tracker exactly MAX_CHANGE_AGE old is *not* older than the clamp.
+        let at_limit = ChangeTracker::at(Tick::new(now.get().wrapping_sub(MAX_CHANGE_AGE)));
+        assert_eq!(
+            w.query_data_filtered_since::<Entity, crate::Changed<W1>>(&at_limit)
+                .count(),
+            0
+        );
+        // And a second scan changes nothing.
+        w.check_change_ticks();
+        assert_eq!(seen(&mut w), (1, true, 1));
+    }
+
+    #[test]
+    fn increment_change_tick_runs_the_scan_when_due_and_not_before() {
+        let mut w = World::new();
+        assert_eq!(w.last_check_tick(), Tick::ZERO);
+        w.set_change_tick(Tick::new(CHECK_TICK_THRESHOLD - 2));
+        w.increment_change_tick();
+        assert_eq!(w.last_check_tick(), Tick::ZERO, "one tick short of due");
+        let now = w.increment_change_tick();
+        assert_eq!(now, Tick::new(CHECK_TICK_THRESHOLD));
+        assert_eq!(w.last_check_tick(), now, "due: scanned");
+        w.increment_change_tick();
+        assert_eq!(w.last_check_tick(), now, "not due again for a whole threshold");
+    }
+
+    /// Two worlds see the same history: a component stamped once, then a
+    /// long wait of 2^32 + 5 million ticks in 520-million-tick jumps (each
+    /// followed by the `increment_change_tick` a game loop makes). One
+    /// world's loop increments, so it scans on the way; the other's does
+    /// not. The stamp must read as old in the first and, without a scan,
+    /// wrongly new in the second.
+    #[test]
+    fn a_world_that_scans_on_the_way_keeps_old_values_old_across_a_full_wrap() {
+        fn world_after_the_wait(increment_each_jump: bool) -> World {
+            let mut w = World::new();
+            w.set_change_tick(Tick::new(100));
+            let e = w.spawn();
+            w.insert_static(e, W1(1));
+            for k in 1..=8u32 {
+                w.set_change_tick(Tick::new(100 + k * 520_000_000));
+                if increment_each_jump {
+                    w.increment_change_tick();
+                }
+            }
+            w.set_change_tick(Tick::new(100u32.wrapping_add(5_000_000)));
+            w
+        }
+        let changed = |w: &mut World| {
+            let now = w.change_tick();
+            let tracker = ChangeTracker::at(Tick::new(now.get().wrapping_sub(10_000_000)));
+            w.query_data_filtered_since::<Entity, crate::Changed<W1>>(&tracker)
+                .count()
+        };
+        assert_eq!(changed(&mut world_after_the_wait(true)), 0, "scanned: still old");
+        assert_eq!(
+            changed(&mut world_after_the_wait(false)),
+            1,
+            "without a scan the wrapped age looks new: the bug"
+        );
     }
 }

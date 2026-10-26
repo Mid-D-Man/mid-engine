@@ -271,6 +271,20 @@ int32_t mid_ecs_world_resource_write(MidEcsWorld *world, uint32_t resource_id, c
 // previously obtained for it.
 int32_t mid_ecs_world_resource_remove(MidEcsWorld *world, uint32_t resource_id);
 
+// Resource change detection. 1 if the resource was INSERTED (added) /
+// inserted, replaced or written (changed) after last_run, 0 if not, and also 0
+// if the resource is registered but not currently inserted. last_run is a
+// change tick you kept, as for the *_rows functions: read
+// mid_ecs_world_change_tick after handling a batch, pass it next time, and call
+// mid_ecs_world_increment_change_tick once per step (a change in the same tick
+// as last_run is not reported). A resource removed and inserted again is a new
+// addition; replacing one (mid_ecs_world_resource_write, or Rust code taking
+// mutable access) is a change but not an addition. Reading is not a change.
+// MID_ECS_NULL_POINTER on a NULL world; MID_ECS_NOT_FOUND if resource_id was
+// never issued.
+int32_t mid_ecs_world_resource_added_since(const MidEcsWorld *world, uint32_t resource_id, uint32_t last_run);
+int32_t mid_ecs_world_resource_changed_since(const MidEcsWorld *world, uint32_t resource_id, uint32_t last_run);
+
 // --- Change detection: added / changed rows ---
 //
 // The C counterpart of Rust's World::query_added / query_changed, for

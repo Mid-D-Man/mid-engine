@@ -2806,6 +2806,74 @@ pub unsafe extern "C" fn mid_ecs_world_resource_remove(
     })
 }
 
+/// Whether the registered resource was *inserted* after `last_run`: `1` if
+/// so, `0` if not (also `0` if it is registered but not currently
+/// inserted). `last_run` is a change tick the caller kept, exactly as for
+/// the `*_rows` functions: read [`mid_ecs_world_change_tick`] after handling
+/// a batch, pass it next time, and call
+/// [`mid_ecs_world_increment_change_tick`] once per step (a change in the
+/// same tick as `last_run` is not reported). `0` for `last_run` reports
+/// anything inserted since the world began. A resource that is removed and
+/// inserted again counts as a new addition.
+///
+/// Returns `1` or `0`, or a negative `MidEcsStatus`: `NullPointer` (null
+/// `world`) or `NotFound` (`resource_id` was never issued).
+///
+/// # Safety
+/// `world` must be a valid, non-null handle from `mid_ecs_world_new`.
+#[no_mangle]
+pub unsafe extern "C" fn mid_ecs_world_resource_added_since(
+    world: *const MidEcsWorld,
+    resource_id: u32,
+    last_run: u32,
+) -> i32 {
+    ffi_guard(|| {
+        if world.is_null() {
+            return MidEcsStatus::NullPointer as i32;
+        }
+        let world = unsafe { &*world };
+        match world
+            .0
+            .resource_added_since(ResourceId::from_u32(resource_id), Tick::new(last_run))
+        {
+            Ok(added) => i32::from(added),
+            Err(error) => resource_status(error),
+        }
+    })
+}
+
+/// Whether the registered resource was inserted, replaced, or written
+/// (through [`mid_ecs_world_resource_write`], or by Rust code handing out
+/// mutable access to it) after `last_run`: `1` if so, `0` if not (also `0`
+/// if it is registered but not currently inserted). Same `last_run`
+/// convention and returns as [`mid_ecs_world_resource_added_since`]. Reading
+/// a resource, including through [`mid_ecs_world_resource_raw_span`], is
+/// not a change; a write through a span from `raw_span` is invisible, as
+/// the span is read-only.
+///
+/// # Safety
+/// `world` must be a valid, non-null handle from `mid_ecs_world_new`.
+#[no_mangle]
+pub unsafe extern "C" fn mid_ecs_world_resource_changed_since(
+    world: *const MidEcsWorld,
+    resource_id: u32,
+    last_run: u32,
+) -> i32 {
+    ffi_guard(|| {
+        if world.is_null() {
+            return MidEcsStatus::NullPointer as i32;
+        }
+        let world = unsafe { &*world };
+        match world
+            .0
+            .resource_changed_since(ResourceId::from_u32(resource_id), Tick::new(last_run))
+        {
+            Ok(changed) => i32::from(changed),
+            Err(error) => resource_status(error),
+        }
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -7926,5 +7994,59 @@ mod tests {
         );
         let span = world.static_component_row_mut(e[2], a).expect("e[2] has A");
         assert_eq!((span.count, span.stride), (1, 4));
+    }
+
+    // ── resource change detection (C API) ────────────────────────────
+
+    #[test]
+    fn resource_added_and_changed_since_follow_writes_from_c() {
+        let w = mid_ecs_test_resource_fixture_world_new();
+        // SAFETY: `w` is a live handle for this whole block, freed at its end.
+        unsafe {
+            let time = mid_ecs_world_lookup_ffi_resource_id(w, b"FfiTime\0".as_ptr().cast());
+            let gravity =
+                mid_ecs_world_lookup_ffi_resource_id(w, b"FfiGravity\0".as_ptr().cast());
+            let t0 = mid_ecs_world_change_tick(w);
+            // Time is inserted by the fixture; Gravity is registered only.
+            assert_eq!(mid_ecs_world_resource_added_since(w, time, 0), 1);
+            assert_eq!(mid_ecs_world_resource_added_since(w, gravity, 0), 0);
+            assert_eq!(mid_ecs_world_resource_changed_since(w, gravity, 0), 0);
+            assert_eq!(mid_ecs_world_resource_added_since(w, time, t0), 0, "same tick");
+
+            mid_ecs_world_increment_change_tick(w);
+            let g = 9.8f32.to_ne_bytes();
+            assert_eq!(mid_ecs_world_resource_write(w, gravity, g.as_ptr(), 4), OK);
+            assert_eq!(mid_ecs_world_resource_added_since(w, gravity, t0), 1);
+            assert_eq!(mid_ecs_world_resource_changed_since(w, gravity, t0), 1);
+            assert_eq!(mid_ecs_world_resource_changed_since(w, time, t0), 0);
+
+            let t1 = mid_ecs_world_change_tick(w);
+            mid_ecs_world_increment_change_tick(w);
+            let g2 = 1.6f32.to_ne_bytes();
+            assert_eq!(mid_ecs_world_resource_write(w, gravity, g2.as_ptr(), 4), OK);
+            assert_eq!(mid_ecs_world_resource_added_since(w, gravity, t1), 0, "replaced, not added");
+            assert_eq!(mid_ecs_world_resource_changed_since(w, gravity, t1), 1);
+
+            // Removed and written again: a new addition.
+            let t2 = mid_ecs_world_change_tick(w);
+            mid_ecs_world_increment_change_tick(w);
+            assert_eq!(mid_ecs_world_resource_remove(w, gravity), OK);
+            assert_eq!(mid_ecs_world_resource_changed_since(w, gravity, t2), 0, "gone");
+            assert_eq!(mid_ecs_world_resource_write(w, gravity, g.as_ptr(), 4), OK);
+            assert_eq!(mid_ecs_world_resource_added_since(w, gravity, t2), 1);
+
+            // Errors.
+            assert_eq!(mid_ecs_world_resource_added_since(w, 999, 0), NOT_FOUND);
+            assert_eq!(mid_ecs_world_resource_changed_since(w, 999, 0), NOT_FOUND);
+            assert_eq!(mid_ecs_world_resource_added_since(ptr::null(), time, 0), NULL_POINTER);
+            assert_eq!(mid_ecs_world_resource_changed_since(ptr::null(), time, 0), NULL_POINTER);
+            // A refused write stamps nothing.
+            let t3 = mid_ecs_world_change_tick(w);
+            mid_ecs_world_increment_change_tick(w);
+            let short = [1u8, 2];
+            assert!(mid_ecs_world_resource_write(w, gravity, short.as_ptr(), 2) < 0);
+            assert_eq!(mid_ecs_world_resource_changed_since(w, gravity, t3), 0);
+            mid_ecs_world_free(w);
+        }
     }
 }

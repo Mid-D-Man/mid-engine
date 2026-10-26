@@ -108,6 +108,15 @@ impl RemovalLog {
         }
     }
 
+    /// Keeps every entry's tick within [`crate::MAX_CHANGE_AGE`] of `now`.
+    pub(crate) fn check_ticks(&mut self, now: Tick) {
+        for log in self.tracked.values_mut() {
+            for (_, tick) in log.iter_mut() {
+                tick.check_tick(now);
+            }
+        }
+    }
+
     /// Drops every entry. Types stay tracked.
     pub(crate) fn clear(&mut self) {
         for log in self.tracked.values_mut() {

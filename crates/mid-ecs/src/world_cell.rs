@@ -44,7 +44,7 @@ use crate::batching::BatchingStrategy;
 use crate::data_filter::DataFilter;
 use crate::query_data::{QueryData, QueryEntityError, ReadOnlyQueryData};
 use crate::removal::RemovalLog;
-use crate::tick::Tick;
+use crate::tick::{ComponentTicks, Tick};
 use crate::world::{Entity, World};
 
 /// A copyable, `unsafe`-to-use handle on a [`World`]. See the module docs
@@ -320,6 +320,29 @@ impl<'w> WorldCell<'w> {
             .count_matching::<Q, F>(this_run, last_run)
     }
 
+    /// The resource of type `T` and its ticks, shared.
+    ///
+    /// # Safety
+    /// As for [`Self::resource`].
+    pub(crate) unsafe fn resource_with_ticks<T: 'static>(
+        self,
+    ) -> Option<(&'w T, &'w ComponentTicks)> {
+        // SAFETY: shared structure read; the data contract is the caller's.
+        unsafe { self.world() }.resources.get_with_ticks::<T>()
+    }
+
+    /// The resource of type `T` and its ticks, exclusive.
+    ///
+    /// # Safety
+    /// As for [`Self::resource_mut`].
+    #[allow(clippy::mut_from_ref)]
+    pub(crate) unsafe fn resource_mut_with_ticks<T: 'static>(
+        self,
+    ) -> Option<(&'w mut T, &'w mut ComponentTicks)> {
+        // SAFETY: forwarded to the caller.
+        unsafe { self.world().resources.get_mut_unchecked::<T>() }
+    }
+
     /// The resource of type `T`, shared.
     ///
     /// # Safety
@@ -339,7 +362,7 @@ impl<'w> WorldCell<'w> {
     #[allow(clippy::mut_from_ref)]
     pub unsafe fn resource_mut<T: 'static>(self) -> Option<&'w mut T> {
         // SAFETY: forwarded to the caller.
-        unsafe { self.world().resources.get_mut_unchecked::<T>() }
+        unsafe { self.world().resources.get_mut_unchecked::<T>() }.map(|(value, _)| value)
     }
 }
 

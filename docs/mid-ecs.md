@@ -3746,7 +3746,8 @@ everything.)
   change detection.
 - No `query2_added` form: `query_data_filtered_since::<(Entity, &A, &B), Added<A>>`
   covers it.
-- No `AnyOf`, no resource change detection, no tick wraparound check (item 8).
+- No `AnyOf`. (Resource change detection and the tick wraparound check are built:
+  see "Resource change detection" and "Tick wraparound".)
 
 ### Access sets: `access.rs` (`Access`, `FilteredAccess`, `FilteredAccessSet`)
 
@@ -3996,7 +3997,8 @@ section, which applies to these tests too.
   matched archetypes: every `iter` and every lookup re-resolves them, like the
   `query_data` methods (item 8). (`Query::get`, `single`, `contains`, `count` and
   friends are built: see "Looking entities up in a query".)
-- Resources have no change detection (item 8); `Res`/`ResMut` carry none.
+- Resource change detection (`Res::is_changed`, `ResMut`) is built: see "Resource
+  change detection".
 - No benchmark: these are setup-time structures plus one call per parameter per
   run. The per-row cost of a system's query is that of `query_iter` /
   `query_iter_mut`, which are the existing iterators.
@@ -4095,6 +4097,134 @@ fix, and would serve `contains` and `count` too.
   `Query::transmute` / `as_readonly`, `ParamSet`.
 - `EntityRef` / `EntityMut` (whole-entity access by type), a separate gap.
 - Lookups in the Sparse Shell, which has no query terms.
+
+### Resource change detection (`Res`, `ResMut`, `World::resource_changed`)
+
+Components had change detection (`Ref`, `Mut`, `Added`, `Changed`); resources
+had none, so a system could not ask "has the gravity setting changed since I last
+ran". Each resource now stores a `ComponentTicks` (added, changed) next to its
+value, stamped by the same rules as a component's.
+
+| event | added | changed |
+|---|---|---|
+| `insert_resource` of a new resource, or a C write that creates it | now | now |
+| `insert_resource` over an existing one | kept | now |
+| `World::get_resource_mut` | kept | now (when handed out) |
+| a C `mid_ecs_world_resource_write` over an existing one | kept | now |
+| removed, then inserted again | now (a new addition) | now |
+| reading (`get_resource`, a C span, `Res`) | | |
+
+A replacement is made **in place** (`mem::replace` into the existing box), which is
+why the added tick can be kept, and also means a replaced value keeps its address.
+The C span contract stays the conservative one it was (a Rust-side insert may
+invalidate), but a test now pins that the typed insert does not move the value.
+
+**In a system.** `Res<T>` carries the system's last-run tick and `ResMut<T>` the
+same plus a write path, so both answer with no argument, as in `bevy_ecs`:
+`is_added()` and `is_changed()` ("since this system last ran"), `last_changed()` and
+`added()`. `ResMut` stamps *changed* when it is dereferenced **mutably**
+(`DerefMut`), exactly as `Mut` does for a component, so a system that takes a
+`ResMut` and only reads costs no other system a change; it also has
+`set_changed()` (a mutation made some other way) and `bypass_change_detection()`
+(a write no reader needs to see). A `ResMut` that has written sees its own write
+as changed from that point on (pinned). `Option<Res<T>>` and `Option<ResMut<T>>`
+carry the same. This differs from a component's `Ref` / `Mut`, which take a
+`ChangeTracker` argument, because those can also come from a world query that has
+no system; a resource parameter can only come from a system.
+
+**`World::get_resource_mut` stamps on access, not on write.** It returns a plain
+`&mut T`, so there is nothing to intercept a write, and changing its type would
+break every caller. It follows the rule `get_static_mut` already has (stamped when
+handed out), and over-reports like it; a system that wants the precise rule uses
+`ResMut`.
+
+**Outside a system.** `World::resource_added::<T>(&tracker)` and
+`resource_changed::<T>(&tracker)` (the resource forms of `query_added` /
+`query_changed`), and the by-id forms `resource_added_since(id, last_run)` /
+`resource_changed_since(id, last_run)` for a caller that holds a last-run tick.
+All are `false` for a resource that is not inserted.
+
+**From C.** `mid_ecs_world_resource_added_since(world, resource_id, last_run)` and
+`mid_ecs_world_resource_changed_since(...)` return `1`, `0`, `NullPointer` or
+`NotFound`, with the same `last_run` convention as the `*_rows` functions.
+
+**Verified (sandbox, rustc 1.91.1).** Eleven new tests for the pieces in this
+section (the other eleven are under "Tick wraparound" below): the `Resources` stamps for
+every row of the table above including the in-place address; `World`'s tracker
+forms through insert, replace, `get_resource_mut`, reading, remove and re-insert,
+and a C write (new, replaced, refused); and, in running systems, `Res` through a
+first run, no change, a `ResMut` write, a read-only `ResMut`, `set_changed` and
+`bypass_change_detection`, a `ResMut` seeing its own write, and the `Option`
+forms with the resource absent and present. C: `test.c` 276 -> 287 `ok:` lines
+(a new block: added versus changed, replace, read, remove and re-add, refused
+write, the error codes).
+
+**Not done.** Hooks for resources, removal tracking for resources, and a
+`last_changed` that reports the changing *system*.
+
+### Tick wraparound (`World::check_change_ticks`)
+
+A tick is a wrapping `u32`, and `Tick::is_newer_than` compares two *ages*
+(`this_run - tick`) as unsigned numbers, so it is right only while no age reaches
+`u32::MAX`. A value untouched for 2^32 ticks would read as brand new, silently. It
+arrives sooner than it sounds, because `System::run` advances the tick once per
+system run: 100 systems at 60 frames a second is 6,000 ticks a second, and 2^32 of
+them pass in about eight days. `bevy_ecs`'s answer is adopted unchanged: keep every stored tick's age
+below `MAX_CHANGE_AGE` by clamping the old ones, since a value that old is simply
+"old" and its exact age no longer matters.
+
+- `CHECK_TICK_THRESHOLD = 518_400_000` and `MAX_CHANGE_AGE = u32::MAX - (2 *
+  CHECK_TICK_THRESHOLD - 1)` (public). The second is chosen so that a tick that
+  has gone a whole threshold unchecked is still younger than `u32::MAX`.
+- `Tick::check_tick(&mut self, now) -> bool` clamps one tick to exactly
+  `MAX_CHANGE_AGE` if it is older (`now.relative_to(tick)`, a wrapping age, new
+  `Tick::relative_to`).
+- `World::check_change_ticks()` walks everything the world stores: both ticks of
+  every component row in every archetype, both ticks of every resource, every entry
+  of the removal log. `World::increment_change_tick` runs it itself when
+  `CHECK_TICK_THRESHOLD` ticks have passed since the last scan
+  (`World::last_check_tick()`), so the world's own ticks stay in range with no
+  caller effort.
+- **What it cannot reach**, because the world does not hold it: a system's last
+  run, a `SystemState`'s, and a `ChangeTracker`. Each has a `check_change_tick` /
+  `check_tick(now)` (one comparison), and whoever owns them calls it with the
+  world's tick at least once per threshold (once per step is fine). When a
+  schedule owns the systems, that call is its job. `System::check_change_tick` is a
+  new **required** method of the `System` trait: an external implementor must add
+  it (the two in this crate do).
+
+**Cost.** A scan visits every component row's ticks once per 518 million ticks.
+Not benchmarked (optimization is paused); it is not on any hot path.
+
+**Verified.** Eleven new tests (with the eleven above: lib 720 -> 742):
+`relative_to` including across the wrap; `check_tick` at every side of the boundary
+(ages 0, 1, `MAX - 1`, `MAX`, `MAX + 1`, far older, `u32::MAX`) and across the counter
+wrapping; `ComponentTicks` clamping each tick on its own; a `ChangeTracker`; every resource's
+ticks clamped; the whole scan clamping components, a resource and the removal log (read through the
+public API: a tracker `MAX + 1` old sees the clamped stamps and not the real ones,
+a tracker exactly `MAX` old does not, a second scan changes nothing); the automatic
+trigger firing at exactly the threshold and not a tick before or again soon after;
+and systems, an exclusive system and a `SystemState` clamping their last run. The
+test that matters most shows the failure itself, twice: with bare ticks (a stamp
+2^32 + 5 million ticks old reads as 5 million old and so as newer than a tracker 10
+million ticks behind, unless it was clamped on the way), and end to end on two
+worlds that wait the same 2^32 + 5 million ticks in eight 520-million-tick jumps,
+one of whose loop increments (and so scans) and one of whose does not: the first
+keeps the value old, the second reports it as newly changed.
+
+**Not done.** A threshold other than `bevy_ecs`'s, and clamping a `ChangeTracker`
+automatically (it is the caller's value).
+
+**Mutation testing, for both sections.** 46 mutants of the new code (the tick
+arithmetic and its boundary, each of the four scan targets, the automatic
+trigger, every stamp and the tick it uses, the in-place replace keeping the added
+tick, `Res` / `ResMut` reading `last_run`, `DerefMut` stamping, `set_changed`,
+`bypass_change_detection`, the system and `SystemState` clamps, and the C
+wrappers), 46 caught, 0 survived. Valgrind over the `resource::`, `tick::`,
+`system::` and `ffi::` lib tests (18, 18, 42 and 103 tests) and over the C smoke
+binary: no invalid access or uninitialised read; the only reports are "possibly
+lost" blocks inside libtest's, rayon's and crossbeam's own thread set-up (the
+`system::` run includes the existing `par_iter` pool tests).
 
 ### Parallel iteration (`batching.rs`, `QueryBatch`, `Query::par_iter`)
 

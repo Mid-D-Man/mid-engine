@@ -593,6 +593,18 @@ pub(crate) struct Archetypes {
 const EMPTY_ARCHETYPE: ArchetypeId = ArchetypeId(0);
 
 impl Archetypes {
+    /// Keeps every stored component tick within [`crate::MAX_CHANGE_AGE`]
+    /// of `now` (see `World::check_change_ticks`).
+    pub(crate) fn check_ticks(&mut self, now: Tick) {
+        for archetype in self.archetypes.values_mut() {
+            for column_ticks in archetype.table.ticks.values_mut() {
+                for ticks in column_ticks.iter_mut() {
+                    ticks.check_tick(now);
+                }
+            }
+        }
+    }
+
     pub(crate) fn new() -> Self {
         let mut archetypes = SparseSet::new();
         archetypes.insert(EMPTY_ARCHETYPE, Archetype::empty());

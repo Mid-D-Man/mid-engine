@@ -98,6 +98,14 @@ pub trait System: 'static {
     /// means nothing at all.)
     unsafe fn run_unchecked(&mut self, world: WorldCell<'_>, this_run: Tick);
 
+    /// Keeps the system's last-run tick within [`crate::MAX_CHANGE_AGE`] of
+    /// `now`; whether it was clamped. `World::check_change_ticks` cannot
+    /// reach a tick the system itself holds, so whoever owns the system
+    /// calls this with the world's tick at least once per
+    /// [`crate::CHECK_TICK_THRESHOLD`] ticks (once per step is fine: it is
+    /// one comparison).
+    fn check_change_tick(&mut self, now: Tick) -> bool;
+
     /// Applies what the last run deferred.
     fn apply_deferred(&mut self, world: &mut World);
 
@@ -260,6 +268,10 @@ impl<Marker: 'static, F: SystemParamFunction<Marker>> System for FunctionSystem<
         self.meta.set_last_run(this_run);
     }
 
+    fn check_change_tick(&mut self, now: Tick) -> bool {
+        self.meta.check_change_tick(now)
+    }
+
     fn apply_deferred(&mut self, world: &mut World) {
         if let Some(state) = self.state.as_mut() {
             <F::Param as SystemParam>::apply(state, &self.meta, world);
@@ -327,6 +339,10 @@ impl<F: FnMut(&mut World) + 'static> System for ExclusiveFunctionSystem<F> {
         // `world_mut` needs.
         (self.func)(unsafe { world.world_mut() });
         self.meta.set_last_run(this_run);
+    }
+
+    fn check_change_tick(&mut self, now: Tick) -> bool {
+        self.meta.check_change_tick(now)
     }
 
     fn apply_deferred(&mut self, _world: &mut World) {}
@@ -1363,5 +1379,152 @@ mod tests {
         world.get_static_mut::<A>(es[30]).unwrap().0 = 2;
         in_pool(4, || sys.run(&mut world));
         assert_eq!(rows(&world), 42, "exactly the two outside writes");
+    }
+
+    // ── Res / ResMut change detection ────────────────────────────────
+
+    #[derive(Debug, PartialEq)]
+    struct Gauge(u32);
+    #[derive(Default, Debug, PartialEq)]
+    struct GaugeLog {
+        added: Vec<bool>,
+        changed: Vec<bool>,
+    }
+
+    fn watch_gauge(g: Res<Gauge>, mut seen: ResMut<GaugeLog>) {
+        seen.added.push(g.is_added());
+        seen.changed.push(g.is_changed());
+    }
+
+    fn bump_gauge(mut g: ResMut<Gauge>) {
+        g.0 += 1;
+    }
+
+    fn peek_gauge(g: ResMut<Gauge>) {
+        let _ = g.0;
+    }
+
+    fn flag_gauge(mut g: ResMut<Gauge>) {
+        g.set_changed();
+    }
+
+    fn quiet_gauge(mut g: ResMut<Gauge>) {
+        *g.bypass_change_detection() = Gauge(99);
+    }
+
+    fn seen(world: &World) -> (Vec<bool>, Vec<bool>) {
+        let s = world.get_resource::<GaugeLog>().expect("GaugeLog");
+        (s.added.clone(), s.changed.clone())
+    }
+
+    #[test]
+    fn res_reports_added_and_changed_since_the_systems_last_run() {
+        let mut world = World::new();
+        world.insert_resource(Gauge(0));
+        world.insert_resource(GaugeLog::default());
+        let mut watch = watch_gauge.into_system();
+        let mut bump = bump_gauge.into_system();
+        let mut peek = peek_gauge.into_system();
+        let mut flag = flag_gauge.into_system();
+        let mut quiet = quiet_gauge.into_system();
+
+        watch.run(&mut world); // first run: everything is new
+        watch.run(&mut world); // nothing happened
+        bump.run(&mut world);
+        watch.run(&mut world); // a ResMut write
+        peek.run(&mut world); // a ResMut that only reads
+        watch.run(&mut world);
+        flag.run(&mut world); // set_changed
+        watch.run(&mut world);
+        quiet.run(&mut world); // bypass_change_detection
+        watch.run(&mut world);
+
+        assert_eq!(world.get_resource::<Gauge>(), Some(&Gauge(99)), "the quiet write landed");
+        assert_eq!(
+            seen(&world),
+            (
+                vec![true, false, false, false, false, false],
+                vec![true, false, true, false, true, false],
+            )
+        );
+    }
+
+    fn resmut_probe(mut g: ResMut<Gauge>, mut seen: ResMut<GaugeLog>) {
+        seen.changed.push(g.is_changed());
+        g.0 += 1;
+        seen.changed.push(g.is_changed());
+        seen.added.push(g.last_changed() == g.added());
+    }
+
+    #[test]
+    fn a_resmut_sees_its_own_write_as_a_change_from_that_point_on() {
+        let mut world = World::new();
+        world.insert_resource(Gauge(0));
+        world.insert_resource(GaugeLog::default());
+        world.increment_change_tick();
+        world.increment_change_tick();
+        let mut probe = resmut_probe.into_system();
+        probe.run(&mut world); // first run: added, so changed already
+        probe.run(&mut world); // second: unchanged until it writes
+        let s = seen(&world);
+        assert_eq!(s.1, vec![true, true, false, true]);
+        assert_eq!(s.0, vec![false, false], "after its writes, changed tick != added tick");
+    }
+
+    fn watch_optional(g: Option<Res<Gauge>>, mut seen: ResMut<GaugeLog>) {
+        seen.changed.push(g.map(|g| g.is_changed()).unwrap_or(false));
+    }
+
+    fn write_optional(g: Option<ResMut<Gauge>>) {
+        if let Some(mut g) = g {
+            g.0 += 1;
+        }
+    }
+
+    #[test]
+    fn optional_res_and_resmut_carry_ticks_and_tolerate_absence() {
+        let mut world = World::new();
+        world.insert_resource(GaugeLog::default());
+        let mut watch = watch_optional.into_system();
+        let mut write = write_optional.into_system();
+        watch.run(&mut world); // absent
+        write.run(&mut world); // absent: nothing to write
+        world.insert_resource(Gauge(0));
+        watch.run(&mut world); // present and new
+        watch.run(&mut world); // unchanged
+        write.run(&mut world);
+        watch.run(&mut world); // written
+        assert_eq!(seen(&world).1, vec![false, true, false, true]);
+    }
+
+    fn exclusive_noop(_world: &mut World) {}
+
+    #[test]
+    fn systems_and_system_state_clamp_their_last_run_like_any_stored_tick() {
+        let mut world = World::new();
+        world.insert_resource(Gauge(0));
+        let mut sys = bump_gauge.into_system();
+        sys.run(&mut world);
+        let last = sys.meta().last_run();
+        let now = Tick::new(last.get().wrapping_add(crate::tick::MAX_CHANGE_AGE + 40));
+        assert!(sys.check_change_tick(now));
+        assert_eq!(
+            now.relative_to(sys.meta().last_run()).get(),
+            crate::tick::MAX_CHANGE_AGE
+        );
+        assert!(!sys.check_change_tick(now), "already within range");
+
+        let mut ex = exclusive_noop.into_system();
+        ex.run(&mut world);
+        let last = ex.meta().last_run();
+        let now = Tick::new(last.get().wrapping_add(crate::tick::MAX_CHANGE_AGE + 1));
+        assert!(ex.check_change_tick(now));
+
+        let mut state = SystemState::<Query<&A>>::new(&mut world);
+        drop(state.get(&mut world));
+        let last = state.meta().last_run();
+        let now = Tick::new(last.get().wrapping_add(crate::tick::MAX_CHANGE_AGE + 9));
+        assert!(state.check_change_tick(now));
+        assert!(!state.check_change_tick(now));
     }
 }

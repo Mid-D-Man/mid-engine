@@ -24,6 +24,7 @@ use zerocopy::{FromBytes, Immutable, IntoBytes, KnownLayout};
 
 use crate::hash::TypeIdMap;
 use crate::interior::Interior;
+use crate::tick::{ComponentTicks, Tick};
 
 /// Identifies a resource type registered for FFI access. Issued by
 /// `World::register_ffi_resource`, densely from 0, and only meaningful
@@ -57,13 +58,28 @@ pub enum ResourceFfiError {
     Absent,
 }
 
-type Values = TypeIdMap<Interior<Box<dyn Any>>>;
+type Values = TypeIdMap<Interior<ResourceCell>>;
+
+/// One resource: its value, and when it was added and last changed.
+struct ResourceCell {
+    value: Box<dyn Any>,
+    ticks: ComponentTicks,
+}
+
+impl ResourceCell {
+    fn new<T: 'static>(value: T, tick: Tick) -> Self {
+        Self {
+            value: Box::new(value),
+            ticks: ComponentTicks::new(tick),
+        }
+    }
+}
 
 struct FfiEntry {
     type_id: TypeId,
     size: usize,
     read: fn(&dyn Any) -> FfiSpan,
-    write: fn(&mut Values, &[u8]) -> bool,
+    write: fn(&mut Values, &[u8], Tick) -> bool,
 }
 
 fn read_one<T: 'static + IntoBytes + Immutable>(value: &dyn Any) -> FfiSpan {
@@ -75,20 +91,26 @@ fn read_one<T: 'static + IntoBytes + Immutable>(value: &dyn Any) -> FfiSpan {
 
 /// Builds a `T` from `bytes` and stores it: in place if a `T` is already
 /// there (its address does not change, so a span handed out earlier keeps
-/// pointing at the live value), inserted otherwise. `false` only when
-/// `bytes.len()` isn't `size_of::<T>()`.
-fn write_one<T: 'static + FromBytes>(values: &mut Values, bytes: &[u8]) -> bool {
+/// pointing at the live value; stamped *changed* at `tick`), inserted
+/// otherwise (stamped *added*). `false` only when `bytes.len()` isn't
+/// `size_of::<T>()`.
+fn write_one<T: 'static + FromBytes>(values: &mut Values, bytes: &[u8], tick: Tick) -> bool {
     let Ok(new_value) = T::read_from_bytes(bytes) else {
         return false;
     };
     match values.get_mut(&TypeId::of::<T>()) {
         Some(existing) => {
             *existing
+                .value
                 .downcast_mut::<T>()
                 .expect("resource value type must match its registered TypeId") = new_value;
+            existing.ticks.changed = tick;
         }
         None => {
-            values.insert(TypeId::of::<T>(), Interior::new(Box::new(new_value)));
+            values.insert(
+                TypeId::of::<T>(),
+                Interior::new(ResourceCell::new(new_value, tick)),
+            );
         }
     }
     true
@@ -108,48 +130,95 @@ impl Resources {
     }
 
     /// Stores `value`, returning the previous value of that type if any.
-    pub(crate) fn insert<T: 'static>(&mut self, value: T) -> Option<T> {
-        self.values
-            .insert(TypeId::of::<T>(), Interior::new(Box::new(value)))
-            .map(|old| {
-                *old.into_inner()
-                    .downcast::<T>()
-                    .expect("resource value type must match its TypeId")
-            })
+    /// A new resource is stamped added and changed at `tick`; replacing
+    /// one keeps its added tick and stamps it changed, and the replacement
+    /// happens in place (the value's address does not change).
+    pub(crate) fn insert<T: 'static>(&mut self, value: T, tick: Tick) -> Option<T> {
+        match self.values.get_mut(&TypeId::of::<T>()) {
+            Some(cell) => {
+                let old = std::mem::replace(
+                    cell.value
+                        .downcast_mut::<T>()
+                        .expect("resource value type must match its TypeId"),
+                    value,
+                );
+                cell.ticks.changed = tick;
+                Some(old)
+            }
+            None => {
+                self.values.insert(
+                    TypeId::of::<T>(),
+                    Interior::new(ResourceCell::new(value, tick)),
+                );
+                None
+            }
+        }
     }
 
     pub(crate) fn get<T: 'static>(&self) -> Option<&T> {
-        self.values.get(&TypeId::of::<T>())?.downcast_ref::<T>()
+        self.values
+            .get(&TypeId::of::<T>())?
+            .value
+            .downcast_ref::<T>()
     }
 
-    pub(crate) fn get_mut<T: 'static>(&mut self) -> Option<&mut T> {
-        self.values.get_mut(&TypeId::of::<T>())?.downcast_mut::<T>()
+    /// Mutable access, stamping the resource changed at `tick` when it is
+    /// handed out (not when it is written: the same rule as
+    /// `World::get_static_mut`).
+    pub(crate) fn get_mut<T: 'static>(&mut self, tick: Tick) -> Option<&mut T> {
+        let cell = self.values.get_mut(&TypeId::of::<T>())?;
+        cell.ticks.changed = tick;
+        cell.value.downcast_mut::<T>()
     }
 
     pub(crate) fn remove<T: 'static>(&mut self) -> Option<T> {
         self.values.remove(&TypeId::of::<T>()).map(|old| {
             *old.into_inner()
+                .value
                 .downcast::<T>()
                 .expect("resource value type must match its TypeId")
         })
     }
 
-    /// A mutable reference to the `T` resource through a shared one, for
-    /// `WorldCell`.
+    /// The resource's value and its ticks, shared.
+    pub(crate) fn get_with_ticks<T: 'static>(&self) -> Option<(&T, &ComponentTicks)> {
+        let cell = self.values.get(&TypeId::of::<T>())?;
+        Some((cell.value.downcast_ref::<T>()?, &cell.ticks))
+    }
+
+    /// A copy of the resource's ticks.
+    pub(crate) fn ticks<T: 'static>(&self) -> Option<ComponentTicks> {
+        Some(self.values.get(&TypeId::of::<T>())?.ticks)
+    }
+
+    /// The resource's value and its ticks, both mutable, through a shared
+    /// reference, for `WorldCell`. Neither is stamped: the caller decides
+    /// (`ResMut` stamps when it is dereferenced mutably).
     ///
     /// # Safety
-    /// For as long as the returned reference is live, nothing else may
-    /// read or write this resource (the contract of
+    /// For as long as the returned references are live, nothing else may
+    /// read or write this resource, value or ticks (the contract of
     /// [`Interior::get_mut_unchecked`]); in particular no `get`, `get_mut`
     /// or second call for the same `T`.
-    pub(crate) unsafe fn get_mut_unchecked<T: 'static>(&self) -> Option<&mut T> {
+    pub(crate) unsafe fn get_mut_unchecked<T: 'static>(
+        &self,
+    ) -> Option<(&mut T, &mut ComponentTicks)> {
         let cell = self.values.get(&TypeId::of::<T>())?;
         // SAFETY: forwarded to the caller.
-        unsafe { cell.get_mut_unchecked() }.downcast_mut::<T>()
+        let ResourceCell { value, ticks } = unsafe { cell.get_mut_unchecked() };
+        Some((value.downcast_mut::<T>()?, ticks))
     }
 
     pub(crate) fn contains<T: 'static>(&self) -> bool {
         self.values.contains_key(&TypeId::of::<T>())
+    }
+
+    /// Keeps every resource's ticks within [`crate::MAX_CHANGE_AGE`] of
+    /// `now`.
+    pub(crate) fn check_ticks(&mut self, now: Tick) {
+        for cell in self.values.values_mut() {
+            cell.ticks.check_tick(now);
+        }
     }
 
     /// Opts `T` into FFI access under `name`. Idempotent for the same
@@ -196,17 +265,31 @@ impl Resources {
     pub(crate) fn ffi_span(&self, id: ResourceId) -> Option<FfiSpan> {
         let entry = self.ffi.get(id.0 as usize)?;
         Some(match self.values.get(&entry.type_id) {
-            Some(value) => (entry.read)(value.as_ref()),
+            Some(cell) => (entry.read)(cell.value.as_ref()),
             None => FfiSpan::empty(),
         })
     }
 
+    /// The registered resource's ticks: `Ok(None)` if it is registered but
+    /// not inserted, `Err(UnknownId)` for an id that was never issued.
+    pub(crate) fn ffi_ticks(
+        &self,
+        id: ResourceId,
+    ) -> Result<Option<ComponentTicks>, ResourceFfiError> {
+        let entry = self
+            .ffi
+            .get(id.0 as usize)
+            .ok_or(ResourceFfiError::UnknownId)?;
+        Ok(self.values.get(&entry.type_id).map(|cell| cell.ticks))
+    }
+
     /// Copies `bytes` in as the resource's new value (inserting it if
-    /// absent). See [`write_one`].
+    /// absent), stamped at `tick`. See [`write_one`].
     pub(crate) fn ffi_write(
         &mut self,
         id: ResourceId,
         bytes: &[u8],
+        tick: Tick,
     ) -> Result<(), ResourceFfiError> {
         let entry = self
             .ffi
@@ -215,7 +298,7 @@ impl Resources {
         if bytes.len() != entry.size {
             return Err(ResourceFfiError::SizeMismatch);
         }
-        if (entry.write)(&mut self.values, bytes) {
+        if (entry.write)(&mut self.values, bytes, tick) {
             Ok(())
         } else {
             Err(ResourceFfiError::SizeMismatch)
@@ -240,6 +323,15 @@ mod tests {
     use super::*;
     use std::cell::Cell;
     use std::rc::Rc;
+
+    /// The tick the value-focused tests stamp with.
+    const T1: Tick = Tick::new(1);
+
+    impl Resources {
+        fn insert_t1<T: 'static>(&mut self, value: T) -> Option<T> {
+            self.insert(value, T1)
+        }
+    }
 
     #[derive(Debug, Clone, Copy, PartialEq, FromBytes, IntoBytes, KnownLayout, Immutable)]
     #[repr(C)]
@@ -268,26 +360,26 @@ mod tests {
         assert_eq!(r.get::<Config>(), None);
         assert!(!r.contains::<Config>());
 
-        assert_eq!(r.insert(Config("a")), None);
+        assert_eq!(r.insert_t1(Config("a")), None);
         assert!(r.contains::<Config>());
         assert_eq!(r.get::<Config>(), Some(&Config("a")));
 
-        *r.get_mut::<Config>().unwrap() = Config("b");
+        *r.get_mut::<Config>(T1).unwrap() = Config("b");
         assert_eq!(r.get::<Config>(), Some(&Config("b")));
     }
 
     #[test]
     fn insert_replaces_and_returns_the_previous_value() {
         let mut r = Resources::new();
-        r.insert(Gravity { g: 9.8 });
-        assert_eq!(r.insert(Gravity { g: 1.6 }), Some(Gravity { g: 9.8 }));
+        r.insert_t1(Gravity { g: 9.8 });
+        assert_eq!(r.insert_t1(Gravity { g: 1.6 }), Some(Gravity { g: 9.8 }));
         assert_eq!(r.get::<Gravity>(), Some(&Gravity { g: 1.6 }));
     }
 
     #[test]
     fn remove_returns_the_value_and_clears_it() {
         let mut r = Resources::new();
-        r.insert(Config("x"));
+        r.insert_t1(Config("x"));
         assert_eq!(r.remove::<Config>(), Some(Config("x")));
         assert_eq!(r.remove::<Config>(), None);
         assert!(!r.contains::<Config>());
@@ -296,12 +388,12 @@ mod tests {
     #[test]
     fn distinct_types_do_not_collide() {
         let mut r = Resources::new();
-        r.insert(Gravity { g: 1.0 });
-        r.insert(Time {
+        r.insert_t1(Gravity { g: 1.0 });
+        r.insert_t1(Time {
             delta: 0.5,
             frame: 3,
         });
-        r.insert(Config("c"));
+        r.insert_t1(Config("c"));
         assert_eq!(r.get::<Gravity>(), Some(&Gravity { g: 1.0 }));
         assert_eq!(
             r.get::<Time>(),
@@ -325,17 +417,17 @@ mod tests {
         let drops = Rc::new(Cell::new(0));
         {
             let mut r = Resources::new();
-            r.insert(Tracked(drops.clone()));
+            r.insert_t1(Tracked(drops.clone()));
             assert_eq!(drops.get(), 0);
             // Replacing hands the old value back; dropping it is ours.
-            let old = r.insert(Tracked(drops.clone()));
+            let old = r.insert_t1(Tracked(drops.clone()));
             assert_eq!(drops.get(), 0);
             drop(old);
             assert_eq!(drops.get(), 1);
             // Removing hands it back too.
             drop(r.remove::<Tracked>());
             assert_eq!(drops.get(), 2);
-            r.insert(Tracked(drops.clone()));
+            r.insert_t1(Tracked(drops.clone()));
         }
         assert_eq!(drops.get(), 3, "the last one drops with the store");
     }
@@ -371,7 +463,7 @@ mod tests {
             "registered but not inserted is empty, not an error"
         );
 
-        r.insert(Time {
+        r.insert_t1(Time {
             delta: 0.25,
             frame: 9,
         });
@@ -397,7 +489,7 @@ mod tests {
         let id = r.register_ffi::<Time>("Time");
         assert_eq!(r.get::<Time>(), None);
 
-        r.ffi_write(id, &time_bytes(0.5, 2)).unwrap();
+        r.ffi_write(id, &time_bytes(0.5, 2), T1).unwrap();
         assert_eq!(
             r.get::<Time>(),
             Some(&Time {
@@ -411,13 +503,13 @@ mod tests {
     fn ffi_write_updates_in_place_so_an_earlier_span_stays_valid() {
         let mut r = Resources::new();
         let id = r.register_ffi::<Time>("Time");
-        r.insert(Time {
+        r.insert_t1(Time {
             delta: 1.0,
             frame: 1,
         });
         let before = r.ffi_span(id).unwrap();
 
-        r.ffi_write(id, &time_bytes(2.0, 5)).unwrap();
+        r.ffi_write(id, &time_bytes(2.0, 5), T1).unwrap();
         let after = r.ffi_span(id).unwrap();
         assert_eq!(before.ptr, after.ptr, "same address: written in place");
         // SAFETY: `before.ptr` is the live value's address (checked
@@ -436,24 +528,24 @@ mod tests {
     fn ffi_write_rejects_a_wrong_size_and_an_unknown_id_without_changing_anything() {
         let mut r = Resources::new();
         let id = r.register_ffi::<Time>("Time");
-        r.insert(Time {
+        r.insert_t1(Time {
             delta: 1.0,
             frame: 1,
         });
 
         let too_short = &time_bytes(9.0, 9)[..7];
         assert_eq!(
-            r.ffi_write(id, too_short),
+            r.ffi_write(id, too_short, T1),
             Err(ResourceFfiError::SizeMismatch)
         );
         let mut too_long = time_bytes(9.0, 9);
         too_long.push(0);
         assert_eq!(
-            r.ffi_write(id, &too_long),
+            r.ffi_write(id, &too_long, T1),
             Err(ResourceFfiError::SizeMismatch)
         );
         assert_eq!(
-            r.ffi_write(ResourceId::from_u32(7), &[]),
+            r.ffi_write(ResourceId::from_u32(7), &[], T1),
             Err(ResourceFfiError::UnknownId)
         );
         assert_eq!(
@@ -475,12 +567,96 @@ mod tests {
             Err(ResourceFfiError::UnknownId)
         );
 
-        r.insert(Time {
+        r.insert_t1(Time {
             delta: 1.0,
             frame: 1,
         });
         assert_eq!(r.ffi_remove(id), Ok(()));
         assert!(!r.contains::<Time>());
         assert_eq!(r.ffi_span(id).unwrap().count, 0);
+    }
+
+    // ── change ticks ─────────────────────────────────────────────────
+
+    #[test]
+    fn a_new_resource_is_added_and_changed_and_a_replacement_only_changed() {
+        let mut r = Resources::new();
+        assert_eq!(r.insert(Config("a"), Tick::new(5)), None);
+        let t = r.ticks::<Config>().unwrap();
+        assert_eq!((t.added, t.changed), (Tick::new(5), Tick::new(5)));
+
+        assert_eq!(r.insert(Config("b"), Tick::new(9)), Some(Config("a")));
+        let t = r.ticks::<Config>().unwrap();
+        assert_eq!(
+            (t.added, t.changed),
+            (Tick::new(5), Tick::new(9)),
+            "replacing keeps the added tick"
+        );
+        assert_eq!(r.get::<Config>(), Some(&Config("b")));
+        assert!(r.ticks::<Gravity>().is_none());
+    }
+
+    #[test]
+    fn get_mut_stamps_changed_when_handed_out_and_get_does_not() {
+        let mut r = Resources::new();
+        r.insert(Config("a"), Tick::new(5));
+        let _ = r.get::<Config>();
+        assert_eq!(r.ticks::<Config>().unwrap().changed, Tick::new(5));
+        let _ = r.get_mut::<Config>(Tick::new(8));
+        let t = r.ticks::<Config>().unwrap();
+        assert_eq!((t.added, t.changed), (Tick::new(5), Tick::new(8)));
+    }
+
+    #[test]
+    fn removing_forgets_the_ticks_and_reinserting_is_a_new_addition() {
+        let mut r = Resources::new();
+        r.insert(Config("a"), Tick::new(5));
+        assert_eq!(r.remove::<Config>(), Some(Config("a")));
+        assert!(r.ticks::<Config>().is_none());
+        r.insert(Config("b"), Tick::new(20));
+        let t = r.ticks::<Config>().unwrap();
+        assert_eq!((t.added, t.changed), (Tick::new(20), Tick::new(20)));
+    }
+
+    #[test]
+    fn replacing_a_resource_keeps_its_address_and_a_replaced_ffi_span_stays_valid() {
+        let mut r = Resources::new();
+        r.insert(Gravity { g: 1.0 }, Tick::new(1));
+        let before = r.get::<Gravity>().unwrap() as *const Gravity;
+        r.insert(Gravity { g: 2.0 }, Tick::new(2));
+        let after = r.get::<Gravity>().unwrap() as *const Gravity;
+        assert_eq!(before, after, "replaced in place");
+        assert_eq!(r.get::<Gravity>(), Some(&Gravity { g: 2.0 }));
+    }
+
+    #[test]
+    fn an_ffi_write_stamps_added_when_it_inserts_and_changed_when_it_replaces() {
+        let mut r = Resources::new();
+        let id = r.register_ffi::<Time>("Time");
+        r.ffi_write(id, &time_bytes(0.5, 1), Tick::new(4)).unwrap();
+        let t = r.ticks::<Time>().unwrap();
+        assert_eq!((t.added, t.changed), (Tick::new(4), Tick::new(4)));
+        r.ffi_write(id, &time_bytes(0.6, 2), Tick::new(7)).unwrap();
+        let t = r.ticks::<Time>().unwrap();
+        assert_eq!((t.added, t.changed), (Tick::new(4), Tick::new(7)));
+        // A refused write stamps nothing.
+        assert!(r.ffi_write(id, &[1, 2], Tick::new(9)).is_err());
+        assert_eq!(r.ticks::<Time>().unwrap().changed, Tick::new(7));
+    }
+
+    #[test]
+    fn check_ticks_clamps_every_resources_ticks() {
+        let mut r = Resources::new();
+        r.insert(Config("old"), Tick::new(10));
+        r.insert(Gravity { g: 1.0 }, Tick::new(3_900_000_000));
+        let now = Tick::new(10u32.wrapping_add(crate::tick::MAX_CHANGE_AGE).wrapping_add(500));
+        r.check_ticks(now);
+        let old = r.ticks::<Config>().unwrap();
+        assert_eq!(now.relative_to(old.added).get(), crate::tick::MAX_CHANGE_AGE);
+        assert_eq!(now.relative_to(old.changed).get(), crate::tick::MAX_CHANGE_AGE);
+        // 3_900_000_000 is *ahead* of `now` (a huge wrapping age), so it is
+        // clamped as well: ages are only ever compared, never ordered.
+        let g = r.ticks::<Gravity>().unwrap();
+        assert_eq!(now.relative_to(g.added).get(), crate::tick::MAX_CHANGE_AGE);
     }
 }

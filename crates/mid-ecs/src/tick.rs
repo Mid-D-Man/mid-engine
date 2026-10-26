@@ -15,21 +15,38 @@
 //! system's own last-run tick, made explicit because this crate has no
 //! `Schedule` to hold it implicitly.
 //!
-//! **Simplified relative to `bevy_ecs`.** The comparison
-//! (`Tick::is_newer_than`) is the same wrapping-counter technique, read
-//! directly from `Mid-D-Man/bevy`'s `change_detection/tick.rs`. What's
-//! deliberately not here: bevy periodically scans every stored tick
-//! (`check_tick`) to clamp its age below `MAX_CHANGE_AGE`, because a
-//! `Schedule` running indefinitely will otherwise let `this_run - tick`
-//! overflow `u32::MAX` and invert the comparison. Nothing here runs that
-//! scan. The comparison stays correct as long as `this_run - last_run`
-//! and `this_run - added`/`this_run - changed` never exceed
-//! `u32::MAX / 2` in practice — at one `increment_change_tick` per
-//! rendered frame, that's on the order of a billion frames between a
-//! value's insertion and a query checking it, so this is a real limit,
-//! not a rounding error, but not one worth a background scanner for yet.
+//! **Wraparound.** A tick is a `u32` that wraps, and the comparison
+//! (`Tick::is_newer_than`) is the same wrapping-counter technique as
+//! `bevy_ecs`'s, read directly from `Mid-D-Man/bevy`'s
+//! `change_detection/tick.rs`: it measures two *ages* (`this_run - tick`) as
+//! unsigned numbers and compares them, so it is right as long as no age
+//! reaches `u32::MAX`; a value that is more than 2^32 ticks old would look
+//! brand new. [`World::check_change_ticks`](crate::World::check_change_ticks)
+//! is what prevents that: it walks every tick the world stores (component
+//! rows, resources, the removal log) and clamps any whose age exceeds
+//! [`MAX_CHANGE_AGE`] to exactly that age (an old-enough value is "old", and
+//! the exact age no longer matters). [`crate::World::increment_change_tick`]
+//! runs the scan itself every [`CHECK_TICK_THRESHOLD`] ticks, so a world's
+//! own ticks stay in range with no caller effort. Ticks the world does not
+//! store are the caller's to keep in range: a system's last run
+//! ([`crate::System::check_change_tick`], [`crate::SystemState::check_change_tick`])
+//! and a [`ChangeTracker`] ([`ChangeTracker::check_tick`]); call them with
+//! the world's tick at least once per [`CHECK_TICK_THRESHOLD`] ticks (once
+//! per step is fine, each is one compare).
 
 use std::ops::{Deref, DerefMut};
+
+/// How many ticks may pass between two scans of every stored tick (see the
+/// module docs). `bevy_ecs`'s value: at one tick per rendered frame, a
+/// scan every 518 million frames.
+pub const CHECK_TICK_THRESHOLD: u32 = 518_400_000;
+
+/// The oldest age a stored tick is allowed to have: a scan clamps anything
+/// older to exactly this. Chosen (as in `bevy_ecs`) so that even a tick
+/// that has gone `CHECK_TICK_THRESHOLD` ticks unchecked since the last scan
+/// is still younger than `u32::MAX` ticks, the one thing
+/// [`Tick::is_newer_than`] needs.
+pub const MAX_CHANGE_AGE: u32 = u32::MAX - (2 * CHECK_TICK_THRESHOLD - 1);
 
 /// A point on the world's change-tick counter. Comparisons
 /// (`is_newer_than`) are all that ever matters about a `Tick` — the raw
@@ -55,6 +72,26 @@ impl Tick {
     /// happened after `last_run` — i.e. is at least as recent as
     /// anything from `last_run` up to and including `this_run`. See this
     /// module's doc comment for the wraparound caveat.
+    /// The number of ticks from `other` forward to `self`, wrapping: how
+    /// old `other` is at the moment `self`. `now.relative_to(stamp)` is
+    /// the age of `stamp`.
+    pub const fn relative_to(self, other: Tick) -> Tick {
+        Tick(self.0.wrapping_sub(other.0))
+    }
+
+    /// Keeps a stored tick's age at `now` within [`MAX_CHANGE_AGE`]: if it
+    /// is older, sets it to exactly that age and returns `true`. This is
+    /// what [`crate::World::check_change_ticks`] does to every tick the
+    /// world stores; call it on ticks you store yourself.
+    pub fn check_tick(&mut self, now: Tick) -> bool {
+        if now.relative_to(*self).get() > MAX_CHANGE_AGE {
+            *self = now.relative_to(Tick::new(MAX_CHANGE_AGE));
+            true
+        } else {
+            false
+        }
+    }
+
     #[inline]
     pub fn is_newer_than(self, last_run: Tick, this_run: Tick) -> bool {
         let ticks_since_insert = this_run.0.wrapping_sub(self.0);
@@ -79,6 +116,14 @@ impl ComponentTicks {
             added: tick,
             changed: tick,
         }
+    }
+
+    /// Keeps both ticks within [`MAX_CHANGE_AGE`] of `now`; whether
+    /// either was clamped.
+    pub(crate) fn check_tick(&mut self, now: Tick) -> bool {
+        let added = self.added.check_tick(now);
+        let changed = self.changed.check_tick(now);
+        added || changed
     }
 
     pub(crate) fn is_added(&self, last_run: Tick, this_run: Tick) -> bool {
@@ -114,6 +159,21 @@ impl ChangeTracker {
 
     pub(crate) fn last_run(&self) -> Tick {
         self.last_run
+    }
+
+    /// A tracker whose last run is `tick`, for tests that need a
+    /// specific age.
+    #[cfg(test)]
+    pub(crate) const fn at(tick: Tick) -> Self {
+        Self { last_run: tick }
+    }
+
+    /// Keeps the tracker's last-run tick within [`MAX_CHANGE_AGE`] of
+    /// `now` (see [`Tick::check_tick`]); whether it was clamped. A tracker
+    /// the caller holds across more than [`CHECK_TICK_THRESHOLD`] ticks
+    /// needs this called with the world's tick.
+    pub fn check_tick(&mut self, now: Tick) -> bool {
+        self.last_run.check_tick(now)
     }
 
     /// Advances this tracker to `world`'s current tick. Call once per
@@ -441,5 +501,90 @@ mod tests {
         let plain: &u32 = r.into_inner();
         assert_eq!(*plain, 7);
         assert_eq!(format!("{copy:?}"), "Ref(7)");
+    }
+
+    // ── wraparound: check_tick ───────────────────────────────────────
+
+    #[test]
+    fn relative_to_is_the_wrapping_age() {
+        assert_eq!(Tick::new(10).relative_to(Tick::new(4)), Tick::new(6));
+        assert_eq!(Tick::new(4).relative_to(Tick::new(10)), Tick::new(u32::MAX - 5));
+        assert_eq!(Tick::new(3).relative_to(Tick::new(u32::MAX)), Tick::new(4));
+    }
+
+    #[test]
+    fn check_tick_clamps_exactly_what_is_older_than_max_change_age() {
+        let now = Tick::new(4_000_000_000);
+        // Age 0, and exactly MAX_CHANGE_AGE: untouched.
+        for age in [0, 1, MAX_CHANGE_AGE - 1, MAX_CHANGE_AGE] {
+            let mut t = Tick::new(now.get().wrapping_sub(age));
+            let before = t;
+            assert!(!t.check_tick(now), "age {age}");
+            assert_eq!(t, before);
+        }
+        // One older, and far older: set to exactly MAX_CHANGE_AGE.
+        for age in [MAX_CHANGE_AGE + 1, MAX_CHANGE_AGE + 12_345, u32::MAX] {
+            let mut t = Tick::new(now.get().wrapping_sub(age));
+            assert!(t.check_tick(now), "age {age}");
+            assert_eq!(now.relative_to(t).get(), MAX_CHANGE_AGE, "age {age}");
+        }
+    }
+
+    #[test]
+    fn check_tick_works_across_the_counter_wrapping() {
+        // `now` just after a wrap: a stamp from before it is young, a
+        // stamp "ahead" of it (huge wrapping age) is old.
+        let now = Tick::new(5);
+        let mut young = Tick::new(u32::MAX - 100);
+        assert!(!young.check_tick(now));
+        assert_eq!(now.relative_to(young).get(), 106);
+        let mut old = Tick::new(10);
+        assert!(old.check_tick(now));
+        assert_eq!(now.relative_to(old).get(), MAX_CHANGE_AGE);
+    }
+
+    #[test]
+    fn component_ticks_check_clamps_each_tick_on_its_own() {
+        let now = Tick::new(3_000_000_000);
+        let mut t = ComponentTicks {
+            added: Tick::new(now.get().wrapping_sub(MAX_CHANGE_AGE + 77)),
+            changed: Tick::new(now.get() - 5),
+        };
+        assert!(t.check_tick(now));
+        assert_eq!(now.relative_to(t.added).get(), MAX_CHANGE_AGE);
+        assert_eq!(now.relative_to(t.changed).get(), 5, "the young one is left alone");
+        assert!(!t.check_tick(now), "a second check changes nothing");
+    }
+
+    #[test]
+    fn a_tracker_is_clamped_like_any_other_tick() {
+        let mut tracker = ChangeTracker::new(); // last run: tick 0
+        let now = Tick::new(MAX_CHANGE_AGE + 50);
+        assert!(tracker.check_tick(now));
+        assert_eq!(now.relative_to(tracker.last_run()).get(), MAX_CHANGE_AGE);
+        assert!(!tracker.check_tick(now));
+    }
+
+    /// The failure `check_tick` exists to prevent, shown with bare ticks:
+    /// a stamp that is 2^32 + 5_000_000 ticks old reads as 5 million ticks
+    /// old, so it looks newer than a tracker that last ran 10 million ticks
+    /// ago.
+    #[test]
+    fn a_stamp_that_wrapped_looks_new_unless_it_was_checked_on_the_way() {
+        let stamp = Tick::new(100);
+        let first_check = Tick::new(stamp.get().wrapping_add(3_400_000_000));
+        let much_later = Tick::new(stamp.get().wrapping_add(5_000_000)); // 2^32 + 5M ticks on
+        let last_run = Tick::new(much_later.get().wrapping_sub(10_000_000));
+
+        // Unchecked: the age wrapped to 5M, below the tracker's 10M.
+        assert!(stamp.is_newer_than(last_run, much_later), "the bug");
+
+        // Checked at `first_check`, when it was 3.4e9 old (over the limit).
+        let mut checked = stamp;
+        assert!(checked.check_tick(first_check));
+        assert!(
+            !checked.is_newer_than(last_run, much_later),
+            "clamped on the way, it is still old when `much_later` comes"
+        );
     }
 }

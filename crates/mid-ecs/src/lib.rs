@@ -58,7 +58,7 @@ pub use system_param::{
     Local, Query, QueryParIter, RemovedComponents, Res, ResMut, SystemMeta, SystemParam,
     SystemParamItem, SystemState,
 };
-pub use tick::{ChangeTracker, Mut, Ref, Tick};
+pub use tick::{ChangeTracker, Mut, Ref, Tick, CHECK_TICK_THRESHOLD, MAX_CHANGE_AGE};
 pub use transform::{GlobalTransform, GlobalTransformLWC};
 pub use world::{Entity, World};
 pub use world_cell::WorldCell;

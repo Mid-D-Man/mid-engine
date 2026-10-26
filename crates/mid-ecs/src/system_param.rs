@@ -37,7 +37,7 @@ use crate::commands::{CommandQueue, Commands};
 use crate::data_filter::DataFilter;
 use crate::query_data::{QueryData, QueryEntityError, QuerySingleError, ReadOnlyQueryData};
 use crate::removal::RemovalLog;
-use crate::tick::Tick;
+use crate::tick::{ComponentTicks, Tick};
 use crate::world::{Entity, World};
 use crate::world_cell::WorldCell;
 
@@ -84,6 +84,12 @@ impl SystemMeta {
 
     pub(crate) fn set_last_run(&mut self, tick: Tick) {
         self.last_run = tick;
+    }
+
+    /// Keeps the system's last-run tick within [`crate::MAX_CHANGE_AGE`] of
+    /// `now` (see [`Tick::check_tick`]); whether it was clamped.
+    pub fn check_change_tick(&mut self, now: Tick) -> bool {
+        self.last_run.check_tick(now)
     }
 
     /// Registers one parameter's access.
@@ -711,8 +717,41 @@ unsafe impl<Q: QueryData + 'static, F: DataFilter + 'static> SystemParam for Que
 
 /// A resource, shared. Panics when the system runs if the resource does
 /// not exist; use `Option<Res<T>>` to tolerate that.
+///
+/// Besides the value it carries the resource's change ticks and the
+/// system's last-run tick, so [`Self::is_added`] and [`Self::is_changed`]
+/// answer "since this system last ran" with no argument, as in `bevy_ecs`.
+/// (A component's `Ref` / `Mut` take a [`crate::ChangeTracker`] instead,
+/// because they can also come from a world query that has no system.)
 pub struct Res<'w, T: 'static> {
     value: &'w T,
+    ticks: &'w ComponentTicks,
+    last_run: Tick,
+    this_run: Tick,
+}
+
+impl<T: 'static> Res<'_, T> {
+    /// Whether the resource was inserted since this system last ran (on its
+    /// first run, whether it exists at all).
+    pub fn is_added(&self) -> bool {
+        self.ticks.is_added(self.last_run, self.this_run)
+    }
+
+    /// Whether the resource was inserted, replaced, or written through a
+    /// `ResMut` (or `World::get_resource_mut`) since this system last ran.
+    pub fn is_changed(&self) -> bool {
+        self.ticks.is_changed(self.last_run, self.this_run)
+    }
+
+    /// The tick the resource was last changed at.
+    pub fn last_changed(&self) -> Tick {
+        self.ticks.changed
+    }
+
+    /// The tick the resource was added at.
+    pub fn added(&self) -> Tick {
+        self.ticks.added
+    }
 }
 
 impl<T: 'static> Deref for Res<'_, T> {
@@ -725,8 +764,55 @@ impl<T: 'static> Deref for Res<'_, T> {
 
 /// A resource, exclusive. Panics when the system runs if the resource
 /// does not exist; use `Option<ResMut<T>>` to tolerate that.
+///
+/// Reading through it ([`Deref`]) leaves the resource's change tick alone;
+/// *mutably* dereferencing it ([`DerefMut`]: any `*r = ..`, `r.field =
+/// ..`, `&mut *r`) stamps the resource changed at this run's tick, which
+/// is what other systems' `Res::is_changed` read. A system that takes a
+/// `ResMut` and only reads costs nobody a change.
 pub struct ResMut<'w, T: 'static> {
     value: &'w mut T,
+    ticks: &'w mut ComponentTicks,
+    last_run: Tick,
+    this_run: Tick,
+}
+
+impl<T: 'static> ResMut<'_, T> {
+    /// Whether the resource was inserted since this system last ran.
+    pub fn is_added(&self) -> bool {
+        self.ticks.is_added(self.last_run, self.this_run)
+    }
+
+    /// Whether the resource was changed since this system last ran. A
+    /// write this system made earlier in this same run is not "since the
+    /// last run"; it counts from the next run of anything that compares
+    /// against this run's tick.
+    pub fn is_changed(&self) -> bool {
+        self.ticks.is_changed(self.last_run, self.this_run)
+    }
+
+    /// The tick the resource was last changed at.
+    pub fn last_changed(&self) -> Tick {
+        self.ticks.changed
+    }
+
+    /// The tick the resource was added at.
+    pub fn added(&self) -> Tick {
+        self.ticks.added
+    }
+
+    /// Marks the resource changed without writing to it, for a mutation
+    /// made some other way (interior mutability, say).
+    pub fn set_changed(&mut self) {
+        self.ticks.changed = self.this_run;
+    }
+
+    /// Mutable access that does *not* mark the resource changed: for a
+    /// write no change-detecting reader needs to see. The caller is
+    /// asserting exactly that.
+    pub fn bypass_change_detection(&mut self) -> &mut T {
+        self.value
+    }
 }
 
 impl<T: 'static> Deref for ResMut<'_, T> {
@@ -739,6 +825,7 @@ impl<T: 'static> Deref for ResMut<'_, T> {
 
 impl<T: 'static> DerefMut for ResMut<'_, T> {
     fn deref_mut(&mut self) -> &mut T {
+        self.ticks.changed = self.this_run;
         self.value
     }
 }
@@ -774,12 +861,17 @@ unsafe impl<T: 'static> SystemParam for Res<'_, T> {
         _state: &'s mut Self::State,
         meta: &SystemMeta,
         world: WorldCell<'w>,
-        _this_run: Tick,
+        this_run: Tick,
     ) -> Self::Item<'w, 's> {
         // SAFETY: the read was registered and checked against every other
         // parameter, so nothing writes `T` meanwhile.
-        match unsafe { world.resource::<T>() } {
-            Some(value) => Res { value },
+        match unsafe { world.resource_with_ticks::<T>() } {
+            Some((value, ticks)) => Res {
+                value,
+                ticks,
+                last_run: meta.last_run(),
+                this_run,
+            },
             None => missing_resource::<T>(meta),
         }
     }
@@ -796,12 +888,17 @@ unsafe impl<T: 'static> SystemParam for Option<Res<'_, T>> {
 
     unsafe fn get_param<'w, 's>(
         _state: &'s mut Self::State,
-        _meta: &SystemMeta,
+        meta: &SystemMeta,
         world: WorldCell<'w>,
-        _this_run: Tick,
+        this_run: Tick,
     ) -> Self::Item<'w, 's> {
         // SAFETY: as for `Res`.
-        unsafe { world.resource::<T>() }.map(|value| Res { value })
+        unsafe { world.resource_with_ticks::<T>() }.map(|(value, ticks)| Res {
+            value,
+            ticks,
+            last_run: meta.last_run(),
+            this_run,
+        })
     }
 }
 
@@ -818,12 +915,17 @@ unsafe impl<T: 'static> SystemParam for ResMut<'_, T> {
         _state: &'s mut Self::State,
         meta: &SystemMeta,
         world: WorldCell<'w>,
-        _this_run: Tick,
+        this_run: Tick,
     ) -> Self::Item<'w, 's> {
         // SAFETY: the write was registered and checked against every
         // other parameter, so nothing else reads or writes `T` meanwhile.
-        match unsafe { world.resource_mut::<T>() } {
-            Some(value) => ResMut { value },
+        match unsafe { world.resource_mut_with_ticks::<T>() } {
+            Some((value, ticks)) => ResMut {
+                value,
+                ticks,
+                last_run: meta.last_run(),
+                this_run,
+            },
             None => missing_resource::<T>(meta),
         }
     }
@@ -840,12 +942,17 @@ unsafe impl<T: 'static> SystemParam for Option<ResMut<'_, T>> {
 
     unsafe fn get_param<'w, 's>(
         _state: &'s mut Self::State,
-        _meta: &SystemMeta,
+        meta: &SystemMeta,
         world: WorldCell<'w>,
-        _this_run: Tick,
+        this_run: Tick,
     ) -> Self::Item<'w, 's> {
         // SAFETY: as for `ResMut`.
-        unsafe { world.resource_mut::<T>() }.map(|value| ResMut { value })
+        unsafe { world.resource_mut_with_ticks::<T>() }.map(|(value, ticks)| ResMut {
+            value,
+            ticks,
+            last_run: meta.last_run(),
+            this_run,
+        })
     }
 }
 
@@ -1012,6 +1119,14 @@ impl<P: SystemParam + 'static> SystemState<P> {
     /// The meta `new` built: the name and the registered access.
     pub fn meta(&self) -> &SystemMeta {
         &self.meta
+    }
+
+    /// Keeps the last-call tick within [`crate::MAX_CHANGE_AGE`] of `now`;
+    /// whether it was clamped. Call with the world's tick at least once per
+    /// [`crate::CHECK_TICK_THRESHOLD`] ticks if this state outlives that
+    /// many.
+    pub fn check_change_tick(&mut self, now: Tick) -> bool {
+        self.meta.check_change_tick(now)
     }
 
     /// The parameters for now. `Added`/`Changed` measure against the
