@@ -22,6 +22,7 @@ pub mod query;
 pub mod query_data;
 mod removal;
 pub mod resource;
+pub mod schedule;
 mod scratch;
 pub mod sync;
 pub mod system;

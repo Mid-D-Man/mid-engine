@@ -98,6 +98,10 @@ pub trait System: 'static {
     /// means nothing at all.)
     unsafe fn run_unchecked(&mut self, world: WorldCell<'_>, this_run: Tick);
 
+    /// The tick of the system's previous run (zero before the first): what
+    /// `Added` and `Changed` in its queries measure "since" against.
+    fn last_run(&self) -> Tick;
+
     /// Keeps the system's last-run tick within [`crate::MAX_CHANGE_AGE`] of
     /// `now`; whether it was clamped. `World::check_change_ticks` cannot
     /// reach a tick the system itself holds, so whoever owns the system
@@ -165,27 +169,33 @@ pub trait SystemParamFunction<Marker>: 'static {
     /// The arguments, as one (tuple) parameter.
     type Param: SystemParam + 'static;
 
+    /// What the function returns: `()` for a system, `bool` for a run
+    /// condition (see [`crate::schedule::Condition`]).
+    type Out: 'static;
+
     /// Calls the function.
-    fn run(&mut self, param: SystemParamItem<'_, '_, Self::Param>);
+    fn run(&mut self, param: SystemParamItem<'_, '_, Self::Param>) -> Self::Out;
 }
 
 macro_rules! impl_system_param_function {
     ($($P:ident),*) => {
         #[allow(non_snake_case)]
-        impl<Func, $($P: SystemParam + 'static),*> SystemParamFunction<fn($($P,)*)> for Func
+        impl<Func, Out, $($P: SystemParam + 'static),*> SystemParamFunction<fn($($P,)*) -> Out> for Func
         where
             Func: 'static,
+            Out: 'static,
             // The function must accept the parameters both with the
             // placeholder lifetimes `SystemParam` is written with and
             // with any real ones: the second bound is what the call
             // below needs, the first is what a function item satisfies.
             for<'a> &'a mut Func:
-                FnMut($($P),*) + FnMut($(SystemParamItem<'_, '_, $P>),*),
+                FnMut($($P),*) -> Out + FnMut($(SystemParamItem<'_, '_, $P>),*) -> Out,
         {
             type Param = ($($P,)*);
+            type Out = Out;
 
-            fn run(&mut self, param: SystemParamItem<'_, '_, ($($P,)*)>) {
-                fn call_inner<$($P,)*>(mut f: impl FnMut($($P,)*), $($P: $P,)*) {
+            fn run(&mut self, param: SystemParamItem<'_, '_, ($($P,)*)>) -> Out {
+                fn call_inner<Out, $($P,)*>(mut f: impl FnMut($($P,)*) -> Out, $($P: $P,)*) -> Out {
                     f($($P,)*)
                 }
                 let ($($P,)*) = param;
@@ -218,45 +228,36 @@ pub struct FunctionSystem<Marker, F: SystemParamFunction<Marker>> {
 }
 
 impl<Marker, F: SystemParamFunction<Marker>> FunctionSystem<Marker, F> {
-    /// The system's meta: its name, registered access and last run.
-    pub fn meta(&self) -> &SystemMeta {
-        &self.meta
-    }
-}
-
-impl<Marker: 'static, F: SystemParamFunction<Marker>> IntoSystem<(IsFunctionSystem, Marker)> for F {
-    type System = FunctionSystem<Marker, F>;
-
-    fn into_system(self) -> Self::System {
-        FunctionSystem {
-            func: self,
+    pub(crate) fn new(func: F) -> Self {
+        Self {
+            func,
             state: None,
             meta: SystemMeta::new(type_name::<F>()),
             _marker: PhantomData,
         }
     }
-}
 
-impl<Marker: 'static, F: SystemParamFunction<Marker>> System for FunctionSystem<Marker, F> {
-    fn name(&self) -> &str {
-        self.meta.name()
+    /// The system's meta: its name, registered access and last run.
+    pub fn meta(&self) -> &SystemMeta {
+        &self.meta
     }
 
-    fn initialize(&mut self, world: &mut World) {
+    /// Builds the parameters' state if that has not happened yet.
+    pub(crate) fn init_params(&mut self, world: &mut World) {
         if self.state.is_none() {
             self.state = Some(<F::Param as SystemParam>::init_state(world, &mut self.meta));
         }
     }
 
-    fn is_initialized(&self) -> bool {
+    pub(crate) fn params_ready(&self) -> bool {
         self.state.is_some()
     }
 
-    fn access(&self) -> &FilteredAccessSet {
-        self.meta.access()
-    }
-
-    unsafe fn run_unchecked(&mut self, world: WorldCell<'_>, this_run: Tick) {
+    /// Fetches the parameters, calls the function, records the run.
+    ///
+    /// # Safety
+    /// The contract of [`System::run_unchecked`].
+    pub(crate) unsafe fn call(&mut self, world: WorldCell<'_>, this_run: Tick) -> F::Out {
         let state = self
             .state
             .as_mut()
@@ -264,8 +265,58 @@ impl<Marker: 'static, F: SystemParamFunction<Marker>> System for FunctionSystem<
         // SAFETY: the caller's contract is exactly `get_param`'s.
         let param =
             unsafe { <F::Param as SystemParam>::get_param(state, &self.meta, world, this_run) };
-        self.func.run(param);
+        let out = self.func.run(param);
         self.meta.set_last_run(this_run);
+        out
+    }
+
+    pub(crate) fn check_tick(&mut self, now: Tick) -> bool {
+        self.meta.check_change_tick(now)
+    }
+
+    pub(crate) fn apply_params(&mut self, world: &mut World) {
+        if let Some(state) = self.state.as_mut() {
+            <F::Param as SystemParam>::apply(state, &self.meta, world);
+        }
+    }
+}
+
+impl<Marker: 'static, F: SystemParamFunction<Marker, Out = ()>>
+    IntoSystem<(IsFunctionSystem, Marker)> for F
+{
+    type System = FunctionSystem<Marker, F>;
+
+    fn into_system(self) -> Self::System {
+        FunctionSystem::new(self)
+    }
+}
+
+impl<Marker: 'static, F: SystemParamFunction<Marker, Out = ()>> System
+    for FunctionSystem<Marker, F>
+{
+    fn name(&self) -> &str {
+        self.meta.name()
+    }
+
+    fn initialize(&mut self, world: &mut World) {
+        self.init_params(world);
+    }
+
+    fn is_initialized(&self) -> bool {
+        self.params_ready()
+    }
+
+    fn access(&self) -> &FilteredAccessSet {
+        self.meta.access()
+    }
+
+    unsafe fn run_unchecked(&mut self, world: WorldCell<'_>, this_run: Tick) {
+        // SAFETY: the caller's contract is `call`'s.
+        unsafe { self.call(world, this_run) }
+    }
+
+    fn last_run(&self) -> Tick {
+        self.meta.last_run()
     }
 
     fn check_change_tick(&mut self, now: Tick) -> bool {
@@ -273,9 +324,7 @@ impl<Marker: 'static, F: SystemParamFunction<Marker>> System for FunctionSystem<
     }
 
     fn apply_deferred(&mut self, world: &mut World) {
-        if let Some(state) = self.state.as_mut() {
-            <F::Param as SystemParam>::apply(state, &self.meta, world);
-        }
+        self.apply_params(world);
     }
 }
 
@@ -339,6 +388,10 @@ impl<F: FnMut(&mut World) + 'static> System for ExclusiveFunctionSystem<F> {
         // `world_mut` needs.
         (self.func)(unsafe { world.world_mut() });
         self.meta.set_last_run(this_run);
+    }
+
+    fn last_run(&self) -> Tick {
+        self.meta.last_run()
     }
 
     fn check_change_tick(&mut self, now: Tick) -> bool {

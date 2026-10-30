@@ -264,6 +264,15 @@ impl Access {
         self.read_all_resources = true;
     }
 
+    /// `true` if this access writes nothing: no component, no resource,
+    /// and not everything.
+    pub fn is_read_only(&self) -> bool {
+        self.component_writes.is_empty()
+            && self.resource_writes.is_empty()
+            && !self.write_all_components
+            && !self.write_all_resources
+    }
+
     /// `true` if this access reads or writes anything at all.
     pub fn is_empty(&self) -> bool {
         !self.components().touches_any() && !self.resources().touches_any()
@@ -787,6 +796,27 @@ mod tests {
             assert!(c.is_all(), "{other:?}");
             assert!(!other.is_compatible(&ex));
         }
+    }
+
+    #[test]
+    fn is_read_only_is_false_for_any_write_and_true_otherwise() {
+        assert!(access(|_| {}).is_read_only());
+        assert!(access(|a| {
+            a.add_component_read::<A>();
+            a.add_resource_read::<B>();
+            a.read_all();
+        })
+        .is_read_only());
+        assert!(!access(|a| a.add_component_write::<A>()).is_read_only());
+        assert!(!access(|a| a.add_resource_write::<A>()).is_read_only());
+        assert!(!access(|a| a.write_all()).is_read_only());
+        // each of the whole-world flags on its own
+        let mut components = Access::default();
+        components.write_all_components = true;
+        assert!(!components.is_read_only());
+        let mut resources = Access::default();
+        resources.write_all_resources = true;
+        assert!(!resources.is_read_only());
     }
 
     #[test]
