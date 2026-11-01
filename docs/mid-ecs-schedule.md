@@ -4,7 +4,9 @@ This is a separate part of the `mid-ecs` documentation (see "Large crates:
 splitting by part" in `docs/DOCUMENTATION_AND_COMMENTING_GUIDELINES.md`). The
 main file is `docs/mid-ecs.md`. **Status: phase 1 is built** (labels, sets, the
 config builder, run conditions, the graph, a single-threaded executor, `Schedules`
-and the `World` methods). Phases 2 to 4 are still design. The sections down to
+and the `World` methods). Phase 2 (`Send`, deferred-work flags, the parallel
+executor) is built too and documented in `docs/mid-ecs-schedule-parallel.md`;
+phases 3 and 4 are still design. The sections down to
 "Test plan for phase 1" are the design as agreed; where the code differs, the
 text says "As built". The per-file sections after the test plan describe what is
 actually in `crates/mid-ecs/src/schedule/`.
@@ -208,7 +210,9 @@ labelled schedules in order is `mid-app`'s, not `mid-ecs`'s.
    `Schedules`, the `World` methods, the tick sweep. New module `schedule/`:
    `label.rs`, `config.rs`, `condition.rs`, `graph.rs`, `executor.rs`, `mod.rs`.
    Estimate: 3,000 lines with tests, two working sessions. No FFI surface yet.
-2. **Phase 2, parallel executor.** Needs: `Send` on `System` (see decision 5),
+2. **Phase 2, parallel executor** (built; see `docs/mid-ecs-schedule-parallel.md`,
+   where the sync points differ from this sketch: they are found when a system
+   needs one, not inserted into the graph). Needs: `Send` on `System` (see decision 5),
    sync points inserted automatically between a system with deferred work and
    anything ordered after it, a per-system tick assigned by the executor before
    the parallel section (the world's tick is a plain `u32`, so systems cannot
@@ -243,7 +247,9 @@ labelled schedules in order is `mid-app`'s, not `mid-ecs`'s.
 5. **`System: Send` arrives with phase 2**, not before. Today a system may hold
    something non-`Send`, and phase 1 runs on one thread. Adding the bound is a
    breaking change for any such system, so it is made once, with the executor that
-   needs it, and with a compile-fail test.
+   needs it, and with a compile-fail test. **As built** it reaches further than
+   the system type: the parameters' state and items must be `Send` too (a `Res<T>`
+   needs `T: Sync`), and labels, sets and queued commands with it.
 6. **Ambiguity detection defaults to `Ignore`**, with the query always available.
    Alternative: warn by default. Rejected: a single-threaded schedule is
    deterministic, and the engine has no logging dependency in `mid-ecs` to warn
@@ -469,8 +475,8 @@ levels), and a few hundred systems in phases.
 - **The world's change tick starts at 1, not 0.** Zero is "never ran". Tests that
   expect "the first run is at tick zero" are wrong; compare against
   `world.change_tick()` taken before the run.
-- **Open, not done (phase 2 and later):** `System: Send`, automatic sync points, the
-  parallel executor, and the `mid-app` side (`App`, `Plugin`, `Main`, the fixed
-  stages as labels, the call to `World::trim_removals` with
+- **Open, not done (phase 3 and later):** the `mid-app` side (`App`, `Plugin`,
+  `Main`, the fixed stages as labels, the call to `World::trim_removals` with
   `Schedule::oldest_last_run`). `mid-app`'s closures have not been migrated to
-  exclusive systems yet.
+  exclusive systems yet. (`System: Send`, deferred-work flags and the parallel
+  executor are phase 2.)

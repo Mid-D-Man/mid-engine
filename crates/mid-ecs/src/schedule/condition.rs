@@ -40,7 +40,7 @@ use crate::world_cell::WorldCell;
 /// It is set up and run like a [`crate::System`] and shares the machinery
 /// for it (its parameters, its last run, its tick), but its parameters may
 /// only read, and nothing it defers (`Commands`) is ever applied.
-pub trait Condition: 'static {
+pub trait Condition: Send + 'static {
     /// A name for messages.
     fn name(&self) -> &str;
 

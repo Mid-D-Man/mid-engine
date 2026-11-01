@@ -76,13 +76,13 @@ enum Command {
     /// Spawns an empty entity; pushes it onto the slot list.
     Spawn,
     /// Spawns an entity with a bundle; pushes it onto the slot list.
-    SpawnWith(Box<dyn FnOnce(&mut World) -> Entity>),
+    SpawnWith(Box<dyn FnOnce(&mut World) -> Entity + Send>),
     Despawn(Target),
     /// Runs against one entity (inserts, custom per-entity commands).
-    OnEntity(Target, Box<dyn FnOnce(&mut World, Entity)>),
+    OnEntity(Target, Box<dyn FnOnce(&mut World, Entity) + Send>),
     /// A removal: a monomorphised function pointer, so no allocation.
     Remove(Target, fn(&mut World, Entity)),
-    OnWorld(Box<dyn FnOnce(&mut World)>),
+    OnWorld(Box<dyn FnOnce(&mut World) + Send>),
 }
 
 /// An ordered buffer of deferred [`World`] changes. See the module docs.
@@ -214,7 +214,7 @@ impl Commands<'_> {
     /// Queues a spawn that attaches `bundle` in the same step
     /// ([`World::spawn_bundle`]).
     #[allow(private_bounds)]
-    pub fn spawn_bundle<B: Bundle>(&mut self, bundle: B) -> EntityCommands<'_> {
+    pub fn spawn_bundle<B: Bundle + Send>(&mut self, bundle: B) -> EntityCommands<'_> {
         let target = self
             .queue
             .push_spawn(Command::SpawnWith(Box::new(move |world| {
@@ -255,7 +255,7 @@ impl Commands<'_> {
     }
 
     /// Queues [`World::insert_resource`].
-    pub fn insert_resource<T: 'static>(&mut self, value: T) {
+    pub fn insert_resource<T: Send + 'static>(&mut self, value: T) {
         self.queue.push(Command::OnWorld(Box::new(move |world| {
             world.insert_resource(value);
         })));
@@ -271,7 +271,7 @@ impl Commands<'_> {
     /// Queues any closure over the whole world. The way to queue Sparse
     /// Shell inserts (`World::insert`) or anything else without a
     /// dedicated method.
-    pub fn queue(&mut self, command: impl FnOnce(&mut World) + 'static) {
+    pub fn queue(&mut self, command: impl FnOnce(&mut World) + Send + 'static) {
         self.queue.push(Command::OnWorld(Box::new(command)));
     }
 }
@@ -286,7 +286,7 @@ pub struct EntityCommands<'q> {
 
 impl EntityCommands<'_> {
     /// Queues [`World::insert_static`].
-    pub fn insert_static<T: 'static>(&mut self, component: T) -> &mut Self {
+    pub fn insert_static<T: Send + 'static>(&mut self, component: T) -> &mut Self {
         self.queue.push(Command::OnEntity(
             self.target,
             Box::new(move |world, entity| {
@@ -385,7 +385,7 @@ impl EntityCommands<'_> {
 
     /// Queues [`World::insert_bundle`].
     #[allow(private_bounds)]
-    pub fn insert_bundle<B: Bundle>(&mut self, bundle: B) -> &mut Self {
+    pub fn insert_bundle<B: Bundle + Send>(&mut self, bundle: B) -> &mut Self {
         self.queue.push(Command::OnEntity(
             self.target,
             Box::new(move |world, entity| {
@@ -407,7 +407,10 @@ impl EntityCommands<'_> {
 
     /// Queues any closure over the world and this entity. The way to
     /// queue Sparse Shell inserts and removals for it.
-    pub fn queue(&mut self, command: impl FnOnce(&mut World, Entity) + 'static) -> &mut Self {
+    pub fn queue(
+        &mut self,
+        command: impl FnOnce(&mut World, Entity) + Send + 'static,
+    ) -> &mut Self {
         self.queue
             .push(Command::OnEntity(self.target, Box::new(command)));
         self

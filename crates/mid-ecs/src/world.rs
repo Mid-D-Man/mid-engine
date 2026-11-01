@@ -699,6 +699,19 @@ impl World {
         self.last_check_tick
     }
 
+    /// Moves the change tick to `tick`, which is at or ahead of the current
+    /// one, running [`Self::check_change_ticks`] if a check is due, as
+    /// [`Self::increment_change_tick`] would have after the same number of
+    /// steps. For a schedule's parallel executor, which counts ticks itself
+    /// while systems run and writes the count back whenever it holds the
+    /// whole world.
+    pub(crate) fn advance_change_tick_to(&mut self, tick: Tick) {
+        self.change_tick = tick;
+        if self.change_tick.relative_to(self.last_check_tick).get() >= CHECK_TICK_THRESHOLD {
+            self.check_change_ticks();
+        }
+    }
+
     /// Jumps the change tick to `tick`, for tests of wraparound that
     /// cannot afford 2^32 increments.
     #[cfg(test)]
@@ -3002,7 +3015,32 @@ mod tests {
         assert_eq!(now, Tick::new(CHECK_TICK_THRESHOLD));
         assert_eq!(w.last_check_tick(), now, "due: scanned");
         w.increment_change_tick();
-        assert_eq!(w.last_check_tick(), now, "not due again for a whole threshold");
+        assert_eq!(
+            w.last_check_tick(),
+            now,
+            "not due again for a whole threshold"
+        );
+    }
+
+    #[test]
+    fn advance_change_tick_to_sets_the_tick_and_scans_when_due_and_not_before() {
+        let mut w = World::new();
+        w.advance_change_tick_to(Tick::new(CHECK_TICK_THRESHOLD - 1));
+        assert_eq!(w.change_tick(), Tick::new(CHECK_TICK_THRESHOLD - 1));
+        assert_eq!(w.last_check_tick(), Tick::ZERO, "one tick short of due");
+        w.advance_change_tick_to(Tick::new(CHECK_TICK_THRESHOLD + 7));
+        assert_eq!(w.change_tick(), Tick::new(CHECK_TICK_THRESHOLD + 7));
+        assert_eq!(
+            w.last_check_tick(),
+            Tick::new(CHECK_TICK_THRESHOLD + 7),
+            "due: scanned"
+        );
+        w.advance_change_tick_to(Tick::new(CHECK_TICK_THRESHOLD + 9));
+        assert_eq!(
+            w.last_check_tick(),
+            Tick::new(CHECK_TICK_THRESHOLD + 7),
+            "not due again for a whole threshold"
+        );
     }
 
     /// Two worlds see the same history: a component stamped once, then a

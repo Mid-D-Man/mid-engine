@@ -1109,6 +1109,16 @@ fn run_errors_say_what_happened() {
 }
 
 #[test]
+fn a_schedule_and_what_it_holds_are_send() {
+    fn assert_send<T: Send>() {}
+    assert_send::<Schedule>();
+    assert_send::<Schedules>();
+    assert_send::<BoxedCondition>();
+    assert_send::<ScheduleConfigs<ScheduleSystem>>();
+    assert_send::<AndCondition<BoxedCondition, BoxedCondition>>();
+}
+
+#[test]
 fn the_schedule_label_is_kept() {
     let s = Schedule::new(Update);
     assert_eq!(s.label(), &Update.label_key());

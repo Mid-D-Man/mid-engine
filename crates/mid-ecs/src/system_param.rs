@@ -52,6 +52,7 @@ pub struct SystemMeta {
     name: Cow<'static, str>,
     access: FilteredAccessSet,
     last_run: Tick,
+    has_deferred: bool,
 }
 
 impl SystemMeta {
@@ -63,7 +64,21 @@ impl SystemMeta {
             name: name.into(),
             access: FilteredAccessSet::new(),
             last_run: Tick::default(),
+            has_deferred: false,
         }
+    }
+
+    /// Says that a parameter of this system defers work to
+    /// [`SystemParam::apply`] (as `Commands` does), so a schedule must not
+    /// run anything ordered after the system until that work has been
+    /// applied. Called from [`SystemParam::init_state`].
+    pub fn set_has_deferred(&mut self) {
+        self.has_deferred = true;
+    }
+
+    /// Whether a parameter defers work. See [`Self::set_has_deferred`].
+    pub fn has_deferred(&self) -> bool {
+        self.has_deferred
     }
 
     /// The system's name.
@@ -121,13 +136,21 @@ impl SystemMeta {
 /// any other. The unsafe functions of [`WorldCell`] and the guarantees of
 /// every other parameter rest on that being true.
 pub unsafe trait SystemParam: Sized {
-    /// What the parameter keeps between runs of its system.
-    type State: 'static;
+    /// What the parameter keeps between runs of its system. It travels
+    /// with the system to whichever thread runs it, so it is `Send`.
+    type State: Send + 'static;
 
     /// The parameter as the system's function receives it: `Self` with
     /// its lifetimes filled in (`'w` for what it borrows from the world,
     /// `'s` for what it borrows from its own state).
-    type Item<'w, 's>: SystemParam<State = Self::State>;
+    ///
+    /// It is `Send`: a schedule may run the system on another thread, and
+    /// what the item holds (a reference to a resource, a query over
+    /// components) is then reached from there. So a parameter over a type
+    /// that may not be shared between threads (`Res<T>` needs `T: Sync`,
+    /// `ResMut<T>` needs `T: Send`, a query needs the same of its
+    /// components) is not a parameter at all.
+    type Item<'w, 's>: SystemParam<State = Self::State> + Send;
 
     /// Builds the state, once, and registers the parameter's access in
     /// `meta`.
@@ -300,6 +323,18 @@ pub struct Query<'w, 's, Q: QueryData + 'static, F: DataFilter + 'static = ()> {
     this_run: Tick,
     last_run: Tick,
     _marker: PhantomData<(&'s (), fn() -> (Q, F))>,
+}
+
+// SAFETY: a query touches component values only through the terms of `Q`,
+// and `Q::Fetch<'a>: Send` is the statement that those values may be reached
+// from another thread (a `&T` term needs `T: Sync`, a `Mut<T>` term needs
+// `T: Send`; it is the same bound `par_iter` asks for). Filters read ids and
+// ticks, which are plain integers. The world cell is what makes the query
+// `!Send` by default; the access the query registered is what keeps two
+// systems that conflict from running at once.
+unsafe impl<Q: QueryData + 'static, F: DataFilter + 'static> Send for Query<'_, '_, Q, F> where
+    for<'a> Q::Fetch<'a>: Send
+{
 }
 
 impl<'w, 's, Q: QueryData + 'static, F: DataFilter + 'static> Query<'w, 's, Q, F> {
@@ -547,7 +582,10 @@ impl<'w, 's, Q: QueryData + 'static, F: DataFilter + 'static> Query<'w, 's, Q, F
 /// on the calling thread.
 ///
 /// A component type that is not `Send` (for `Mut`) or not `Sync` (for a
-/// read term) cannot be iterated in parallel; the compiler refuses:
+/// read term) cannot be iterated in parallel, and since a schedule may run
+/// any system on another thread it cannot be queried through a system
+/// parameter at all (`Query<..>` is a [`SystemParam`] only when `Q::Fetch`
+/// is `Send`); the compiler refuses:
 ///
 /// ```compile_fail
 /// use mid_ecs::{Mut, Query, SystemState, World};
@@ -690,7 +728,10 @@ where
 
 // SAFETY: registers exactly `FilteredAccess::of_query::<Q, F>()`, the
 // access `query_iter` / `query_iter_mut` make.
-unsafe impl<Q: QueryData + 'static, F: DataFilter + 'static> SystemParam for Query<'_, '_, Q, F> {
+unsafe impl<Q: QueryData + 'static, F: DataFilter + 'static> SystemParam for Query<'_, '_, Q, F>
+where
+    for<'a> Q::Fetch<'a>: Send,
+{
     type State = ();
     type Item<'w, 's> = Query<'w, 's, Q, F>;
 
@@ -849,7 +890,7 @@ fn missing_resource<T: 'static>(meta: &SystemMeta) -> ! {
 }
 
 // SAFETY: registers a read of resource `T`, the only thing it touches.
-unsafe impl<T: 'static> SystemParam for Res<'_, T> {
+unsafe impl<T: Sync + 'static> SystemParam for Res<'_, T> {
     type State = ();
     type Item<'w, 's> = Res<'w, T>;
 
@@ -878,7 +919,7 @@ unsafe impl<T: 'static> SystemParam for Res<'_, T> {
 }
 
 // SAFETY: registers a read of resource `T`, the only thing it touches.
-unsafe impl<T: 'static> SystemParam for Option<Res<'_, T>> {
+unsafe impl<T: Sync + 'static> SystemParam for Option<Res<'_, T>> {
     type State = ();
     type Item<'w, 's> = Option<Res<'w, T>>;
 
@@ -903,7 +944,7 @@ unsafe impl<T: 'static> SystemParam for Option<Res<'_, T>> {
 }
 
 // SAFETY: registers a write of resource `T`, the only thing it touches.
-unsafe impl<T: 'static> SystemParam for ResMut<'_, T> {
+unsafe impl<T: Send + 'static> SystemParam for ResMut<'_, T> {
     type State = ();
     type Item<'w, 's> = ResMut<'w, T>;
 
@@ -932,7 +973,7 @@ unsafe impl<T: 'static> SystemParam for ResMut<'_, T> {
 }
 
 // SAFETY: registers a write of resource `T`, the only thing it touches.
-unsafe impl<T: 'static> SystemParam for Option<ResMut<'_, T>> {
+unsafe impl<T: Send + 'static> SystemParam for Option<ResMut<'_, T>> {
     type State = ();
     type Item<'w, 's> = Option<ResMut<'w, T>>;
 
@@ -980,7 +1021,7 @@ impl<T: 'static> DerefMut for Local<'_, T> {
 }
 
 // SAFETY: touches nothing in the world, so registers nothing.
-unsafe impl<T: Default + 'static> SystemParam for Local<'_, T> {
+unsafe impl<T: Default + Send + 'static> SystemParam for Local<'_, T> {
     type State = T;
     type Item<'w, 's> = Local<'s, T>;
 
@@ -1006,7 +1047,8 @@ unsafe impl SystemParam for Commands<'_> {
     type State = CommandQueue;
     type Item<'w, 's> = Commands<'s>;
 
-    fn init_state(_world: &mut World, _meta: &mut SystemMeta) -> Self::State {
+    fn init_state(_world: &mut World, meta: &mut SystemMeta) -> Self::State {
+        meta.set_has_deferred();
         CommandQueue::new()
     }
 

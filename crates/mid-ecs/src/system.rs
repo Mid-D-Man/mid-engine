@@ -60,7 +60,89 @@ use crate::world_cell::WorldCell;
 // ── The trait ────────────────────────────────────────────────────────
 
 /// A unit of work over a [`World`] with a known access footprint.
-pub trait System: 'static {
+///
+/// # Threads
+/// A system is `Send`: a schedule may run it on another thread, with other
+/// systems that touch different data running beside it. So everything a
+/// system is made of must be `Send`, and everything its parameters reach must
+/// be fit to be reached from another thread: a `Res<T>` needs `T: Sync`, a
+/// `ResMut<T>` or a `Local<T>` needs `T: Send`, a query needs the same of its
+/// components, and what is queued through `Commands` is `Send`. A system that
+/// breaks the rule is not a system (`IntoSystem` is not implemented for it).
+/// Each of these is refused by the compiler:
+///
+/// ```compile_fail
+/// use mid_ecs::{IntoSystem, Res};
+/// use std::cell::Cell;
+/// struct NotSync(Cell<u32>);
+/// fn reads(_r: Res<NotSync>) {}
+/// let _ = IntoSystem::into_system(reads);
+/// ```
+///
+/// ```compile_fail
+/// use mid_ecs::{IntoSystem, ResMut};
+/// use std::rc::Rc;
+/// struct NotSend(Rc<u32>);
+/// fn writes(_r: ResMut<NotSend>) {}
+/// let _ = IntoSystem::into_system(writes);
+/// ```
+///
+/// ```compile_fail
+/// use mid_ecs::{IntoSystem, Query};
+/// use std::cell::Cell;
+/// struct NotSync(Cell<u32>);
+/// fn reads(_q: Query<&NotSync>) {}
+/// let _ = IntoSystem::into_system(reads);
+/// ```
+///
+/// ```compile_fail
+/// use mid_ecs::{IntoSystem, Local};
+/// use std::rc::Rc;
+/// fn keeps(_l: Local<Rc<u32>>) {}
+/// let _ = IntoSystem::into_system(keeps);
+/// ```
+///
+/// ```compile_fail
+/// use mid_ecs::{IntoSystem, World};
+/// use std::rc::Rc;
+/// let rc = Rc::new(1u32);
+/// let _ = IntoSystem::into_system(move |_world: &mut World| {
+///     let _ = &rc;
+/// });
+/// ```
+///
+/// ```compile_fail
+/// use mid_ecs::{Commands, IntoSystem, World};
+/// use std::rc::Rc;
+/// fn queues(mut commands: Commands) {
+///     let rc = Rc::new(1u32);
+///     commands.queue(move |_world: &mut World| {
+///         let _ = &rc;
+///     });
+/// }
+/// let _ = IntoSystem::into_system(queues);
+/// ```
+///
+/// What does pass: a `Res` over a `Sync` type, a `ResMut` or `Local` over a
+/// `Send` one (it need not be `Sync`), queries over such components, and
+/// closures that capture `Send` values.
+///
+/// ```
+/// use mid_ecs::{IntoSystem, Local, Mut, Query, Res, ResMut, World};
+/// use std::cell::Cell;
+/// use std::sync::Arc;
+/// struct SendOnly(Cell<u32>); // `Send`, not `Sync`
+/// struct Plain(u32);
+/// fn a(_r: Res<Plain>, _q: Query<&Plain>) {}
+/// fn b(_w: ResMut<SendOnly>, _q: Query<Mut<SendOnly>>, _l: Local<Arc<u32>>) {}
+/// let shared = Arc::new(1u32);
+/// let _ = IntoSystem::into_system(a);
+/// let _ = IntoSystem::into_system(b);
+/// let _ = IntoSystem::into_system(move |_world: &mut World| {
+///     let _ = &shared;
+/// });
+/// ```
+pub trait System: Send + 'static {
     /// A name for messages.
     fn name(&self) -> &str;
 
@@ -97,6 +179,11 @@ pub trait System: 'static {
     /// that conflicts with [`Self::access`]. (For an exclusive system that
     /// means nothing at all.)
     unsafe fn run_unchecked(&mut self, world: WorldCell<'_>, this_run: Tick);
+
+    /// Whether running the system leaves deferred work to apply (a
+    /// `Commands` parameter), so that nothing ordered after it may start
+    /// before [`Self::apply_deferred`] has run.
+    fn has_deferred(&self) -> bool;
 
     /// The tick of the system's previous run (zero before the first): what
     /// `Added` and `Changed` in its queries measure "since" against.
@@ -165,7 +252,7 @@ impl<S: System> IntoSystem<IsSystem> for S {
 
 /// A function whose arguments are all [`SystemParam`]s. Implemented for
 /// functions and closures of up to twelve such arguments.
-pub trait SystemParamFunction<Marker>: 'static {
+pub trait SystemParamFunction<Marker>: Send + 'static {
     /// The arguments, as one (tuple) parameter.
     type Param: SystemParam + 'static;
 
@@ -182,8 +269,9 @@ macro_rules! impl_system_param_function {
         #[allow(non_snake_case)]
         impl<Func, Out, $($P: SystemParam + 'static),*> SystemParamFunction<fn($($P,)*) -> Out> for Func
         where
-            Func: 'static,
+            Func: Send + 'static,
             Out: 'static,
+
             // The function must accept the parameters both with the
             // placeholder lifetimes `SystemParam` is written with and
             // with any real ones: the second bound is what the call
@@ -315,6 +403,10 @@ impl<Marker: 'static, F: SystemParamFunction<Marker, Out = ()>> System
         unsafe { self.call(world, this_run) }
     }
 
+    fn has_deferred(&self) -> bool {
+        self.meta.has_deferred()
+    }
+
     fn last_run(&self) -> Tick {
         self.meta.last_run()
     }
@@ -344,7 +436,7 @@ impl<F> ExclusiveFunctionSystem<F> {
     }
 }
 
-impl<F: FnMut(&mut World) + 'static> IntoSystem<IsExclusiveFunctionSystem> for F {
+impl<F: FnMut(&mut World) + Send + 'static> IntoSystem<IsExclusiveFunctionSystem> for F {
     type System = ExclusiveFunctionSystem<F>;
 
     fn into_system(self) -> Self::System {
@@ -356,7 +448,7 @@ impl<F: FnMut(&mut World) + 'static> IntoSystem<IsExclusiveFunctionSystem> for F
     }
 }
 
-impl<F: FnMut(&mut World) + 'static> System for ExclusiveFunctionSystem<F> {
+impl<F: FnMut(&mut World) + Send + 'static> System for ExclusiveFunctionSystem<F> {
     fn name(&self) -> &str {
         self.meta.name()
     }
@@ -388,6 +480,10 @@ impl<F: FnMut(&mut World) + 'static> System for ExclusiveFunctionSystem<F> {
         // `world_mut` needs.
         (self.func)(unsafe { world.world_mut() });
         self.meta.set_last_run(this_run);
+    }
+
+    fn has_deferred(&self) -> bool {
+        false
     }
 
     fn last_run(&self) -> Tick {
@@ -921,6 +1017,68 @@ mod tests {
     }
 
     // ── Running a system by hand, the way a runner will ──────────────
+
+    // ── threads ──────────────────────────────────────────────────────
+
+    fn assert_send<T: Send>() {}
+
+    fn system_is_send<M, S: IntoSystem<M>>(_: S) {
+        assert_send::<S::System>();
+    }
+
+    struct Gauge2(u32);
+    struct Pos2(u32);
+
+    fn reads_only(_r: Res<Gauge2>, _q: Query<&Pos2>) {}
+    fn writes_only(_r: ResMut<Gauge2>, _q: Query<Mut<Pos2>>, _l: Local<u32>) {}
+    fn defers_only(_c: Commands) {}
+    fn defers_among_others(_r: Res<Gauge2>, _c: Commands, _l: Local<u32>) {}
+    fn exclusive(_w: &mut World) {}
+
+    #[test]
+    fn every_kind_of_system_is_send() {
+        system_is_send(reads_only);
+        system_is_send(writes_only);
+        system_is_send(defers_only);
+        system_is_send(exclusive);
+        system_is_send(|_w: &mut World| {});
+        assert_send::<Box<dyn System>>();
+    }
+
+    #[test]
+    fn a_system_that_defers_work_says_so_once_it_is_initialized() {
+        let mut world = World::new();
+        world.insert_resource(Gauge2(0));
+        let has = |sys: &mut dyn System, world: &mut World| {
+            assert!(
+                !sys.has_deferred(),
+                "nothing is known before it is initialized"
+            );
+            sys.initialize(world);
+            sys.has_deferred()
+        };
+        assert!(!has(&mut reads_only.into_system(), &mut world));
+        assert!(!has(&mut writes_only.into_system(), &mut world));
+        assert!(has(&mut defers_only.into_system(), &mut world));
+        assert!(has(&mut defers_among_others.into_system(), &mut world));
+        assert!(!has(&mut exclusive.into_system(), &mut world));
+    }
+
+    #[test]
+    fn the_deferred_flag_is_in_the_meta_of_a_function_system() {
+        let mut world = World::new();
+        world.insert_resource(Gauge2(0));
+        let mut yes = defers_among_others.into_system();
+        yes.initialize(&mut world);
+        assert!(yes.meta().has_deferred());
+        let mut no = reads_only.into_system();
+        no.initialize(&mut world);
+        assert!(!no.meta().has_deferred());
+        assert!(!SystemMeta::new("fresh").has_deferred());
+        let mut meta = SystemMeta::new("flagged");
+        meta.set_has_deferred();
+        assert!(meta.has_deferred());
+    }
 
     #[test]
     fn run_unchecked_and_apply_deferred_are_the_two_halves_of_run() {

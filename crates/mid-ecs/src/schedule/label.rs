@@ -5,9 +5,10 @@
 //! Names for schedules and for groups of systems.
 //!
 //! A [`ScheduleLabel`] names a schedule (`Update`, `FixedUpdate`). It is
-//! implemented for every type that is `Debug + Clone + Eq + Hash +
-//! 'static`, so a unit struct or an enum with the usual `#[derive]` is a
-//! label with no further code.
+//! implemented for every type that is `Debug + Clone + Eq + Hash + Send +
+//! Sync + 'static`, so a unit struct or an enum with the usual `#[derive]`
+//! is a label with no further code. (`Send + Sync` because a schedule holds
+//! its label and a schedule may be moved to another thread.)
 //!
 //! A [`SystemSet`] names a group of systems (`Phase::Input`), so ordering
 //! and run conditions can be stated once for the whole group. It has the
@@ -36,14 +37,14 @@ use crate::system::IntoSystem;
 
 /// A value that can be cloned, compared and hashed without knowing its
 /// type. Equality requires the same concrete type on both sides.
-trait DynValue: Any + Debug {
+trait DynValue: Any + Debug + Send + Sync {
     fn dyn_clone(&self) -> Box<dyn DynValue>;
     fn dyn_eq(&self, other: &dyn DynValue) -> bool;
     fn dyn_hash(&self, state: &mut dyn Hasher);
     fn as_any(&self) -> &dyn Any;
 }
 
-impl<T: Debug + Clone + Eq + Hash + 'static> DynValue for T {
+impl<T: Debug + Clone + Eq + Hash + Send + Sync + 'static> DynValue for T {
     fn dyn_clone(&self) -> Box<dyn DynValue> {
         Box::new(self.clone())
     }
@@ -70,7 +71,7 @@ impl<T: Debug + Clone + Eq + Hash + 'static> DynValue for T {
 struct Interned(Box<dyn DynValue>);
 
 impl Interned {
-    fn new<T: Debug + Clone + Eq + Hash + 'static>(value: T) -> Self {
+    fn new<T: Debug + Clone + Eq + Hash + Send + Sync + 'static>(value: T) -> Self {
         Self(Box::new(value))
     }
 }
@@ -123,7 +124,7 @@ pub trait ScheduleLabel: Debug + 'static {
     fn label_key(&self) -> LabelKey;
 }
 
-impl<T: Debug + Clone + Eq + Hash + 'static> ScheduleLabel for T {
+impl<T: Debug + Clone + Eq + Hash + Send + Sync + 'static> ScheduleLabel for T {
     fn label_key(&self) -> LabelKey {
         match (self as &dyn Any).downcast_ref::<LabelKey>() {
             Some(key) => key.clone(),
@@ -182,7 +183,7 @@ impl Debug for SetKey {
 /// Names a group of systems. Implement it with an empty `impl` for a
 /// `Debug + Clone + Eq + Hash + 'static` type; see the module docs for why
 /// this is not automatic.
-pub trait SystemSet: Debug + Clone + Eq + Hash + 'static {
+pub trait SystemSet: Debug + Clone + Eq + Hash + Send + Sync + 'static {
     /// The type-erased key for this set.
     fn set_key(&self) -> SetKey {
         SetKey(SetKind::User(Interned::new(self.clone())))

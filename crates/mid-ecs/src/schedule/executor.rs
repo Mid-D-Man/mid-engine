@@ -28,6 +28,11 @@ fn evaluate(conditions: &mut [BoxedCondition], world: &mut World) -> bool {
 impl Schedule {
     /// Runs every system once. The schedule must be built.
     pub(super) fn execute(&mut self, world: &mut World) {
+        #[cfg(not(target_arch = "wasm32"))]
+        if self.executor == crate::schedule::ExecutorKind::MultiThreaded && !self.systems.is_empty()
+        {
+            return self.execute_parallel(world);
+        }
         let Schedule {
             systems,
             sets,

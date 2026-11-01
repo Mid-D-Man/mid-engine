@@ -50,12 +50,18 @@ mod config;
 mod executor;
 mod graph;
 mod label;
+#[cfg(not(target_arch = "wasm32"))]
+mod parallel;
 
 #[cfg(test)]
 mod tests;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod tests_parallel;
 
 use std::collections::{HashMap, HashSet};
 use std::fmt;
+#[cfg(not(target_arch = "wasm32"))]
+use std::sync::Arc;
 
 use crate::system::System;
 use crate::tick::Tick;
@@ -92,6 +98,22 @@ pub enum AmbiguityDetection {
     Error,
 }
 
+/// How a schedule runs its systems.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ExecutorKind {
+    /// One at a time, in order, on the calling thread; whatever a system
+    /// defers is applied before the next one starts. The default.
+    #[default]
+    SingleThreaded,
+    /// On the rayon pool, as many at a time as there are threads and the
+    /// access sets allow. Systems that conflict never run together; ordered
+    /// systems run in order; what a system defers is applied before anything
+    /// ordered after it starts (not necessarily before an unordered system
+    /// does). On `wasm32`, where there is no pool, this runs as
+    /// [`Self::SingleThreaded`].
+    MultiThreaded,
+}
+
 // ── The schedule ─────────────────────────────────────────────────────
 
 struct SystemNode {
@@ -109,6 +131,10 @@ struct BuiltSchedule {
     graph: graph::Built,
     /// For each system, the sets above it that carry conditions.
     condition_sets: Vec<Vec<usize>>,
+    /// What the parallel executor needs; there when the schedule is
+    /// multi-threaded.
+    #[cfg(not(target_arch = "wasm32"))]
+    plan: Option<parallel::ParallelPlan>,
 }
 
 /// Systems, how they are ordered, and when they run.
@@ -130,6 +156,10 @@ pub struct Schedule {
     silenced: Vec<(NodeId, NodeId)>,
     anon_counter: u32,
     ambiguity: AmbiguityDetection,
+    executor: ExecutorKind,
+    /// The pool a multi-threaded run uses; the global one if `None`.
+    #[cfg(not(target_arch = "wasm32"))]
+    thread_pool: Option<Arc<rayon::ThreadPool>>,
     built: Option<BuiltSchedule>,
     /// Each set's condition result in the current run.
     set_results: Vec<Option<bool>>,
@@ -159,6 +189,9 @@ impl Schedule {
             silenced: Vec::new(),
             anon_counter: 0,
             ambiguity: AmbiguityDetection::default(),
+            executor: ExecutorKind::default(),
+            #[cfg(not(target_arch = "wasm32"))]
+            thread_pool: None,
             built: None,
             set_results: Vec::new(),
         }
@@ -191,6 +224,30 @@ impl Schedule {
     /// The current setting.
     pub fn ambiguity_detection(&self) -> AmbiguityDetection {
         self.ambiguity
+    }
+
+    /// Chooses how the schedule runs its systems. See [`ExecutorKind`].
+    pub fn set_executor(&mut self, kind: ExecutorKind) -> &mut Self {
+        if kind != self.executor {
+            self.executor = kind;
+            self.built = None;
+        }
+        self
+    }
+
+    /// How the schedule runs its systems.
+    pub fn executor(&self) -> ExecutorKind {
+        self.executor
+    }
+
+    /// The pool a multi-threaded run spawns its systems on, instead of the
+    /// global rayon pool (`None` goes back to it). The caller's thread starts
+    /// the run and does not wait on a channel, so a pool of any size works,
+    /// one thread included.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn set_thread_pool(&mut self, pool: Option<Arc<rayon::ThreadPool>>) -> &mut Self {
+        self.thread_pool = pool;
+        self
     }
 
     fn set_node(&mut self, key: &SetKey) -> usize {
@@ -348,7 +405,7 @@ impl Schedule {
             members: &self.members,
             deps: &self.deps,
         })?;
-        let condition_sets = graph
+        let condition_sets: Vec<Vec<usize>> = graph
             .sets_of_system
             .iter()
             .map(|sets| {
@@ -358,9 +415,15 @@ impl Schedule {
                     .collect()
             })
             .collect();
+        #[cfg(not(target_arch = "wasm32"))]
+        let plan = (self.executor == ExecutorKind::MultiThreaded).then(|| {
+            parallel::ParallelPlan::new(&graph, &self.systems, &self.sets, &condition_sets)
+        });
         self.built = Some(BuiltSchedule {
             graph,
             condition_sets,
+            #[cfg(not(target_arch = "wasm32"))]
+            plan,
         });
         Ok(())
     }
