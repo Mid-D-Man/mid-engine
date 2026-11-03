@@ -53,6 +53,7 @@ pub struct SystemMeta {
     access: FilteredAccessSet,
     last_run: Tick,
     has_deferred: bool,
+    reads_removals: bool,
 }
 
 impl SystemMeta {
@@ -65,6 +66,7 @@ impl SystemMeta {
             access: FilteredAccessSet::new(),
             last_run: Tick::default(),
             has_deferred: false,
+            reads_removals: false,
         }
     }
 
@@ -79,6 +81,19 @@ impl SystemMeta {
     /// Whether a parameter defers work. See [`Self::set_has_deferred`].
     pub fn has_deferred(&self) -> bool {
         self.has_deferred
+    }
+
+    /// Says that a parameter of this system reads the removal log (as
+    /// [`RemovedComponents`] does), so the log may not be trimmed past the
+    /// system's last run. Called from [`SystemParam::init_state`].
+    pub fn set_reads_removals(&mut self) {
+        self.reads_removals = true;
+    }
+
+    /// Whether a parameter reads the removal log. See
+    /// [`Self::set_reads_removals`].
+    pub fn reads_removals(&self) -> bool {
+        self.reads_removals
     }
 
     /// The system's name.
@@ -195,8 +210,10 @@ pub type SystemParamItem<'w, 's, P> = <P as SystemParam>::Item<'w, 's>;
 ///
 /// The window is the system's own previous run, as for `Added`/`Changed`:
 /// removals queued by this system's own `Commands` are applied after its
-/// run and so are seen on its next one. Nothing trims the log: see
-/// [`World::trim_removals`].
+/// run and so are seen on its next one. Nothing trims the log by itself:
+/// see [`World::trim_removals`], and
+/// [`World::trim_removals_for_schedules`], which `mid-app` calls after
+/// every frame.
 ///
 /// ```
 /// use mid_ecs::{IntoSystem, RemovedComponents, System, World};
@@ -251,8 +268,9 @@ unsafe impl<T: 'static> SystemParam for RemovedComponents<'_, T> {
     type State = ();
     type Item<'w, 's> = RemovedComponents<'w, T>;
 
-    fn init_state(world: &mut World, _meta: &mut SystemMeta) -> Self::State {
+    fn init_state(world: &mut World, meta: &mut SystemMeta) -> Self::State {
         world.track_removals::<T>();
+        meta.set_reads_removals();
     }
 
     unsafe fn get_param<'w, 's>(

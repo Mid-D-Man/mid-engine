@@ -4362,6 +4362,7 @@ to come (see "Not done").
 | `World::removed_since::<T>(&tracker)` | The entities that lost a `T` after `tracker`'s last update, oldest first. The counterpart of `query_changed`. **Panics** if `T` is not tracked: nothing would ever have been recorded and an empty answer would hide that. |
 | `RemovedComponents<'w, T>` (system param) | `iter()`, `len()`, `is_empty()`: removals since *this system's* previous run. Calls `track_removals::<T>()` when the system is set up. No component or resource access to register, so it never conflicts. |
 | `World::trim_removals(tick)` / `clear_removals()` / `removal_count::<T>()` / `tracks_removals::<T>()` | Housekeeping and diagnostics. |
+| `World::trim_removals_for_schedules()` | Trims at the last run of the schedule system that reads removals and ran longest ago; see `docs/mid-ecs-schedule.md`, "Phase 3 additions in `mid-ecs`". `mid-app` calls it after every frame. |
 
 **What counts as a removal.** `remove`, `remove_static`, `remove_bundle` (every
 member, only when the whole bundle was present and was removed),
@@ -4405,7 +4406,10 @@ only whoever owns *all* the readers knows the oldest `last_run` any of them
 still holds. Pass that to `trim_removals`. A type that is removed often and
 never trimmed grows its log without bound (bevy bounds this by flipping two
 buffers each frame; there is no frame owner in `mid-ecs`, so `mid-app`'s
-schedule is the natural caller). `removal_count::<T>()` is there to watch it.
+schedule is the natural caller, and it is: `App` calls
+`World::trim_removals_for_schedules` after every frame, which counts only the
+schedule systems that read removals). `removal_count::<T>()` is there to watch
+it. A `ChangeTracker` held outside the schedules is not counted by that call.
 `since` scans the whole retained log rather than stopping at the first old
 entry: an entry stamped after the reader's `this_run` is "not newer" by the
 wrapping comparison and must not hide older ones before it. Trimming keeps

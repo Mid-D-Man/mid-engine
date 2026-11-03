@@ -5,8 +5,10 @@ splitting by part" in `docs/DOCUMENTATION_AND_COMMENTING_GUIDELINES.md`). The
 main file is `docs/mid-ecs.md`. **Status: phase 1 is built** (labels, sets, the
 config builder, run conditions, the graph, a single-threaded executor, `Schedules`
 and the `World` methods). Phase 2 (`Send`, deferred-work flags, the parallel
-executor) is built too and documented in `docs/mid-ecs-schedule-parallel.md`;
-phases 3 and 4 are still design. The sections down to
+executor) is built too and documented in `docs/mid-ecs-schedule-parallel.md`.
+Phase 3 (`mid-app`) is built and documented in `docs/mid-app.md`; it also added a
+small piece to `mid-ecs`, described under "Phase 3 additions in `mid-ecs`" below.
+Phase 4 is still design. The sections down to
 "Test plan for phase 1" are the design as agreed; where the code differs, the
 text says "As built". The per-file sections after the test plan describe what is
 actually in `crates/mid-ecs/src/schedule/`.
@@ -220,9 +222,12 @@ labelled schedules in order is `mid-app`'s, not `mid-ecs`'s.
    dependency off wasm32, used by `par_iter`; the wasm32 path would run the
    schedule on one thread, as `par_iter` runs its batches serially there). The
    ambiguity query is the correctness argument for it.
-3. **Phase 3, `mid-app` on top.** `App`, `Plugin`, `Main`, the fixed stages as
-   labels, the loop with `mid-time`'s fixed timestep, the trim call. Separate crate,
-   small.
+3. **Phase 3, `mid-app` on top** (built; see `docs/mid-app.md`). `App`, `Plugin`,
+   `Main`, the fixed stages as labels, the loop with `mid-time`'s fixed timestep,
+   the trim call. Separate crate, small. As built, the trim call is
+   `World::trim_removals_for_schedules`, not `trim_removals` fed with
+   `Schedule::oldest_last_run`: that counts every system, so one that runs rarely
+   would hold the log back for good (see "Phase 3 additions in `mid-ecs`").
 4. **Phase 4, events/messages and observers** (the rest of gap-list item 6) and
    states. Both need a schedule to run their update.
 
@@ -443,6 +448,60 @@ exclusive systems and nested schedules, state kept across rebuilds, labels and t
 world methods, panic safety, ambiguity (including `ambiguous_with` and the
 levels), and a few hundred systems in phases.
 
+### tests_removals.rs
+
+The removal-reader flag and what is built on it (see "Phase 3 additions in
+`mid-ecs`"). The flag on a system, an exclusive system and a condition, through
+`not`, `and`, `or` and a boxed condition, in either position; a hand-written
+system and condition that say nothing take the safe default; the schedule's
+`oldest_removal_reader` (empty, not set up yet, readers and non-readers, a reader
+skipped by its own condition, a condition that reads on a system, on a set and
+nested); the world's trim (no schedules, no readers, a reader that has not run
+since the removals, a reader that runs less often than another, a schedule that
+reads nothing and never runs again, called from inside a running schedule); sixty
+seeds of random removals, re-insertions, runs of two readers and trims, checking
+that both readers see every removal exactly once and the log ends empty; and
+two hundred frames of trimming that keep the log at length zero.
+
+### Phase 3 additions in `mid-ecs`
+
+`mid-app` needed one thing from `mid-ecs` that was not there: a way to say how far
+the removal log may be trimmed that does not depend on every system in every
+schedule having run recently. `Schedule::oldest_last_run` counts all systems and
+conditions, so a system that is skipped for long, a schedule that is run on demand
+or a one-shot would pin the answer at its old tick, and the log of a type that is
+removed often would grow without bound in exactly the apps that have such a
+system. What matters is only the ones that read the log.
+
+- `SystemMeta::set_reads_removals` / `reads_removals`, set by
+  `RemovedComponents::init_state`.
+- `System::reads_removals` and `Condition::reads_removals`, provided methods
+  (not required, so nothing outside the repo breaks). The default is `true`, the
+  safe answer: a system that does not say only keeps the log longer. A function
+  system answers from its meta, an exclusive system answers `false` (what it reads
+  through a `ChangeTracker` of its own is its owner's to account for), a
+  function condition from its meta, `not` from its inner condition, `and` and
+  `or` from either half, a boxed condition from what it holds.
+- `Schedule::oldest_removal_reader(now)`: the same as `oldest_last_run`, over the
+  systems and conditions (including a set's) that read the log, or `None` if there
+  are none. One that is not set up yet counts, since its flag is not known until
+  its parameters are built.
+- `Schedules::oldest_removal_reader(now)` over every schedule that is not being
+  run, and `Schedules::any_running`.
+- `World::trim_removals_for_schedules()`: trims at that tick and returns whether it
+  did. It does nothing when no schedule system reads removals, and nothing while
+  any schedule is being run, because a running schedule is out of the map and its
+  systems may be the ones that still need the log. An exclusive system runs inside
+  one, so it cannot call this usefully; `mid-app` calls it after `Main` returns.
+
+What it does not count: a `ChangeTracker` or any reader held outside the
+schedules. With one of those, call `World::trim_removals` yourself at the oldest
+of its last run and this one's (`App::set_trim_removals(false)` leaves the
+trimming to the caller). A reader skipped by its conditions holds the log back for
+as long as it is skipped. That is the correct behavior, since the run that ends
+the skipping must see what was removed meanwhile, and the cost is a log that grows
+while it waits.
+
 ### Changes outside `schedule/`
 
 - `system.rs`: `SystemParamFunction` gains `type Out` and `fn run` returns it;
@@ -455,6 +514,8 @@ levels), and a few hundred systems in phases.
   breaking change for any outside implementor; the two in the repo are updated).
 - `access.rs`: `Access::is_read_only`.
 - `lib.rs`: `pub mod schedule`.
+- Phase 3: `system.rs` gains the provided method `System::reads_removals`;
+  `system_param.rs` gains the `SystemMeta` flag, set by `RemovedComponents`.
 
 ## Fixes and Problems
 
@@ -475,8 +536,21 @@ levels), and a few hundred systems in phases.
 - **The world's change tick starts at 1, not 0.** Zero is "never ran". Tests that
   expect "the first run is at tick zero" are wrong; compare against
   `world.change_tick()` taken before the run.
-- **Open, not done (phase 3 and later):** the `mid-app` side (`App`, `Plugin`,
-  `Main`, the fixed stages as labels, the call to `World::trim_removals` with
-  `Schedule::oldest_last_run`). `mid-app`'s closures have not been migrated to
-  exclusive systems yet. (`System: Send`, deferred-work flags and the parallel
-  executor are phase 2.)
+- **Phase 3: trimming by `oldest_last_run` pins the log.** The plan was to call
+  `World::trim_removals` with `Schedule::oldest_last_run`. That counts every
+  system, so a system that never runs again (skipped for good, or in a schedule
+  that is run once) fixes the answer at its last run and nothing newer is ever
+  dropped. Found by reading the code before writing the call, not by a failing
+  test. Fixed with the `reads_removals` flag (see "Phase 3 additions in
+  `mid-ecs`"); `oldest_last_run` is unchanged.
+- **A system that is not set up yet cannot say whether it reads removals** (the
+  flag is set when its parameters are built, at the first build of the schedule).
+  Counting it as a reader is the safe choice. Without it, a schedule added after
+  the first frame could have the removals it would have seen at its first run
+  trimmed before it ran.
+- **Phase 3 is done on the `mid-app` side.** `App`, `Plugin`, `Main`, the stages as
+  labels, the fixed timestep and the trim call are in `docs/mid-app.md`, and
+  `mid-app`'s closures are exclusive systems (they are `Send`; none of them held
+  anything that was not).
+- **Open:** states, events and observers (phase 4); no workflow runs the schedule
+  or `mid-app` tests yet.

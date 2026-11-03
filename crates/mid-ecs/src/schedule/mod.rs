@@ -57,6 +57,8 @@ mod parallel;
 mod tests;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests_parallel;
+#[cfg(test)]
+mod tests_removals;
 
 use std::collections::{HashMap, HashSet};
 use std::fmt;
@@ -519,7 +521,27 @@ impl Schedule {
     /// `None` if the schedule has none. What to pass to
     /// [`World::trim_removals`] so nothing a system here has yet to see is
     /// dropped (include any `ChangeTracker` held outside the schedule).
+    ///
+    /// This counts every system. A schedule that runs rarely, or whose
+    /// systems are skipped for long, holds the answer back whether or not
+    /// they read removals; [`Self::oldest_removal_reader`] counts only the
+    /// ones that do.
     pub fn oldest_last_run(&self, now: Tick) -> Option<Tick> {
+        self.oldest_where(now, false)
+    }
+
+    /// [`Self::oldest_last_run`] over only the systems and conditions that
+    /// read the removal log ([`System::reads_removals`]), or `None` if
+    /// there are none. One that is not initialized yet counts, since it
+    /// cannot say. A system skipped by its conditions keeps its old last
+    /// run, so it holds the answer back for as long as it is skipped:
+    /// that is correct, because the run that ends the skipping must still
+    /// see what was removed meanwhile.
+    pub fn oldest_removal_reader(&self, now: Tick) -> Option<Tick> {
+        self.oldest_where(now, true)
+    }
+
+    fn oldest_where(&self, now: Tick, readers_only: bool) -> Option<Tick> {
         let mut oldest: Option<Tick> = None;
         let mut consider = |tick: Tick| {
             oldest = Some(match oldest {
@@ -527,15 +549,22 @@ impl Schedule {
                 _ => tick,
             });
         };
+        let counts = |initialized: bool, reads: bool| !readers_only || !initialized || reads;
         for node in &self.systems {
-            consider(node.system.last_run());
+            if counts(node.system.is_initialized(), node.system.reads_removals()) {
+                consider(node.system.last_run());
+            }
             for c in &node.conditions {
-                consider(c.oldest_last_run(now));
+                if counts(c.is_initialized(), c.reads_removals()) {
+                    consider(c.oldest_last_run(now));
+                }
             }
         }
         for set in &self.sets {
             for c in &set.conditions {
-                consider(c.oldest_last_run(now));
+                if counts(c.is_initialized(), c.reads_removals()) {
+                    consider(c.oldest_last_run(now));
+                }
             }
         }
         oldest
@@ -584,6 +613,27 @@ impl Schedules {
     /// Whether the schedule called `label` is being run right now.
     pub fn is_running(&self, label: impl ScheduleLabel) -> bool {
         self.running.contains(&label.label_key())
+    }
+
+    /// Whether any schedule is being run right now.
+    pub fn any_running(&self) -> bool {
+        !self.running.is_empty()
+    }
+
+    /// [`Schedule::oldest_removal_reader`] over every schedule here that
+    /// is not being run (a running one is out of the map; see
+    /// [`Self::any_running`]).
+    pub fn oldest_removal_reader(&self, now: Tick) -> Option<Tick> {
+        let mut oldest: Option<Tick> = None;
+        for schedule in self.schedules.values() {
+            if let Some(tick) = schedule.oldest_removal_reader(now) {
+                oldest = Some(match oldest {
+                    Some(o) if now.relative_to(o).get() >= now.relative_to(tick).get() => o,
+                    _ => tick,
+                });
+            }
+        }
+        oldest
     }
 }
 
@@ -754,5 +804,33 @@ impl World {
         if let Err(error) = self.try_run_schedule(label) {
             panic!("{error}");
         }
+    }
+
+    /// Trims the removal log of everything no system in any schedule can
+    /// still need to see: [`World::trim_removals`] at the last run of the
+    /// system that reads removals and ran longest ago
+    /// ([`Schedules::oldest_removal_reader`]). Returns whether it
+    /// trimmed. It does not when no system in a schedule reads removals
+    /// (nobody here to say how far the log may go), and it does not while
+    /// any schedule is being run, because that schedule's systems are
+    /// out of reach and may be the ones that still need the log, so call
+    /// it from outside any schedule (an exclusive system is inside one).
+    ///
+    /// A `ChangeTracker` or a reader held outside the schedules is not
+    /// counted: with one of those, call [`World::trim_removals`] yourself
+    /// at the oldest of its last run and this one's.
+    pub fn trim_removals_for_schedules(&mut self) -> bool {
+        let now = self.change_tick();
+        let Some(schedules) = self.get_resource::<Schedules>() else {
+            return false;
+        };
+        if schedules.any_running() {
+            return false;
+        }
+        let Some(oldest) = schedules.oldest_removal_reader(now) else {
+            return false;
+        };
+        self.trim_removals(oldest);
+        true
     }
 }

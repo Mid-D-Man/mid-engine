@@ -185,6 +185,17 @@ pub trait System: Send + 'static {
     /// before [`Self::apply_deferred`] has run.
     fn has_deferred(&self) -> bool;
 
+    /// Whether the system reads the removal log (a `RemovedComponents`
+    /// parameter), so that [`World::trim_removals`] must not go past its
+    /// [`Self::last_run`]. Defaults to `true`, the safe answer for a
+    /// system that does not say: it only keeps the log longer. An
+    /// exclusive system answers `false`, since what it reads through a
+    /// [`ChangeTracker`](crate::ChangeTracker) of its own is its owner's
+    /// to account for.
+    fn reads_removals(&self) -> bool {
+        true
+    }
+
     /// The tick of the system's previous run (zero before the first): what
     /// `Added` and `Changed` in its queries measure "since" against.
     fn last_run(&self) -> Tick;
@@ -407,6 +418,10 @@ impl<Marker: 'static, F: SystemParamFunction<Marker, Out = ()>> System
         self.meta.has_deferred()
     }
 
+    fn reads_removals(&self) -> bool {
+        self.meta.reads_removals()
+    }
+
     fn last_run(&self) -> Tick {
         self.meta.last_run()
     }
@@ -483,6 +498,10 @@ impl<F: FnMut(&mut World) + Send + 'static> System for ExclusiveFunctionSystem<F
     }
 
     fn has_deferred(&self) -> bool {
+        false
+    }
+
+    fn reads_removals(&self) -> bool {
         false
     }
 

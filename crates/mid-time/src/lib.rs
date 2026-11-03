@@ -25,12 +25,12 @@
 //!   out) that hand-rolling it costs one imported function and one line
 //!   of host-side JS glue instead.
 //!
-//! **Not built yet, deliberately** (`docs/roadmap.md`'s "What can be
+//! **Not in this crate, by design** (`docs/roadmap.md`'s "What can be
 //! built in parallel" section scopes this crate to exactly this): the
-//! `mid-app`/`mid-ecs` System wrapper that calls [`Clock::tick`] once a
-//! frame. That's a few lines once `mid-app` exists to register a system
-//! against — bolting it on doesn't change anything below, so it isn't
-//! worth blocking this crate on `mid-app` landing first.
+//! thing that calls [`Clock::tick`] once a frame and
+//! [`FixedTimestep::accumulate`] with its delta. That is `mid-app`'s
+//! `App::update`, which keeps a `Clock` and a `FixedTimestep` as
+//! resources and runs its `Physics` stage once per step (`docs/mid-app.md`).
 //!
 //! **Unverified on wasm32**, same honest caveat this workspace already
 //! uses for `mid-net-transport-wasm` (`docs/mid-net.md`): no wasm32

@@ -72,6 +72,14 @@ pub trait Condition: Send + 'static {
     /// furthest back from `now`.
     fn oldest_last_run(&self, now: Tick) -> Tick;
 
+    /// Whether the condition (or, for one made of several, any part of it)
+    /// reads the removal log, so that [`crate::World::trim_removals`] must
+    /// not go past [`Self::oldest_last_run`]. Defaults to `true`, the safe
+    /// answer for a condition that does not say.
+    fn reads_removals(&self) -> bool {
+        true
+    }
+
     /// Keeps the last-run ticks within [`crate::MAX_CHANGE_AGE`] of `now`;
     /// whether any was clamped. The owner calls this as it does for a
     /// system's (see [`crate::System::check_change_tick`]).
@@ -116,6 +124,10 @@ impl Condition for Box<dyn Condition> {
 
     fn oldest_last_run(&self, now: Tick) -> Tick {
         (**self).oldest_last_run(now)
+    }
+
+    fn reads_removals(&self) -> bool {
+        (**self).reads_removals()
     }
 
     fn check_change_tick(&mut self, now: Tick) -> bool {
@@ -200,6 +212,10 @@ impl<Marker: 'static, F: SystemParamFunction<Marker, Out = bool>> Condition
         self.meta().last_run()
     }
 
+    fn reads_removals(&self) -> bool {
+        self.meta().reads_removals()
+    }
+
     fn check_change_tick(&mut self, now: Tick) -> bool {
         self.check_tick(now)
     }
@@ -262,6 +278,10 @@ impl<C: Condition> Condition for NotCondition<C> {
 
     fn oldest_last_run(&self, now: Tick) -> Tick {
         self.inner.oldest_last_run(now)
+    }
+
+    fn reads_removals(&self) -> bool {
+        self.inner.reads_removals()
     }
 
     fn check_change_tick(&mut self, now: Tick) -> bool {
@@ -332,6 +352,10 @@ impl<A: Condition, B: Condition> Condition for AndCondition<A, B> {
         )
     }
 
+    fn reads_removals(&self) -> bool {
+        self.a.reads_removals() || self.b.reads_removals()
+    }
+
     fn check_change_tick(&mut self, now: Tick) -> bool {
         let a = self.a.check_change_tick(now);
         let b = self.b.check_change_tick(now);
@@ -398,6 +422,10 @@ impl<A: Condition, B: Condition> Condition for OrCondition<A, B> {
             self.a.oldest_last_run(now),
             self.b.oldest_last_run(now),
         )
+    }
+
+    fn reads_removals(&self) -> bool {
+        self.a.reads_removals() || self.b.reads_removals()
     }
 
     fn check_change_tick(&mut self, now: Tick) -> bool {
