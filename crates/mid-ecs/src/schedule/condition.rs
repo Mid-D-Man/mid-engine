@@ -80,6 +80,13 @@ pub trait Condition: Send + 'static {
         true
     }
 
+    /// Whether the condition (or any part of it) reads the messages of
+    /// type `message`. Defaults to `true`, as [`Self::reads_removals`]
+    /// does.
+    fn reads_message(&self, _message: std::any::TypeId) -> bool {
+        true
+    }
+
     /// Keeps the last-run ticks within [`crate::MAX_CHANGE_AGE`] of `now`;
     /// whether any was clamped. The owner calls this as it does for a
     /// system's (see [`crate::System::check_change_tick`]).
@@ -128,6 +135,10 @@ impl Condition for Box<dyn Condition> {
 
     fn reads_removals(&self) -> bool {
         (**self).reads_removals()
+    }
+
+    fn reads_message(&self, message: std::any::TypeId) -> bool {
+        (**self).reads_message(message)
     }
 
     fn check_change_tick(&mut self, now: Tick) -> bool {
@@ -216,6 +227,10 @@ impl<Marker: 'static, F: SystemParamFunction<Marker, Out = bool>> Condition
         self.meta().reads_removals()
     }
 
+    fn reads_message(&self, message: std::any::TypeId) -> bool {
+        self.meta().reads_message(message)
+    }
+
     fn check_change_tick(&mut self, now: Tick) -> bool {
         self.check_tick(now)
     }
@@ -282,6 +297,10 @@ impl<C: Condition> Condition for NotCondition<C> {
 
     fn reads_removals(&self) -> bool {
         self.inner.reads_removals()
+    }
+
+    fn reads_message(&self, message: std::any::TypeId) -> bool {
+        self.inner.reads_message(message)
     }
 
     fn check_change_tick(&mut self, now: Tick) -> bool {
@@ -356,6 +375,10 @@ impl<A: Condition, B: Condition> Condition for AndCondition<A, B> {
         self.a.reads_removals() || self.b.reads_removals()
     }
 
+    fn reads_message(&self, message: std::any::TypeId) -> bool {
+        self.a.reads_message(message) || self.b.reads_message(message)
+    }
+
     fn check_change_tick(&mut self, now: Tick) -> bool {
         let a = self.a.check_change_tick(now);
         let b = self.b.check_change_tick(now);
@@ -428,6 +451,10 @@ impl<A: Condition, B: Condition> Condition for OrCondition<A, B> {
         self.a.reads_removals() || self.b.reads_removals()
     }
 
+    fn reads_message(&self, message: std::any::TypeId) -> bool {
+        self.a.reads_message(message) || self.b.reads_message(message)
+    }
+
     fn check_change_tick(&mut self, now: Tick) -> bool {
         let a = self.a.check_change_tick(now);
         let b = self.b.check_change_tick(now);
@@ -477,6 +504,13 @@ pub mod common_conditions {
     /// does not exist.
     pub fn resource_exists_and_changed<T: 'static>(resource: Option<Res<T>>) -> bool {
         resource.is_some_and(|r| r.is_changed())
+    }
+
+    /// `true` if a message of type `M` was written since this condition
+    /// last ran. The system it gates reads everything written since *its*
+    /// last run, which is at least as much.
+    pub fn on_message<M: Send + Sync + 'static>(reader: crate::message::MessageReader<M>) -> bool {
+        !reader.is_empty()
     }
 }
 

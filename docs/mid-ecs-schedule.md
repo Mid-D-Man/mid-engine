@@ -8,7 +8,8 @@ and the `World` methods). Phase 2 (`Send`, deferred-work flags, the parallel
 executor) is built too and documented in `docs/mid-ecs-schedule-parallel.md`.
 Phase 3 (`mid-app`) is built and documented in `docs/mid-app.md`; it also added a
 small piece to `mid-ecs`, described under "Phase 3 additions in `mid-ecs`" below.
-Phase 4 is still design. The sections down to
+Phase 4a (messages) is built and documented in `docs/mid-ecs-events.md`; states and
+observers (4b, 4c) are still design. The sections down to
 "Test plan for phase 1" are the design as agreed; where the code differs, the
 text says "As built". The per-file sections after the test plan describe what is
 actually in `crates/mid-ecs/src/schedule/`.
@@ -229,7 +230,8 @@ labelled schedules in order is `mid-app`'s, not `mid-ecs`'s.
    `Schedule::oldest_last_run`: that counts every system, so one that runs rarely
    would hold the log back for good (see "Phase 3 additions in `mid-ecs`").
 4. **Phase 4, events/messages and observers** (the rest of gap-list item 6) and
-   states. Both need a schedule to run their update.
+   states. Both need a schedule to run their update. Messages are built (4a; see
+   `docs/mid-ecs-events.md`); states (4b) and observers (4c) are not.
 
 ## Decisions, with the recommendation taken
 
@@ -552,5 +554,5 @@ while it waits.
   labels, the fixed timestep and the trim call are in `docs/mid-app.md`, and
   `mid-app`'s closures are exclusive systems (they are `Send`; none of them held
   anything that was not).
-- **Open:** states, events and observers (phase 4); no workflow runs the schedule
-  or `mid-app` tests yet.
+- **Open:** states and observers (phase 4b and 4c; messages are built, see
+  `docs/mid-ecs-events.md`); no workflow runs the schedule or `mid-app` tests yet.

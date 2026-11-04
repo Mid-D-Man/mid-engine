@@ -17,7 +17,8 @@ PreUpdate -> Update -> Net -> Physics (0..n times) -> PostUpdate
 
 `Physics` is the one stage on a fixed timestep (`mid_time::FixedTimestep`, 60 Hz
 by default, at most 8 steps in a frame). Every other stage runs once a frame. After
-the frame, the removal log is trimmed to what some system still has to see.
+the frame, the removal log and the message logs are trimmed to what some system still
+has to see (messages: `docs/mid-ecs-events.md`).
 
 Before this phase, `mid-app` held `Vec<Box<dyn FnMut(&mut World)>>` in five hard
 wired stages and said in its header that it was waiting for the ECS
@@ -85,7 +86,8 @@ driver. Then:
 | `insert_resource(value)` | `World::insert_resource`, chainable. |
 | `add_plugin(plugin)` | Calls `plugin.build(self)` at once. |
 | `set_fixed_timestep(hz, max)` | Replaces the timestep; time already accumulated is dropped. |
-| `set_trim_removals(on)` / `trims_removals()` | Whether the log is trimmed after each frame (on by default). |
+| `set_trim_removals(on)` / `trims_removals()` | Whether the removal log is trimmed after each frame (on by default). |
+| `set_trim_messages(on)` / `trims_messages()` | Whether the message logs are trimmed after each frame (on by default). |
 | `update()` | One frame, with the platform clock's delta. |
 | `update_with(delta)` | One frame as if `delta` had passed. For tests, replay and lockstep. |
 | `run_until(done)` | `update` in a loop until `done` says stop. Not on `wasm32`. |
@@ -120,6 +122,12 @@ then `PostUpdate`.
   and one of them could be the reader that still needs the log.
   `World::trim_removals_for_schedules` refuses to trim while any schedule is
   running for this reason.
+- **Messages are trimmed the same way,** by `World::trim_messages_for_schedules`, per
+  type and never past the previous frame's trim (so a message lives at least a whole
+  frame whoever reads it, including code outside the schedules). A reader in `Physics`
+  sees every message however many steps each frame makes, which the double-buffered
+  messages of `bevy_ecs` cannot promise; that is the reason for the tick-stamped design
+  (`docs/mid-ecs-events.md`).
 - **What trimming counts.** Only schedule systems that read the removal log
   (`docs/mid-ecs-schedule.md`, "Phase 3 additions in `mid-ecs`"). A `ChangeTracker`
   held outside the schedules is not counted, so `set_trim_removals(false)` is the
@@ -134,7 +142,7 @@ then `PostUpdate`.
 
 ### `tests.rs`
 
-26 tests and the doctest. Stage order whatever the order added; exclusive
+35 tests and the doctest. Stage order whatever the order added; exclusive
 closures as systems; an empty app; order inside a stage (`before`, `after`,
 `chain`, sets, conditions) reaching the schedule through the app; a system on
 `Main`; a multi-threaded stage; the fixed timestep (one step per step's worth,
@@ -144,11 +152,16 @@ systems reading `Clock` and `FixedTimestep`; `update` against the platform clock
 plugins (built at once, nested); `run_until`; and the removal log (trimmed to empty
 each frame with nothing missed, trimming switched off and on, no trim without a
 reader, a skipped reader keeping the log until it runs, a reader in `Physics`
-seeing each removal once across frames of zero, one and three steps).
+seeing each removal once across frames of zero, one and three steps), and messages
+(written and read across stages in a frame and a frame apart; a `Physics` reader seeing
+every message across frames of zero, one and three steps; a `Physics` writer's messages
+all read next frame; the log kept at one entry by trimming; a type with no reader kept a
+frame; trimming switched off and on; a skipped reader keeping its messages;
+`on_message` through the app).
 
 ## What is not built, on purpose
 
-- Events, observers and states (phase 4).
+- Observers and states (phase 4b and 4c; messages are built).
 - The 128 Hz network tick (see `labels.rs`).
 - A startup stage, a `Last` stage, schedule order as data. Add when something
   needs one.
@@ -181,7 +194,8 @@ None yet. No workflow runs `cargo test -p mid-app` or the schedule tests in
 
 ### `tests.rs`
 
-- **A first pass proves little.** All 26 tests passed on the first run. Mutation
+- **A first pass proves little.** All 26 tests passed on the first run (and the nine
+  message tests on theirs). Mutation
   testing of the new code (below) is what shows the tests can fail.
 
 ## Verification
@@ -196,6 +210,9 @@ benchmarked.
 | `mid-ecs` doctests | 33 | 33 |
 | `ffi::` | 103 | 103 |
 | `mid-app` tests | 3 | 26, plus one doctest |
+
+Phase 4a (messages) took these to 1033 / 1038 / 34 / 103 and 35 `mid-app` tests; its
+table and mutation results are in `docs/mid-ecs-events.md`.
 
 Mutation testing of everything new, 49 mutants in a copy of the tree and a neutral
 control (which survived, as it should): the flag and its setter and getter, the

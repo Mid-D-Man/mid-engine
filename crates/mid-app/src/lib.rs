@@ -42,9 +42,9 @@
 //! assert_eq!(app.world.get_resource::<Frames>().unwrap().0, 2);
 //! ```
 //!
-//! What is not here, on purpose: events, observers and states (they need a
-//! schedule to run their update in, which now exists, and are the next
-//! piece of `mid-ecs`), a second timestep for the network stage (one is
+//! Messages (`mid_ecs::MessageWriter` and `MessageReader`) are trimmed after
+//! each frame. What is not here, on purpose: observers and states (the next
+//! pieces of `mid-ecs`), a second timestep for the network stage (one is
 //! built; the 128 Hz network tick is a decision for when `mid-net` is
 //! driven from here), and a startup stage (add one when something needs it).
 

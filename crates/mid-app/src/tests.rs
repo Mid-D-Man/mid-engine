@@ -476,3 +476,174 @@ fn a_reader_in_physics_sees_each_removal_once_however_many_steps_run() {
     app.update_with(one_step());
     assert_eq!(app.world.get_resource::<Reaped>().unwrap().0, 80);
 }
+
+// ── messages ─────────────────────────────────────────────────────────
+
+use mid_ecs::{MessageReader, MessageWriter};
+
+struct Ping(u32);
+
+#[derive(Default)]
+struct Pings(Vec<u32>);
+
+/// Writes 1, 2, 3, ... one per run.
+fn send_ping(mut pings: MessageWriter<Ping>, mut n: ResMut<Count>) {
+    n.0 += 1;
+    pings.write(Ping(n.0));
+}
+
+fn take_pings(pings: MessageReader<Ping>, mut got: ResMut<Pings>) {
+    got.0.extend(pings.read().map(|p| p.0));
+}
+
+fn got(app: &App) -> Vec<u32> {
+    app.world.get_resource::<Pings>().unwrap().0.clone()
+}
+
+fn app_with_pings() -> App {
+    let mut app = App::new();
+    app.insert_resource(Count(0))
+        .insert_resource(Pings::default());
+    app
+}
+
+#[test]
+fn a_message_written_in_one_stage_is_read_in_a_later_one_the_same_frame() {
+    let mut app = app_with_pings();
+    app.add_systems(PreUpdate, send_ping)
+        .add_systems(Update, take_pings);
+    app.update_with(ms(1));
+    assert_eq!(got(&app), [1]);
+    app.update_with(ms(1));
+    assert_eq!(got(&app), [1, 2]);
+}
+
+#[test]
+fn a_message_written_in_a_later_stage_is_read_by_an_earlier_one_next_frame() {
+    let mut app = app_with_pings();
+    app.add_systems(PostUpdate, send_ping)
+        .add_systems(PreUpdate, take_pings);
+    app.update_with(ms(1));
+    assert_eq!(got(&app), Vec::<u32>::new());
+    app.update_with(ms(1));
+    assert_eq!(got(&app), [1]);
+}
+
+#[test]
+fn a_reader_in_physics_sees_every_message_however_many_steps_the_frames_make() {
+    let mut app = app_with_pings();
+    app.add_systems(Update, send_ping)
+        .add_systems(Physics, take_pings);
+    app.update_with(one_step()); // set up
+    let mut written = 1;
+    for frame in 0..40u32 {
+        let delta = match frame % 3 {
+            0 => Duration::ZERO, // a frame that makes no step
+            1 => one_step(),
+            _ => one_step() * 3,
+        };
+        app.update_with(delta);
+        written += 1;
+    }
+    app.update_with(one_step());
+    written += 1;
+    // Physics reads at most once a step, and a frame of no step reads
+    // nothing: the messages of such frames arrive with the next one.
+    assert_eq!(got(&app), (1..=written).collect::<Vec<u32>>());
+}
+
+#[test]
+fn a_writer_in_physics_runs_once_per_step_and_update_reads_them_all_next_frame() {
+    let mut app = app_with_pings();
+    app.add_systems(Physics, send_ping)
+        .add_systems(Update, take_pings);
+    app.update_with(one_step() * 3);
+    assert_eq!(got(&app), Vec::<u32>::new(), "Update ran before Physics");
+    app.update_with(Duration::ZERO);
+    assert_eq!(got(&app), [1, 2, 3], "all three steps' messages");
+}
+
+#[test]
+fn the_message_log_is_trimmed_after_each_frame_and_nothing_is_missed() {
+    let mut app = app_with_pings();
+    app.add_systems(Update, (send_ping, take_pings).chain());
+    app.update_with(ms(1));
+    let mut longest = 0;
+    for _ in 0..100 {
+        app.update_with(ms(1));
+        longest = longest.max(app.world.message_count::<Ping>());
+    }
+    assert_eq!(got(&app), (1..=101).collect::<Vec<u32>>());
+    assert!(longest <= 1, "only the last frame's, was {longest}");
+}
+
+#[test]
+fn a_type_with_no_reader_is_kept_a_frame_and_then_dropped() {
+    let mut app = App::new();
+    app.insert_resource(Count(0));
+    app.add_systems(Update, send_ping);
+    for _ in 0..50 {
+        app.update_with(ms(1));
+        assert!(app.world.message_count::<Ping>() <= 1);
+    }
+}
+
+#[test]
+fn message_trimming_can_be_turned_off() {
+    let mut app = app_with_pings();
+    app.add_systems(Update, (send_ping, take_pings).chain());
+    assert!(app.trims_messages());
+    app.set_trim_messages(false);
+    assert!(!app.trims_messages());
+    for _ in 0..10 {
+        app.update_with(ms(1));
+    }
+    assert_eq!(app.world.message_count::<Ping>(), 10, "left for the owner");
+    app.set_trim_messages(true);
+    app.update_with(ms(1));
+    app.update_with(ms(1));
+    assert!(app.world.message_count::<Ping>() <= 1);
+}
+
+#[test]
+fn a_reader_that_is_skipped_keeps_its_messages_for_when_it_runs() {
+    #[derive(Default)]
+    struct Gate(bool);
+    let mut app = app_with_pings();
+    app.insert_resource(Gate(false));
+    app.add_systems(Update, send_ping);
+    app.add_systems(Physics, take_pings.run_if(|gate: Res<Gate>| gate.0));
+    for _ in 0..5 {
+        app.update_with(one_step());
+    }
+    assert_eq!(
+        app.world.message_count::<Ping>(),
+        5,
+        "all held for the reader"
+    );
+    app.world.get_resource_mut::<Gate>().unwrap().0 = true;
+    app.update_with(one_step());
+    assert_eq!(got(&app), [1, 2, 3, 4, 5, 6]);
+}
+
+#[test]
+fn on_message_gates_a_stage_system_through_the_app() {
+    use mid_ecs::schedule::common_conditions::on_message;
+    let mut app = app_with_pings();
+    app.add_systems(Update, count_runs_of_pings.run_if(on_message::<Ping>));
+    app.update_with(ms(1));
+    assert_eq!(app.world.get_resource::<Count>().unwrap().0, 0);
+    app.world.write_message(Ping(1));
+    app.update_with(ms(1));
+    assert_eq!(app.world.get_resource::<Count>().unwrap().0, 1);
+    app.update_with(ms(1));
+    assert_eq!(
+        app.world.get_resource::<Count>().unwrap().0,
+        1,
+        "nothing new"
+    );
+}
+
+fn count_runs_of_pings(mut count: ResMut<Count>) {
+    count.0 += 1;
+}

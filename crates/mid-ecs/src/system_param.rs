@@ -54,6 +54,7 @@ pub struct SystemMeta {
     last_run: Tick,
     has_deferred: bool,
     reads_removals: bool,
+    message_reads: Vec<TypeId>,
 }
 
 impl SystemMeta {
@@ -67,6 +68,7 @@ impl SystemMeta {
             last_run: Tick::default(),
             has_deferred: false,
             reads_removals: false,
+            message_reads: Vec::new(),
         }
     }
 
@@ -94,6 +96,22 @@ impl SystemMeta {
     /// [`Self::set_reads_removals`].
     pub fn reads_removals(&self) -> bool {
         self.reads_removals
+    }
+
+    /// Says that a parameter of this system reads the messages of type
+    /// `message` (a [`crate::MessageReader`]), so that log may not be
+    /// trimmed past the system's last run. Called from
+    /// [`SystemParam::init_state`].
+    pub fn add_message_read(&mut self, message: TypeId) {
+        if !self.message_reads.contains(&message) {
+            self.message_reads.push(message);
+        }
+    }
+
+    /// Whether a parameter reads the messages of type `message`. See
+    /// [`Self::add_message_read`].
+    pub fn reads_message(&self, message: TypeId) -> bool {
+        self.message_reads.contains(&message)
     }
 
     /// The system's name.
@@ -889,7 +907,7 @@ impl<T: 'static> DerefMut for ResMut<'_, T> {
     }
 }
 
-fn register_resource<T: 'static>(meta: &mut SystemMeta, write: bool) {
+pub(crate) fn register_resource<T: 'static>(meta: &mut SystemMeta, write: bool) {
     let mut part = FilteredAccess::new();
     if write {
         part.add_resource_write::<T>();
@@ -899,7 +917,7 @@ fn register_resource<T: 'static>(meta: &mut SystemMeta, write: bool) {
     meta.add_param_access(part);
 }
 
-fn missing_resource<T: 'static>(meta: &SystemMeta) -> ! {
+pub(crate) fn missing_resource<T: 'static>(meta: &SystemMeta) -> ! {
     panic!(
         "system `{}`: resource `{}` does not exist (insert it first, or ask for `Option<..>` instead)",
         meta.name(),

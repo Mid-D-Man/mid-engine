@@ -196,6 +196,15 @@ pub trait System: Send + 'static {
         true
     }
 
+    /// Whether the system reads the messages of type `message` (a
+    /// `MessageReader` parameter), so that [`World::trim_messages`] must
+    /// not go past its [`Self::last_run`] for that type. Defaults to
+    /// `true` for the same reason as [`Self::reads_removals`]; an
+    /// exclusive system answers `false`.
+    fn reads_message(&self, _message: std::any::TypeId) -> bool {
+        true
+    }
+
     /// The tick of the system's previous run (zero before the first): what
     /// `Added` and `Changed` in its queries measure "since" against.
     fn last_run(&self) -> Tick;
@@ -422,6 +431,10 @@ impl<Marker: 'static, F: SystemParamFunction<Marker, Out = ()>> System
         self.meta.reads_removals()
     }
 
+    fn reads_message(&self, message: std::any::TypeId) -> bool {
+        self.meta.reads_message(message)
+    }
+
     fn last_run(&self) -> Tick {
         self.meta.last_run()
     }
@@ -502,6 +515,10 @@ impl<F: FnMut(&mut World) + Send + 'static> System for ExclusiveFunctionSystem<F
     }
 
     fn reads_removals(&self) -> bool {
+        false
+    }
+
+    fn reads_message(&self, _message: std::any::TypeId) -> bool {
         false
     }
 

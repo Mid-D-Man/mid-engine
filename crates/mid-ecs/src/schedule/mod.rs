@@ -55,11 +55,14 @@ mod parallel;
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_messages;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests_parallel;
 #[cfg(test)]
 mod tests_removals;
 
+use std::any::TypeId;
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 #[cfg(not(target_arch = "wasm32"))]
@@ -527,7 +530,7 @@ impl Schedule {
     /// they read removals; [`Self::oldest_removal_reader`] counts only the
     /// ones that do.
     pub fn oldest_last_run(&self, now: Tick) -> Option<Tick> {
-        self.oldest_where(now, false)
+        self.oldest_where(now, Reader::Any)
     }
 
     /// [`Self::oldest_last_run`] over only the systems and conditions that
@@ -538,10 +541,20 @@ impl Schedule {
     /// that is correct, because the run that ends the skipping must still
     /// see what was removed meanwhile.
     pub fn oldest_removal_reader(&self, now: Tick) -> Option<Tick> {
-        self.oldest_where(now, true)
+        self.oldest_where(now, Reader::Removals)
     }
 
-    fn oldest_where(&self, now: Tick, readers_only: bool) -> Option<Tick> {
+    /// [`Self::oldest_last_run`] over only the systems and conditions that
+    /// read the messages of type `message` ([`System::reads_message`]), or
+    /// `None` if there are none. One that is not initialized yet counts,
+    /// for the reason given at [`Self::oldest_removal_reader`]. A reader of
+    /// another type does not: a system skipped for good holds back the log
+    /// of what it reads and no other.
+    pub fn oldest_message_reader(&self, message: TypeId, now: Tick) -> Option<Tick> {
+        self.oldest_where(now, Reader::Message(message))
+    }
+
+    fn oldest_where(&self, now: Tick, reader: Reader) -> Option<Tick> {
         let mut oldest: Option<Tick> = None;
         let mut consider = |tick: Tick| {
             oldest = Some(match oldest {
@@ -549,25 +562,56 @@ impl Schedule {
                 _ => tick,
             });
         };
-        let counts = |initialized: bool, reads: bool| !readers_only || !initialized || reads;
         for node in &self.systems {
-            if counts(node.system.is_initialized(), node.system.reads_removals()) {
+            if reader.counts_system(&*node.system) {
                 consider(node.system.last_run());
             }
             for c in &node.conditions {
-                if counts(c.is_initialized(), c.reads_removals()) {
+                if reader.counts_condition(&**c) {
                     consider(c.oldest_last_run(now));
                 }
             }
         }
         for set in &self.sets {
             for c in &set.conditions {
-                if counts(c.is_initialized(), c.reads_removals()) {
+                if reader.counts_condition(&**c) {
                     consider(c.oldest_last_run(now));
                 }
             }
         }
         oldest
+    }
+}
+
+/// Which systems and conditions a question about last runs is about.
+#[derive(Clone, Copy)]
+enum Reader {
+    /// All of them.
+    Any,
+    /// Those that read the removal log.
+    Removals,
+    /// Those that read the messages of one type.
+    Message(TypeId),
+}
+
+impl Reader {
+    /// One that is not set up yet cannot say what it reads, so it counts.
+    fn counts_system(self, system: &dyn System) -> bool {
+        match self {
+            Reader::Any => true,
+            _ if !system.is_initialized() => true,
+            Reader::Removals => system.reads_removals(),
+            Reader::Message(message) => system.reads_message(message),
+        }
+    }
+
+    fn counts_condition(self, condition: &dyn Condition) -> bool {
+        match self {
+            Reader::Any => true,
+            _ if !condition.is_initialized() => true,
+            Reader::Removals => condition.reads_removals(),
+            Reader::Message(message) => condition.reads_message(message),
+        }
     }
 }
 
@@ -624,9 +668,19 @@ impl Schedules {
     /// is not being run (a running one is out of the map; see
     /// [`Self::any_running`]).
     pub fn oldest_removal_reader(&self, now: Tick) -> Option<Tick> {
+        self.oldest_over(now, |schedule| schedule.oldest_removal_reader(now))
+    }
+
+    /// [`Schedule::oldest_message_reader`] over every schedule here that
+    /// is not being run.
+    pub fn oldest_message_reader(&self, message: TypeId, now: Tick) -> Option<Tick> {
+        self.oldest_over(now, |schedule| schedule.oldest_message_reader(message, now))
+    }
+
+    fn oldest_over(&self, now: Tick, of: impl Fn(&Schedule) -> Option<Tick>) -> Option<Tick> {
         let mut oldest: Option<Tick> = None;
         for schedule in self.schedules.values() {
-            if let Some(tick) = schedule.oldest_removal_reader(now) {
+            if let Some(tick) = of(schedule) {
                 oldest = Some(match oldest {
                     Some(o) if now.relative_to(o).get() >= now.relative_to(tick).get() => o,
                     _ => tick,
@@ -831,6 +885,57 @@ impl World {
             return false;
         };
         self.trim_removals(oldest);
+        true
+    }
+
+    /// Trims every message log of what no system in any schedule can still
+    /// need to see, and returns whether it did. For each type, the log is
+    /// cut at the older of two ticks: the last run of the system that
+    /// reads that type and ran longest ago ([`Schedules::oldest_message_reader`]),
+    /// and the world tick at the previous call. The second keeps every
+    /// message for at least the interval between two calls (a frame, for
+    /// `mid-app`) whoever reads it, so code outside the schedules (a
+    /// `ChangeTracker` that reads once a frame) does not lose a message
+    /// to a trim that came between its writer and its reader. A type no
+    /// schedule system reads is therefore kept for between one and two
+    /// intervals, as `bevy_ecs` keeps every message.
+    ///
+    /// Does nothing, and returns `false`, while any schedule is being run:
+    /// its systems are out of reach and may be the ones that still need
+    /// the log. Call it from outside any schedule. It advances the
+    /// world's tick by one.
+    ///
+    /// A system that reads a type and is skipped for good (its conditions
+    /// never hold) holds that type's log back for good. Use
+    /// [`Self::message_count`] to see it, and [`Self::trim_messages`] or
+    /// [`Self::clear_messages`] to cut it.
+    pub fn trim_messages_for_schedules(&mut self) -> bool {
+        let now = self.change_tick();
+        if self
+            .get_resource::<Schedules>()
+            .is_some_and(Schedules::any_running)
+        {
+            return false;
+        }
+        let previous = self.messages.last_trim;
+        for i in 0..self.messages.types.len() {
+            let (type_id, trim) = {
+                let t = &self.messages.types[i];
+                (t.type_id, t.trim)
+            };
+            let reader = self
+                .get_resource::<Schedules>()
+                .and_then(|schedules| schedules.oldest_message_reader(type_id, now));
+            let at = match reader {
+                Some(r) if now.relative_to(r).get() > now.relative_to(previous).get() => r,
+                _ => previous,
+            };
+            trim(self, at, now);
+        }
+        self.messages.last_trim = now;
+        // A message written from here on gets a later tick than this
+        // trim's, so the next trim does not take it for older than it is.
+        self.increment_change_tick();
         true
     }
 }

@@ -4362,6 +4362,8 @@ to come (see "Not done").
 | `World::removed_since::<T>(&tracker)` | The entities that lost a `T` after `tracker`'s last update, oldest first. The counterpart of `query_changed`. **Panics** if `T` is not tracked: nothing would ever have been recorded and an empty answer would hide that. |
 | `RemovedComponents<'w, T>` (system param) | `iter()`, `len()`, `is_empty()`: removals since *this system's* previous run. Calls `track_removals::<T>()` when the system is set up. No component or resource access to register, so it never conflicts. |
 | `World::trim_removals(tick)` / `clear_removals()` / `removal_count::<T>()` / `tracks_removals::<T>()` | Housekeeping and diagnostics. |
+| `World::init_message::<M>()` / `write_message(m)` / `messages_since::<M>(&tracker)` / `message_count::<M>()` | Message logs (`docs/mid-ecs-events.md`): a tick-stamped log per type, read "since the last run" like removals. Systems use `MessageWriter<M>` and `MessageReader<M>`; `Commands::write_message`; run condition `on_message::<M>`. |
+| `World::trim_messages(tick)` / `clear_messages()` / `trim_messages_for_schedules()` | Housekeeping for the logs; the last is per type and keeps at least one interval. `mid-app` calls it after every frame. |
 | `World::trim_removals_for_schedules()` | Trims at the last run of the schedule system that reads removals and ran longest ago; see `docs/mid-ecs-schedule.md`, "Phase 3 additions in `mid-ecs`". `mid-app` calls it after every frame. |
 
 **What counts as a removal.** `remove`, `remove_static`, `remove_bundle` (every

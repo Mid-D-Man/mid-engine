@@ -18,6 +18,7 @@ pub mod filter;
 mod hash;
 pub mod hooks;
 mod interior;
+pub mod message;
 pub mod query;
 pub mod query_data;
 mod removal;
@@ -48,6 +49,7 @@ pub use component::{ComponentId, SparseShell};
 pub use data_filter::DataFilter;
 pub use filter::{Or, QueryFilter, With, Without};
 pub use hooks::{ComponentHook, ComponentHooks, DeferredWorld, HookContext};
+pub use message::{MessageReader, MessageWriter, Messages};
 pub use query_data::{
     Added, Changed, Has, QueryData, QueryEntityError, QuerySingleError, ReadOnlyQueryData,
 };

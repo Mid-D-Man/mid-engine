@@ -42,6 +42,7 @@ pub struct App {
     /// The world the systems run on.
     pub world: World,
     trim_removals: bool,
+    trim_messages: bool,
 }
 
 impl App {
@@ -62,6 +63,7 @@ impl App {
         Self {
             world,
             trim_removals: true,
+            trim_messages: true,
         }
     }
 
@@ -144,6 +146,25 @@ impl App {
         self
     }
 
+    /// Whether the message logs are trimmed after every frame (the
+    /// default). See [`Self::set_trim_messages`].
+    pub fn trims_messages(&self) -> bool {
+        self.trim_messages
+    }
+
+    /// Turns the trimming of the message logs after each frame on or off.
+    ///
+    /// On, each log is cut back after each frame to what the systems that
+    /// read that type still have to see, and never to less than the last
+    /// frame's worth (`World::trim_messages_for_schedules`), so a type
+    /// written often does not grow without bound and a message is kept for
+    /// at least a whole frame whoever reads it. Turn it off to trim
+    /// yourself.
+    pub fn set_trim_messages(&mut self, on: bool) -> &mut Self {
+        self.trim_messages = on;
+        self
+    }
+
     /// Runs one frame, with the time the platform clock says has passed
     /// since the last one (the first frame's is nearly zero).
     pub fn update(&mut self) {
@@ -182,6 +203,9 @@ impl App {
         self.world.run_schedule(Main);
         if self.trim_removals {
             self.world.trim_removals_for_schedules();
+        }
+        if self.trim_messages {
+            self.world.trim_messages_for_schedules();
         }
     }
 }

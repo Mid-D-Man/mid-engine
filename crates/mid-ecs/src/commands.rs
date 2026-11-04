@@ -268,6 +268,12 @@ impl Commands<'_> {
         })));
     }
 
+    /// Queues a message to be written when the commands are applied
+    /// ([`World::write_message`]).
+    pub fn write_message<M: Send + Sync + 'static>(&mut self, message: M) {
+        self.queue(move |world| world.write_message(message));
+    }
+
     /// Queues any closure over the whole world. The way to queue Sparse
     /// Shell inserts (`World::insert`) or anything else without a
     /// dedicated method.

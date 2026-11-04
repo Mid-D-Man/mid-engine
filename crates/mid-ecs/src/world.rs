@@ -43,6 +43,7 @@ use crate::hash::TypeIdMap;
 use crate::hooks::{
     ComponentHooks, DeferredWorld, HookContext, HookKind, HookRegistry, MAX_HOOK_ROUNDS,
 };
+use crate::message::{MessageRegistry, Messages};
 use crate::removal::RemovalLog;
 use crate::resource::{ResourceFfiError, ResourceId, Resources};
 use crate::tick::{ChangeTracker, Tick, CHECK_TICK_THRESHOLD};
@@ -212,6 +213,8 @@ pub struct World {
     pub(crate) resources: Resources,
     /// Opt-in log of component removals (`removal.rs`).
     pub(crate) removals: RemovalLog,
+    /// The message types the world holds logs of (`message.rs`).
+    pub(crate) messages: MessageRegistry,
     /// Component hooks and the commands they have queued (`hooks.rs`).
     pub(crate) hooks: HookRegistry,
     storage_claims: StorageClaims,
@@ -231,6 +234,7 @@ impl World {
             sync: crate::sync::SyncRegistry::new(),
             resources: Resources::new(),
             removals: RemovalLog::default(),
+            messages: MessageRegistry::default(),
             hooks: HookRegistry::default(),
             storage_claims: StorageClaims::default(),
             change_tick: Tick::new(1),
@@ -248,6 +252,7 @@ impl World {
             sync: crate::sync::SyncRegistry::new(),
             resources: Resources::new(),
             removals: RemovalLog::default(),
+            messages: MessageRegistry::default(),
             hooks: HookRegistry::default(),
             storage_claims: StorageClaims::default(),
             change_tick: Tick::new(1),
@@ -689,6 +694,11 @@ impl World {
         self.archetypes.check_ticks(now);
         self.resources.check_ticks(now);
         self.removals.check_ticks(now);
+        for i in 0..self.messages.types.len() {
+            let check = self.messages.types[i].check_ticks;
+            check(self, now);
+        }
+        self.messages.last_trim.check_tick(now);
         self.last_check_tick = now;
     }
 
@@ -881,6 +891,77 @@ impl World {
     /// Drops every logged removal. Tracked types stay tracked.
     pub fn clear_removals(&mut self) {
         self.removals.clear();
+    }
+
+    // ── messages ─────────────────────────────────────────────────────
+
+    /// Makes the world hold messages of type `M`: inserts the empty
+    /// [`Messages<M>`] resource if there is none and remembers the type, so
+    /// the trimming calls reach its log. Does nothing if that was done
+    /// already. A `MessageReader`, a `MessageWriter` and
+    /// [`Self::write_message`] do it themselves.
+    pub fn init_message<M: Send + Sync + 'static>(&mut self) {
+        if !self.contains_resource::<Messages<M>>() {
+            self.insert_resource(Messages::<M>::default());
+        }
+        if !self.messages.contains(TypeId::of::<M>()) {
+            self.messages.register::<M>();
+        }
+    }
+
+    /// Writes a message, stamped with the world's tick, so a system that
+    /// starts running after this reads it, and one that already started
+    /// does not. A caller with its own [`ChangeTracker`] that updates it
+    /// and then writes at the same tick must advance the world's tick
+    /// first ([`Self::increment_change_tick`]), as for any other
+    /// change.
+    pub fn write_message<M: Send + Sync + 'static>(&mut self, message: M) {
+        self.init_message::<M>();
+        let tick = self.change_tick;
+        if let Some(messages) = self.get_resource_mut::<Messages<M>>() {
+            messages.push(tick, message);
+        }
+    }
+
+    /// The messages of type `M` written after `tracker`'s last run, as seen
+    /// at the world's tick, oldest first: the counterpart of
+    /// `MessageReader` for code that has a world and no system. Empty if
+    /// the world has never held that type.
+    pub fn messages_since<M: Send + Sync + 'static>(
+        &self,
+        tracker: &ChangeTracker,
+    ) -> impl Iterator<Item = &M> + '_ {
+        let last_run = tracker.last_run();
+        let this_run = self.change_tick;
+        self.get_resource::<Messages<M>>()
+            .into_iter()
+            .flat_map(move |messages| messages.since(last_run, this_run))
+    }
+
+    /// How many messages of type `M` the log holds (0 if the world has
+    /// never held that type).
+    pub fn message_count<M: Send + Sync + 'static>(&self) -> usize {
+        self.get_resource::<Messages<M>>().map_or(0, Messages::len)
+    }
+
+    /// Drops, in every message log, what no reader whose last run was
+    /// `at_or_before` could still see. Without trimming, the log of a type
+    /// written often grows without bound; see
+    /// [`Self::trim_messages_for_schedules`] for who normally does it.
+    pub fn trim_messages(&mut self, at_or_before: Tick) {
+        let now = self.change_tick;
+        for i in 0..self.messages.types.len() {
+            let trim = self.messages.types[i].trim;
+            trim(self, at_or_before, now);
+        }
+    }
+
+    /// Drops every message of every type. The types stay held.
+    pub fn clear_messages(&mut self) {
+        for i in 0..self.messages.types.len() {
+            let clear = self.messages.types[i].clear;
+            clear(self);
+        }
     }
 
     /// Whether `entity` is alive and currently has an archetype-tracked

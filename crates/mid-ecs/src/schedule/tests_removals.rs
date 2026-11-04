@@ -157,10 +157,10 @@ fn conditions_report_the_parameter_through_every_combinator() {
 }
 
 /// A system that says nothing about removals: it takes the trait's answer.
-struct Silent(crate::FilteredAccessSet);
+pub(super) struct Silent(pub(super) crate::FilteredAccessSet);
 
 impl Silent {
-    fn new() -> Self {
+    pub(super) fn new() -> Self {
         Self(crate::FilteredAccessSet::new())
     }
 }
@@ -190,7 +190,7 @@ impl System for Silent {
 }
 
 /// The same for a condition.
-struct SilentCondition(crate::FilteredAccessSet);
+pub(super) struct SilentCondition(pub(super) crate::FilteredAccessSet);
 
 impl Condition for SilentCondition {
     fn name(&self) -> &str {
