@@ -9,8 +9,8 @@ on entering and leaving a value) and **observers** (callbacks that run at once w
 something is triggered or a component is added or removed). All three needed a frame
 owner to run their update in, which `mid-app` (phase 3) now is.
 
-Built so far: **messages** (phase 4a, this document). Not built yet: states (4b) and
-observers (4c). Bevy 0.20-dev splits "message" (buffered, read by a system later) from
+Built so far: **messages** (phase 4a) and **states** (phase 4b), both in this document.
+Not built yet: observers (4c). Bevy 0.20-dev splits "message" (buffered, read by a system later) from
 "event" (triggered, run by observers at once); this crate follows that split, so
 "event" is the word for what observers will take.
 
@@ -75,6 +75,52 @@ afterwards is stamped later than the trim and the next trim does not take it for
 than it is. It does nothing while any schedule is being run (their systems are out of
 reach), and `mid-app` calls it after `Main` returns.
 
+## States: the design
+
+A state is a value the whole world is "in", usually an enum. `bevy_state` is a separate
+crate on top of `bevy_app`; here the state types live in `mid-ecs` (`state.rs`) because
+they need only schedules and messages, and `mid-app` supplies the frame that runs them.
+
+- `State<S>` (resource): the current value. `NextState<S>` (resource): `Unchanged`,
+  `Pending(S)` or `PendingIfNeq(S)`, set by systems with `set`, `set_if_neq`, `reset`.
+- `StateTransition` (schedule label): the schedule that applies changes. Every state type
+  adds one system to it (`apply_state_transition::<S>`, an exclusive system) when it is
+  inserted. `mid-app` runs it once a frame between `PreUpdate` and `Update`, where
+  `bevy_app` runs its `StateTransition` too (after `PreUpdate`, before the fixed loop and
+  `Update`).
+- `OnExit(s)`, `OnTransition { exited, entered }`, `OnEnter(s)`: labels of schedules that
+  exist only if something was added to them, and are skipped silently otherwise. Run in
+  that order, after `State<S>` has changed, so a system in them reads the new state.
+- `StateTransitionMessage<S> { exited: Option<S>, entered: S }`: written at each
+  transition, for any system that wants to react without owning a schedule.
+- Run conditions `in_state(s)`, `state_changed::<S>`, `state_exists::<S>`.
+
+**The same as `bevy_state`** (read from `crates/bevy_state/src/state/transitions.rs`): the
+state does not exist until the first `StateTransition` (so `in_state` is false before it
+and the `OnEnter` of the initial value runs in that first frame); exit, then transition,
+then enter; `set` of the state the world is already in is an identity transition that
+runs exit and enter again, and `set_if_neq` is the one that does nothing; every
+transition is also a message.
+
+**Different, on purpose:**
+- **`States` is a blanket trait** for every `Debug + Clone + Eq + Hash + Send + Sync +
+  'static` type, where `bevy_state` asks for a derive or an impl. There is no derive
+  macro here, and the one-line impl per enum bought nothing. (`SystemSet` is opt-in for a
+  different reason: a blanket one made tuples of sets ambiguous. Nothing like that
+  happens for states.)
+- **One transition per run.** A change asked for from inside an `OnEnter` waits for the
+  next run of `StateTransition`, so a frame is never an unbounded loop of transitions.
+- **Not built:** `SubStates`, `ComputedStates`, `StateScoped` entities, a `PreviousState`
+  resource (the message has the state that was left), a state that goes away
+  (`bevy_state`'s `Option<S>` machinery), and `OnEnter`/`OnExit` for a whole set of
+  states at once.
+- **`apply_state_transition` is one exclusive system per state type,** in the order the
+  types were inserted. Bevy sorts exit, transition and enter schedules of all types into
+  three sets so that every type exits before any enters. Here a type's exit, transition and
+  enter run together, then the next type's. With two state types that depend on each
+  other, put the dependent one second, or use one state type. Nothing in the repo has two
+  yet.
+
 ## Modules
 
 ### `message.rs`
@@ -113,6 +159,34 @@ message was written since the condition last ran.
 
 **Tests:** 10 unit tests of the log, the registry and the world's tick check inside the file.
 
+### `state.rs`
+
+**What it does:** `States`, `State<S>`, `NextState<S>`, the labels, the message,
+`World::insert_state` and `World::init_state`, `apply_state_transition`, and the three
+run conditions.
+
+**Decisions:**
+- **`insert_state` on a type the world already has only asks for the value** (as
+  `NextState::set` would), so calling it twice cannot add the system twice or reset a
+  state that is in force. `init_state` (the `Default` one) does nothing at all in that
+  case.
+- **`NextState` is taken with `mem::take` before anything runs,** so a transition that
+  panics or a system that asks again from inside an `OnEnter` cannot apply the same
+  request twice.
+- **A missing schedule is not an error; any other failure is.** `try_run_schedule`'s
+  `NotFound` is skipped, and a schedule that is already running or does not build panics
+  with its message.
+- **`in_state` returns a closure over `Option<Res<State<S>>>`**, so it is false, not a
+  panic, before the state exists.
+
+**Tests:** 24 inside the file and a doctest: `NextState`'s three methods and the blanket
+trait; the state not existing before the first run, and the first run entering the initial
+value with no exit; `init_state`; exit, transition, enter in that order; schedules seeing
+the new state; a change applied once; identity transitions and `set_if_neq`; a withdrawn
+change; one change per run; no schedules at all; a state with data; two state types; a
+second `insert_state`; the transition read as a message; `in_state` (alone, with `not` and
+`and`), `state_changed`, `state_exists`; and an exit schedule of a state never left.
+
 ### `schedule/tests_messages.rs`
 
 Who sees what and when (reader after, before and in the same frame as its writer; every
@@ -145,7 +219,9 @@ at one entry.
 - `world.rs`: the registry field, the methods above, the tick check.
 - `commands.rs`: `Commands::write_message`. `lib.rs`: `pub mod message` and the exports.
 - `mid-app`: `App` trims the message logs after each frame (`set_trim_messages`,
-  `trims_messages`); see `docs/mid-app.md`.
+  `trims_messages`), runs `StateTransition` between `PreUpdate` and `Update`, and has
+  `init_state` and `insert_state`; see `docs/mid-app.md`.
+- `lib.rs` also exports `state` and `State`, `NextState`, `States`.
 
 ## Not built, on purpose
 
@@ -155,7 +231,7 @@ at one entry.
   component data has; decide it with the C surface for schedules, which does not exist.
 - **Deferred-world writes from hooks** (`DeferredWorld::write_message`). Hooks queue
   commands, and `Commands::write_message` is one.
-- **States and observers**, the rest of phase 4.
+- **Observers**, the rest of phase 4 (4c), and the rest of `bevy_state` listed above.
 
 ## CI and Workflows
 
@@ -178,18 +254,29 @@ None yet; see `docs/mid-app.md`.
   where every stamp is at or before the world's tick. The test was deleted rather than
   made to pass.
 
+### `state.rs`
+
+- **Two of the first `mid-app` state tests were wrong, not the code.** They set a state
+  from `PreUpdate` on the first frame and expected it to take effect. The state does not
+  exist until the first `StateTransition`, which runs after `PreUpdate`, so on frame 1
+  `in_state` is false and the first change can only be asked for on frame 2. That is the
+  `bevy_state` behavior this module copies, so the tests were changed and the first-frame
+  rule is now written down in the tests and in the module docs.
+- **`is_identity` survived mutation** because no test asserted it false for a real change.
+  One assertion added.
+
 ## Verification
 
 Rustc 1.91 in the sandbox, one core, static reading plus the tests. Nothing was
 benchmarked.
 
-| | before 4a | after |
-|---|---|---|
-| `mid-ecs` lib tests | 987 | 1033 (276 in `schedule`, 36 of them in `tests_messages`; 10 in `message`) |
-| with `--features scratch-arena` | 992 | 1038 |
-| `mid-ecs` doctests | 33 | 34 |
-| `ffi::` | 103 | 103 |
-| `mid-app` tests | 26 | 35, plus one doctest |
+| | before 4a | after 4a | after 4b |
+|---|---|---|---|
+| `mid-ecs` lib tests | 987 | 1033 (276 in `schedule`, 36 of them in `tests_messages`; 10 in `message`) | 1057 (24 in `state`) |
+| with `--features scratch-arena` | 992 | 1038 | 1062 |
+| `mid-ecs` doctests | 33 | 34 | 35 |
+| `ffi::` | 103 | 103 | 103 |
+| `mid-app` tests | 26 | 35, plus one doctest | 41, plus one doctest |
 
 Mutation testing of everything new, 58 mutants in a copy of the tree and a neutral
 control (which survived, as it should): the log (`since`, `trim`, `check_ticks`, `clear`,
@@ -205,3 +292,12 @@ not set up yet was not counted as a reader and nothing noticed (the system path 
 covered, the condition path was not). `a_system_or_condition_not_set_up_yet_counts_for_
 every_kind_of_reader` covers both for all three kinds of question and kills it. The
 first-pass tests had nothing to say about the removal path of that same line either.
+
+Mutation testing of 4b, 28 mutants (and the control): `NextState`'s three methods, `is_identity`,
+the second `insert_state`, the system `insert_state` adds, `init_state`'s guard, the
+`PendingIfNeq` comparison, replacing the state and making it the first time, the message's
+`exited`, each of the exit, transition and enter schedules and the order between them,
+taking the pending change, the three run conditions, and in `mid-app` the position of
+`StateTransition` in the frame, `init_state`, `insert_state` and the schedule's existence.
+27 were killed by the first pass. `is_identity` survived: no test asserted it false for a
+real change. One assertion added, killed.

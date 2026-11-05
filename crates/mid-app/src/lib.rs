@@ -10,7 +10,7 @@
 //! [`Main`] runs the stages in a fixed order once per frame:
 //!
 //! ```text
-//! PreUpdate → Update → Net → Physics (0..n times) → PostUpdate
+//! PreUpdate → StateTransition → Update → Net → Physics (0..n times) → PostUpdate
 //! ```
 //!
 //! [`Physics`] is the one stage that runs on a fixed timestep (60 Hz by
@@ -55,6 +55,10 @@ mod tests;
 
 pub use app::{App, Plugin, DEFAULT_FIXED_HZ, DEFAULT_MAX_FIXED_STEPS};
 pub use labels::{Main, Net, Physics, PostUpdate, PreUpdate, Update};
+pub use mid_ecs::state::{
+    in_state, state_changed, state_exists, NextState, OnEnter, OnExit, OnTransition, State,
+    StateTransition, StateTransitionMessage, States,
+};
 
 // The crates a plugin is written against, so one `mid-app` dependency
 // brings matching versions of them.

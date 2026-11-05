@@ -67,6 +67,7 @@ fn a_new_app_has_a_schedule_for_every_stage_and_for_main() {
     let app = App::new();
     assert!(app.world.contains_schedule(Main));
     assert!(app.world.contains_schedule(PreUpdate));
+    assert!(app.world.contains_schedule(StateTransition));
     assert!(app.world.contains_schedule(Update));
     assert!(app.world.contains_schedule(Net));
     assert!(app.world.contains_schedule(Physics));
@@ -646,4 +647,122 @@ fn on_message_gates_a_stage_system_through_the_app() {
 
 fn count_runs_of_pings(mut count: ResMut<Count>) {
     count.0 += 1;
+}
+
+// ── states ───────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
+enum Mode {
+    #[default]
+    Menu,
+    Play,
+}
+
+logger!(enter_menu);
+logger!(enter_play);
+logger!(exit_menu);
+
+fn go_play(mut next: ResMut<NextState<Mode>>) {
+    next.set(Mode::Play);
+}
+
+#[test]
+fn the_transition_runs_between_pre_update_and_update() {
+    let mut app = app_with_log();
+    app.init_state::<Mode>();
+    app.add_systems(PreUpdate, pre)
+        .add_systems(Update, update)
+        .add_systems(OnEnter(Mode::Menu), enter_menu);
+    app.update_with(ms(1));
+    assert_eq!(log(&app), ["pre", "enter_menu", "update"]);
+    app.update_with(ms(1));
+    assert_eq!(
+        log(&app),
+        ["pre", "enter_menu", "update", "pre", "update"],
+        "OnEnter of the initial state runs once"
+    );
+}
+
+#[test]
+fn a_change_asked_for_in_pre_update_is_in_force_the_same_frame() {
+    let mut app = app_with_log();
+    app.init_state::<Mode>();
+    app.add_systems(PreUpdate, go_play.run_if(in_state(Mode::Menu)))
+        .add_systems(OnExit(Mode::Menu), exit_menu)
+        .add_systems(OnEnter(Mode::Play), enter_play)
+        .add_systems(Update, update.run_if(in_state(Mode::Play)));
+    app.update_with(ms(1));
+    assert!(log(&app).is_empty(), "frame 1 only makes the state: Menu");
+    app.update_with(ms(1));
+    assert_eq!(
+        log(&app),
+        ["exit_menu", "enter_play", "update"],
+        "exit and enter, then Update already sees Play"
+    );
+    app.update_with(ms(1));
+    assert_eq!(
+        log(&app),
+        ["exit_menu", "enter_play", "update", "update"],
+        "and no second exit or enter"
+    );
+}
+
+#[test]
+fn a_change_asked_for_in_update_is_in_force_next_frame() {
+    let mut app = app_with_log();
+    app.init_state::<Mode>();
+    app.add_systems(Update, go_play)
+        .add_systems(OnEnter(Mode::Play), enter_play);
+    app.update_with(ms(1));
+    assert!(log(&app).is_empty());
+    app.update_with(ms(1));
+    assert_eq!(log(&app), ["enter_play"]);
+}
+
+#[test]
+fn the_state_exists_from_the_first_frame_and_is_readable() {
+    let mut app = App::new();
+    app.insert_state(Mode::Play);
+    assert!(app.world.get_resource::<State<Mode>>().is_none());
+    app.update_with(ms(1));
+    assert_eq!(
+        app.world.get_resource::<State<Mode>>().unwrap().get(),
+        &Mode::Play
+    );
+}
+
+#[test]
+fn init_state_twice_is_one_state_and_insert_state_asks_for_a_change() {
+    let mut app = app_with_log();
+    app.init_state::<Mode>().init_state::<Mode>();
+    app.add_systems(OnEnter(Mode::Menu), enter_menu)
+        .add_systems(OnEnter(Mode::Play), enter_play);
+    app.update_with(ms(1));
+    app.insert_state(Mode::Play);
+    app.update_with(ms(1));
+    assert_eq!(log(&app), ["enter_menu", "enter_play"], "each once");
+}
+
+#[test]
+fn a_state_gates_physics_and_reads_state_changes_as_messages() {
+    #[derive(Default)]
+    struct Seen(Vec<bool>);
+    fn watch(m: MessageReader<StateTransitionMessage<Mode>>, mut seen: ResMut<Seen>) {
+        seen.0.extend(m.read().map(|m| m.is_identity()));
+    }
+    let mut app = app_with_log();
+    app.insert_resource(Seen::default());
+    app.init_state::<Mode>();
+    app.add_systems(Physics, physics.run_if(in_state(Mode::Play)))
+        .add_systems(PostUpdate, watch)
+        .add_systems(PreUpdate, go_play.run_if(in_state(Mode::Menu)));
+    app.update_with(one_step() * 2);
+    assert!(log(&app).is_empty(), "frame 1 only makes the state: Menu");
+    app.update_with(one_step() * 2);
+    assert_eq!(log(&app), ["physics", "physics"], "Play from this frame on");
+    assert_eq!(
+        app.world.get_resource::<Seen>().unwrap().0,
+        [false, false],
+        "the state's making and the change, neither an identity"
+    );
 }

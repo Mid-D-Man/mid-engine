@@ -4363,6 +4363,7 @@ to come (see "Not done").
 | `RemovedComponents<'w, T>` (system param) | `iter()`, `len()`, `is_empty()`: removals since *this system's* previous run. Calls `track_removals::<T>()` when the system is set up. No component or resource access to register, so it never conflicts. |
 | `World::trim_removals(tick)` / `clear_removals()` / `removal_count::<T>()` / `tracks_removals::<T>()` | Housekeeping and diagnostics. |
 | `World::init_message::<M>()` / `write_message(m)` / `messages_since::<M>(&tracker)` / `message_count::<M>()` | Message logs (`docs/mid-ecs-events.md`): a tick-stamped log per type, read "since the last run" like removals. Systems use `MessageWriter<M>` and `MessageReader<M>`; `Commands::write_message`; run condition `on_message::<M>`. |
+| `World::insert_state(s)` / `init_state::<S>()`, `State<S>`, `NextState<S>`, `StateTransition`, `OnEnter`/`OnExit`/`OnTransition`, `in_state(s)` | States (`docs/mid-ecs-events.md`): a value the world is in, changed by the `StateTransition` schedule, with exit, transition and enter schedules and a message per change. |
 | `World::trim_messages(tick)` / `clear_messages()` / `trim_messages_for_schedules()` | Housekeeping for the logs; the last is per type and keeps at least one interval. `mid-app` calls it after every frame. |
 | `World::trim_removals_for_schedules()` | Trims at the last run of the schedule system that reads removals and ran longest ago; see `docs/mid-ecs-schedule.md`, "Phase 3 additions in `mid-ecs`". `mid-app` calls it after every frame. |
 

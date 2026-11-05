@@ -7,6 +7,7 @@
 use std::time::Duration;
 
 use mid_ecs::schedule::{IntoScheduleConfigs, Schedule, ScheduleLabel, ScheduleSystem, SetKey};
+use mid_ecs::state::{StateTransition, States};
 use mid_ecs::World;
 use mid_time::{Clock, FixedTimestep};
 
@@ -33,7 +34,7 @@ pub trait Plugin {
 /// A world and the schedules that run it.
 ///
 /// A new `App` has a schedule for each of the stages ([`PreUpdate`],
-/// [`Update`], [`Net`], [`Physics`], [`PostUpdate`]) and for [`Main`], the
+/// [`StateTransition`], [`Update`], [`Net`], [`Physics`], [`PostUpdate`]) and for [`Main`], the
 /// one that runs them, and holds a `mid_time::Clock` and a
 /// `mid_time::FixedTimestep` as resources, so a system can read the
 /// frame's time as `Res<Clock>` and the step's length as
@@ -55,6 +56,7 @@ impl App {
             DEFAULT_MAX_FIXED_STEPS,
         ));
         world.init_schedule(PreUpdate);
+        world.init_schedule(StateTransition);
         world.init_schedule(Update);
         world.init_schedule(Net);
         world.init_schedule(Physics);
@@ -109,6 +111,23 @@ impl App {
     /// Sets a resource, replacing the one of that type if there is one.
     pub fn insert_resource<T: 'static>(&mut self, value: T) -> &mut Self {
         self.world.insert_resource(value);
+        self
+    }
+
+    /// Gives the app a state of type `S`, `S::default()` to begin with: the
+    /// world has `State<S>` from the first frame (the transition runs
+    /// between `PreUpdate` and `Update`, so `OnEnter` of the initial value
+    /// and `in_state` are right in that frame). Does nothing if the app
+    /// has that state type already.
+    pub fn init_state<S: States + Default>(&mut self) -> &mut Self {
+        self.world.init_state::<S>();
+        self
+    }
+
+    /// Gives the app a state of type `S`, `initial` to begin with; if it has
+    /// the type already, asks for `initial` as `NextState::set` would.
+    pub fn insert_state<S: States>(&mut self, initial: S) -> &mut Self {
+        self.world.insert_state(initial);
         self
     }
 
@@ -216,10 +235,12 @@ impl Default for App {
     }
 }
 
-/// The one system of [`Main`]: runs the stages in order, [`Physics`] as
+/// The one system of [`Main`]: runs the stages in order (with
+/// [`StateTransition`] between [`PreUpdate`] and [`Update`]), [`Physics`] as
 /// many times as the frame's time has made steps ready.
 fn run_stages(world: &mut World) {
     world.run_schedule(PreUpdate);
+    world.run_schedule(StateTransition);
     world.run_schedule(Update);
     world.run_schedule(Net);
     let delta = world

@@ -12,7 +12,7 @@ of the schedule work (`docs/mid-ecs-schedule.md`).
 A frame:
 
 ```text
-PreUpdate -> Update -> Net -> Physics (0..n times) -> PostUpdate
+PreUpdate -> StateTransition -> Update -> Net -> Physics (0..n times) -> PostUpdate
 ```
 
 `Physics` is the one stage on a fixed timestep (`mid_time::FixedTimestep`, 60 Hz
@@ -48,7 +48,8 @@ and the re-exports.
 ### `labels.rs`
 
 **What it does:** The six schedule labels: `Main`, `PreUpdate`, `Update`, `Net`,
-`Physics`, `PostUpdate`. Each is a unit struct; `ScheduleLabel` is a blanket
+`Physics`, `PostUpdate`. (`StateTransition`, the seventh schedule of a frame, is defined
+in `mid-ecs` with the state types and re-exported by `mid-app`.) Each is a unit struct; `ScheduleLabel` is a blanket
 impl in `mid-ecs`, so nothing more is needed.
 
 **Decisions:**
@@ -84,6 +85,7 @@ driver. Then:
 | `configure_sets(label, sets)` | `Schedule::configure_sets` likewise. |
 | `schedule_mut(label)` | The schedule itself, for `set_executor` and `set_ambiguity_detection`. |
 | `insert_resource(value)` | `World::insert_resource`, chainable. |
+| `init_state::<S>()` / `insert_state(s)` | Gives the app a state of type `S` (`docs/mid-ecs-events.md`): `Default` or the value given. `State<S>` exists from the first frame, in time for `OnEnter` of the initial value. |
 | `add_plugin(plugin)` | Calls `plugin.build(self)` at once. |
 | `set_fixed_timestep(hz, max)` | Replaces the timestep; time already accumulated is dropped. |
 | `set_trim_removals(on)` / `trims_removals()` | Whether the removal log is trimmed after each frame (on by default). |
@@ -92,7 +94,7 @@ driver. Then:
 | `update_with(delta)` | One frame as if `delta` had passed. For tests, replay and lockstep. |
 | `run_until(done)` | `update` in a loop until `done` says stop. Not on `wasm32`. |
 
-`run_stages` runs `PreUpdate`, `Update`, `Net`, then asks `FixedTimestep` how many
+`run_stages` runs `PreUpdate`, `StateTransition`, `Update`, `Net`, then asks `FixedTimestep` how many
 steps the frame's `Clock::delta` made ready and runs `Physics` that many times,
 then `PostUpdate`.
 
@@ -122,6 +124,11 @@ then `PostUpdate`.
   and one of them could be the reader that still needs the log.
   `World::trim_removals_for_schedules` refuses to trim while any schedule is
   running for this reason.
+- **`StateTransition` runs between `PreUpdate` and `Update`,** where `bevy_app` runs its
+  own. A system in `PreUpdate` can ask for a change and `Update` sees it the same frame; a
+  system in `Update` or later asks for the next frame. The first frame makes the state, so
+  a change asked for in `PreUpdate` of the very first frame finds no state yet and
+  `in_state` is false (the state exists from the first transition on, as in `bevy_state`).
 - **Messages are trimmed the same way,** by `World::trim_messages_for_schedules`, per
   type and never past the previous frame's trim (so a message lives at least a whole
   frame whoever reads it, including code outside the schedules). A reader in `Physics`
@@ -142,7 +149,7 @@ then `PostUpdate`.
 
 ### `tests.rs`
 
-35 tests and the doctest. Stage order whatever the order added; exclusive
+41 tests and the doctest. Stage order whatever the order added; exclusive
 closures as systems; an empty app; order inside a stage (`before`, `after`,
 `chain`, sets, conditions) reaching the schedule through the app; a system on
 `Main`; a multi-threaded stage; the fixed timestep (one step per step's worth,
@@ -157,11 +164,14 @@ seeing each removal once across frames of zero, one and three steps), and messag
 every message across frames of zero, one and three steps; a `Physics` writer's messages
 all read next frame; the log kept at one entry by trimming; a type with no reader kept a
 frame; trimming switched off and on; a skipped reader keeping its messages;
-`on_message` through the app).
+`on_message` through the app), and states (the transition between `PreUpdate` and
+`Update` and `OnEnter` of the initial state once; a change from `PreUpdate` in force the
+same frame and one from `Update` the next; the state present from the first frame;
+`init_state` twice; a state gating `Physics` and its changes read as messages).
 
 ## What is not built, on purpose
 
-- Observers and states (phase 4b and 4c; messages are built).
+- Observers (phase 4c; messages and states are built).
 - The 128 Hz network tick (see `labels.rs`).
 - A startup stage, a `Last` stage, schedule order as data. Add when something
   needs one.
