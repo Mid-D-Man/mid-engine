@@ -1,9 +1,9 @@
 {
-  "build": "40",
+  "build": "41",
   "branch": "main",
-  "commit": "67be65c7",
+  "commit": "774a4972",
   "date": "",
-  "rust_version": "rustc 1.97.1 (8bab26f4f 2026-07-14)",
+  "rust_version": "rustc 1.99.1 (58cf8f9c3 2026-10-13)",
   "crate": "mid-net",
   "summary": {
     "total": 77,
@@ -20,12 +20,6 @@
       "ignored": 0,
       "duration_s": 0.0,
       "tests": [
-        {
-          "name": "connection::tests::malformed_bytes_on_either_channel_are_dropped_not_panicking",
-          "status": "passed",
-          "duration_ms": 0,
-          "output": ""
-        },
         {
           "name": "connection::tests::both_channels_arrive_together",
           "status": "passed",
@@ -45,7 +39,13 @@
           "output": ""
         },
         {
-          "name": "ffi::tests::null_handle_getters_return_safe_defaults_not_crash",
+          "name": "connection::tests::malformed_bytes_on_either_channel_are_dropped_not_panicking",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "connection::tests::stale_player_state_is_dropped_not_applied",
           "status": "passed",
           "duration_ms": 0,
           "output": ""
@@ -57,13 +57,25 @@
           "output": ""
         },
         {
-          "name": "ffi::tests::player_event_encode_decode_round_trips_through_ffi",
+          "name": "ffi::tests::player_event_new_free_and_getters_round_trip",
           "status": "passed",
           "duration_ms": 0,
           "output": ""
         },
         {
-          "name": "ffi::tests::player_event_new_free_and_getters_round_trip",
+          "name": "ffi::tests::null_handle_getters_return_safe_defaults_not_crash",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "ffi::tests::player_event_new_rejects_invalid_utf8",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "ffi::tests::player_event_encode_decode_round_trips_through_ffi",
           "status": "passed",
           "duration_ms": 0,
           "output": ""
@@ -76,18 +88,6 @@
         },
         {
           "name": "ffi::tests::player_state_encode_null_buf_queries_size",
-          "status": "passed",
-          "duration_ms": 0,
-          "output": ""
-        },
-        {
-          "name": "connection::tests::stale_player_state_is_dropped_not_applied",
-          "status": "passed",
-          "duration_ms": 0,
-          "output": ""
-        },
-        {
-          "name": "ffi::tests::player_event_new_rejects_invalid_utf8",
           "status": "passed",
           "duration_ms": 0,
           "output": ""
@@ -120,13 +120,19 @@
           "output": ""
         },
         {
+          "name": "tests::clean_ack_without_retransmit_does_feed_rtt_sample",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
           "name": "tests::acked_packet_is_removed_and_unacked_is_not",
           "status": "passed",
           "duration_ms": 0,
           "output": ""
         },
         {
-          "name": "tests::clean_ack_without_retransmit_does_feed_rtt_sample",
+          "name": "tests::duplicate_ack_of_already_removed_packet_is_harmless",
           "status": "passed",
           "duration_ms": 0,
           "output": ""
@@ -144,7 +150,7 @@
           "output": ""
         },
         {
-          "name": "tests::duplicate_ack_of_already_removed_packet_is_harmless",
+          "name": "tests::reliable_frame_round_trips",
           "status": "passed",
           "duration_ms": 0,
           "output": ""
@@ -156,37 +162,13 @@
           "output": ""
         },
         {
-          "name": "tests::rtt_estimator_converges_toward_stable_samples",
-          "status": "passed",
-          "duration_ms": 0,
-          "output": ""
-        },
-        {
-          "name": "tests::reliable_frame_round_trips",
-          "status": "passed",
-          "duration_ms": 0,
-          "output": ""
-        },
-        {
           "name": "tests::retransmits_after_timeout_and_updates_bookkeeping",
           "status": "passed",
           "duration_ms": 0,
           "output": ""
         },
         {
-          "name": "tests::retransmitted_packet_does_not_pollute_rtt_sample",
-          "status": "passed",
-          "duration_ms": 0,
-          "output": ""
-        },
-        {
-          "name": "tests::rtt_estimator_timeout_is_clamped",
-          "status": "passed",
-          "duration_ms": 0,
-          "output": ""
-        },
-        {
-          "name": "tests::unreliable_frame_rejects_unknown_kind",
+          "name": "tests::rtt_estimator_converges_toward_stable_samples",
           "status": "passed",
           "duration_ms": 0,
           "output": ""
@@ -198,7 +180,25 @@
           "output": ""
         },
         {
+          "name": "tests::rtt_estimator_timeout_is_clamped",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
           "name": "tests::rtt_estimator_widens_timeout_under_jitter",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::retransmitted_packet_does_not_pollute_rtt_sample",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::unreliable_frame_round_trips",
           "status": "passed",
           "duration_ms": 0,
           "output": ""
@@ -210,7 +210,7 @@
           "output": ""
         },
         {
-          "name": "tests::unreliable_frame_round_trips",
+          "name": "tests::unreliable_frame_rejects_unknown_kind",
           "status": "passed",
           "duration_ms": 0,
           "output": ""
@@ -231,7 +231,7 @@
           "output": ""
         },
         {
-          "name": "tests::loopback_pair_delivers_reliable_streams_with_id",
+          "name": "tests::generic_fn_over_the_trait_compiles_and_works",
           "status": "passed",
           "duration_ms": 0,
           "output": ""
@@ -243,7 +243,7 @@
           "output": ""
         },
         {
-          "name": "tests::generic_fn_over_the_trait_compiles_and_works",
+          "name": "tests::loopback_pair_delivers_reliable_streams_with_id",
           "status": "passed",
           "duration_ms": 0,
           "output": ""
@@ -264,25 +264,19 @@
           "output": ""
         },
         {
-          "name": "packet::tests::packet_kind_round_trips_through_u8",
-          "status": "passed",
-          "duration_ms": 0,
-          "output": ""
-        },
-        {
           "name": "packet::tests::player_event_decode_rejects_truncated_string",
           "status": "passed",
           "duration_ms": 0,
           "output": ""
         },
         {
-          "name": "packet::tests::player_event_decode_rejects_bad_utf8",
+          "name": "packet::tests::packet_kind_round_trips_through_u8",
           "status": "passed",
           "duration_ms": 0,
           "output": ""
         },
         {
-          "name": "packet::tests::player_event_handles_empty_strings",
+          "name": "packet::tests::player_event_decode_rejects_bad_utf8",
           "status": "passed",
           "duration_ms": 0,
           "output": ""
@@ -306,13 +300,19 @@
           "output": ""
         },
         {
-          "name": "packet::tests::player_state_default_round_trips",
+          "name": "packet::tests::player_event_default_round_trips",
           "status": "passed",
           "duration_ms": 0,
           "output": ""
         },
         {
-          "name": "packet::tests::player_state_round_trips",
+          "name": "packet::tests::player_event_handles_empty_strings",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "packet::tests::player_state_default_round_trips",
           "status": "passed",
           "duration_ms": 0,
           "output": ""
@@ -330,7 +330,7 @@
           "output": ""
         },
         {
-          "name": "packet::tests::player_event_default_round_trips",
+          "name": "packet::tests::player_state_round_trips",
           "status": "passed",
           "duration_ms": 0,
           "output": ""
@@ -348,12 +348,6 @@
           "output": ""
         },
         {
-          "name": "sequence::tests::is_acked_true_for_the_ack_itself",
-          "status": "passed",
-          "duration_ms": 0,
-          "output": ""
-        },
-        {
           "name": "sequence::tests::is_acked_false_for_anything_newer_than_ack",
           "status": "passed",
           "duration_ms": 0,
@@ -366,7 +360,13 @@
           "output": ""
         },
         {
-          "name": "sequence::tests::record_received_across_u16_wraparound_does_not_panic",
+          "name": "sequence::tests::out_of_order_arrival_within_window",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "sequence::tests::is_acked_true_for_the_ack_itself",
           "status": "passed",
           "duration_ms": 0,
           "output": ""
@@ -384,7 +384,7 @@
           "output": ""
         },
         {
-          "name": "sequence::tests::out_of_order_arrival_within_window",
+          "name": "sequence::tests::record_received_across_u16_wraparound_does_not_panic",
           "status": "passed",
           "duration_ms": 0,
           "output": ""
