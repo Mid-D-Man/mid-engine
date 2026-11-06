@@ -44,6 +44,7 @@ use crate::hooks::{
     ComponentHooks, DeferredWorld, HookContext, HookKind, HookRegistry, MAX_HOOK_ROUNDS,
 };
 use crate::message::{MessageRegistry, Messages};
+use crate::observer::ObserverRegistry;
 use crate::removal::RemovalLog;
 use crate::resource::{ResourceFfiError, ResourceId, Resources};
 use crate::tick::{ChangeTracker, Tick, CHECK_TICK_THRESHOLD};
@@ -215,6 +216,8 @@ pub struct World {
     pub(crate) removals: RemovalLog,
     /// The message types the world holds logs of (`message.rs`).
     pub(crate) messages: MessageRegistry,
+    /// Observers and the triggers waiting to be delivered (`observer.rs`).
+    pub(crate) observers: ObserverRegistry,
     /// Component hooks and the commands they have queued (`hooks.rs`).
     pub(crate) hooks: HookRegistry,
     storage_claims: StorageClaims,
@@ -235,6 +238,7 @@ impl World {
             resources: Resources::new(),
             removals: RemovalLog::default(),
             messages: MessageRegistry::default(),
+            observers: ObserverRegistry::default(),
             hooks: HookRegistry::default(),
             storage_claims: StorageClaims::default(),
             change_tick: Tick::new(1),
@@ -253,6 +257,7 @@ impl World {
             resources: Resources::new(),
             removals: RemovalLog::default(),
             messages: MessageRegistry::default(),
+            observers: ObserverRegistry::default(),
             hooks: HookRegistry::default(),
             storage_claims: StorageClaims::default(),
             change_tick: Tick::new(1),
@@ -747,6 +752,14 @@ impl World {
                 &mut DeferredWorld::new(self),
                 HookContext { entity, type_id },
             );
+        }
+        // Observers of the matching lifecycle event run when the outermost
+        // operation has finished, like the commands a hook queues.
+        if let Some(fire) = self.hooks.lifecycle_fn(kind, type_id) {
+            self.hooks
+                .pending
+                .commands()
+                .queue(move |world| fire(world, entity));
         }
     }
 

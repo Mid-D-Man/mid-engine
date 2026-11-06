@@ -8,7 +8,7 @@
 use std::time::Duration;
 
 use mid_ecs::schedule::{ExecutorKind, IntoScheduleConfigs};
-use mid_ecs::{RemovedComponents, Res, ResMut, World};
+use mid_ecs::{Commands, RemovedComponents, Res, ResMut, World};
 use mid_time::{Clock, FixedTimestep};
 
 use crate::*;
@@ -765,4 +765,49 @@ fn a_state_gates_physics_and_reads_state_changes_as_messages() {
         [false, false],
         "the state's making and the change, neither an identity"
     );
+}
+
+// ── observers ────────────────────────────────────────────────────────
+
+struct Boom(u32);
+impl Event for Boom {}
+
+struct Marker;
+
+fn log_boom(on: On<Boom>, mut log: ResMut<Log>) {
+    log.0.push(if on.0 == 1 { "boom 1" } else { "boom" });
+}
+
+fn fire(mut commands: Commands) {
+    commands.trigger(Boom(1));
+}
+
+#[test]
+fn a_system_triggers_an_event_and_its_observer_runs_at_once() {
+    let mut app = app_with_log();
+    app.add_observer(log_boom)
+        .add_systems(Update, (fire, update).chain());
+    app.update_with(ms(1));
+    assert_eq!(
+        log(&app),
+        ["boom 1", "update"],
+        "the observer ran when fire's commands applied, before update"
+    );
+}
+
+#[test]
+fn a_lifecycle_observer_added_to_the_app_sees_spawns_made_by_systems() {
+    fn made(_on: On<Add<Marker>>, mut log: ResMut<Log>) {
+        log.0.push("made");
+    }
+    fn spawn_marker(mut commands: Commands) {
+        commands.spawn().queue(|w, e| {
+            w.insert_static(e, Marker);
+        });
+    }
+    let mut app = app_with_log();
+    app.add_observer(made).add_systems(Update, spawn_marker);
+    app.update_with(ms(1));
+    app.update_with(ms(1));
+    assert_eq!(log(&app), ["made", "made"]);
 }

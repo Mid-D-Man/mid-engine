@@ -59,6 +59,7 @@
 
 use crate::archetype::Bundle;
 use crate::component::ComponentId;
+use crate::system::IntoSystem;
 use crate::world::{Entity, World};
 
 /// What a queued command acts on.
@@ -274,6 +275,23 @@ impl Commands<'_> {
         self.queue(move |world| world.write_message(message));
     }
 
+    /// Queues [`World::trigger`].
+    pub fn trigger<E: crate::observer::Event>(&mut self, event: E) {
+        self.queue(move |world| world.trigger(event));
+    }
+
+    /// Queues [`World::trigger_targets`].
+    pub fn trigger_targets<E: crate::observer::Event>(&mut self, event: E, target: Entity) {
+        self.queue(move |world| world.trigger_targets(event, target));
+    }
+
+    /// Queues [`World::add_observer`].
+    pub fn add_observer<M: 'static, S: IntoSystem<M> + Send + 'static>(&mut self, system: S) {
+        self.queue(move |world| {
+            world.add_observer(system);
+        });
+    }
+
     /// Queues any closure over the whole world. The way to queue Sparse
     /// Shell inserts (`World::insert`) or anything else without a
     /// dedicated method.
@@ -420,6 +438,22 @@ impl EntityCommands<'_> {
         self.queue
             .push(Command::OnEntity(self.target, Box::new(command)));
         self
+    }
+
+    /// Queues [`World::observe`] for this entity: an observer that runs
+    /// for events triggered at it.
+    pub fn observe<M: 'static, S: IntoSystem<M> + Send + 'static>(
+        &mut self,
+        system: S,
+    ) -> &mut Self {
+        self.queue(move |world, entity| {
+            world.observe(entity, system);
+        })
+    }
+
+    /// Queues [`World::trigger_targets`] at this entity.
+    pub fn trigger<E: crate::observer::Event>(&mut self, event: E) -> &mut Self {
+        self.queue(move |world, entity| world.trigger_targets(event, entity))
     }
 
     /// Queues [`World::despawn`] for this entity.

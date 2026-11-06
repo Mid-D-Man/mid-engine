@@ -86,6 +86,7 @@ driver. Then:
 | `schedule_mut(label)` | The schedule itself, for `set_executor` and `set_ambiguity_detection`. |
 | `insert_resource(value)` | `World::insert_resource`, chainable. |
 | `init_state::<S>()` / `insert_state(s)` | Gives the app a state of type `S` (`docs/mid-ecs-events.md`): `Default` or the value given. `State<S>` exists from the first frame, in time for `OnEnter` of the initial value. |
+| `add_observer(system)` | `World::add_observer`: a system with an `On<E>` parameter, run each time an `E` is triggered (`docs/mid-ecs-events.md`). |
 | `add_plugin(plugin)` | Calls `plugin.build(self)` at once. |
 | `set_fixed_timestep(hz, max)` | Replaces the timestep; time already accumulated is dropped. |
 | `set_trim_removals(on)` / `trims_removals()` | Whether the removal log is trimmed after each frame (on by default). |
@@ -149,7 +150,7 @@ then `PostUpdate`.
 
 ### `tests.rs`
 
-41 tests and the doctest. Stage order whatever the order added; exclusive
+43 tests and the doctest. Stage order whatever the order added; exclusive
 closures as systems; an empty app; order inside a stage (`before`, `after`,
 `chain`, sets, conditions) reaching the schedule through the app; a system on
 `Main`; a multi-threaded stage; the fixed timestep (one step per step's worth,
@@ -167,11 +168,14 @@ frame; trimming switched off and on; a skipped reader keeping its messages;
 `on_message` through the app), and states (the transition between `PreUpdate` and
 `Update` and `OnEnter` of the initial state once; a change from `PreUpdate` in force the
 same frame and one from `Update` the next; the state present from the first frame;
-`init_state` twice; a state gating `Physics` and its changes read as messages).
+`init_state` twice; a state gating `Physics` and its changes read as messages), and
+observers (a system triggers an event and the observer runs when its commands apply; a
+lifecycle observer sees spawns made by systems).
 
 ## What is not built, on purpose
 
-- Observers (phase 4c; messages and states are built).
+- Observer propagation (needs a hierarchy), and the rest listed in
+  `docs/mid-ecs-events.md` (messages, states and observers are built).
 - The 128 Hz network tick (see `labels.rs`).
 - A startup stage, a `Last` stage, schedule order as data. Add when something
   needs one.

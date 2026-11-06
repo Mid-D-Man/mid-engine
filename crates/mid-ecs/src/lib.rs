@@ -19,13 +19,14 @@ mod hash;
 pub mod hooks;
 mod interior;
 pub mod message;
+pub mod observer;
 pub mod query;
-pub mod state;
 pub mod query_data;
 mod removal;
 pub mod resource;
 pub mod schedule;
 mod scratch;
+pub mod state;
 pub mod sync;
 pub mod system;
 pub mod system_param;
@@ -51,11 +52,12 @@ pub use data_filter::DataFilter;
 pub use filter::{Or, QueryFilter, With, Without};
 pub use hooks::{ComponentHook, ComponentHooks, DeferredWorld, HookContext};
 pub use message::{MessageReader, MessageWriter, Messages};
-pub use state::{NextState, State, States};
+pub use observer::{Event, ObserverId, On};
 pub use query_data::{
     Added, Changed, Has, QueryData, QueryEntityError, QuerySingleError, ReadOnlyQueryData,
 };
 pub use resource::{ResourceFfiError, ResourceId};
+pub use state::{NextState, State, States};
 pub use system::{
     ExclusiveFunctionSystem, FunctionSystem, IntoSystem, System, SystemParamFunction,
 };

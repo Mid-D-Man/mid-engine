@@ -9,8 +9,9 @@ on entering and leaving a value) and **observers** (callbacks that run at once w
 something is triggered or a component is added or removed). All three needed a frame
 owner to run their update in, which `mid-app` (phase 3) now is.
 
-Built so far: **messages** (phase 4a) and **states** (phase 4b), both in this document.
-Not built yet: observers (4c). Bevy 0.20-dev splits "message" (buffered, read by a system later) from
+Built: **messages** (phase 4a), **states** (phase 4b) and **observers** (phase 4c), all in
+this document. Not built: observer propagation through a hierarchy (there is no hierarchy
+yet), and the rest of what each section below lists. Bevy 0.20-dev splits "message" (buffered, read by a system later) from
 "event" (triggered, run by observers at once); this crate follows that split, so
 "event" is the word for what observers will take.
 
@@ -121,6 +122,49 @@ transition is also a message.
   other, put the dependent one second, or use one state type. Nothing in the repo has two
   yet.
 
+## Observers: the design
+
+An observer is a system with one `On<E>` parameter, added with `World::add_observer`
+(`App::add_observer`, `Commands::add_observer`). `World::trigger(event)` runs every
+observer of `E`, in the order they were added; `World::trigger_targets(event, entity)`
+also runs the ones added for that entity with `World::observe`. `On<E>` gives the event
+and the target. The observer is an ordinary system otherwise: queries, resources,
+`Commands`, message writers, `Local` state that lasts across triggers, and `Added` /
+`Changed` filters that mean "since this observer last ran".
+
+**Different from `bevy_ecs`** (read from `crates/bevy_ecs/src/observer/`):
+- **An observer is not an entity.** `bevy_ecs` spawns an entity with an `Observer`
+  component, which is how it is despawned, how it is scoped to an entity, and how it
+  watches a set of components. Here the world has a table of boxed systems and an
+  `ObserverId`. Scoping to an entity is a field on the entry, and the observer of a
+  despawned entity is dropped the next time something is triggered at that entity. If
+  observers need to be entities later (inspecting them, despawning them with a
+  scene), the table is the one thing to change.
+- **`Event` is an explicit trait** (`impl Event for Hit {}`), not a blanket one, because
+  the lifecycle events need behavior of their own per type. There is no derive.
+- **A trigger made from inside an observer waits** until the observers of the trigger in
+  progress have all run, then runs; it does not run inside the observer that made it. An
+  observer reaches the world only through `Commands`, which `System::run` applies after
+  the observer returns, so a nested trigger arrives as a queued one. The result is a queue
+  and not a recursion: a chain of five thousand triggers (an explosion setting off its
+  neighbors, the same observer each time) is a loop, not a stack. `bevy_ecs` runs a nested
+  trigger at once, inside the observer. The cost is order: with observers `[a, b]` of `E1`
+  and `a` triggering `E2`, the order is `a`, `b`, then the observers of `E2`, where Bevy
+  runs `a`, the `E2` observers, then `b`.
+- **Lifecycle events are `Add<T>`, `Insert<T>`, `Discard<T>`, `Remove<T>` and
+  `Despawn<T>`** (event types, where Bevy writes `On<Add, T>`), triggered at the entity.
+  They ride on the five component-hook points, so they cover Archetype and Sparse Shell
+  components and the FFI byte paths alike. **They are delivered when the outermost
+  structural operation has finished**, as the commands a hook queues are; Bevy delivers
+  them inside the operation. So an observer of `Add<T>` or `Insert<T>` finds the
+  component, and one of `Discard<T>`, `Remove<T>` or `Despawn<T>` does not (the entity is
+  gone for `Despawn<T>`). To see the value being removed, use a component hook, which
+  runs before the removal. A world pays nothing for this until an observer of a lifecycle
+  event is added (`HookRegistry::is_active`).
+- **On an archetype component, `Discard`/`Insert` on overwrite never happen:**
+  `insert_static` on a component the entity has does nothing and returns `false`. Only
+  Sparse Shell `insert` overwrites.
+
 ## Modules
 
 ### `message.rs`
@@ -187,6 +231,40 @@ change; one change per run; no schedules at all; a state with data; two state ty
 second `insert_state`; the transition read as a message; `in_state` (alone, with `not` and
 `and`), `state_changed`, `state_exists`; and an exit schedule of a state never left.
 
+### `observer.rs`
+
+**What it does:** `Event`, the five lifecycle events, `On<E>`, `ObserverId`, the observer
+table and the trigger queue, and `World::add_observer`, `observe`, `remove_observer`,
+`observer_count`, `trigger`, `trigger_targets`.
+
+**Decisions:**
+- **`On<E>` is a read of a resource, `TriggerSlot<E>`,** that the world fills for the
+  trigger in progress and empties after. It needs no new kind of system input: the
+  observer is a system like any other. Using `On<E>` in a scheduled system (not added
+  with `add_observer`) panics with a message that says so.
+- **Registration reads the system's `On<E>` by probing its initialization.** `On<E>`'s
+  `init_state` notes its event type in a probe the world sets up while `add_observer`
+  initializes the system, so `add_observer::<E, ..>` needs no type annotation. Zero `On`
+  parameters or two panic at registration, as do conflicting parameters.
+- **The system is taken out of the table while it runs** and put back after, so it can
+  `remove_observer` itself through `Commands` (the system is then dropped, not put back).
+- **A panic in an observer** resets the delivery flag and clears the queue before it
+  propagates, so the world can deliver again. That observer is left disabled: its system
+  was taken out and is not put back.
+- **The list of observers of an event is cloned per trigger.** One allocation per trigger
+  with observers, none without. Performance work is paused; this is where to start.
+
+**Tests:** 35 inside the file and a doctest: delivery order, one event only, no observers,
+queries and resources, commands applied after the observer, state across triggers, messages
+written by an observer; registration (exactly one `On`, conflicts, outside a trigger,
+removal, self-removal, no id left behind); entities (global and scoped observers, the
+target, a despawned target); order (a trigger from an observer waits, a chain of five
+thousand, a panic leaves the world usable and drops the triggers that were waiting);
+`Commands` and `EntityCommands` triggers and
+observers; lifecycle events (add, overwrite, remove, despawn, the entity's own observers,
+Sparse Shell, beside a component hook, nothing paid before the first, other component
+types, an observer reacting with commands, an `insert_static` of what is there).
+
 ### `schedule/tests_messages.rs`
 
 Who sees what and when (reader after, before and in the same frame as its writer; every
@@ -221,7 +299,12 @@ at one entry.
 - `mid-app`: `App` trims the message logs after each frame (`set_trim_messages`,
   `trims_messages`), runs `StateTransition` between `PreUpdate` and `Update`, and has
   `init_state` and `insert_state`; see `docs/mid-app.md`.
-- `lib.rs` also exports `state` and `State`, `NextState`, `States`.
+- `lib.rs` also exports `state` and `State`, `NextState`, `States`, and `observer` and
+  `Event`, `On`, `ObserverId`.
+- Observers: `hooks.rs` (`HookRegistry` gains the lifecycle table, `is_active` counts it),
+  `world.rs` (`run_hook` queues the lifecycle trigger; the `observers` field),
+  `commands.rs` (`Commands::trigger`, `trigger_targets`, `add_observer`;
+  `EntityCommands::observe`, `trigger`), and `mid-app`'s `App::add_observer` and re-exports.
 
 ## Not built, on purpose
 
@@ -231,7 +314,15 @@ at one entry.
   component data has; decide it with the C surface for schedules, which does not exist.
 - **Deferred-world writes from hooks** (`DeferredWorld::write_message`). Hooks queue
   commands, and `Commands::write_message` is one.
-- **Observers**, the rest of phase 4 (4c), and the rest of `bevy_state` listed above.
+- **Propagation** (an event bubbling to an entity's parents): needs a hierarchy, which does
+  not exist yet. It is the first thing to add when `ChildOf` and `Children` land.
+- **Observers before the change** for `Discard`, `Remove` and `Despawn` (Bevy's
+  `On<Remove, T>` runs with the value still there). Needs the observer to run inside the
+  operation with a restricted world, as hooks do; use a hook for the value.
+- **An observer of several events**, and `On<Add, (A, B)>` style component sets. One event
+  type per observer; add one observer per event.
+- **Observers as entities**, and run conditions on observers.
+- The rest of `bevy_state` listed above.
 
 ## CI and Workflows
 
@@ -254,6 +345,19 @@ None yet; see `docs/mid-app.md`.
   where every stamp is at or before the world's tick. The test was deleted rather than
   made to pass.
 
+### `observer.rs`
+
+- **Two assumptions about the existing code were wrong,** both found by the first test
+  run: a mutable query is `Query<Mut<T>>` here, not `Query<&mut T>`, and `insert_static`
+  of a component the entity already has does nothing, so "overwrite" lifecycle events
+  exist only for Sparse Shell `insert`. The test and the docs now say so.
+- **Nested triggers were going to be depth-first, like Bevy's.** Writing the re-entrancy
+  case down showed that an observer is taken out of the table while it runs, so a nested
+  trigger of the same event would find it missing and skip it silently, and chain reactions
+  (the same observer triggered by its own consequences) are exactly what games do. The
+  queue came from that: it needs no re-entrancy and no recursion depth. The order
+  difference from Bevy is in the design section.
+
 ### `state.rs`
 
 - **Two of the first `mid-app` state tests were wrong, not the code.** They set a state
@@ -270,13 +374,13 @@ None yet; see `docs/mid-app.md`.
 Rustc 1.91 in the sandbox, one core, static reading plus the tests. Nothing was
 benchmarked.
 
-| | before 4a | after 4a | after 4b |
-|---|---|---|---|
-| `mid-ecs` lib tests | 987 | 1033 (276 in `schedule`, 36 of them in `tests_messages`; 10 in `message`) | 1057 (24 in `state`) |
-| with `--features scratch-arena` | 992 | 1038 | 1062 |
-| `mid-ecs` doctests | 33 | 34 | 35 |
-| `ffi::` | 103 | 103 | 103 |
-| `mid-app` tests | 26 | 35, plus one doctest | 41, plus one doctest |
+| | before 4a | after 4a | after 4b | after 4c |
+|---|---|---|---|---|
+| `mid-ecs` lib tests | 987 | 1033 (276 in `schedule`, 36 of them in `tests_messages`; 10 in `message`) | 1057 (24 in `state`) | 1092 (35 in `observer`) |
+| with `--features scratch-arena` | 992 | 1038 | 1062 | 1097 |
+| `mid-ecs` doctests | 33 | 34 | 35 | 36 |
+| `ffi::` | 103 | 103 | 103 | 103 |
+| `mid-app` tests | 26 | 35, plus one doctest | 41, plus one doctest | 43, plus one doctest |
 
 Mutation testing of everything new, 58 mutants in a copy of the tree and a neutral
 control (which survived, as it should): the log (`since`, `trim`, `check_ticks`, `clear`,
@@ -301,3 +405,15 @@ taking the pending change, the three run conditions, and in `mid-app` the positi
 `StateTransition` in the frame, `init_state`, `insert_state` and the schedule's existence.
 27 were killed by the first pass. `is_identity` survived: no test asserted it false for a
 real change. One assertion added, killed.
+
+Mutation testing of 4c, 35 mutants (and the control): which hook kind each lifecycle event
+stands for (all five) and its component type, `On::target`, the registration probe, the
+lifecycle registration, id allocation, observer order, removal (the id list, the return
+value), `observer_count`, the target passed by `trigger_targets`, the queue guard, the
+delivery flag, the slot (set and cleared), the scope check, the alive check and dropping a
+dead scope's observer, putting the system back, `HookRegistry::is_active`, the lifecycle
+table's kind index at both ends, the queued lifecycle trigger, and each `Commands` and
+`EntityCommands` method and `App::add_observer`. 34 were killed by the first pass. One
+survived: nothing checked that a panic drops the triggers that were waiting, so a stale
+trigger would have run on the next delivery. `a_panic_drops_the_triggers_that_were_waiting`
+covers it and kills it.

@@ -8,6 +8,7 @@ use std::time::Duration;
 
 use mid_ecs::schedule::{IntoScheduleConfigs, Schedule, ScheduleLabel, ScheduleSystem, SetKey};
 use mid_ecs::state::{StateTransition, States};
+use mid_ecs::system::IntoSystem;
 use mid_ecs::World;
 use mid_time::{Clock, FixedTimestep};
 
@@ -111,6 +112,13 @@ impl App {
     /// Sets a resource, replacing the one of that type if there is one.
     pub fn insert_resource<T: 'static>(&mut self, value: T) -> &mut Self {
         self.world.insert_resource(value);
+        self
+    }
+
+    /// Adds an observer: a system with an `On<E>` parameter, run each time an
+    /// `E` is triggered (`World::add_observer`; `docs/mid-ecs-events.md`).
+    pub fn add_observer<M, S: IntoSystem<M>>(&mut self, system: S) -> &mut Self {
+        self.world.add_observer(system);
         self
     }
 

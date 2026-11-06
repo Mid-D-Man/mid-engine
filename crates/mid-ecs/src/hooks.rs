@@ -166,6 +166,11 @@ pub(crate) const MAX_HOOK_ROUNDS: usize = 1_000;
 #[derive(Default)]
 pub(crate) struct HookRegistry {
     hooks: TypeIdMap<ComponentHooks>,
+    /// For each hook kind (by index), the component types that have a
+    /// lifecycle event observed, and the function that triggers it
+    /// (`observer.rs`).
+    lifecycle: [TypeIdMap<fn(&mut World, Entity)>; 5],
+    lifecycle_any: bool,
     /// Structural changes hooks asked for, applied when the outermost
     /// operation finishes (see `World::flush_hook_commands`).
     pub(crate) pending: CommandQueue,
@@ -179,7 +184,27 @@ impl HookRegistry {
     /// without hooks pays per structural operation.
     #[inline]
     pub(crate) fn is_active(&self) -> bool {
-        !self.hooks.is_empty()
+        !self.hooks.is_empty() || self.lifecycle_any
+    }
+
+    /// Makes the world trigger the lifecycle event `spec` stands for.
+    pub(crate) fn register_lifecycle(&mut self, spec: crate::observer::Lifecycle) {
+        self.lifecycle[spec.kind as usize].insert(spec.component, spec.fire);
+        self.lifecycle_any = true;
+    }
+
+    /// The function that triggers the lifecycle event of `kind` for the
+    /// component type `type_id`, if an observer of it was ever added.
+    #[inline]
+    pub(crate) fn lifecycle_fn(
+        &self,
+        kind: HookKind,
+        type_id: TypeId,
+    ) -> Option<fn(&mut World, Entity)> {
+        if !self.lifecycle_any {
+            return None;
+        }
+        self.lifecycle[kind as usize].get(&type_id).copied()
     }
 
     pub(crate) fn entry(&mut self, type_id: TypeId) -> &mut ComponentHooks {
