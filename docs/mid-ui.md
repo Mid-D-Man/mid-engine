@@ -5,10 +5,13 @@
 Standalone UI core for Mid Engine: a widget tree, anchor/margin layout with
 row and column flow, pointer hit testing, and a backend-agnostic draw-command
 list. Generic over `f32` and `f64`. It has no renderer, no input loop, no ECS
-and no file format yet; a host owns the tree, runs layout, asks whether the UI
+and no file format of its own; a host owns the tree, runs layout, asks whether the UI
 claims the pointer, and hands the draw list to a backend.
 
 Depends on `mid-math` only (`Color32`, and `Vec2`/`DVec2` conversions).
+
+The `.mxui` file loader is a separate crate, `mid-ui-mxui` (see
+`docs/mid-ui-mxui.md`), so this core never depends on DixScript.
 
 ## Decisions
 
@@ -151,7 +154,7 @@ pointer event to a game world).
 
 ## Not built yet
 
-DixScript `.mxui` loader, text (shaping, atlas, line breaking), images and
+text (shaping, atlas, line breaking), images and
 vector paths, pointer/keyboard event dispatch and focus, data binding by key,
 animation (planned on `mid-anim`'s `Track`), flexbox wrap and min/max sizes,
 a per-node user tag, a `mid_geom::Rect` conversion, the optional `mid-ecs`

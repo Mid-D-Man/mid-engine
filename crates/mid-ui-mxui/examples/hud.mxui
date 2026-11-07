@@ -1,0 +1,41 @@
+// Brought to u by MidManStudio
+
+@CONFIG(
+  version  -> "1.0.0"
+  author   -> "MidManStudio"
+  features -> "quickfuncs,enums,data"
+)
+
+@ENUMS(
+  UiKind   { Panel, Label, Button }
+  UiAnchor { TopLeft, Top, TopRight, Left, Center, Right, BottomLeft, Bottom, BottomRight }
+  UiFlow   { Stack, Row, Column }
+)
+
+@QUICKFUNCS(
+  ~fill<object>(_weight<float> = 1.0) {
+    return { fill = _weight }
+  }
+
+  ~panel<object>(_id<string>, _anchor<enum>, _flow<enum>, _width, _height, _children<array>) {
+    return { id = _id, kind = UiKind.Panel, anchor = _anchor, flow = _flow, width = _width, height = _height, children = _children }
+  }
+
+  ~label<object>(_id<string>, _text<string>, _bind<string>, _width, _height) {
+    return { id = _id, kind = UiKind.Label, text = _text, bind = _bind, width = _width, height = _height }
+  }
+
+  ~button<object>(_id<string>, _text<string>, _bind<string>, _width, _height) {
+    return { id = _id, kind = UiKind.Button, text = _text, bind = _bind, width = _width, height = _height, interactive = true }
+  }
+)
+
+@DATA(
+  screen<string> = "hud"
+
+  root::
+    panel("hud_root", UiAnchor.TopLeft, UiFlow.Row, fill(), 96, [
+      label("hp_label", "HP", "player_health", 120, 24),
+      button("pause_btn", "Pause", "ui_pause", 80, 24)
+    ])
+)

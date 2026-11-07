@@ -1,0 +1,20 @@
+[package]
+name        = "mid-ui-mxui"
+version     = "0.1.0"
+edition     = "2021"
+description = "Loads .mxui UI files (DixScript v1.0.0) into a mid-ui widget tree. The schema reader is source-neutral; the dixscript adapter is an optional feature."
+
+[lib]
+name = "mid_ui_mxui"
+crate-type = ["lib"]
+
+[features]
+default   = ["dixscript"]
+dixscript = ["dep:dixscript"]
+
+[dependencies]
+mid-ui    = { path = "../mid-ui" }
+dixscript = { version = "1.0.0", default-features = false, optional = true }
+
+[lints]
+workspace = true
