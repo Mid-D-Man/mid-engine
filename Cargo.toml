@@ -44,6 +44,7 @@ members = [
     "crates/mid-anim",
     "crates/mid-app",
     "crates/mid-ui",
+    "crates/mid-ui-mxui",
     "tools/mdix-compiler",
     "examples/headless-server",
     "examples/custom-transport-demo",
