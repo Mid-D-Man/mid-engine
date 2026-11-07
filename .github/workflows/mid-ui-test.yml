@@ -1,0 +1,98 @@
+# .github/workflows/mid-ui-test.yml
+#
+# workflow_dispatch only, per docs/RUST_AND_CRATE_GUIDELINES.md section 7.
+# Cache keys are scoped to this crate and the runner OS, and ~/.cargo/bin/ is
+# not cached (same failure documented there for mid-ptr-test.yml).
+
+name: mid-ui — Tests
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  run-tests:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # mid-ui depends on mid-math, which needs a toolchain newer than the
+      # workspace's rustc-1.75 floor; @stable is always past that.
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Toolchain check
+        run: |
+          rustc --version
+          cargo --version
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+          key: cargo-registry-mid-ui-${{ runner.os }}-${{ hashFiles('crates/mid-ui/Cargo.toml') }}
+          restore-keys: |
+            cargo-registry-mid-ui-${{ runner.os }}-
+
+      - name: Check formatting
+        run: cargo fmt -p mid-ui --check
+        continue-on-error: true
+
+      - name: Clippy
+        run: cargo clippy -p mid-ui --all-targets -- -D warnings
+        continue-on-error: true
+
+      - name: Build
+        run: cargo build -p mid-ui
+
+      - name: Run unit, integration and doc tests
+        run: |
+          set -o pipefail
+          cargo test -p mid-ui --color=never --no-fail-fast 2>&1 | tee mid-ui-test-raw.txt
+
+      - name: Summary
+        if: always()
+        run: |
+          read passed failed < <(awk '/^test result:/ { p += $4; f += $6 } END { print p + 0, f + 0 }' mid-ui-test-raw.txt)
+          {
+            echo "## mid-ui tests"
+            echo ""
+            echo "- Toolchain: $(rustc --version)"
+            echo "- Passed: ${passed}"
+            echo "- Failed: ${failed}"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  wasm32-check:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+          key: cargo-registry-mid-ui-wasm-${{ runner.os }}-${{ hashFiles('crates/mid-ui/Cargo.toml') }}
+          restore-keys: |
+            cargo-registry-mid-ui-wasm-${{ runner.os }}-
+
+      - name: Check wasm32 build
+        run: cargo check -p mid-ui --target wasm32-unknown-unknown
