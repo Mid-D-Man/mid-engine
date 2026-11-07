@@ -1,0 +1,15 @@
+[package]
+name        = "mid-ui"
+version     = "0.1.0"
+edition     = "2021"
+description = "Standalone UI core for Mid Engine — widget tree, anchor/margin layout, hit testing and a draw-command list, generic over f32 and f64. No renderer, no ECS."
+
+[lib]
+name = "mid_ui"
+crate-type = ["lib"]
+
+[dependencies]
+mid-math = { path = "../mid-math" }
+
+[lints]
+workspace = true
