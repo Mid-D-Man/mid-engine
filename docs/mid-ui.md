@@ -12,6 +12,8 @@ Depends on `mid-math` only (`Color32`, and `Vec2`/`DVec2` conversions).
 
 The `.mxui` file loader is a separate crate, `mid-ui-mxui` (see
 `docs/mid-ui-mxui.md`), so this core never depends on DixScript.
+A browser playground built on both lives in `web/mid-ui-wasm` and `web/ui`
+(see `docs/mid-ui-wasm.md`).
 
 ## Decisions
 
@@ -157,9 +159,8 @@ pointer event to a game world).
 text (shaping, atlas, line breaking), images and
 vector paths, pointer/keyboard event dispatch and focus, data binding by key,
 animation (planned on `mid-anim`'s `Track`), flexbox wrap and min/max sizes,
-a per-node user tag, a `mid_geom::Rect` conversion, the optional `mid-ecs`
-binding crate, and the wasm demo (`web/mid-ui-wasm` plus a playground page,
-built the way msx's is).
+a per-node user tag, a `mid_geom::Rect` conversion, and the optional `mid-ecs`
+binding crate.
 
 ## Verification status
 

@@ -1,0 +1,40 @@
+// Brought to u by MidManStudio
+// A row sharing leftover width 1:3 beside a fixed 50. Laid out at 250x100.
+
+@CONFIG(
+  version  -> "1.0.0"
+  author   -> "MidManStudio"
+  features -> "quickfuncs,enums,data"
+)
+
+@ENUMS(
+  UiKind   { Label, Button }
+  UiAnchor { TopLeft, Top, TopRight, Left, Center, Right, BottomLeft, Bottom, BottomRight }
+  UiFlow   { Stack, Row, Column }
+)
+
+@QUICKFUNCS(
+  // { fill = weight }: a share of the space left over in a row or column.
+  ~fill<object>(_weight<float>) {
+    return { fill = _weight }
+  }
+
+  // A container node. Enum values come in as typed parameters.
+  ~box<object>(_id<string>, _anchor<enum>, _flow<enum>, _width, _height, _margin, _padding, _gap, _bg, _radius, _clip<bool>, _children<array>) {
+    return { id = _id, anchor = _anchor, flow = _flow, width = _width, height = _height, margin = _margin, padding = _padding, gap = _gap, background = _bg, radius = _radius, clip = _clip, children = _children }
+  }
+
+  // A label or a button: a leaf that carries text and a binding key.
+  ~leaf<object>(_id<string>, _kind<enum>, _anchor<enum>, _width, _height, _margin, _text<string>, _bind<string>, _interactive<bool>) {
+    return { id = _id, kind = _kind, anchor = _anchor, width = _width, height = _height, margin = _margin, text = _text, bind = _bind, interactive = _interactive }
+  }
+)
+
+@DATA(
+  root::
+    box("row", UiAnchor.TopLeft, UiFlow.Row, fill(1.0), fill(1.0), 0, 0, 0, #0000, 0, false, [
+      leaf("fixed", UiKind.Label, UiAnchor.TopLeft, 50, fill(1.0), 0, "fixed", "w_fixed", false),
+      leaf("one", UiKind.Label, UiAnchor.TopLeft, fill(1.0), fill(1.0), 0, "one", "w_one", false),
+      leaf("three", UiKind.Label, UiAnchor.TopLeft, fill(3.0), fill(1.0), 0, "three", "w_three", false)
+    ])
+)

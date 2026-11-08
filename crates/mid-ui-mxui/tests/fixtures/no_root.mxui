@@ -1,0 +1,6 @@
+// Brought to u by MidManStudio
+// Valid DixScript with no `root` entry.
+
+@DATA(
+  other = 1
+)

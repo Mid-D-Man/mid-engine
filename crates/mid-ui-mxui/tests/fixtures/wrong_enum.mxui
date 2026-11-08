@@ -1,0 +1,18 @@
+// Brought to u by MidManStudio
+// anchor wants a UiAnchor; a UiFlow value must be rejected at root.anchor.
+
+@CONFIG(
+  version  -> "1.0.0"
+  author   -> "MidManStudio"
+  features -> "enums,data"
+)
+
+@ENUMS(
+  UiAnchor { TopLeft, Center }
+  UiFlow   { Stack, Row }
+)
+
+@DATA(
+  root:
+    anchor<enum> = UiFlow.Row
+)

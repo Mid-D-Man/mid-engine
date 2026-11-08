@@ -1,0 +1,21 @@
+// Brought to u by MidManStudio
+// The smallest useful file: root as a plain table, no QuickFuncs.
+// Laid out at 200x100: a 100x40 node centered.
+
+@CONFIG(
+  version  -> "1.0.0"
+  author   -> "MidManStudio"
+  features -> "enums,data"
+)
+
+@ENUMS(
+  UiAnchor { TopLeft, Top, TopRight, Left, Center, Right, BottomLeft, Bottom, BottomRight }
+)
+
+@DATA(
+  root:
+    id = "solo"
+    anchor<enum> = UiAnchor.Center
+    width = 100
+    height = 40
+)

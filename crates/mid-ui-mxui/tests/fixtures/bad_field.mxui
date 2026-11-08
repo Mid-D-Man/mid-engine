@@ -1,0 +1,7 @@
+// Brought to u by MidManStudio
+// "widht" is a typo for "width"; the loader must reject it at root.widht.
+
+@DATA(
+  root:
+    widht = 100
+)

@@ -1,0 +1,52 @@
+// Brought to u by MidManStudio
+// A realistic screen: top bar, centered pause menu, corner hint.
+// Laid out at 800x600 by the tests.
+
+@CONFIG(
+  version  -> "1.0.0"
+  author   -> "MidManStudio"
+  features -> "quickfuncs,enums,data"
+)
+
+@ENUMS(
+  UiKind   { Label, Button }
+  UiAnchor { TopLeft, Top, TopRight, Left, Center, Right, BottomLeft, Bottom, BottomRight }
+  UiFlow   { Stack, Row, Column }
+)
+
+@QUICKFUNCS(
+  // { fill = weight }: a share of the space left over in a row or column.
+  ~fill<object>(_weight<float>) {
+    return { fill = _weight }
+  }
+
+  // A container node. Enum values come in as typed parameters.
+  ~box<object>(_id<string>, _anchor<enum>, _flow<enum>, _width, _height, _margin, _padding, _gap, _bg, _radius, _clip<bool>, _children<array>) {
+    return { id = _id, anchor = _anchor, flow = _flow, width = _width, height = _height, margin = _margin, padding = _padding, gap = _gap, background = _bg, radius = _radius, clip = _clip, children = _children }
+  }
+
+  // A label or a button: a leaf that carries text and a binding key.
+  ~leaf<object>(_id<string>, _kind<enum>, _anchor<enum>, _width, _height, _margin, _text<string>, _bind<string>, _interactive<bool>) {
+    return { id = _id, kind = _kind, anchor = _anchor, width = _width, height = _height, margin = _margin, text = _text, bind = _bind, interactive = _interactive }
+  }
+)
+
+@DATA(
+  screen<string> = "main"
+
+  root::
+    box("screen", UiAnchor.TopLeft, UiFlow.Stack, fill(1.0), fill(1.0), 0, 0, 0, #0B0F14, 0, false, [
+      box("top_bar", UiAnchor.Top, UiFlow.Row, fill(1.0), 48, 0, [12, 8], 8, #151B23, 0, false, [
+        leaf("hp_label", UiKind.Label, UiAnchor.TopLeft, 100, fill(1.0), 0, "HP", "player_health", false),
+        leaf("score_label", UiKind.Label, UiAnchor.TopLeft, fill(1.0), fill(1.0), 0, "Score", "player_score", false),
+        leaf("pause_btn", UiKind.Button, UiAnchor.TopLeft, 80, fill(1.0), 0, "Pause", "ui_pause", true)
+      ]),
+      box("menu", UiAnchor.Center, UiFlow.Column, 300, 220, 0, 16, 8, #1E2430, 8, true, [
+        leaf("menu_title", UiKind.Label, UiAnchor.TopLeft, fill(1.0), 32, 0, "Paused", "menu_title_text", false),
+        leaf("play_btn", UiKind.Button, UiAnchor.TopLeft, fill(1.0), 40, 0, "Resume", "ui_resume", true),
+        leaf("options_btn", UiKind.Button, UiAnchor.TopLeft, fill(1.0), 40, 0, "Options", "ui_options", true),
+        leaf("quit_btn", UiKind.Button, UiAnchor.TopLeft, fill(1.0), 40, 0, "Quit", "ui_quit", true)
+      ]),
+      leaf("hint", UiKind.Label, UiAnchor.BottomRight, 200, 20, 12, "Press Esc to pause", "hint_text", false)
+    ])
+)
