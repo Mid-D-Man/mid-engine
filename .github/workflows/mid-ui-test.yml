@@ -1,10 +1,10 @@
-# .github/workflows/mid-ui-mxui-test.yml
+# .github/workflows/mid-ui-test.yml
 #
 # workflow_dispatch only, per docs/RUST_AND_CRATE_GUIDELINES.md section 7.
 # Cache keys are scoped to this crate and the runner OS, and ~/.cargo/bin/ is
 # not cached (same failure documented there for mid-ptr-test.yml).
 
-name: mid-ui-mxui — Tests
+name: mid-ui — Tests
 
 on:
   workflow_dispatch:
@@ -13,17 +13,24 @@ permissions:
   contents: read
 
 jobs:
-  reader-tests:
+  run-tests:
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # mid-ui depends on mid-math, which needs a toolchain newer than the
+      # workspace's rustc-1.75 floor; @stable is always past that.
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
-          components: clippy
+          components: rustfmt, clippy
+
+      - name: Toolchain check
+        run: |
+          rustc --version
+          cargo --version
 
       - name: Cache cargo registry
         uses: actions/cache@v4
@@ -32,63 +39,32 @@ jobs:
             ~/.cargo/registry/index/
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
-          key: cargo-registry-mid-ui-mxui-${{ runner.os }}-${{ hashFiles('crates/mid-ui-mxui/Cargo.toml') }}
+          key: cargo-registry-mid-ui-${{ runner.os }}-${{ hashFiles('crates/mid-ui/Cargo.toml') }}
           restore-keys: |
-            cargo-registry-mid-ui-mxui-${{ runner.os }}-
+            cargo-registry-mid-ui-${{ runner.os }}-
 
-      - name: Clippy (reader only)
-        run: cargo clippy -p mid-ui-mxui --no-default-features --all-targets -- -D warnings
+      - name: Check formatting
+        run: cargo fmt -p mid-ui --check
         continue-on-error: true
 
-      - name: Reader tests (no DixScript)
+      - name: Clippy
+        run: cargo clippy -p mid-ui --all-targets -- -D warnings
+        continue-on-error: true
+
+      - name: Build
+        run: cargo build -p mid-ui
+
+      - name: Run unit, integration and doc tests
         run: |
           set -o pipefail
-          cargo test -p mid-ui-mxui --no-default-features --color=never --no-fail-fast 2>&1 | tee reader-raw.txt
+          cargo test -p mid-ui --color=never --no-fail-fast 2>&1 | tee mid-ui-test-raw.txt
 
       - name: Summary
         if: always()
         run: |
-          read passed failed < <(awk '/^test result:/ { p += $4; f += $6 } END { print p + 0, f + 0 }' reader-raw.txt)
+          read passed failed < <(awk '/^test result:/ { p += $4; f += $6 } END { print p + 0, f + 0 }' mid-ui-test-raw.txt)
           {
-            echo "## mid-ui-mxui reader tests (no DixScript)"
-            echo ""
-            echo "- Toolchain: $(rustc --version)"
-            echo "- Passed: ${passed}"
-            echo "- Failed: ${failed}"
-          } >> "$GITHUB_STEP_SUMMARY"
-
-  dixscript-e2e:
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache cargo registry
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git/db/
-          key: cargo-registry-mid-ui-mxui-dix-${{ runner.os }}-${{ hashFiles('crates/mid-ui-mxui/Cargo.toml') }}
-          restore-keys: |
-            cargo-registry-mid-ui-mxui-dix-${{ runner.os }}-
-
-      - name: All tests (DixScript feature on, includes the e2e file)
-        run: |
-          set -o pipefail
-          cargo test -p mid-ui-mxui --color=never --no-fail-fast 2>&1 | tee dix-raw.txt
-
-      - name: Summary
-        if: always()
-        run: |
-          read passed failed < <(awk '/^test result:/ { p += $4; f += $6 } END { print p + 0, f + 0 }' dix-raw.txt)
-          {
-            echo "## mid-ui-mxui all tests (DixScript on)"
+            echo "## mid-ui tests"
             echo ""
             echo "- Toolchain: $(rustc --version)"
             echo "- Passed: ${passed}"
@@ -114,12 +90,9 @@ jobs:
             ~/.cargo/registry/index/
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
-          key: cargo-registry-mid-ui-mxui-wasm-${{ runner.os }}-${{ hashFiles('crates/mid-ui-mxui/Cargo.toml') }}
+          key: cargo-registry-mid-ui-wasm-${{ runner.os }}-${{ hashFiles('crates/mid-ui/Cargo.toml') }}
           restore-keys: |
-            cargo-registry-mid-ui-mxui-wasm-${{ runner.os }}-
+            cargo-registry-mid-ui-wasm-${{ runner.os }}-
 
-      - name: Check wasm32 build, reader only
-        run: cargo check -p mid-ui-mxui --no-default-features --target wasm32-unknown-unknown
-
-      - name: Check wasm32 build, with DixScript
-        run: cargo check -p mid-ui-mxui --target wasm32-unknown-unknown
+      - name: Check wasm32 build
+        run: cargo check -p mid-ui --target wasm32-unknown-unknown

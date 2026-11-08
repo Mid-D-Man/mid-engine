@@ -1,0 +1,112 @@
+# .github/workflows/mid-ui-wasm-test.yml
+#
+# workflow_dispatch only, per docs/RUST_AND_CRATE_GUIDELINES.md section 7.
+# Cache keys are scoped to this crate and the runner OS, and ~/.cargo/bin/ is
+# not cached (same failure documented there for mid-ptr-test.yml).
+#
+# web/mid-ui-wasm is a standalone crate (its own [workspace]), so every cargo
+# command here runs inside that directory.
+
+name: mid-ui-wasm — Tests
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  logic-tests:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+          key: cargo-registry-mid-ui-wasm-logic-${{ runner.os }}-${{ hashFiles('web/mid-ui-wasm/Cargo.toml') }}
+          restore-keys: |
+            cargo-registry-mid-ui-wasm-logic-${{ runner.os }}-
+
+      - name: Native logic tests (no DixScript)
+        working-directory: web/mid-ui-wasm
+        run: |
+          set -o pipefail
+          cargo test --no-default-features --color=never --no-fail-fast 2>&1 | tee ../../logic-raw.txt
+
+      - name: Render module tests (node)
+        run: |
+          set -o pipefail
+          node --test web/ui/render.test.mjs 2>&1 | tee render-raw.txt
+
+      - name: Summary
+        if: always()
+        run: |
+          read passed failed < <(awk '/^test result:/ { p += $4; f += $6 } END { print p + 0, f + 0 }' logic-raw.txt)
+          npass=$(awk '/^# pass/ { print $3 }' render-raw.txt)
+          nfail=$(awk '/^# fail/ { print $3 }' render-raw.txt)
+          {
+            echo "## mid-ui-wasm tests"
+            echo ""
+            echo "- Toolchain: $(rustc --version), node $(node --version)"
+            echo "- Rust logic tests: ${passed} passed, ${failed} failed"
+            echo "- Node render tests: ${npass:-0} passed, ${nfail:-0} failed"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  wasm-build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+          key: cargo-registry-mid-ui-wasm-build-${{ runner.os }}-${{ hashFiles('web/mid-ui-wasm/Cargo.toml') }}
+          restore-keys: |
+            cargo-registry-mid-ui-wasm-build-${{ runner.os }}-
+
+      - name: Install wasm-pack
+        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+
+      - name: Build the playground package
+        run: wasm-pack build web/mid-ui-wasm --target web --release --out-dir pkg
+
+      - name: Report sizes
+        run: |
+          raw=$(stat -c %s web/mid-ui-wasm/pkg/mid_ui_wasm_bg.wasm)
+          gz=$(gzip -9 -c web/mid-ui-wasm/pkg/mid_ui_wasm_bg.wasm | wc -c)
+          {
+            echo "## mid-ui-wasm package"
+            echo ""
+            echo "- wasm: ${raw} bytes raw, ${gz} bytes gzip -9"
+            echo "- glue: $(stat -c %s web/mid-ui-wasm/pkg/mid_ui_wasm.js) bytes"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload package
+        uses: actions/upload-artifact@v4
+        with:
+          name: mid-ui-wasm-pkg-${{ github.run_number }}
+          path: |
+            web/mid-ui-wasm/pkg/mid_ui_wasm.js
+            web/mid-ui-wasm/pkg/mid_ui_wasm_bg.wasm
+          retention-days: 7

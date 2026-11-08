@@ -205,19 +205,49 @@ jobs:
           cd web/site
           "$HOME/.mdbook-bin/mdbook" build
 
+      # ── mid-ui playground (WASM) ─────────────────────────────────────────
+      # Like the test steps above, a failure here must not block the rest of
+      # the site: web/ui/index.html explains itself when pkg/ is missing.
+      - name: Install wasm target and wasm-pack
+        continue-on-error: true
+        run: |
+          rustup target add wasm32-unknown-unknown
+          curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+
+      - name: Build mid-ui playground (wasm-pack)
+        continue-on-error: true
+        run: wasm-pack build web/mid-ui-wasm --target web --release --out-dir pkg
+
+      - name: Test mid-ui playground render module (node)
+        continue-on-error: true
+        run: node --test web/ui/render.test.mjs
+
       # ── Assemble dist/ ───────────────────────────────────────────────────
       - name: Assemble dist/
         run: |
           set -e
           rm -rf dist
           mkdir -p dist/docs dist/tests/mid-ptr dist/tests/mid-platform \
-                   dist/tests/mid-ecs-ffi dist/benchmarks dist/shared
+                   dist/tests/mid-ecs-ffi dist/benchmarks dist/shared \
+                   dist/ui/pkg dist/ui/examples
 
           cp web/home/index.html dist/index.html
           cp -r web/site/book/.  dist/docs/
           cp web/tests/index.html dist/tests/index.html
           cp web/benchmarks/index.html dist/benchmarks/index.html
           cp -r web/shared/.     dist/shared/
+
+          # mid-ui playground: page + render module + the .mxui example files
+          # (the same real fixtures the mid-ui-mxui tests use) + the wasm
+          # package if the build step above produced one.
+          cp web/ui/index.html web/ui/render.js dist/ui/
+          cp crates/mid-ui-mxui/tests/fixtures/real.mxui \
+             crates/mid-ui-mxui/tests/fixtures/row_weights.mxui \
+             crates/mid-ui-mxui/tests/fixtures/minimal_table.mxui \
+             crates/mid-ui-mxui/examples/hud.mxui \
+             dist/ui/examples/
+          [ -f web/mid-ui-wasm/pkg/mid_ui_wasm.js ] && \
+            cp web/mid-ui-wasm/pkg/mid_ui_wasm.js web/mid-ui-wasm/pkg/mid_ui_wasm_bg.wasm dist/ui/pkg/ || true
 
           # Per-crate JSON, if this run produced any -- a card on
           # web/tests/index.html just shows "No results yet" when its file
