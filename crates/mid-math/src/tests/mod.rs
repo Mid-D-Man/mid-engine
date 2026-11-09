@@ -13,3 +13,5 @@ mod noise;
 mod camera;
 mod geom;
 mod mid_vec;
+#[cfg(feature = "mint")]
+mod mint_tests;

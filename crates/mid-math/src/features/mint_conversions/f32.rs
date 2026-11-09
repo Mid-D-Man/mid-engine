@@ -45,7 +45,7 @@ impl mint::IntoMint for Quat {
 
 impl From<mint::ColumnMatrix2<f32>> for Mat2 {
     fn from(m: mint::ColumnMatrix2<f32>) -> Self {
-        Self { x_axis: m.x.into(), y_axis: m.y.into() }
+        Self::from_cols(m.x.into(), m.y.into())
     }
 }
 
@@ -57,7 +57,7 @@ impl From<Mat2> for mint::ColumnMatrix2<f32> {
 
 impl From<mint::RowMatrix2<f32>> for Mat2 {
     fn from(m: mint::RowMatrix2<f32>) -> Self {
-        let col: Mat2 = Mat2 { x_axis: m.x.into(), y_axis: m.y.into() };
+        let col = Mat2::from_cols(m.x.into(), m.y.into());
         col.transpose()
     }
 }

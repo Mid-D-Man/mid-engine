@@ -295,9 +295,46 @@ Not checked: NEON (no `const` site of this kind was found in those
 backends, but they were not built), the nightly-only `coresimd` feature,
 and wasm32 on a pre-1.83 compiler.
 
-Found while testing, not fixed: the `mint` feature does not compile, on
-rustc 1.97 as well as 1.75 and with or without this patch.
-`features/mint_conversions/f32.rs` builds `Mat2` values with
-`x_axis`/`y_axis` fields that `Mat2` does not have (the same family of
-mismatch as the `Mat4` note above). Unrelated to the toolchain, so it was
-not touched.
+Found while testing: the `mint` feature did not compile, on rustc 1.97 as
+well as 1.75 and with or without this patch. It had nothing to do with the
+toolchain; see the next entry.
+
+### `features/mint_conversions/f32.rs`, the `mint` feature did not compile
+
+`--features mint` failed with 4 errors (`struct Mat2 has no field named
+x_axis`), on rustc 1.97 and 1.75, in two conversions:
+`From<mint::ColumnMatrix2<f32>> for Mat2` and
+`From<mint::RowMatrix2<f32>> for Mat2`. Both built the matrix with a struct
+literal, `Mat2 { x_axis, y_axis }`. That only works for the scalar `Mat2`,
+which has public fields. The SSE2, NEON and wasm `Mat2` are tuple structs
+around one SIMD register (`Mat2(__m128)`) that expose `x_axis`/`y_axis` for
+reading through `Deref`, so there is nothing to construct with a literal.
+The `Mat3` conversions already used `Mat3::from_cols`, and every `Mat2`
+backend, scalar included, has `Mat2::from_cols(Vec2, Vec2)`.
+
+It went unnoticed because the feature is opt-in, no workflow built with it,
+and no test touched a mint conversion.
+
+Fixed by switching those two sites to `Mat2::from_cols`. Reading `m.x_axis`
+elsewhere in the file was already fine on every backend (`Deref` on the SIMD
+ones, a public field on the scalar one), so nothing else changed. Added
+`src/tests/mint_tests.rs` (15 tests, compiled only with `--features mint`):
+vector component order for `f32`, `f64` and integer types, the quaternion's
+scalar part going to `w`, column and row matrices for `Mat2`, `Mat3`, `Mat4`
+and their `f64` counterparts (a row matrix must come out transposed into
+columns), and `IntoMint`. `mid-math-test.yml` gets a step that builds with
+`--features mint` and runs those tests, so a break shows up as a red step.
+
+Checked:
+- `--features mint` builds on rustc 1.97 for the default (SSE2) backend, with
+  `force-scalar`, and with `simd,avx2,ffi`. All 15 new tests pass on the SSE2
+  backend, and 5 deliberately injected bugs in the conversions (a missing
+  transpose, swapped columns, a swapped quaternion scalar) were each caught.
+- On rustc 1.75 the feature builds too once the `const_bits` entry above is
+  in place.
+
+Not checked: the NEON and wasm `Mat2` backends were not built. The tests were
+not run under `force-scalar`, because the crate's test build does not compile
+there: `tests/wide_tests.rs` has type mismatches (`E0308`) under
+`--features force-scalar`, on unpatched main too and with no `mint` involved.
+Left alone.
