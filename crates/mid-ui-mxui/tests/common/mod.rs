@@ -11,7 +11,7 @@
 #![allow(dead_code, missing_docs)]
 
 use mid_ui::{draw, hit, layout, Color32, DrawCmd, Point, Rect, Size};
-use mid_ui_mxui::{BindKey, Loaded, MxValue};
+use mid_ui_mxui::{BindKey, EnumTables, Loaded, MxValue};
 
 // ── MxValue builders mirroring the fixtures' QuickFuncs ─────────────────────
 
@@ -27,12 +27,41 @@ fn en(t: &str, f: &str) -> MxValue {
     MxValue::enum_value(t, f)
 }
 
+/// The enums every fixture declares, numbered the way DixScript numbers them:
+/// from 0, in declaration order.
+pub fn tables() -> EnumTables {
+    let mut t = EnumTables::new();
+    t.insert("UiKind", [("Label", 0), ("Button", 1)]);
+    t.insert(
+        "UiAnchor",
+        [("TopLeft", 0), ("Top", 1), ("TopRight", 2), ("Left", 3), ("Center", 4), ("Right", 5), ("BottomLeft", 6), ("Bottom", 7), ("BottomRight", 8)],
+    );
+    t.insert("UiFlow", [("Stack", 0), ("Row", 1), ("Column", 2)]);
+    t
+}
+
+/// How an enum value is written into a twin.
+pub type Enc = fn(&str, &str) -> MxValue;
+
+/// What DixScript hands back for an enum that went through a QuickFunc
+/// argument: the variant's integer (see `docs/mid-ui-mxui.md`).
+pub fn as_int(t: &str, f: &str) -> MxValue {
+    let v = tables().variant_value(t, f).unwrap_or_else(|| panic!("{t}.{f} is not in the fixture enums"));
+    MxValue::Int(v)
+}
+
+/// What DixScript hands back for a bare `Enum.Variant` at a data position.
+pub fn as_enum(t: &str, f: &str) -> MxValue {
+    en(t, f)
+}
+
 pub fn fill(w: f64) -> MxValue {
     MxValue::object([("fill", MxValue::Float(w))])
 }
 
 #[allow(clippy::too_many_arguments)]
 fn boxv(
+    enc: Enc,
     id: &str,
     anchor: &str,
     flow: &str,
@@ -48,8 +77,8 @@ fn boxv(
 ) -> MxValue {
     MxValue::object([
         ("id", s(id)),
-        ("anchor", en("UiAnchor", anchor)),
-        ("flow", en("UiFlow", flow)),
+        ("anchor", enc("UiAnchor", anchor)),
+        ("flow", enc("UiFlow", flow)),
         ("width", width),
         ("height", height),
         ("margin", margin),
@@ -64,6 +93,7 @@ fn boxv(
 
 #[allow(clippy::too_many_arguments)]
 fn leafv(
+    enc: Enc,
     id: &str,
     kind: &str,
     anchor: &str,
@@ -76,8 +106,8 @@ fn leafv(
 ) -> MxValue {
     MxValue::object([
         ("id", s(id)),
-        ("kind", en("UiKind", kind)),
-        ("anchor", en("UiAnchor", anchor)),
+        ("kind", enc("UiKind", kind)),
+        ("anchor", enc("UiAnchor", anchor)),
         ("width", width),
         ("height", height),
         ("margin", int(margin)),
@@ -89,30 +119,40 @@ fn leafv(
 
 // ── twins of the fixtures ───────────────────────────────────────────────────
 
-/// Twin of `fixtures/real.mxui`.
+/// Twin of `fixtures/real.mxui`, in the form DixScript delivers it: enums
+/// that went through QuickFunc arguments are integers.
 pub fn real_value() -> MxValue {
-    boxv("screen", "TopLeft", "Stack", fill(1.0), fill(1.0), int(0), int(0), 0, "#0B0F14", 0, false, vec![
-        boxv("top_bar", "Top", "Row", fill(1.0), int(48), int(0), MxValue::Array(vec![int(12), int(8)]), 8, "#151B23", 0, false, vec![
-            leafv("hp_label", "Label", "TopLeft", int(100), fill(1.0), 0, "HP", "player_health", false),
-            leafv("score_label", "Label", "TopLeft", fill(1.0), fill(1.0), 0, "Score", "player_score", false),
-            leafv("pause_btn", "Button", "TopLeft", int(80), fill(1.0), 0, "Pause", "ui_pause", true),
+    real_with(as_int)
+}
+
+/// The same tree with real enum values, as a table-style file would give.
+pub fn real_value_enum_form() -> MxValue {
+    real_with(as_enum)
+}
+
+fn real_with(enc: Enc) -> MxValue {
+    boxv(enc, "screen", "TopLeft", "Stack", fill(1.0), fill(1.0), int(0), int(0), 0, "#0B0F14", 0, false, vec![
+        boxv(enc, "top_bar", "Top", "Row", fill(1.0), int(48), int(0), MxValue::Array(vec![int(12), int(8)]), 8, "#151B23", 0, false, vec![
+            leafv(enc, "hp_label", "Label", "TopLeft", int(100), fill(1.0), 0, "HP", "player_health", false),
+            leafv(enc, "score_label", "Label", "TopLeft", fill(1.0), fill(1.0), 0, "Score", "player_score", false),
+            leafv(enc, "pause_btn", "Button", "TopLeft", int(80), fill(1.0), 0, "Pause", "ui_pause", true),
         ]),
-        boxv("menu", "Center", "Column", int(300), int(220), int(0), int(16), 8, "#1E2430", 8, true, vec![
-            leafv("menu_title", "Label", "TopLeft", fill(1.0), int(32), 0, "Paused", "menu_title_text", false),
-            leafv("play_btn", "Button", "TopLeft", fill(1.0), int(40), 0, "Resume", "ui_resume", true),
-            leafv("options_btn", "Button", "TopLeft", fill(1.0), int(40), 0, "Options", "ui_options", true),
-            leafv("quit_btn", "Button", "TopLeft", fill(1.0), int(40), 0, "Quit", "ui_quit", true),
+        boxv(enc, "menu", "Center", "Column", int(300), int(220), int(0), int(16), 8, "#1E2430", 8, true, vec![
+            leafv(enc, "menu_title", "Label", "TopLeft", fill(1.0), int(32), 0, "Paused", "menu_title_text", false),
+            leafv(enc, "play_btn", "Button", "TopLeft", fill(1.0), int(40), 0, "Resume", "ui_resume", true),
+            leafv(enc, "options_btn", "Button", "TopLeft", fill(1.0), int(40), 0, "Options", "ui_options", true),
+            leafv(enc, "quit_btn", "Button", "TopLeft", fill(1.0), int(40), 0, "Quit", "ui_quit", true),
         ]),
-        leafv("hint", "Label", "BottomRight", int(200), int(20), 12, "Press Esc to pause", "hint_text", false),
+        leafv(enc, "hint", "Label", "BottomRight", int(200), int(20), 12, "Press Esc to pause", "hint_text", false),
     ])
 }
 
 /// Twin of `fixtures/row_weights.mxui`.
 pub fn row_weights_value() -> MxValue {
-    boxv("row", "TopLeft", "Row", fill(1.0), fill(1.0), int(0), int(0), 0, "#0000", 0, false, vec![
-        leafv("fixed", "Label", "TopLeft", int(50), fill(1.0), 0, "fixed", "w_fixed", false),
-        leafv("one", "Label", "TopLeft", fill(1.0), fill(1.0), 0, "one", "w_one", false),
-        leafv("three", "Label", "TopLeft", fill(3.0), fill(1.0), 0, "three", "w_three", false),
+    boxv(as_int, "row", "TopLeft", "Row", fill(1.0), fill(1.0), int(0), int(0), 0, "#0000", 0, false, vec![
+        leafv(as_int, "fixed", "Label", "TopLeft", int(50), fill(1.0), 0, "fixed", "w_fixed", false),
+        leafv(as_int, "one", "Label", "TopLeft", fill(1.0), fill(1.0), 0, "one", "w_one", false),
+        leafv(as_int, "three", "Label", "TopLeft", fill(3.0), fill(1.0), 0, "three", "w_three", false),
     ])
 }
 
@@ -128,9 +168,9 @@ pub fn minimal_table_value() -> MxValue {
 
 /// Twin of `examples/hud.mxui`.
 pub fn hud_value() -> MxValue {
-    boxv("hud_root", "TopLeft", "Row", fill(1.0), int(96), int(0), int(0), 0, "#0000", 0, false, vec![
-        leafv("hp_label", "Label", "TopLeft", int(120), int(24), 0, "HP", "player_health", false),
-        leafv("pause_btn", "Button", "TopLeft", int(80), int(24), 0, "Pause", "ui_pause", true),
+    boxv(as_int, "hud_root", "TopLeft", "Row", fill(1.0), int(96), int(0), int(0), 0, "#0000", 0, false, vec![
+        leafv(as_int, "hp_label", "Label", "TopLeft", int(120), int(24), 0, "HP", "player_health", false),
+        leafv(as_int, "pause_btn", "Button", "TopLeft", int(80), int(24), 0, "Pause", "ui_pause", true),
     ])
 }
 

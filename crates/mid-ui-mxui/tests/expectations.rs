@@ -7,7 +7,7 @@
 
 mod common;
 
-use mid_ui_mxui::{build, Loaded};
+use mid_ui_mxui::{build_with, Loaded};
 
 const FIXTURES: [(&str, &str); 7] = [
     ("real", include_str!("fixtures/real.mxui")),
@@ -20,7 +20,7 @@ const FIXTURES: [(&str, &str); 7] = [
 ];
 
 fn loaded(v: &mid_ui_mxui::MxValue) -> Loaded<f32> {
-    build::<f32>(v).unwrap()
+    build_with::<f32>(v, &common::tables()).unwrap()
 }
 
 #[test]
@@ -45,14 +45,36 @@ fn hud_expectations_hold_for_the_twin() {
 
 #[test]
 fn the_real_screen_also_lays_out_at_f64() {
-    let mut a = build::<f32>(&common::real_value()).unwrap();
-    let mut b = build::<f64>(&common::real_value()).unwrap();
+    let mut a = build_with::<f32>(&common::real_value(), &common::tables()).unwrap();
+    let mut b = build_with::<f64>(&common::real_value(), &common::tables()).unwrap();
     mid_ui::layout::compute(&mut a.tree, mid_ui::Size::new(800.0, 600.0));
     mid_ui::layout::compute(&mut b.tree, mid_ui::Size::new(800.0, 600.0));
     for (name, id) in &a.names {
         let (ra, rb) = (a.tree.rect(*id).unwrap(), b.tree.rect(b.names[name]).unwrap());
         assert_eq!((ra.x as f64, ra.y as f64, ra.w as f64, ra.h as f64), (rb.x, rb.y, rb.w, rb.h), "{name}");
     }
+}
+
+// DixScript gives back an integer for an enum that went through a QuickFunc
+// argument and a real enum value for a bare `Enum.Variant`; both must build
+// the same tree, so a file may mix the two freely.
+#[test]
+fn integer_and_enum_forms_of_the_same_file_build_identical_trees() {
+    let mut a = loaded(&common::real_value());
+    let mut b = loaded(&common::real_value_enum_form());
+    common::assert_real_screen(&mut a);
+    common::assert_real_screen(&mut b);
+}
+
+#[test]
+fn the_twins_really_use_integers_where_quickfuncs_do() {
+    use mid_ui_mxui::MxValue;
+    let MxValue::Object(fields) = common::real_value() else { panic!("root is an object") };
+    let get = |k: &str| fields.iter().find(|(n, _)| n == k).map(|(_, v)| v.clone());
+    assert_eq!(get("anchor"), Some(MxValue::Int(0)));
+    assert_eq!(get("flow"), Some(MxValue::Int(0)));
+    let MxValue::Object(e) = common::real_value_enum_form() else { panic!() };
+    assert!(matches!(e.iter().find(|(n, _)| n == "anchor"), Some((_, MxValue::Enum { .. }))));
 }
 
 // The most common hand-writing mistakes from the DixScript writing guide,

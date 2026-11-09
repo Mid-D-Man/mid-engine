@@ -5,7 +5,7 @@
 //! Schema reader tests, driven by hand-built `MxValue` trees (no DixScript).
 
 use mid_ui::{layout, Anchor, Color32, Flow, Insets, NodeId, Size, Sizing, Style};
-use mid_ui_mxui::{build, BindKey, MxErrorKind, MxValue};
+use mid_ui_mxui::{build, build_with, BindKey, EnumTables, MxErrorKind, MxValue};
 
 fn int(v: i64) -> MxValue {
     MxValue::Int(v)
@@ -379,4 +379,100 @@ fn errors_deep_in_the_tree_report_the_full_path() {
 fn errors_display_their_path_and_message() {
     let e = build::<f32>(&node(vec![("widht", int(1))])).err().unwrap();
     assert_eq!(e.to_string(), "root.widht: unknown field `widht`");
+}
+
+// ── integer enum values (what a QuickFunc argument becomes) ─────────────────
+
+fn tables() -> EnumTables {
+    let mut t = EnumTables::new();
+    t.insert("UiAnchor", [("TopLeft", 0), ("Center", 4), ("BottomRight", 8)]);
+    t.insert("UiFlow", [("Stack", 0), ("Row", 1), ("Column", 2)]);
+    t.insert("UiKind", [("Label", 0), ("Button", 1)]);
+    t
+}
+
+fn with_tables(v: &MxValue) -> Result<mid_ui_mxui::Loaded<f32>, mid_ui_mxui::MxError> {
+    build_with::<f32>(v, &tables())
+}
+
+#[test]
+fn integers_decode_through_the_declared_enums() {
+    let v = node(vec![
+        ("anchor", int(4)),
+        ("flow", int(2)),
+        ("kind", int(1)),
+    ]);
+    let l = with_tables(&v).unwrap();
+    let s = l.tree.style(l.tree.root()).unwrap();
+    assert_eq!(s.anchor, Anchor::Center);
+    assert_eq!(s.flow, Flow::Column);
+    let kind = l.meta[&l.tree.root()].kind.as_ref().unwrap();
+    assert_eq!((kind.type_name.as_str(), kind.field.as_str()), ("UiKind", "Button"));
+}
+
+#[test]
+fn explicit_values_decode_not_declaration_order() {
+    // Center is 4 here, not 1: the integer is a value, not an index.
+    let l = with_tables(&node(vec![("anchor", int(4))])).unwrap();
+    assert_eq!(l.tree.style(l.tree.root()).unwrap().anchor, Anchor::Center);
+    let e = with_tables(&node(vec![("anchor", int(1))])).err().unwrap();
+    assert_eq!(e.kind, MxErrorKind::UnknownVariant { enum_name: "UiAnchor", found: "1".into() });
+}
+
+#[test]
+fn an_integer_with_no_declared_enum_cannot_be_decoded() {
+    let e = build::<f32>(&node(vec![("anchor", int(0))])).err().unwrap();
+    assert_eq!((e.path.as_str(), e.kind), ("root.anchor", MxErrorKind::EnumNotDeclared("UiAnchor")));
+    let mut partial = EnumTables::new();
+    partial.insert("UiAnchor", [("TopLeft", 0)]);
+    let e = build_with::<f32>(&node(vec![("flow", int(0))]), &partial).err().unwrap();
+    assert_eq!(e.kind, MxErrorKind::EnumNotDeclared("UiFlow"));
+    let e = build_with::<f32>(&node(vec![("kind", int(0))]), &partial).err().unwrap();
+    assert_eq!(e.kind, MxErrorKind::EnumNotDeclared("UiKind"));
+}
+
+#[test]
+fn an_unknown_integer_names_the_value_and_the_path() {
+    let v = node(vec![("children", kids(vec![node(vec![("flow", int(7))])]))]);
+    let e = with_tables(&v).err().unwrap();
+    assert_eq!(e.path, "root.children[0].flow");
+    assert_eq!(e.kind, MxErrorKind::UnknownVariant { enum_name: "UiFlow", found: "7".into() });
+    let e = with_tables(&node(vec![("anchor", int(-1))])).err().unwrap();
+    assert_eq!(e.kind, MxErrorKind::UnknownVariant { enum_name: "UiAnchor", found: "-1".into() });
+}
+
+#[test]
+fn real_enum_values_and_integers_can_be_mixed_in_one_file() {
+    let v = node(vec![
+        ("anchor", en("UiAnchor", "BottomRight")),
+        ("flow", int(1)),
+    ]);
+    let l = with_tables(&v).unwrap();
+    let s = l.tree.style(l.tree.root()).unwrap();
+    assert_eq!((s.anchor, s.flow), (Anchor::BottomRight, Flow::Row));
+}
+
+#[test]
+fn a_real_enum_of_the_wrong_type_is_still_rejected_when_tables_exist() {
+    let e = with_tables(&node(vec![("anchor", en("UiFlow", "Row"))])).err().unwrap();
+    assert_eq!(e.kind, MxErrorKind::WrongEnum { expected: "UiAnchor", found: "UiFlow".into() });
+}
+
+#[test]
+fn variants_sharing_a_value_decode_the_same_way_every_time() {
+    let mut t = EnumTables::new();
+    t.insert("UiAnchor", [("Top", 1), ("Left", 1)]);
+    for _ in 0..3 {
+        let l = build_with::<f32>(&node(vec![("anchor", int(1))]), &t).unwrap();
+        assert_eq!(l.tree.style(l.tree.root()).unwrap().anchor, Anchor::Left);
+    }
+    assert_eq!(t.variant_name("UiAnchor", 1), Some("Left"));
+    assert_eq!(t.variant_value("UiAnchor", "Top"), Some(1));
+    assert!(t.declares("UiAnchor") && !t.declares("Nope"));
+}
+
+#[test]
+fn the_error_for_an_undeclared_enum_reads_clearly() {
+    let e = build::<f32>(&node(vec![("anchor", int(0))])).err().unwrap();
+    assert_eq!(e.to_string(), "root.anchor: the file declares no enum `UiAnchor`, so an integer here cannot be decoded");
 }

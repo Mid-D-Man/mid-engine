@@ -37,6 +37,9 @@ pub enum MxErrorKind {
         /// The variant that was found.
         found: String,
     },
+    /// An enum field carries an integer but the file declares no enum with
+    /// the name the field needs, so the integer cannot be decoded.
+    EnumNotDeclared(&'static str),
     /// A node has a field the schema does not define.
     UnknownField(String),
     /// A hex color string is malformed.
@@ -108,6 +111,9 @@ impl fmt::Display for MxError {
             }
             MxErrorKind::UnknownVariant { enum_name, found } => {
                 write!(f, "{enum_name} has no variant `{found}`")
+            }
+            MxErrorKind::EnumNotDeclared(name) => {
+                write!(f, "the file declares no enum `{name}`, so an integer here cannot be decoded")
             }
             MxErrorKind::UnknownField(name) => write!(f, "unknown field `{name}`"),
             MxErrorKind::BadColor(s) => write!(f, "malformed color `{s}`"),

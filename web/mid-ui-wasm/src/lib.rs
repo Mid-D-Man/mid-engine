@@ -18,6 +18,18 @@ pub fn start() {
     console_error_panic_hook::set_once();
 }
 
+/// What the parser returned for `source`, as readable text, whether or not the
+/// file then loads. The page shows it under a load error so a mismatch between
+/// what the file says and what the loader expects can be read directly.
+#[cfg(feature = "dixscript")]
+#[wasm_bindgen]
+pub fn debug_value(source: &str) -> String {
+    match mid_ui_mxui::parse_str(source) {
+        Ok((value, tables)) => format!("{value:#?}\n\n{tables:#?}"),
+        Err(e) => format!("(the parser itself failed: {e})"),
+    }
+}
+
 /// A loaded `.mxui` file.
 #[wasm_bindgen]
 pub struct Playground {

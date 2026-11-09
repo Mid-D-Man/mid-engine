@@ -61,8 +61,10 @@ and ordering, nesting depth, hit names, pointer claims, relayout.
 
 ### `lib.rs`
 `Playground` (constructor from source, `layout`, `draw_list_json`,
-`describe_json`, `hit_name`, `claims_pointer`, `node_count`) and the panic
-hook. Loading errors are thrown as a message carrying the path of the problem.
+`describe_json`, `hit_name`, `claims_pointer`, `node_count`), `debug_value`
+(what the parser returned for a source, even when it then fails to load) and
+the panic hook. Loading errors are thrown as a message carrying the path of the
+problem; the page shows `debug_value` under it.
 
 ### `render.js`
 `paint`, `paintDrawList`, `paintLabels`, `paintOutline`, `roundedRectPath`,
@@ -120,4 +122,8 @@ YAML-validated only.
 
 ## Fixes and Problems
 
-None yet; first release.
+### First browser run failed on enum values
+The playground showed `root.anchor: expected enum, found int` for every
+example. The cause was in `mid-ui-mxui` (see its "Fixes and Problems"), not in
+the wasm wrapper. The wrapper now exports `debug_value` and the page shows it
+under a load error so the next mismatch is readable at once.

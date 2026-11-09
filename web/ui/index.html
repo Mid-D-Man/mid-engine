@@ -24,6 +24,9 @@
   .stage { overflow: auto; background: repeating-conic-gradient(#11161d 0% 25%, #0d1117 0% 50%) 0 0 / 16px 16px; border-radius: 6px; }
   canvas { display: block; max-width: 100%; height: auto; cursor: default; }
   #error { display: none; margin-top: 0.75rem; padding: 0.6rem 0.8rem; border: 1px solid var(--fail); border-radius: 6px; color: var(--fail); font-family: var(--font-mono); font-size: 0.8rem; white-space: pre-wrap; }
+  #debug { display: none; margin-top: 0.5rem; }
+  #debug summary { cursor: pointer; color: var(--text-muted); font-size: 0.8rem; }
+  #debug pre { margin: 0.5rem 0 0; padding: 0.6rem; background: var(--bg); border: 1px solid var(--border-alt); border-radius: 6px; max-height: 18rem; overflow: auto; font-family: var(--font-mono); font-size: 0.72rem; color: var(--text-muted); }
   #fatal { display: none; margin-top: 1.5rem; padding: 1rem; border: 1px solid var(--warn); border-radius: 8px; color: var(--warn); }
   .status { color: var(--text-muted); font-size: 0.82rem; margin-top: 0.6rem; font-family: var(--font-mono); }
   .status b { color: var(--text); font-weight: 600; }
@@ -76,6 +79,7 @@
       </div>
       <textarea id="source" spellcheck="false" aria-label=".mxui source"></textarea>
       <div id="error" role="alert"></div>
+      <details id="debug"><summary>What the parser returned</summary><pre id="debugText"></pre></details>
     </div>
 
     <div class="panel">
@@ -158,10 +162,15 @@ function load() {
     if (pg) pg.free();
     pg = next;
     $('error').style.display = 'none';
+    $('debug').style.display = 'none';
   } catch (e) {
     const box = $('error');
     box.style.display = 'block';
     box.textContent = String(e && e.message ? e.message : e);
+    try {
+      $('debugText').textContent = wasm.debug_value($('source').value);
+      $('debug').style.display = 'block';
+    } catch (_) { /* the diagnostic is best effort */ }
     return;
   }
   relayout();

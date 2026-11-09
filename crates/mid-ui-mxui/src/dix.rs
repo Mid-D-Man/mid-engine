@@ -4,11 +4,11 @@
 // ============================================================================
 //! The DixScript v1.0.0 adapter (feature `dixscript`).
 
-use dixscript::Runtime::{DixLoadOptions, DixLoader, DixValue};
+use dixscript::Runtime::{DixData, DixLoadOptions, DixLoader, DixValue};
 use mid_ui::Real;
 
 use crate::error::{MxError, MxErrorKind};
-use crate::load::{build, Loaded};
+use crate::load::{build_with, EnumTables, Loaded};
 use crate::value::MxValue;
 
 /// Converts a loaded DixScript value into the source-neutral tree. Object
@@ -45,13 +45,28 @@ pub fn from_dix(value: &DixValue) -> MxValue {
     }
 }
 
-/// Parses `.mxui` source text and builds its tree from the `root` entry.
+/// The enums a loaded file declares, as the tables the schema reader needs.
+/// DixScript turns an enum value passed through a QuickFunc argument into a
+/// plain integer, and these tables turn it back into a variant name.
+pub fn enum_tables(data: &DixData) -> EnumTables {
+    let mut tables = EnumTables::new();
+    if let Some(enums) = &data.enums {
+        for (name, fields) in enums {
+            tables.insert(name.clone(), fields.iter().map(|(f, v)| (f.clone(), i64::from(*v))));
+        }
+    }
+    tables
+}
+
+/// Parses `.mxui` source text into the root node's value and the file's enum
+/// tables, without building a tree. Useful for showing what the parser
+/// returned when a file fails to load.
 ///
 /// `root` may be a group array holding one node (`root::` followed by a single
 /// item) or a single object. Imports in the source resolve through the file
 /// system, which does not exist on wasm, so keep each file self-contained
 /// there.
-pub fn load_str<R: Real>(source: &str) -> Result<Loaded<R>, MxError> {
+pub fn parse_str(source: &str) -> Result<(MxValue, EnumTables), MxError> {
     let loader = DixLoader::new_silent();
     let data = loader
         .load_from_str(source, &DixLoadOptions::new())
@@ -70,5 +85,11 @@ pub fn load_str<R: Real>(source: &str) -> Result<Loaded<R>, MxError> {
             return Err(MxError::new("root", MxErrorKind::BadRoot(found)));
         }
     };
-    build(&node)
+    Ok((node, enum_tables(&data)))
+}
+
+/// Parses `.mxui` source text and builds its tree from the `root` entry.
+pub fn load_str<R: Real>(source: &str) -> Result<Loaded<R>, MxError> {
+    let (node, tables) = parse_str(source)?;
+    build_with(&node, &tables)
 }

@@ -25,6 +25,16 @@ to use.
   for those two fields and accepts any enum for `kind`. Repeating the enum
   block per file is the cost; an import provider (DixScript 2.0 or an upstream
   hook) would remove it.
+- **Enums arrive as integers, and are decoded through the file's own enums.**
+  DixScript resolves an enum value that is passed as a QuickFunc argument to a
+  plain integer (its loader says so in `Runtime/loader.rs`: only a bare
+  `Enum.FIELD` at a data position stays an enum value). A file written with
+  QuickFuncs therefore gives the reader `anchor = 4`, not `UiAnchor.Center`.
+  `DixData.enums` carries every declared enum with its values, so the adapter
+  passes those as `EnumTables` and `build_with` turns an integer back into a
+  variant name. The reader accepts both forms in the same file. An integer
+  needs its enum declared in the file (`UiAnchor`, `UiFlow`, `UiKind`);
+  otherwise the error is `EnumNotDeclared`.
 - **Strict fields.** An unknown field on a node is an error at its own path,
   so `widht` is caught instead of silently ignored.
 - **`kind`, `text`, `bind` are metadata only.** The core draws no text and has
@@ -53,11 +63,11 @@ table. A node is an object; every field is optional.
 | Field | Value |
 |---|---|
 | `id` | string; unique in the file |
-| `kind` | any enum value (metadata) |
+| `kind` | an enum value of any type, or an integer decoded as `UiKind` (metadata) |
 | `text` | string (metadata) |
 | `bind` | string binding key (metadata, hashed) |
-| `anchor` | `UiAnchor` value |
-| `flow` | `UiFlow` value (`Stack`, `Row`, `Column`) |
+| `anchor` | `UiAnchor` value, or its integer |
+| `flow` | `UiFlow` value (`Stack`, `Row`, `Column`), or its integer |
 | `width`, `height` | number (fixed) or `{ fill = weight }` |
 | `margin`, `padding` | number, `[h, v]` or `[left, top, right, bottom]` |
 | `gap` | number |
@@ -91,17 +101,19 @@ small constructors and `type_name`/`as_f64`.
 
 ### `load.rs`
 `build::<R>(&MxValue) -> Result<Loaded<R>, MxError>`, `Loaded` (`tree`,
-`names`, `meta`), `NodeMeta`, `Bind`, `EnumRef`. Reads each field, rejects
-unknown ones, checks id uniqueness and bind-key collisions, adds children in
-file order.
-**Tests:** `tests/build.rs`, 21 tests: structure and order, every style field,
+`names`, `meta`), `NodeMeta`, `Bind`, `EnumRef`, plus `build_with` and
+`EnumTables` for decoding integer enums. Reads each field, rejects unknown
+ones, checks id uniqueness and bind-key collisions, adds children in file
+order.
+**Tests:** `tests/build.rs`, 29 tests (8 of them for integer enum decoding): structure and order, every style field,
 layout of a loaded tree, f32/f64 agreement, 50,000-deep file on a tiny stack,
 metadata, bind keys and collisions, duplicate ids, sizing/insets/color/enum
 forms and every error kind with its path.
 
 ### `dix.rs` (feature `dixscript`)
-`from_dix` (`DixValue` to `MxValue`) and `load_str::<R>(&str)`, which loads
-with `DixLoader::new_silent()`, reads `root`, and calls `build`. Dates,
+`from_dix` (`DixValue` to `MxValue`), `enum_tables` (the file's declared
+enums), `parse_str` (source to root value plus enum tables, no tree) and
+`load_str::<R>(&str)`, which is `parse_str` followed by `build_with`. Dates,
 timestamps, blobs and regexes become strings so they fail as type errors where
 used. Imports in the source resolve through the file system, so keep files
 self-contained, especially on wasm.
@@ -132,11 +144,13 @@ fixture text for the writing guide's most common mistakes (signature comment
 first, balanced brackets, `features` listing every gated section, known enum
 variants), so a bad file fails without a parser.
 
-The fixtures only use DixScript patterns that DixScript's own tests show: enum
-values go into QuickFuncs as `<enum>` typed arguments, and root tables set
-enums with `name<enum> = Type.Variant`. An enum literal written directly
-inside a QuickFunc's returned object is avoided because no test or guide
-example shows it.
+The fixtures pass enums into QuickFuncs as `<enum>` typed arguments, which is
+the pattern DixScript's own tests show, and root tables set enums with
+`name<enum> = Type.Variant`. An enum literal written directly inside a
+QuickFunc's returned object is avoided because no test or guide example shows
+it. The twins mirror what DixScript really returns: integers for QuickFunc
+arguments (`as_int`) and enum values for table properties (`as_enum`), and a
+test checks that both forms build the same tree.
 
 The playground page (`docs/mid-ui-wasm.md`) loads these same files.
 
@@ -149,20 +163,22 @@ nodes, and a loader for DixScript 2.0.
 
 ## Verification status
 
-- Schema reader: 21 tests plus 7 fixture-expectation tests pass (rustc 1.97.1
-  sandbox), and 12 hand-made mutants (child order, field targets, hash variant,
+- Schema reader: 29 tests plus 9 fixture-expectation tests pass (rustc 1.97.1
+  sandbox), and 18 hand-made mutants (12 on the reader, 6 on enum decoding) (child order, field targets, hash variant,
   short-color digits, shared bind names, duplicate ids, inset order, unknown
   fields, path order, fill weight) were each caught.
-- DixScript adapter: **type-checked against the published `dixscript` 1.0.0
-  (including the e2e test) but never run**; DixScript-Rust is not executed in
-  the authoring environment, so the first real run is CI. The e2e tests rest on
-  assumptions read from the grammar and dixscript's own tests, not observed:
-  nested values come back inside `get_value("root")` (msx matches on the same
-  shape); a table property with an enum (`anchor<enum> = ...`) appears inside
-  the aggregate `root` object; QuickFuncs accept untyped parameters, `<bool>`
-  and `<array>` parameters, and hex literals such as `#0000` as arguments;
-  comments are allowed between QuickFunc definitions; a call may span several
-  lines; and `@DATA(` alone is a source error.
+- DixScript adapter: **type-checked, and exercised once in a browser by the
+  playground, but never run by the test suite in the authoring environment**
+  (DixScript-Rust is not executed there). What that browser run showed: the
+  playground loaded `real.mxui` through DixScript compiled to wasm, so parsing
+  and QuickFunc evaluation succeeded, `root` came back as a one-item array of
+  objects, and an enum argument came back as an integer (which is how the
+  decoding above was found). Still assumed, not observed: a table property with
+  an enum (`anchor<enum> = ...`) stays an enum value inside the aggregate
+  `root` object; hex literals such as `#0000` survive as arguments; and
+  `@DATA(` alone is a source error. `tests/dixscript_e2e.rs` has tests that
+  state the enum behavior explicitly, and prints the raw parser output when a
+  fixture fails to load.
 - wasm: `cargo check -p mid-ui-mxui --target wasm32-unknown-unknown` passes with
   and without the `dixscript` feature. DixScript 1.0.0 itself targets wasm32: its
   manifest enables `getrandom`'s `js` feature on that target and uses `web-time`.
@@ -196,3 +212,13 @@ The first `hud.mxui` wrote `kind = UiKind.Panel` inside a QuickFunc's returned
 object. No dixscript test or guide example shows an enum literal there, only
 enums passed in as typed arguments, so the examples and fixtures now use the
 shown pattern.
+
+### Enum values passed to a QuickFunc arrive as integers
+The reader first insisted on real enum values, and the first browser run of
+`real.mxui` failed with `root.anchor: expected enum, found int`. I had read
+DixScript's tests and `DixValue`, which has an `Enum` variant, but not the
+value-resolution stage that turns QuickFunc arguments into integers; the
+loader's own comments describe it. Fixed by decoding integers through the
+file's declared enums (`EnumTables`, `build_with`, `parse_str`), keeping real
+enum values working, adding tests for both forms, and making the e2e and
+playground failures print what the parser returned.

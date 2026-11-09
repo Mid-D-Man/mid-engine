@@ -22,8 +22,8 @@ mod dix;
 
 pub use bind::BindKey;
 pub use error::{MxError, MxErrorKind};
-pub use load::{build, Bind, EnumRef, Loaded, NodeMeta};
+pub use load::{build, build_with, Bind, EnumRef, EnumTables, Loaded, NodeMeta};
 pub use value::MxValue;
 
 #[cfg(feature = "dixscript")]
-pub use dix::{from_dix, load_str};
+pub use dix::{enum_tables, from_dix, load_str, parse_str};
