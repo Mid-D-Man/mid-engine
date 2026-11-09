@@ -82,6 +82,17 @@ jobs:
             -o -name "mid_math.dll" \)   \
             -exec ls -lh {} \; 2>/dev/null || echo "  (platform-specific names — fine)"
 
+      # ── mint feature ──────────────────────────────────────────────────
+      # An opt-in feature, so nothing above compiles it. Its Mat2 conversions
+      # broke unnoticed once (docs/mid-math.md, "features/mint_conversions/
+      # f32.rs"); building it and running its conversion tests here keeps
+      # that from happening again. Not continue-on-error: red means broken.
+      - name: Build and test the mint feature
+        run: |
+          echo "=== mid-math --features mint ==="
+          cargo build -p mid-math --features mint
+          cargo test  -p mid-math --features mint --color=never mint_tests
+
       # ── Debug build — correctness ─────────────────────────────────────
       # Stress timings in this pass will print [DEBUG] because
       # cfg!(debug_assertions) == true. These are NOT performance numbers.
