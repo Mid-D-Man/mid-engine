@@ -1,0 +1,3891 @@
+{
+  "build": "1479",
+  "branch": "main",
+  "commit": "2e1f7165",
+  "date": "",
+  "rust_version": "rustc 1.99.1 (58cf8f9c3 2026-10-13)",
+  "crate": "mid-math",
+  "note": "Pass/fail from debug build. Perf numbers in release artifact.",
+  "summary": {
+    "total": 644,
+    "passed": 644,
+    "failed": 0,
+    "ignored": 0,
+    "duration_s": 0.08
+  },
+  "suites": [
+    {
+      "name": "lib (unit tests)",
+      "passed": 644,
+      "failed": 0,
+      "ignored": 0,
+      "duration_s": 0.08,
+      "tests": [
+        {
+          "name": "storage::bf16_impl::tests::batch_x4",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "storage::bf16_impl::tests::infinity_roundtrip",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "storage::bf16_impl::tests::nan_roundtrip",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "storage::bf16_impl::tests::neg_flip",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "storage::bf16_impl::tests::size",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "storage::bf16_impl::tests::no_overflow_from_large_f32",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "storage::bf16_impl::tests::partial_eq_nan",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "storage::bf16_impl::tests::roundtrip_precision",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "storage::f16_impl::tests::batch_x4",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "storage::bf16_impl::tests::to_f32_is_free",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "storage::f16_impl::tests::abs_and_copysign",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "storage::f16_impl::tests::batch_x8",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "storage::f16_impl::tests::infinity_and_nan",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "storage::f16_impl::tests::from_f64",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "storage::f16_impl::tests::neg_zero",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "storage::f16_impl::tests::neg_flip",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "storage::f16_impl::tests::neg_one",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "storage::f16_impl::tests::negative_roundtrip",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "storage::f16_impl::tests::partial_eq_nan",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "storage::f16_impl::tests::one",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "storage::f16_impl::tests::overflow_to_infinity",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "storage::f16_impl::tests::subnormal_positive",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "storage::f16_impl::tests::pi_approx",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "storage::f16_impl::tests::slice_conversion",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "storage::f16_impl::tests::storage_is_two_bytes",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "storage::f4::tests::e2m1_all_negative_values",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "storage::f16_impl::tests::zero",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "storage::f4::tests::batch_8_to_4_pairs",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "storage::f4::tests::batch_e3m0_8_to_4_pairs",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "storage::f4::tests::e2m1_all_positive_values",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "storage::f4::tests::e2m1_exact_roundtrip",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "storage::f4::tests::e2m1_no_nan_output",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "storage::f4::tests::e2m1_pair_zero_pair_is_one_byte",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "storage::f4::tests::e2m1_pair_packs_two_nibbles",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "storage::f4::tests::e2m1_rounding",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "storage::f4::tests::e2m1_zero",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "storage::f4::tests::e2m1_sign",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "storage::f4::tests::e3m0_all_positive_values",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "storage::f4::tests::e2m1_overflow_clamps",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "storage::f4::tests::e3m0_exact_roundtrip",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "storage::f4::tests::e3m0_rounding_geometric",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "storage::f4::tests::memory_density",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "storage::f4::tests::e3m0_overflow_clamps",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "storage::f4::tests::e3m0_pair_roundtrip",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "storage::f4::tests::sizes",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "storage::f8::tests::batch_f32x4_e5m2",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "storage::f4::tests::slice_pack_unpack_roundtrip",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "storage::f8::tests::batch_f32x4_e4m3",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "storage::f8::tests::e4m3_no_rounding_into_nan",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "storage::f8::tests::e4m3_nan",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "storage::f8::tests::e4m3_negative",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "storage::f8::tests::e4m3_no_infinity",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "storage::f8::tests::e4m3_size",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "storage::f8::tests::e4m3_one_roundtrip",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "storage::f8::tests::e4m3_overflow_clamps",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "storage::f8::tests::e4m3_representative_values",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "storage::f8::tests::e5m2_nan",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "storage::f8::tests::e4m3_subnormal_roundtrip",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "storage::f8::tests::e4m3_zero",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "storage::f8::tests::e5m2_infinity_roundtrip",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "storage::f8::tests::e5m2_one_roundtrip",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "storage::f8::tests::e5m2_size",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "storage::f8::tests::e5m2_subnormal_roundtrip",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "storage::f8::tests::e5m2_zero",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "storage::f8::tests::e5m2_wider_range_than_e4m3",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "storage::f8::tests::e5m2_overflow_to_inf",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "storage::f8::tests::f8norm_clamp",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "storage::f8::tests::f8norm_roundtrip_all",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "storage::f8::tests::f8norm_size",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "storage::storage_mask::tests::bitwise_ops",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "storage::storage_mask::tests::difference_op",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "storage::storage_mask::tests::disjoint_and_subset",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "storage::f8::tests::f8norm_zero_one",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "storage::storage_mask::tests::all_and_none",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "storage::storage_mask::tests::ecs_archetype_matches",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "storage::storage_mask::tests::iter_ones_scalar_bit0_not_skipped",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "storage::storage_mask::tests::from_indices",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "storage::storage_mask::tests::iter_ones_wide_across_words",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "storage::storage_mask::tests::iter_ones_scalar_empty",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "storage::storage_mask::tests::iter_ones_scalar_order",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "storage::storage_mask::tests::iter_ones_wide_sparse",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "storage::storage_mask::tests::iter_ones_wide_word0_not_skipped",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "storage::storage_mask::tests::set_get_clear",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "storage::storage_mask::tests::sizes",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "storage::storage_mask::tests::wide_count",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "storage::storage_mask::tests::wide_iter_256",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "storage::storage_mask::tests::wide_matches",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::bool_tests::tests::bvec2_bitmask",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::bool_tests::tests::bvec2_any_all",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::bool_tests::tests::bvec2_bitops",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::bool_tests::tests::bvec2_assign_ops",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::bool_tests::tests::bvec2_size_align",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::bool_tests::tests::bvec2_constants",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::bool_tests::tests::bvec2_from_array_roundtrip",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::bool_tests::tests::bvec2_from_tuple_roundtrip",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::bool_tests::tests::bvec3_any_all",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::bool_tests::tests::bvec2_splat",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::bool_tests::tests::bvec2_test_indexed",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::bool_tests::tests::bvec3_bitmask",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::bool_tests::tests::bvec3_size_align",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::bool_tests::tests::bvec3_from_array_roundtrip",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::bool_tests::tests::bvec3_test_indexed",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::bool_tests::tests::bvec3_bitops",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::bool_tests::tests::bvec4_bitops",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::bool_tests::tests::bvec4_any_all",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::bool_tests::tests::bvec4_assign_ops",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::bool_tests::tests::bvec4_bitmask",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::bool_tests::tests::bvec4_from_array_roundtrip",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::bool_tests::tests::bvec4_test_indexed",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::bool_tests::tests::bvec4_size_align",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::bool_tests::tests::bvec4_splat",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::camera::csm_split_depths_one_cascade",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::camera::csm_split_depths_boundaries",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::camera::csm_split_depths_count",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::camera::csm_split_depths_lambda_0_is_linear",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::camera::csm_split_depths_sorted_ascending",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::camera::frustum_from_view_proj_has_six_planes",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::camera::frustum_aabb_visibility_classifications",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::camera::frustum_behind_camera_is_outside",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::camera::frustum_far_behind_target_is_outside",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::camera::frustum_test_aabb_far_box_invisible",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::camera::frustum_origin_is_inside",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::camera::frustum_sphere_visibility_origin",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::camera::frustum_sphere_visibility_outside",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::camera::frustum_test_aabb_origin_box_visible",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::camera::frustum_test_sphere_large_sphere_visible",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::camera::frustum_test_sphere_tiny_far_sphere_invisible",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::camera::frustum_world_aabb_contains_center",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::camera::frustum_world_center_near_camera_target",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::camera::frustum_world_corners_count_and_finite",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::camera::perspective_decompose_rejects_identity",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::camera::perspective_decompose_rejects_orthographic",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::camera::perspective_resize_changes_only_aspect",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::camera::perspective_decompose_roundtrip",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::camera::perspective_infinite_rh_no_far_clip",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::camera::perspective_reversed_z_far_maps_to_zero",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::camera::sub_frustum_corners_returns_eight_finite_points",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::camera::picking_ray_direction_not_zero",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::camera::sub_frustum_corners_fails_for_non_perspective",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::camera::unproject_far_depth_is_far_from_eye",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::camera::unproject_near_depth_is_near_plane",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::f64_tests::tests::daffine3_compose_matches_dmat4_mul",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::f64_tests::tests::daffine3_from_mat4_roundtrip",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::f64_tests::tests::daffine3_from_trs_matches_dmat4_from_trs",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::f64_tests::tests::daffine3_inverse_identity",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::f64_tests::tests::daffine3_identity_is_default",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::f64_tests::tests::daffine3_identity_transform_point_unchanged",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::f64_tests::tests::daffine3_inverse_trs_roundtrip",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::f64_tests::tests::daffine3_inverse_matches_dmat4_inverse_trs",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::f64_tests::tests::daffine3_inverse_scale_only",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::f64_tests::tests::daffine3_inverse_translation_only",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::f64_tests::tests::daffine3_to_view_relative_at_the_origin_matches_as_affine3",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::f64_tests::tests::daffine3_inverse_zero_scale_does_not_panic",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::f64_tests::tests::daffine3_scale_scales_point",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::f64_tests::tests::daffine3_size_align",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::f64_tests::tests::dmat2_identity_times_vec_is_vec",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::f64_tests::tests::daffine3_to_view_relative_shifts_translation_only",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::f64_tests::tests::daffine3_translation_does_not_affect_vectors",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::f64_tests::tests::daffine3_translation_moves_point",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::f64_tests::tests::dmat2_singular_inverse_returns_none",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::f64_tests::tests::dmat2_inverse_identity_is_identity",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::f64_tests::tests::dmat3_identity_times_vec_is_vec",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::f64_tests::tests::dmat2_rotation_inverse_roundtrip",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::f64_tests::tests::dmat4_inverse_of_identity_is_identity",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::f64_tests::tests::dmat3_inverse_roundtrip",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::f64_tests::tests::dmat3_singular_inverse_returns_none",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::f64_tests::tests::dmat4_identity_transform_point_unchanged",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::f64_tests::tests::dmat4_inverse_trs_roundtrip_matches_general_inverse",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::f64_tests::tests::dmat4_inverse_roundtrip",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::f64_tests::tests::dmat4_inverse_trs_identity",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::f64_tests::tests::dmat4_inverse_trs_translation_only",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::f64_tests::tests::dmat4_scale_scales_point",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::f64_tests::tests::dmat4_look_at_target_on_neg_z",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::f64_tests::tests::dmat4_multiply_identity_is_identity",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::f64_tests::tests::dmat4_perspective_has_neg_one_at_col2_row3",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::f64_tests::tests::dmat4_singular_inverse_returns_none",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::f64_tests::tests::dquat_180deg_y_rotates_x_to_neg_x",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::f64_tests::tests::dmat4_size_align",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::f64_tests::tests::dmat4_translation_does_not_affect_vectors",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::f64_tests::tests::dmat4_translation_moves_point",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::f64_tests::tests::dquat_euler_roundtrip",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::f64_tests::tests::dquat_90deg_y_rotates_x_to_neg_z",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::f64_tests::tests::dquat_compose_90deg_twice_is_180deg",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::f64_tests::tests::dquat_conjugate_inverse_for_unit",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::f64_tests::tests::dquat_identity_does_not_rotate",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::f64_tests::tests::dquat_mul_matches_scalar_reference",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::f64_tests::tests::dquat_nlerp_stays_normalized",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::f64_tests::tests::dquat_slerp_midpoint_in_first_quadrant",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::f64_tests::tests::dvec2_dot",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::f64_tests::tests::dquat_to_mat4_identity_roundtrip",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::f64_tests::tests::dvec2_add_sub",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::f64_tests::tests::dvec2_angle_roundtrip",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::f64_tests::tests::dvec2_size_align",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::f64_tests::tests::dvec2_lerp_midpoint",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::f64_tests::tests::dvec2_normalize_unit_length",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::f64_tests::tests::dvec2_perp_is_orthogonal",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::f64_tests::tests::dvec2_zero_normalize_returns_zero",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::f64_tests::tests::dvec3_angle_between_orthogonal",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::f64_tests::tests::dvec3_angle_between_parallel",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::f64_tests::tests::dvec3_extend_truncate_roundtrip",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::f64_tests::tests::dvec3_cross_basis",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::f64_tests::tests::dvec3_cross_anticommutative",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::f64_tests::tests::dvec3_equality_ignores_pad",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::f64_tests::tests::dvec3_to_view_relative_is_the_actual_fix_for_the_jitter_this_exists_for",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::f64_tests::tests::dvec3_normalize_unit_length",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::f64_tests::tests::dvec3_reflect",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::f64_tests::tests::dvec3_size_align",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::f64_tests::tests::dvec4_size_align",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::f64_tests::tests::dvec3_to_view_relative_matches_plain_subtraction_and_cast",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::f64_tests::tests::dvec4_normalize_unit_length",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::f64_tests::tests::dvec4_dot_with_self_is_length_sq",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::fixed::add_commutativity",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::fixed::ceil_positive",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::fixed::ceil_exact_integer",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::fixed::ceil_negative",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::fixed::checked_mul_normal_returns_some",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::fixed::division_fractional",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::fixed::checked_mul_overflow_returns_none",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::fixed::division_exact",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::fixed::fixed12_mul_precision",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::fixed::fixed8_resolution",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::fixed::floor_exact_integer",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::fixed::floor_negative",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::fixed::floor_positive",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::fixed::fractional_mul",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::fixed::from_f32_precision",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::fixed::fractional_mul_small",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::fixed::integer_mul_exact",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::fixed::from_to_i32_roundtrip",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::fixed::integer_add_and_sub",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::fixed::lerp_at_one",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::fixed::lerp_at_zero",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::fixed::lerp_midpoint",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::fixed::neg_and_abs",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::fixed::negative_ordering",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::fixed::ordering",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::fixed::saturating_add_no_overflow",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::fixed::same_raw_same_value",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::fixed::saturating_add_clamps_at_max",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::fixed::saturating_sub_clamps_at_min",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::fixed::vec2_dot_product",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::fixed::vec2_add_and_sub",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::fixed::vec2_dot_orthogonal",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::fixed::vec2_perp_dot",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::fixed::vec2_length_sq",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::fixed::vec2_lerp",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::fixed::vec2_neg",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::fixed::vec2_scale",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::fixed::vec3_cross_parallel_is_zero",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::fixed::vec2_to_from_vec2_boundary",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::fixed::vec3_cross_anticommutativity",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::fixed::vec3_cross_basic",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::fixed::vec3_dot_self",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::fixed::vec3_to_from_vec3_boundary",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::geom::bary_interpolate_f32_centroid",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::geom::bary_interpolate_f32_vertex_a",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::geom::bary_interpolate_f32_vertex_b",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::geom::bary_is_inside_false_for_outside",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::geom::bary_interpolate_f32_vertex_c",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::geom::bary_interpolate_vec3_vertex",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::geom::bary_is_inside_true_for_centroid",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::geom::bary_on_edge_has_one_zero_weight",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::geom::bary_is_valid_false_for_nan",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::geom::bary_is_valid_for_centroid",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::geom::signed_area_2d_ccw_positive",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::geom::signed_area_2d_cw_negative",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::geom::triangle2_bary_at_centroid",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::geom::triangle2_area_equals_abs_signed_area",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::geom::triangle2_area_unit_triangle",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::geom::triangle2_bary_at_vertex_a",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::geom::triangle2_bary_degenerate_returns_none",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::geom::triangle2_bary_at_vertex_b",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::geom::triangle2_bary_at_vertex_c",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::geom::triangle2_circumcircle_contains_interior_point",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::geom::triangle2_bary_outside_returns_negative_weight",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::geom::triangle2_bary_weights_sum_to_one",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::geom::triangle2_centroid_correct",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::geom::triangle2_circumcircle_does_not_contain_far_point",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::geom::triangle2_contains_vertex",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::geom::triangle2_circumcircle_passes_through_vertices",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::geom::triangle2_contains_centroid",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::geom::triangle2_not_contains_far_outside",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::geom::triangle2_degenerate_circumcircle_returns_none",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::geom::triangle2_flip_winding_reverses_area_sign",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::geom::triangle2_not_contains_outside_point",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::geom::triangle2_signed_area_negative_cw",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::geom::triangle2_signed_area_positive_ccw",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::geom::triangle3_area_is_half",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::geom::triangle3_bary_at_vertex_a",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::geom::triangle3_bary_inside_for_interior_point",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::geom::triangle3_bary_weights_sum_to_one",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::geom::triangle3_centroid_correct",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::geom::triangle3_closest_point_inside_projects_to_plane",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::geom::triangle3_normal_is_unit_length",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::geom::triangle3_closest_point_to_vertex_a_is_vertex_a",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::geom::triangle3_closest_point_on_edge",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::geom::triangle3_normal_is_z_axis_for_xy_triangle",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::geom::triangle3_plane_distance_on_plane_is_zero",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::geom::triangle3_plane_distance_below_is_negative",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::geom::triangle3_plane_distance_above_is_positive",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::geom::triangle3_plane_equation_correct",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::geom::triangle3_ray_miss_behind_origin",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::geom::triangle3_ray_back_face_culling_rejects_back_hit",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::geom::triangle3_ray_hit_from_above",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::geom::triangle3_ray_hit_t_equals_geometric_distance",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::geom::triangle3_ray_miss_outside_triangle",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::geom::triangle3_ray_miss_parallel_to_plane",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::geom::triangle_area_3d_correct",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::geom::triangle_area_3d_degenerate_is_zero",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::int64_tests::tests::i64vec2_casts",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::int64_tests::tests::i64vec2_abs",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::int64_tests::tests::i64vec2_add_sub",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::int64_tests::tests::i64vec2_checked",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::int64_tests::tests::i64vec2_checked_manhattan_overflow",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::int64_tests::tests::i64vec2_cmp_ops",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::int64_tests::tests::i64vec2_distance_sq",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::int64_tests::tests::i64vec2_constants",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::int64_tests::tests::i64vec2_dot",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::int64_tests::tests::i64vec2_element_ops",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::int64_tests::tests::i64vec2_extend",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::int64_tests::tests::i64vec2_from_array_roundtrip",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::int64_tests::tests::i64vec2_length_sq",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::int64_tests::tests::i64vec2_index",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::int64_tests::tests::i64vec2_manhattan_distance",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::int64_tests::tests::i64vec2_min_max_clamp",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::int64_tests::tests::i64vec2_mul_scale",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::int64_tests::tests::i64vec2_neg",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::int64_tests::tests::i64vec2_perp_and_perp_dot",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::int64_tests::tests::i64vec2_saturating",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::int64_tests::tests::i64vec2_signum",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::int64_tests::tests::i64vec2_select",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::int64_tests::tests::i64vec2_wrapping",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::int64_tests::tests::i64vec2_size_align",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::int64_tests::tests::i64vec3_add_sub_neg",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::int64_tests::tests::i64vec3_casts",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::int64_tests::tests::i64vec3_cmp_ops",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::int64_tests::tests::i64vec3_abs",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::int64_tests::tests::i64vec3_constants",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::int64_tests::tests::i64vec3_cross_anticommutative",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::int64_tests::tests::i64vec3_cross_basis",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::int64_tests::tests::i64vec3_dot",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::int64_tests::tests::i64vec3_element_ops",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::int64_tests::tests::i64vec3_extend_truncate",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::int64_tests::tests::i64vec3_index",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::int64_tests::tests::i64vec3_length_sq",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::int64_tests::tests::i64vec3_manhattan_distance",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::int64_tests::tests::i64vec3_select",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::int64_tests::tests::i64vec3_size_align",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::int64_tests::tests::i64vec3_wrapping_saturating",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::int64_tests::tests::i64vec4_abs",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::int64_tests::tests::i64vec4_add_sub_neg",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::int64_tests::tests::i64vec4_casts",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::int64_tests::tests::i64vec4_cmp_ops",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::int64_tests::tests::i64vec3_min_max_clamp",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::int64_tests::tests::i64vec4_dot",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::int64_tests::tests::i64vec4_element_ops",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::int64_tests::tests::i64vec4_index",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::int64_tests::tests::i64vec4_length_sq",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::int64_tests::tests::i64vec4_manhattan_distance",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::int64_tests::tests::i64vec4_min_max_clamp",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::int64_tests::tests::i64vec4_select",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::int64_tests::tests::i64vec4_size_align",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::int64_tests::tests::i64vec4_truncate_and_xy",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::int64_tests::tests::u64vec2_add_sub_mul",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::int64_tests::tests::u64vec2_cmp_ops",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::int64_tests::tests::u64vec2_dot",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::int64_tests::tests::i64vec4_wrapping_saturating",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::int64_tests::tests::u64vec2_casts",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::int64_tests::tests::u64vec2_element_ops",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::int64_tests::tests::u64vec2_extend",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::int64_tests::tests::u64vec2_length_sq",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::int64_tests::tests::u64vec2_select",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::int64_tests::tests::u64vec2_min_max_clamp",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::int64_tests::tests::u64vec2_saturating",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::int64_tests::tests::u64vec2_size_align",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::int64_tests::tests::u64vec2_wrapping",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::int64_tests::tests::u64vec3_casts",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::int64_tests::tests::u64vec3_cmp_ops",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::int64_tests::tests::u64vec3_cross_basis",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::int64_tests::tests::u64vec3_dot",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::int64_tests::tests::u64vec3_element_ops",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::int64_tests::tests::u64vec3_extend_truncate",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::int64_tests::tests::u64vec3_index",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::int64_tests::tests::u64vec3_size_align",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::int64_tests::tests::u64vec3_wrapping_saturating",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::int64_tests::tests::u64vec3_length_sq",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::int64_tests::tests::u64vec4_casts",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::int64_tests::tests::u64vec4_add_mul_scale",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::int64_tests::tests::u64vec4_cmp_ops",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::int64_tests::tests::u64vec4_dot",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::int64_tests::tests::u64vec4_index",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::int64_tests::tests::u64vec4_element_ops",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::int64_tests::tests::u64vec4_length_sq",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::int64_tests::tests::u64vec4_min_max_clamp",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::int64_tests::tests::u64vec4_select",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::int64_tests::tests::u64vec3_min_max_clamp",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::int64_tests::tests::u64vec4_truncate_and_xy",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::int64_tests::tests::u64vec4_size_align",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::int64_tests::tests::u64vec4_wrapping_saturating",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::mat_tests::tests::affine3_from_mat4_roundtrip",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::mat_tests::tests::affine3_from_trs_matches_mat4_from_trs",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::mat_tests::tests::affine3_identity_is_default",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::mat_tests::tests::affine3_identity_transform_point_unchanged",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::mat_tests::tests::affine3_identity_transform_vector_unchanged",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::mat_tests::tests::affine3_inverse_identity",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::mat_tests::tests::affine3_inverse_scale_only",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::mat_tests::tests::affine3_inverse_translation_only",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::mat_tests::tests::affine3_inverse_trs_roundtrip",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::mat_tests::tests::affine3_inverse_zero_scale_does_not_panic",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::mat_tests::tests::affine3_compose_matches_mat4_mul",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::mat_tests::tests::affine3_size_is_64_bytes",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::mat_tests::tests::affine3_scale_scales_point",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::mat_tests::tests::affine3_translation_does_not_affect_vectors",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::mat_tests::tests::affine3_translation_moves_point",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::mat_tests::tests::mat3_identity_times_vec_is_vec",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::mat_tests::tests::mat3_inverse_of_identity_is_identity",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::mat_tests::tests::mat3_multiply_identity_is_identity",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::mat_tests::tests::affine3_inverse_matches_mat4_inverse_trs",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::mat_tests::tests::mat4_inverse_general_sse2_matches_scalar",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::mat_tests::tests::mat4_identity_transform_point_unchanged",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::mat_tests::tests::mat4_inverse_of_identity_is_identity",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::mat_tests::tests::mat4_inverse_trs_identity",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::mat_tests::tests::mat3_inverse_roundtrip",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::mat_tests::tests::mat4_inverse_roundtrip",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::mat_tests::tests::mat4_inverse_trs_roundtrip_matches_general_inverse",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::mat_tests::tests::mat4_inverse_trs_zero_scale_does_not_panic",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::mat_tests::tests::mat4_multiply_identity_is_identity",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::mat_tests::tests::mat4_scale_scales_point",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::mat_tests::tests::mat4_inverse_trs_translation_only",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::mat_tests::tests::mat4_perspective_has_negative_one_at_col3_row2",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::mat_tests::tests::mat4_singular_inverse_returns_none",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::mat_tests::tests::mat4_size_is_64_bytes",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::mat_tests::tests::mat4_translation_does_not_affect_vectors",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::mat_tests::tests::mat4_translation_moves_point",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::mid_vec::clone_is_a_deep_independent_copy_inline",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::mid_vec::clone_is_a_deep_independent_copy_spilled",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::mid_vec::debug_formatting_looks_like_a_list",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::mid_vec::default_matches_new",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::mid_vec::drop_each_inline_element_exactly_once",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::mid_vec::drop_each_spilled_element_exactly_once",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::mat_tests::tests::mat4_look_at_z_axis_points_toward_target",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::mid_vec::from_fixed_array",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::mid_vec::from_iterator_and_extend",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::mid_vec::from_slice_and_extend_from_slice",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::mid_vec::from_vec_with_capacity_adopts_the_allocation",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::mid_vec::clear_drops_everything_exactly_once_and_resets_len",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::mid_vec::insert_that_forces_a_spill",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::mid_vec::insert_within_capacity",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::mid_vec::into_iter_double_ended",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::mid_vec::into_iter_partial_consumption_then_drop_is_leak_and_double_drop_free",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::mid_vec::into_iter_yields_all_elements_in_order",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::mid_vec::into_iter_size_hint_and_len",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::mid_vec::into_vec_from_inline_copies_without_dropping_originals",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::mid_vec::iter_and_iter_mut",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::mid_vec::into_vec_from_spilled_is_zero_copy_and_does_not_drop_elements",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::mid_vec::new_is_empty_and_inline",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::mid_vec::partial_eq_against_slice_vec_and_other_n",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::mid_vec::pop_returns_none_when_empty",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::mid_vec::pop_after_spill_returns_correct_values_in_order",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::mid_vec::push_within_inline_capacity",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::mid_vec::push_many_preserves_order_and_capacity_invariant",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::mid_vec::remove_preserves_order",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::mid_vec::respects_over_alignment_inline_and_spilled",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::mid_vec::push_past_inline_capacity_spills",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::mid_vec::swap_remove_last_index_no_double_drop",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::mid_vec::round_trip_vec_conversion_preserves_data",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::mid_vec::swap_remove_non_last_index_moves_last_into_gap",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::mid_vec::truncate_drops_only_the_tail",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::mid_vec::truncate_to_len_or_more_is_a_no_op",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::mid_vec::with_capacity_under_n_stays_inline",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::mid_vec::with_capacity_over_n_spills_immediately",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::noise::domain_warp_2d_range",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::noise::domain_warp_3d_range",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::mid_vec::from_vec_with_zero_capacity_is_inline_empty",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::noise::domain_warp_double_differs_from_single",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::noise::fbm_determinism",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::noise::fbm_more_octaves_adds_detail",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::noise::perlin_2d_range",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::noise::fbm_perlin_3d_range",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::noise::fbm_simplex_2d_range",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::noise::perlin_3d_range",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::noise::perlin_4d_range",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::noise::perlin_continuity_2d",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::noise::perlin_determinism_2d",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::noise::perlin_determinism_3d",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::noise::perlin_different_seeds_differ",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::noise::simplex_2d_range",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::noise::simplex_3d_range",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::noise::simplex_continuity_2d",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::noise::simplex_4d_range",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::noise::simplex_determinism_2d",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::noise::simplex_no_directional_bias",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::noise::value_2d_range",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::noise::value_3d_range",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::noise::value_4d_range",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::noise::value_integer_coords_at_grid",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::noise::value_determinism",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::noise::worley_chebyshev_metric",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::noise::worley_f2_minus_f1_non_negative_2d",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::noise::worley_f2_range_2d",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::noise::worley_manhattan_metric",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::noise::worley_determinism",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::quat_tests::tests::quat_90deg_around_y_rotates_x_to_neg_z",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::quat_tests::tests::quat_conjugate_is_inverse_for_unit",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::quat_tests::tests::quat_euler_round_trip",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::quat_tests::tests::quat_identity_does_not_rotate_vector",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::quat_tests::tests::quat_inverse_undoes_rotation",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::quat_tests::tests::quat_mul_matches_scalar_reference",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::quat_tests::tests::quat_multiply_composes_rotations",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::quat_tests::tests::quat_nlerp_stays_normalized",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::quat_tests::tests::quat_slerp_midpoint_in_first_quadrant",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::quat_tests::tests::quat_to_mat4_identity_roundtrip",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::stress_tests::tests::lerp_scalar_midpoint",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::stress_tests::tests::smoothstep_midpoint_is_half",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::noise::worley_f1_range_2d",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::stress_tests::tests::smoothstep_clamps_outside_range",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::noise::worley_3d_range",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::stress_tests::tests::stress_100k_vec3_add",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": "200000 Vec3 adds in 3.390ms  (16.9 ns/op)  final_x=110101  [DEBUG]"
+        },
+        {
+          "name": "tests::stress_tests::tests::stress_100k_entity_transform_simulation",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": "100k entity transforms in 5.637ms  (56.4 ns/entity)  [DEBUG]\n  ECS 60Hz budget=16.6ms \u2014 (\u2713 within budget)"
+        },
+        {
+          "name": "tests::stress_tests::tests::stress_100k_vec3_dot",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": "100000 Vec3 dot products in 5.008ms  (50.1 ns/op)  [DEBUG]"
+        },
+        {
+          "name": "tests::stress_tests::tests::stress_100k_vec3_cross",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": "100000 Vec3 cross in 5.796ms  (58.0 ns/op)  [DEBUG]"
+        },
+        {
+          "name": "tests::stress_tests::tests::stress_100k_quat_rotate",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": "100000 Quat rotations in 19.550ms  (195.5 ns/op)  [DEBUG]\n  ECS 60Hz budget=16.6ms \u2014 100k rotations took 19.550ms (\u26a0 over budget)"
+        },
+        {
+          "name": "tests::stress_tests::tests::stress_100k_quat_mul",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": "200000 Quat mul in 21.791ms  (109.0 ns/op)  [DEBUG]"
+        },
+        {
+          "name": "tests::stress_tests::tests::stress_100k_vec3_lerp",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": "100000 Vec3 lerp in 6.327ms  (63.3 ns/op)  [DEBUG]"
+        },
+        {
+          "name": "tests::stress_tests::tests::stress_10k_mat4_transform_point",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": "10000 Mat4 transform_point in 0.995ms  (99.5 ns/op)  [DEBUG]"
+        },
+        {
+          "name": "tests::stress_tests::tests::stress_10k_mat4_mul",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": "20000 Mat4 mul in 6.426ms  (321.3 ns/op)  [DEBUG]"
+        },
+        {
+          "name": "tests::stress_tests::tests::stress_5k_mat4_inverse",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": "5000 Mat4 general inverse in 4.588ms  (917.6 ns/op)  [DEBUG]"
+        },
+        {
+          "name": "tests::stress_tests::tests::stress_100k_vec3_normalize",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": "100000 Vec3 normalize in 16.731ms  (167.3 ns/op)  [DEBUG]"
+        },
+        {
+          "name": "tests::stress_tests::tests::stress_mixed_math_1k_frames_simulation",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": "1000 ticks \u00d7 (TRS + 10 transforms + 10 lerps) in 1.743ms  (1.7 \u00b5s/tick)  [DEBUG]"
+        },
+        {
+          "name": "tests::vec_tests::tests::vec2_addition",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::vec_tests::tests::vec2_dot_product",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::stress_tests::tests::stress_5k_mat4_inverse_trs",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": "5000 Mat4 inverse_trs in 3.613ms  (722.7 ns/op)  [DEBUG]"
+        },
+        {
+          "name": "tests::vec_tests::tests::vec2_lerp_midpoint",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::vec_tests::tests::vec2_normalize_unit_length",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::vec_tests::tests::vec2_zero_normalize_returns_zero",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::vec_tests::tests::vec2_perpendicular_is_orthogonal",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::vec_tests::tests::vec3_align_is_16",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::vec_tests::tests::vec3_cross_anticommutative",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::vec_tests::tests::vec3_cross_product_basis",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::vec_tests::tests::vec3_distance",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::vec_tests::tests::vec3_equality_ignores_padding_lane",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::vec_tests::tests::vec3_extend_and_truncate_roundtrip",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::vec_tests::tests::vec3_normalize_unit_length",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::stress_tests::tests::stress_50k_euler_from_to_roundtrip",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": "50000 euler round-trips in 15.964ms  (319.3 ns/op)  [DEBUG]"
+        },
+        {
+          "name": "tests::vec_tests::tests::vec4_dot_with_self_is_length_sq",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::vec_tests::tests::vec4_normalize_unit_length",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::vec_tests::tests::vec3_reflect",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::vec_tests::tests::vec3_size_is_16_bytes",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::vec_tests::tests::vec4_size_is_16_bytes",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::wide_tests::tests::f32x4_arithmetic",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::wide_tests::tests::f32x4_is_finite",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::wide_tests::tests::f32x4_min_max_abs",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::wide_tests::tests::f32x4_new_and_array_roundtrip",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::wide_tests::tests::f32x4_blend_branchless",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::wide_tests::tests::f32x4_recip_sqrt_accuracy",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::wide_tests::tests::f32x4_size_align",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::wide_tests::tests::f32x4_splat_and_get",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::wide_tests::tests::f32x4_sqrt",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::wide_tests::tests::i16x8_add_sub",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::stress_tests::tests::stress_50k_quat_slerp",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": "50000 Quat slerp in 17.203ms  (344.1 ns/op)  [DEBUG]"
+        },
+        {
+          "name": "tests::wide_tests::tests::f32x4_recip_accuracy",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::wide_tests::tests::i16x8_cmpeq_bitmask",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::wide_tests::tests::i16x8_element_sum",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::wide_tests::tests::i16x8_saturating_sub",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::wide_tests::tests::i16x8_min_max",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::wide_tests::tests::i16x8_mul_lo",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::wide_tests::tests::i16x8_saturating_add",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::wide_tests::tests::i16x8_widen_roundtrip",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::wide_tests::tests::i16x8_size_align",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::wide_tests::tests::i32x4_abs",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::wide_tests::tests::i16x8_splat_and_to_array",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::wide_tests::tests::i32x4_add",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::wide_tests::tests::i32x4_cmp_and_blend",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::wide_tests::tests::i32x4_clamp",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::wide_tests::tests::i32x4_bitwise",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::wide_tests::tests::i32x4_element_sum",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::wide_tests::tests::i32x4_mul",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::wide_tests::tests::i32x4_from_array_roundtrip",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::wide_tests::tests::i32x4_min_max",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::wide_tests::tests::i32x4_min_max_element",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::wide_tests::tests::i32x4_neg",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::wide_tests::tests::i32x4_saturating",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::wide_tests::tests::i32x4_new_roundtrip",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::wide_tests::tests::i32x4_shifts",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::wide_tests::tests::i32x4_size_align",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::wide_tests::tests::i32x4_splat_and_get",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::wide_tests::tests::i32x4_sub",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::wide_tests::tests::i8x16_cmpeq_and_count",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::wide_tests::tests::i32x4_wrapping",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::wide_tests::tests::i8x16_abs",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::wide_tests::tests::i8x16_saturating",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::wide_tests::tests::i8x16_size_align",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::wide_tests::tests::imask4_bitops",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::wide_tests::tests::i8x16_splat_and_to_array",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::wide_tests::tests::imask16_from_i8x16_cmpeq",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::wide_tests::tests::imask4_false_all_zero",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::wide_tests::tests::imask8_from_i16x8_cmpeq",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::wide_tests::tests::imask4_true_all_set",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::wide_tests::tests::mask4_from_f32x4_comparison",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::wide_tests::tests::mask4_bitops",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::wide_tests::tests::mask4_false_true_constants",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::wide_tests::tests::quatx4_conjugate_is_inverse_for_unit",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::wide_tests::tests::quatx4_4_different_rotations_simultaneously",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::wide_tests::tests::quatx4_aos_soa_roundtrip",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::wide_tests::tests::quatx4_dot_self_is_one_for_unit_quats",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::wide_tests::tests::quatx4_identity_default",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::wide_tests::tests::quatx4_mul_matches_scalar",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::wide_tests::tests::quatx4_nlerp_stays_normalised",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::wide_tests::tests::quatx4_normalize_unit_length",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::wide_tests::tests::quatx4_rotate_matches_scalar",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::wide_tests::tests::quatx4_rotate_x_by_90y_is_neg_z",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::wide_tests::tests::quatx4_size_align",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::wide_tests::tests::u16x8_saturating_sub",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::wide_tests::tests::u16x8_saturating_add",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::wide_tests::tests::u16x8_unsigned_min_max",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::wide_tests::tests::u32x4_min_max",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::wide_tests::tests::u32x4_saturating_sub_no_underflow",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::wide_tests::tests::u32x4_saturating_add_no_overflow",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::wide_tests::tests::u32x4_unsigned_comparison",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::wide_tests::tests::u8x16_contains_and_count",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::wide_tests::tests::u8x16_element_sum_correct",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::wide_tests::tests::u8x16_saturating_sub",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::wide_tests::tests::u8x16_min_max_unsigned",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::wide_tests::tests::u8x16_saturating_add",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::wide_tests::tests::vec3x4_add",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::wide_tests::tests::vec3x4_axis_swizzle_xyz_is_identity",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::wide_tests::tests::vec3x4_aos_soa_roundtrip",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::wide_tests::tests::vec3x4_axis_swizzle_matches_scalar",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::wide_tests::tests::vec3x4_cross_anticommutative",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::wide_tests::tests::vec3x4_lerp_midpoint",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::wide_tests::tests::vec3x4_cross_basis",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::wide_tests::tests::vec3x4_dot_4_simultaneous",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::wide_tests::tests::vec3x4_lerp_per_lane_t",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::wide_tests::tests::vec3x4_mat4_transform_matches_scalar",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::wide_tests::tests::vec3x4_matches_scalar_transform",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::wide_tests::tests::vec3x4_normalize_degenerate_lane_safe",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::wide_tests::tests::vec3x4_normalize_unit_length",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::wide_tests::tests::vec3x4_select_branchless",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::wide_tests::tests::vec3x4_sub",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::wide_tests::tests::vec3x4_size_align",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::wide_tests::tests::vec3x4_splat",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::wide_tests::tests::vec3x8_axis_swizzle_matches_scalar",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::wide_tests::tests::vec3x8_axis_swizzle_matches_vec3x4_halves",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        },
+        {
+          "name": "tests::wide_tests::tests::vec3x8_axis_swizzle_xyz_is_identity",
+          "status": "passed",
+          "duration_ms": 0,
+          "output": ""
+        }
+      ]
+    }
+  ]
+}
