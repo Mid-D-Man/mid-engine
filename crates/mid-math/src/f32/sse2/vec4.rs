@@ -50,9 +50,9 @@ impl Vec4 {
     pub fn truncate(self) -> Vec3 {
         use crate::sse2::m128_from_f32x4;
         const MASK: __m128 = m128_from_f32x4([
-            f32::from_bits(0xFFFF_FFFF),
-            f32::from_bits(0xFFFF_FFFF),
-            f32::from_bits(0xFFFF_FFFF),
+            crate::const_bits::f32_from_bits(0xFFFF_FFFF),
+            crate::const_bits::f32_from_bits(0xFFFF_FFFF),
+            crate::const_bits::f32_from_bits(0xFFFF_FFFF),
             0.0,
         ]);
         Vec3(unsafe { _mm_and_ps(self.0, MASK) })

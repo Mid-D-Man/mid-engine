@@ -540,7 +540,7 @@ mod dispatch {
         // of the result is 1, i.e. round-to-even applies).
         // Combined: (man & round_bit) != 0 && (man & (3*round_bit - 1)) != 0
         pub const fn f32_to_f16_soft(value: f32) -> u16 {
-            let x    = value.to_bits();
+            let x    = crate::const_bits::f32_to_bits(value);
             let sign = x & 0x8000_0000u32;
             let exp  = x & 0x7F80_0000u32;
             let man  = x & 0x007F_FFFFu32;
@@ -589,7 +589,7 @@ mod dispatch {
         pub const fn f16_to_f32_soft(i: u16) -> f32 {
             // Signed zero short-circuit
             if i & 0x7FFF == 0 {
-                return f32::from_bits((i as u32) << 16);
+                return crate::const_bits::f32_from_bits((i as u32) << 16);
             }
 
             let half_sign = (i & 0x8000u16) as u32;
@@ -599,10 +599,10 @@ mod dispatch {
             // Infinity or NaN
             if half_exp == 0x7C00u32 {
                 return if half_man == 0 {
-                    f32::from_bits((half_sign << 16) | 0x7F80_0000u32)
+                    crate::const_bits::f32_from_bits((half_sign << 16) | 0x7F80_0000u32)
                 } else {
                     // Set MSB of mantissa → quiet NaN
-                    f32::from_bits((half_sign << 16) | 0x7FC0_0000u32 | (half_man << 13))
+                    crate::const_bits::f32_from_bits((half_sign << 16) | 0x7FC0_0000u32 | (half_man << 13))
                 };
             }
 
@@ -614,21 +614,21 @@ mod dispatch {
                 let e         = (half_man as u16).leading_zeros() - 6;
                 let exp_bits  = (127u32 - 15u32 - e) << 23;
                 let man_bits  = (half_man << (14 + e)) & 0x007F_FFFFu32;
-                return f32::from_bits(sign | exp_bits | man_bits);
+                return crate::const_bits::f32_from_bits(sign | exp_bits | man_bits);
             }
 
             // Normal f16 → normal f32
             let unbiased = ((half_exp as i32) >> 10) - 15;
             let exp_bits = ((unbiased + 127) as u32) << 23;
             let man_bits = (half_man & 0x03FFu32) << 13;
-            f32::from_bits(sign | exp_bits | man_bits)
+            crate::const_bits::f32_from_bits(sign | exp_bits | man_bits)
         }
 
         // ── f64 → binary16 ──────────────────────────────────────────────────
         // Uses the upper 32 bits of the f64 mantissa — the lower 32 bits are
         // completely lost in an f64→f16 conversion anyway (f16 has only 10 bits).
         pub const fn f64_to_f16_soft(value: f64) -> u16 {
-            let val: u64 = value.to_bits();
+            let val: u64 = crate::const_bits::f64_to_bits(value);
             let x        = (val >> 32) as u32;
 
             let sign = x & 0x8000_0000u32;

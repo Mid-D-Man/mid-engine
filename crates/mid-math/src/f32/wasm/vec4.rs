@@ -61,9 +61,9 @@ impl Vec4 {
     pub fn truncate(self) -> Vec3 {
         use crate::wasm::v128_from_f32x4;
         const MASK: v128 = v128_from_f32x4([
-            f32::from_bits(0xFFFF_FFFF),
-            f32::from_bits(0xFFFF_FFFF),
-            f32::from_bits(0xFFFF_FFFF),
+            crate::const_bits::f32_from_bits(0xFFFF_FFFF),
+            crate::const_bits::f32_from_bits(0xFFFF_FFFF),
+            crate::const_bits::f32_from_bits(0xFFFF_FFFF),
             0.0,
         ]);
         Vec3(v128_and(self.0, MASK))

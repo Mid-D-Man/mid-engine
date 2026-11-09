@@ -21,7 +21,7 @@ pub struct Mask4(pub(crate) v128);
 
 impl Mask4 {
     pub const FALSE: Self = Self(v128_from_f32x4([0.0; 4]));
-    pub const TRUE: Self  = Self(v128_from_f32x4([f32::from_bits(0xFFFF_FFFF); 4]));
+    pub const TRUE: Self  = Self(v128_from_f32x4([crate::const_bits::f32_from_bits(0xFFFF_FFFF); 4]));
 
     #[inline] pub fn any(self)  -> bool { v128_any_true(self.0) }
     #[inline] pub fn all(self)  -> bool { i32x4_all_true(self.0) }

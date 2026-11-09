@@ -23,10 +23,10 @@ pub struct Mask4(pub(crate) __m128);
 impl Mask4 {
     pub const FALSE: Self = unsafe { UCast { f: [0.0; 4] }.v };
     pub const TRUE: Self  = unsafe { UCast { f: [
-        f32::from_bits(0xFFFF_FFFF),
-        f32::from_bits(0xFFFF_FFFF),
-        f32::from_bits(0xFFFF_FFFF),
-        f32::from_bits(0xFFFF_FFFF),
+        crate::const_bits::f32_from_bits(0xFFFF_FFFF),
+        crate::const_bits::f32_from_bits(0xFFFF_FFFF),
+        crate::const_bits::f32_from_bits(0xFFFF_FFFF),
+        crate::const_bits::f32_from_bits(0xFFFF_FFFF),
     ] }.v };
 
     #[inline]

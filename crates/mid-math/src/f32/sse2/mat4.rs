@@ -36,9 +36,9 @@ use crate::EPSILON;
 
 /// All-ones lanes 0-2, lane 3 = 0.
 const XYZ_MASK: __m128 = m128_from_f32x4([
-    f32::from_bits(0xFFFF_FFFF),
-    f32::from_bits(0xFFFF_FFFF),
-    f32::from_bits(0xFFFF_FFFF),
+    crate::const_bits::f32_from_bits(0xFFFF_FFFF),
+    crate::const_bits::f32_from_bits(0xFFFF_FFFF),
+    crate::const_bits::f32_from_bits(0xFFFF_FFFF),
     0.0_f32,
 ]);
 

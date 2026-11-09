@@ -253,3 +253,51 @@ failure until now. Unrelated to the swizzle fix above and doesn't
 block `ecs-vs-bevy-ecs` (which only needs `mid-ecs`, not `mid-geom`),
 so it wasn't touched here. Flagging plainly rather than fixing it
 without being asked, since it's a real, separate break.
+
+### `const_bits.rs`, and the `const` bit casts in `storage/f16.rs`, `f32/{sse2,wasm}/{vec4,quat,mat4}.rs`, `wide/float/{sse2,wasm}/mask4.rs`
+
+`f32::from_bits`, `f32::to_bits` and `f64::to_bits` only became `const fn`
+in rustc 1.83. The crate called them from `const` items and `const fn`s in
+24 places, so it could not be built on anything older: rustc 1.75 stopped
+with 20 errors on x86_64 (7 in `storage/f16.rs`, 13 in the four SSE2
+files), and the wasm backends have 4 more calls in the same shape
+(`f32/wasm/vec4.rs`, `wide/float/wasm/mask4.rs`). Those wasm sites could
+not be built on 1.75 here, since no 1.75 wasm32 standard library was
+available, so they were fixed by pattern and compiled on a newer rustc.
+
+Fixed with a new private module, `const_bits.rs`, holding three `const fn`s
+(`f32_from_bits`, `f32_to_bits`, `f64_to_bits`) built on
+`core::mem::transmute`, which has been `const` since 1.56. This is the
+technique `sse2::m128_from_f32x4` already used. Exactly those 24 call sites
+were switched to the new functions. Every other `from_bits`/`to_bits` in
+the crate was left alone: the ones in runtime code compile fine on old
+compilers, and the `from_bits` constructors on `f16`, `bf16` and the
+`f8`/`f4` types are the crate's own methods, not std's.
+
+Checked:
+- The patched crate builds on rustc 1.75 in debug and release for the
+  default, `simd`, `avx2`, `force-scalar` and `ffi` feature sets. The
+  unpatched crate fails on 1.75 with exactly the 20 errors above.
+- `cargo test -p mid-math --lib` passes 654/654 on rustc 1.97 both before
+  and after the patch. The 659 quoted in an older entry above predates
+  other changes to the crate; the count was not re-derived.
+- Release assembly is identical before and after: 0 differing lines out of
+  34,600 for the crate on x86_64 and 0 out of 44,490 on wasm32 with
+  `simd128`, and 0 out of 502 and 779 lines for a probe crate that keeps
+  the `0xFFFF_FFFF` masks and the f16 conversions live. Compiler-generated
+  symbol hashes were normalized first. The wasm build confirmed the wasm
+  backend was compiled, so the 4 wasm sites were exercised. This is
+  expected: the changed expressions either initialize `const` items, which
+  the compiler folds to the same bytes, or are `#[inline(always)]`
+  wrappers around the same bit cast.
+
+Not checked: NEON (no `const` site of this kind was found in those
+backends, but they were not built), the nightly-only `coresimd` feature,
+and wasm32 on a pre-1.83 compiler.
+
+Found while testing, not fixed: the `mint` feature does not compile, on
+rustc 1.97 as well as 1.75 and with or without this patch.
+`features/mint_conversions/f32.rs` builds `Mat2` values with
+`x_axis`/`y_axis` fields that `Mat2` does not have (the same family of
+mismatch as the `Mat4` note above). Unrelated to the toolchain, so it was
+not touched.

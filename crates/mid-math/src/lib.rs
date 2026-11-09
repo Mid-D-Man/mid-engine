@@ -33,6 +33,7 @@ pub mod bvec;
 pub mod deref;
 pub mod swizzle;
 mod features;
+mod const_bits;
 pub mod f32;
 pub mod f64;
 // C-ABI exports, ~1,300+ #[no_mangle] extern "C" functions as of this
