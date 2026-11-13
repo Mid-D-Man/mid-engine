@@ -19,6 +19,12 @@ can't cross a Rust generic, and the only concrete backend that exists
 today is `LoopbackTransport`, not useful to a real FFI caller. Revisit
 once `mid-net-transport-quinn` exists.
 
+**Update:** `mid-net-transport-quinn` exists, and the C interface for it is a
+separate crate, `mid-net-transport-quinn-ffi` (see "Transport" below). It
+exposes the `Transport` itself (connect, accept, send/poll datagrams and
+reliable messages) instead of `Connection<T>`: a C game runs its own protocol on
+top. `Connection<T>` and `PlayerState`/`PlayerEvent` stay as they are here.
+
 - `PlayerState`: `#[repr(C)]` added directly to the type in
   `mid-net-wire` — all fields are plain `f32`, already C-compatible, so
   it crosses the boundary by value with no separate FFI-mirror struct to
@@ -113,6 +119,7 @@ crates/mid-net/
   reliable/                            — mid-net-reliable: frame headers, RTT, retransmit buffer. Depends on mid-net-wire only.
   transport-quinn/                     — mid-net-transport-quinn: native Transport impl over web-transport-quinn. Written, unverified — see "Transport" below.
   transport-wasm/                       — mid-net-transport-wasm: browser Transport impl over web-transport-wasm. Written, unverified even more so than transport-quinn — see "Transport" below.
+  transport-quinn-ffi/                  — mid-net-transport-quinn-ffi: a C ABI over transport-quinn (server bind/accept, client connect, per-connection send/poll), for native C games. Depends on transport-quinn, so it is NOT in the facade. See below.
 ```
 
 `mid-net-transport-quinn` is deliberately **not** a dependency of the
@@ -319,6 +326,33 @@ synchronous confirmation), but worth being explicit that a message can
 still be silently dropped if the writer task itself has already died
 (surfaces as `QuinnTransportError::WorkerGone` on the *next* call, not
 the one that actually got dropped).
+
+### `mid-net-transport-quinn-ffi` — the C interface over the QUIC transport
+
+A native game written in C (Tower of Babylon is the first) needs more than the packet codec that `mid_net.h` exposes: it needs to *connect*, *accept*, *send* and *poll* over the real transport. This crate is that: a C ABI over `mid-net-transport-quinn`, in its own crate so the facade stays free of quinn and tokio (same reason as above). It exposes exactly the five calls of the `Transport` trait per connection, plus what the trait deliberately leaves out, establishing the connection. It does **not** involve `PlayerState` / `PlayerEvent`: it moves bytes, and the caller's protocol decides what they mean (the game runs its own command and snapshot protocol on top).
+
+```
+server:  mid_net_quic_server_open(bind_host, port, &server)    mid_net_quic_server_port(server)
+         mid_net_quic_server_accept(server, &conn)   -> 1 new client / 0 none / <0 error      mid_net_quic_server_close(server)
+client:  mid_net_quic_connect(host, port, &conn)     -> returns at once, state CONNECTING
+conn:    mid_net_quic_conn_state(conn)  0 connecting / 1 connected / 2 closed      mid_net_quic_conn_error(conn, buf, cap)
+         mid_net_quic_send_datagram / recv_datagram      mid_net_quic_send_reliable(conn, stream, ..) / recv_reliable(conn, &stream, ..)
+         mid_net_quic_conn_close(conn, linger_ms)
+```
+
+Hand-written header: `crates/mid-net/transport-quinn-ffi/smoke-test/mid_net_quic.h` (the game keeps a copy in `src/net/mid_net_quic.h`: update both when it changes). Conventions are `ffi.rs`'s: status codes (the first three carry the same numbers as `MidNetStatus`), every body in `catch_unwind`, `unsafe fn` with `# Safety` for every raw-pointer function, null checks first.
+
+**Decisions and things to know:**
+- **One process-wide Tokio runtime**, two worker threads, created on first use. The C side never sees it; every call is non-blocking and poll-based, matching the trait.
+- **IPv4 only, deliberately.** `web-transport-quinn`'s `ClientBuilder` binds `[::]:0` and `unwrap()`s it, which panics where IPv6 sockets do not exist (this sandbox had none, which is how it was found; a kernel with IPv6 disabled would do the same). This crate builds the client itself: `quinn::Endpoint::client("0.0.0.0:0")`, or `[::]:0` only if the host given is an IPv6 literal. The existing `loopback_integration` tests of `mid-net-transport-quinn` still use `ClientBuilder` and so fail on a machine with no IPv6; that is the library's behaviour, not a regression.
+- **The client does not verify the server's certificate** (the `dangerous()` pattern `examples/headless-server` uses): encrypted, not authenticated. Next step: pinned hashes (`ClientBuilder::with_server_certificate_hashes` shows the shape). The server makes a fresh self-signed certificate for `localhost` on every open (loading a real certificate is not done).
+- **Client keep-alive** every 5 s, so a quiet lobby does not time out. The server side uses `ServerBuilder`'s defaults.
+- **`send_reliable` returns when the message is handed to the writer task**, not when it is on the wire (inherited from `mid-net-transport-quinn`); `conn_close(conn, linger_ms)` therefore waits `linger_ms` in the background before closing the session, so a last `Disconnect` still goes out. A connection that is dropped without a linger can lose what was queued.
+- **An empty datagram is not delivered** (it carries nothing) and an empty reliable message is refused. A datagram too big for one is `SendFailed`. A receive buffer that is too small gets `BufferTooSmall` and the message is dropped, as it would be on the wire.
+- **Crypto backend is a feature**: `aws-lc-rs` (default, `web-transport-quinn`'s own) or `ring` (`--no-default-features --features ring`), forwarded through `mid-net-transport-quinn`, whose `web-transport-quinn` dependency is now `default-features = false`. `ring` exists for targets where `aws-lc-sys` is hard to cross-compile (Android armv7 is the one to watch). Both builds pass all tests here; the `ring` build contains no `aws-lc` crate at all. **Neither has been cross-compiled for Android** (no NDK where this was written).
+- **Size:** the release `libmid_net_quic.so` is 5.3 MB on x86_64 with the default profile; `lto` and `strip` in a release profile would shrink it.
+
+**Tests:** `tests/ffi_loopback.rs` (14 tests, real QUIC over the loopback: ports, accept, datagrams both ways, empty and oversized datagrams, a small buffer, reliable messages in order with their stream ids, a 200 KB message in one piece, empty reliable refused, a last message sent before closing with a linger still arrives, a peer that closes is seen as closed, three clients get three connections, bad arguments give codes, a connection that is still connecting says so, a closed connection explains itself) and `smoke-test/test.c` (a real C program with 23 checks, built against both `libmid_net_quic.so` and `libmid_net_quic.a` with gcc; the build lines are at the bottom of the file). **Verified with rustc 1.99.1, the version the CI uses, on Linux x86_64 only.** Not run in CI yet: a workflow step for the C smoke test is the next thing (workflow files are not part of the change that added this crate).
 
 ### `mid-net-transport-wasm` — written, verified even less than transport-quinn
 

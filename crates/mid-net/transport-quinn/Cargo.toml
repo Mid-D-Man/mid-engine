@@ -6,9 +6,17 @@ edition = "2021"
 [lib]
 name = "mid_net_transport_quinn"
 
+# Exactly one crypto backend. `aws-lc-rs` is web-transport-quinn's own default and stays ours; `ring` is the
+# fallback for targets where aws-lc-sys is hard to cross-compile (Android armv7). The choice is forwarded,
+# so the C-ABI crate (mid-net-transport-quinn-ffi) can offer it too.
+[features]
+default = ["aws-lc-rs"]
+aws-lc-rs = ["web-transport-quinn/aws-lc-rs"]
+ring = ["web-transport-quinn/ring"]
+
 [dependencies]
 mid-net-transport = { path = "../transport" }
-web-transport-quinn = "0.11"
+web-transport-quinn = { version = "0.11", default-features = false }
 bytes = "1"
 tokio = { version = "1", default-features = false, features = ["rt", "sync"] }
 

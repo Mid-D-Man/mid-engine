@@ -27,6 +27,7 @@ members = [
     "crates/mid-net/transport",
     "crates/mid-net/reliable",
     "crates/mid-net/transport-quinn",
+    "crates/mid-net/transport-quinn-ffi",
     "crates/mid-net/transport-wasm",
     "crates/mid-net/transport-wasm/wasm-test-server",
     "crates/mid-ecs",
