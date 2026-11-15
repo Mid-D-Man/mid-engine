@@ -179,9 +179,8 @@ lifecycle observer sees spawns made by systems).
 
 ## What is not built, on purpose
 
-- Observer propagation (the hierarchy it needs is built, see `docs/mid-ecs-hierarchy.md`;
-  the propagation is not), and the rest listed in `docs/mid-ecs-events.md` (messages,
-  states and observers are built).
+- What `docs/mid-ecs-events.md` lists as not built (messages, states, observers and
+  observer propagation through `ChildOf` are built).
 - The 128 Hz network tick (see `labels.rs`).
 - A startup stage, a `Last` stage, schedule order as data. Add when something
   needs one.

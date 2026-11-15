@@ -50,6 +50,40 @@
 //! longer finds the component, and an observer of [`Despawn<T>`] is told
 //! about an entity that is gone. For the component's last value, use a hook.
 //!
+//! # Propagation
+//!
+//! An event that sets [`Event::PROPAGATE`] bubbles up the hierarchy
+//! (`docs/mid-ecs-hierarchy.md`). Triggered at an entity with
+//! [`World::trigger_targets`], it is delivered there first, then at that
+//! entity's parent, then its grandparent, and so on up to the root, and at
+//! each step the global observers of the event run and the ones added for that
+//! entity with [`World::observe`]. [`On::target`] is the entity of the step
+//! and [`On::original_target`] the one the event was first triggered at. An
+//! observer stops the climb with `on.propagate(false)`.
+//!
+//! ```
+//! use mid_ecs::observer::{Event, On};
+//! use mid_ecs::{ResMut, World};
+//!
+//! struct Click;
+//! impl Event for Click {
+//!     const PROPAGATE: bool = true;
+//! }
+//!
+//! #[derive(Default)]
+//! struct Heard(Vec<&'static str>);
+//!
+//! let mut world = World::new();
+//! world.insert_resource(Heard::default());
+//! let panel = world.spawn();
+//! let button = world.spawn_child(panel).unwrap();
+//! world.observe(panel, |_on: On<Click>, mut heard: ResMut<Heard>| {
+//!     heard.0.push("panel");
+//! });
+//! world.trigger_targets(Click, button);
+//! assert_eq!(world.get_resource::<Heard>().unwrap().0, ["panel"]);
+//! ```
+//!
 //! # Order
 //!
 //! A trigger made from inside an observer (by `Commands`, the way an
@@ -64,6 +98,7 @@ use std::collections::{HashMap, VecDeque};
 use std::marker::PhantomData;
 use std::ops::Deref;
 use std::panic::{catch_unwind, resume_unwind, AssertUnwindSafe};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::hooks::HookKind;
 use crate::system::{IntoSystem, System};
@@ -87,6 +122,12 @@ pub struct Lifecycle {
 /// A value that can be triggered. Implement it with an empty impl:
 /// `impl Event for Hit {}`.
 pub trait Event: Send + Sync + 'static {
+    /// Whether an event of this type, triggered at an entity, climbs to that
+    /// entity's parents and is delivered at each (see the module docs,
+    /// "Propagation"). Off unless the type says otherwise; the lifecycle
+    /// events never do.
+    const PROPAGATE: bool = false;
+
     /// `Some` for the lifecycle events of this module; `None` for every
     /// event a user writes.
     #[doc(hidden)]
@@ -172,6 +213,8 @@ lifecycle_event!(
 pub struct On<'w, E: Event> {
     event: &'w E,
     target: Option<Entity>,
+    original: Option<Entity>,
+    propagate: &'w AtomicBool,
 }
 
 impl<E: Event> On<'_, E> {
@@ -180,10 +223,26 @@ impl<E: Event> On<'_, E> {
         self.event
     }
 
-    /// The entity the event was triggered at ([`World::trigger_targets`]),
-    /// `None` for [`World::trigger`].
+    /// The entity the event is being delivered at: the one it was triggered
+    /// at ([`World::trigger_targets`]), or for an event that propagates
+    /// ([`Event::PROPAGATE`]) the entity of this step of its climb. `None`
+    /// for [`World::trigger`].
     pub fn target(&self) -> Option<Entity> {
         self.target
+    }
+
+    /// The entity the event was first triggered at. The same as
+    /// [`Self::target`] unless the event is propagating.
+    pub fn original_target(&self) -> Option<Entity> {
+        self.original
+    }
+
+    /// Whether the event goes on to the parent of the current entity after
+    /// the observers of this step have all run. `true` at the start for an
+    /// event with [`Event::PROPAGATE`], and the last observer to set it wins.
+    /// Has no effect on an event that does not propagate.
+    pub fn propagate(&mut self, should_propagate: bool) {
+        self.propagate.store(should_propagate, Ordering::Relaxed);
     }
 }
 
@@ -195,8 +254,19 @@ impl<E: Event> Deref for On<'_, E> {
     }
 }
 
-/// The event being delivered, as a resource: how `On<E>` reaches it.
-struct TriggerSlot<E: Event>(Option<(E, Option<Entity>)>);
+/// The event being delivered and where it is, as a resource: how `On<E>`
+/// reaches them.
+struct Delivery<E: Event> {
+    event: E,
+    /// The entity of the current step.
+    target: Option<Entity>,
+    /// The entity the event was first triggered at.
+    original: Option<Entity>,
+    /// Whether the event climbs on once this step's observers have run.
+    propagate: AtomicBool,
+}
+
+struct TriggerSlot<E: Event>(Option<Delivery<E>>);
 
 // SAFETY: registers a read of resource `TriggerSlot<E>`, the only thing it
 // touches.
@@ -221,9 +291,11 @@ unsafe impl<E: Event> SystemParam for On<'_, E> {
         // SAFETY: the read was registered and checked against every other
         // parameter; the world only writes the slot between observers.
         match unsafe { world.resource_with_ticks::<TriggerSlot<E>>() } {
-            Some((TriggerSlot(Some((event, target))), _)) => On {
-                event,
-                target: *target,
+            Some((TriggerSlot(Some(delivery)), _)) => On {
+                event: &delivery.event,
+                target: delivery.target,
+                original: delivery.original,
+                propagate: &delivery.propagate,
             },
             Some((TriggerSlot(None), _)) => panic!(
                 "`On<{}>` used outside a trigger (system `{}`): an observer must be added with \\
@@ -389,16 +461,67 @@ impl World {
         }
     }
 
-    /// Runs the observers of `E` for one trigger.
+    /// Runs the observers of `E` for one trigger: at `target`, and for an
+    /// event that propagates at each ancestor in turn.
     fn deliver<E: Event>(&mut self, event: E, target: Option<Entity>) {
         let ids = match self.observers.by_event.get(&TypeId::of::<E>()) {
             Some(ids) if !ids.is_empty() => ids.clone(),
             _ => return,
         };
         if let Some(slot) = self.get_resource_mut::<TriggerSlot<E>>() {
-            slot.0 = Some((event, target));
+            slot.0 = Some(Delivery {
+                event,
+                target,
+                original: target,
+                propagate: AtomicBool::new(E::PROPAGATE),
+            });
         }
-        for id in ids {
+        let mut here = target;
+        // Brent's cycle check, for a `ChildOf` loop made by raw inserts in a
+        // world that never enabled the hierarchy (which refuses them).
+        let mut marker = target;
+        let mut since_marker = 0usize;
+        let mut window = 1usize;
+        loop {
+            self.run_observers(&ids, here);
+            if !E::PROPAGATE {
+                break;
+            }
+            let Some(at) = here else { break };
+            let climbs = self
+                .get_resource::<TriggerSlot<E>>()
+                .and_then(|slot| slot.0.as_ref())
+                .is_some_and(|delivery| delivery.propagate.load(Ordering::Relaxed));
+            if !climbs {
+                break;
+            }
+            let Some(parent) = self.parent(at) else { break };
+            since_marker += 1;
+            if Some(parent) == marker {
+                break;
+            }
+            if since_marker == window {
+                marker = Some(parent);
+                window *= 2;
+                since_marker = 0;
+            }
+            if let Some(delivery) = self
+                .get_resource_mut::<TriggerSlot<E>>()
+                .and_then(|slot| slot.0.as_mut())
+            {
+                delivery.target = Some(parent);
+            }
+            here = Some(parent);
+        }
+        if let Some(slot) = self.get_resource_mut::<TriggerSlot<E>>() {
+            slot.0 = None;
+        }
+    }
+
+    /// Runs, in order, those of `ids` that are not scoped to another entity
+    /// than `target`.
+    fn run_observers(&mut self, ids: &[u64], target: Option<Entity>) {
+        for &id in ids {
             let Some(scope) = self.observers.entries.get(&id).map(|entry| entry.scope) else {
                 continue; // removed since
             };
@@ -424,9 +547,6 @@ impl World {
                 entry.system = Some(system);
             }
         }
-        if let Some(slot) = self.get_resource_mut::<TriggerSlot<E>>() {
-            slot.0 = None;
-        }
     }
 }
 
@@ -434,6 +554,7 @@ impl World {
 mod tests {
     use super::*;
     use crate::commands::Commands;
+    use crate::hierarchy::ChildOf;
     use crate::message::{MessageReader, MessageWriter};
     use crate::schedule::{IntoScheduleConfigs, Schedule};
     use crate::system_param::{Local, Query, Res, ResMut};
@@ -1048,5 +1169,511 @@ mod tests {
         let e = w.spawn();
         w.insert_static(e, Mark(1));
         assert_eq!(w.get_static::<Tag>(e).unwrap().0, 99);
+    }
+
+    // ── propagation ──────────────────────────────────────────────────
+
+    struct Climb;
+    impl Event for Climb {
+        const PROPAGATE: bool = true;
+    }
+
+    struct Flat;
+    impl Event for Flat {}
+
+    #[derive(Default)]
+    struct Names(std::collections::HashMap<Entity, &'static str>);
+
+    impl Names {
+        fn of(&self, entity: Option<Entity>) -> &'static str {
+            entity.map_or("none", |e| self.0.get(&e).copied().unwrap_or("?"))
+        }
+    }
+
+    struct Other(Entity);
+
+    #[derive(Default)]
+    struct Count(usize);
+
+    fn climb_global(on: On<Climb>, names: Res<Names>, mut log: ResMut<Log>) {
+        log.0.push(format!(
+            "g:{}<-{}",
+            names.of(on.target()),
+            names.of(on.original_target())
+        ));
+    }
+
+    fn climb_scoped(on: On<Climb>, names: Res<Names>, mut log: ResMut<Log>) {
+        log.0.push(format!("s:{}", names.of(on.target())));
+    }
+
+    fn flat_scoped(on: On<Flat>, names: Res<Names>, mut log: ResMut<Log>) {
+        log.0.push(format!(
+            "s:{}<-{}",
+            names.of(on.target()),
+            names.of(on.original_target())
+        ));
+    }
+
+    fn stop_here(mut on: On<Climb>) {
+        on.propagate(false);
+    }
+
+    fn go_on(mut on: On<Climb>) {
+        on.propagate(true);
+    }
+
+    fn visit(on: On<Climb>, names: Res<Names>, mut log: ResMut<Log>) {
+        log.0.push(names.of(on.target()).to_string());
+    }
+
+    /// A world with `Log` and `Names`, and `root > mid > leaf`.
+    fn chain() -> (World, Entity, Entity, Entity) {
+        let mut w = world();
+        w.insert_resource(Names::default());
+        let root = w.spawn();
+        let mid = w.spawn_child(root).unwrap();
+        let leaf = w.spawn_child(mid).unwrap();
+        for (e, name) in [(root, "root"), (mid, "mid"), (leaf, "leaf")] {
+            w.get_resource_mut::<Names>().unwrap().0.insert(e, name);
+        }
+        (w, leaf, mid, root)
+    }
+
+    /// An entity with a name and, if given, a raw `ChildOf`, made without
+    /// enabling the hierarchy (so nothing refuses a loop).
+    fn raw(w: &mut World, name: &'static str, parent: Option<Entity>) -> Entity {
+        let e = w.spawn();
+        if let Some(p) = parent {
+            w.insert_static(e, ChildOf(p));
+        }
+        w.get_resource_mut::<Names>().unwrap().0.insert(e, name);
+        e
+    }
+
+    fn raw_world() -> World {
+        let mut w = world();
+        w.insert_resource(Names::default());
+        w
+    }
+
+    #[test]
+    fn an_event_that_does_not_propagate_stays_at_its_target() {
+        let (mut w, leaf, mid, root) = chain();
+        w.observe(leaf, flat_scoped);
+        w.observe(mid, flat_scoped);
+        w.observe(root, flat_scoped);
+        w.trigger_targets(Flat, leaf);
+        assert_eq!(logged(&w), ["s:leaf<-leaf"]);
+        assert!(!Flat::PROPAGATE);
+        assert!(Climb::PROPAGATE);
+    }
+
+    #[test]
+    fn a_propagating_event_climbs_to_every_ancestor_nearest_first() {
+        let (mut w, leaf, mid, root) = chain();
+        w.observe(root, climb_scoped);
+        w.observe(leaf, climb_scoped);
+        w.observe(mid, climb_scoped);
+        w.trigger_targets(Climb, leaf);
+        assert_eq!(logged(&w), ["s:leaf", "s:mid", "s:root"]);
+    }
+
+    #[test]
+    fn global_observers_run_at_every_step_and_know_where_it_started() {
+        let (mut w, leaf, _mid, _root) = chain();
+        w.add_observer(climb_global);
+        w.trigger_targets(Climb, leaf);
+        assert_eq!(logged(&w), ["g:leaf<-leaf", "g:mid<-leaf", "g:root<-leaf"]);
+    }
+
+    #[test]
+    fn within_a_step_global_and_scoped_observers_run_in_the_order_added() {
+        let (mut w, leaf, mid, _root) = chain();
+        w.observe(leaf, climb_scoped);
+        w.add_observer(climb_global);
+        w.observe(mid, climb_scoped);
+        w.trigger_targets(Climb, leaf);
+        assert_eq!(
+            logged(&w),
+            [
+                "s:leaf",
+                "g:leaf<-leaf",
+                "g:mid<-leaf",
+                "s:mid",
+                "g:root<-leaf"
+            ]
+        );
+    }
+
+    #[test]
+    fn propagate_false_ends_the_climb_after_the_step_it_was_said_in() {
+        let (mut w, leaf, mid, root) = chain();
+        w.observe(leaf, climb_scoped);
+        w.observe(mid, stop_here);
+        w.observe(mid, climb_scoped);
+        w.observe(root, climb_scoped);
+        w.trigger_targets(Climb, leaf);
+        assert_eq!(
+            logged(&w),
+            ["s:leaf", "s:mid"],
+            "the rest of the step still runs, the next step does not"
+        );
+    }
+
+    #[test]
+    fn the_last_observer_of_a_step_to_set_the_flag_wins() {
+        let (mut w, leaf, mid, root) = chain();
+        w.observe(mid, stop_here);
+        w.observe(mid, go_on);
+        w.observe(root, climb_scoped);
+        w.trigger_targets(Climb, leaf);
+        assert_eq!(logged(&w), ["s:root"], "stop, then go on: it climbs");
+
+        let (mut w, leaf, mid, root) = chain();
+        w.observe(mid, go_on);
+        w.observe(mid, stop_here);
+        w.observe(root, climb_scoped);
+        w.trigger_targets(Climb, leaf);
+        assert!(logged(&w).is_empty(), "go on, then stop: it stops");
+    }
+
+    #[test]
+    fn each_trigger_starts_with_the_flag_set() {
+        fn stop_once(mut on: On<Climb>, mut n: Local<u32>) {
+            *n += 1;
+            if *n == 1 {
+                on.propagate(false);
+            }
+        }
+        let (mut w, leaf, mid, root) = chain();
+        w.observe(mid, stop_once);
+        w.observe(root, climb_scoped);
+        w.trigger_targets(Climb, leaf);
+        assert!(logged(&w).is_empty());
+        w.trigger_targets(Climb, leaf);
+        assert_eq!(logged(&w), ["s:root"]);
+    }
+
+    #[test]
+    fn propagate_does_nothing_for_an_event_that_does_not_propagate() {
+        fn go_flat(mut on: On<Flat>) {
+            on.propagate(true);
+        }
+        let (mut w, leaf, mid, _root) = chain();
+        w.observe(leaf, go_flat);
+        w.observe(mid, flat_scoped);
+        w.trigger_targets(Flat, leaf);
+        assert!(logged(&w).is_empty());
+    }
+
+    #[test]
+    fn an_event_with_no_target_does_not_climb() {
+        let (mut w, _leaf, _mid, _root) = chain();
+        w.add_observer(climb_global);
+        w.trigger(Climb);
+        assert_eq!(logged(&w), ["g:none<-none"]);
+    }
+
+    #[test]
+    fn an_event_at_a_root_has_one_step() {
+        let (mut w, _leaf, _mid, root) = chain();
+        w.add_observer(climb_global);
+        w.trigger_targets(Climb, root);
+        assert_eq!(logged(&w), ["g:root<-root"]);
+    }
+
+    #[test]
+    fn a_dead_target_is_delivered_to_once_and_goes_no_further() {
+        let (mut w, leaf, mid, _root) = chain();
+        w.observe(mid, climb_scoped);
+        w.add_observer(climb_global);
+        w.despawn(leaf);
+        w.trigger_targets(Climb, leaf);
+        assert_eq!(logged(&w), ["g:leaf<-leaf"]);
+    }
+
+    #[test]
+    fn an_observer_that_moves_the_current_entity_changes_the_route() {
+        fn move_away(on: On<Climb>, other: Res<Other>, mut commands: Commands) {
+            commands.entity(on.target().unwrap()).set_parent(other.0);
+        }
+        let (mut w, leaf, mid, _root) = chain();
+        let other = w.spawn();
+        w.get_resource_mut::<Names>()
+            .unwrap()
+            .0
+            .insert(other, "other");
+        w.insert_resource(Other(other));
+        w.observe(leaf, climb_scoped);
+        w.observe(leaf, move_away);
+        w.observe(mid, climb_scoped);
+        w.observe(other, climb_scoped);
+        w.trigger_targets(Climb, leaf);
+        assert_eq!(
+            logged(&w),
+            ["s:leaf", "s:other"],
+            "the commands were applied before the next step was chosen"
+        );
+    }
+
+    #[test]
+    fn an_observer_that_despawns_the_current_entity_ends_the_climb() {
+        fn despawn_self(on: On<Climb>, mut commands: Commands) {
+            commands.despawn(on.target().unwrap());
+        }
+        let (mut w, leaf, mid, root) = chain();
+        w.observe(leaf, climb_scoped);
+        w.observe(mid, climb_scoped);
+        w.observe(mid, despawn_self);
+        w.observe(root, climb_scoped);
+        w.trigger_targets(Climb, leaf);
+        assert_eq!(logged(&w), ["s:leaf", "s:mid"]);
+        assert!(!w.is_alive(mid) && !w.is_alive(leaf) && w.is_alive(root));
+    }
+
+    #[test]
+    fn a_trigger_made_by_an_observer_waits_for_the_whole_climb() {
+        fn queue_flat(_on: On<Climb>, mut commands: Commands) {
+            commands.trigger(Flat);
+        }
+        fn on_flat(_on: On<Flat>, mut log: ResMut<Log>) {
+            log.0.push("flat".into());
+        }
+        let (mut w, leaf, mid, root) = chain();
+        w.observe(leaf, climb_scoped);
+        w.observe(leaf, queue_flat);
+        w.observe(mid, climb_scoped);
+        w.observe(root, climb_scoped);
+        w.add_observer(on_flat);
+        w.trigger_targets(Climb, leaf);
+        assert_eq!(logged(&w), ["s:leaf", "s:mid", "s:root", "flat"]);
+    }
+
+    #[test]
+    fn an_observer_added_during_a_climb_misses_the_rest_of_it() {
+        fn add_global(mut commands: Commands, _on: On<Climb>) {
+            commands.add_observer(climb_global);
+        }
+        let (mut w, leaf, _mid, _root) = chain();
+        w.observe(leaf, add_global);
+        w.trigger_targets(Climb, leaf);
+        assert!(
+            logged(&w).is_empty(),
+            "the observers of a trigger are fixed when it starts"
+        );
+        assert_eq!(w.observer_count(), 2);
+    }
+
+    #[test]
+    fn lifecycle_events_do_not_climb() {
+        fn scoped_add(on: On<Add<Mark>>, names: Res<Names>, mut log: ResMut<Log>) {
+            log.0.push(format!("add {}", names.of(on.target())));
+        }
+        let (mut w, leaf, mid, _root) = chain();
+        w.observe(mid, scoped_add);
+        w.insert_static(leaf, Mark(1));
+        assert!(logged(&w).is_empty());
+        w.insert_static(mid, Mark(2));
+        assert_eq!(logged(&w), ["add mid"], "the observer itself works");
+        assert!(!Add::<Mark>::PROPAGATE);
+    }
+
+    #[test]
+    fn commands_trigger_a_propagating_event_the_same_way() {
+        fn relay(_on: On<Hit>, leaf: Res<Other>, mut commands: Commands) {
+            commands.entity(leaf.0).trigger(Climb);
+            commands.trigger_targets(Climb, leaf.0);
+        }
+        let (mut w, leaf, mid, root) = chain();
+        w.insert_resource(Other(leaf));
+        w.observe(mid, climb_scoped);
+        w.observe(root, climb_scoped);
+        w.add_observer(relay);
+        w.trigger(Hit(0));
+        assert_eq!(logged(&w), ["s:mid", "s:root", "s:mid", "s:root"]);
+    }
+
+    #[test]
+    fn propagation_needs_only_a_child_of_not_the_hierarchy_hooks() {
+        let mut w = raw_world();
+        let root = raw(&mut w, "root", None);
+        let kid = raw(&mut w, "kid", Some(root));
+        w.add_observer(visit);
+        w.trigger_targets(Climb, kid);
+        assert_eq!(logged(&w), ["kid", "root"]);
+    }
+
+    #[test]
+    fn a_long_chain_is_climbed_by_a_loop_not_by_recursion() {
+        fn count(_on: On<Climb>, mut n: ResMut<Count>) {
+            n.0 += 1;
+        }
+        const DEPTH: usize = 5_000;
+        let mut w = raw_world();
+        w.insert_resource(Count::default());
+        let mut at = raw(&mut w, "top", None);
+        for _ in 0..DEPTH {
+            at = raw(&mut w, "below", Some(at));
+        }
+        w.add_observer(count);
+        w.trigger_targets(Climb, at);
+        assert_eq!(w.get_resource::<Count>().unwrap().0, DEPTH + 1);
+    }
+
+    #[test]
+    fn a_loop_of_raw_child_of_ends_the_climb() {
+        // A world that never enabled the hierarchy does not refuse a loop;
+        // the climb notices it instead of running forever. Each entity of a
+        // loop is delivered to once or twice.
+        let mut w = raw_world();
+        let a = raw(&mut w, "a", None);
+        w.insert_static(a, ChildOf(a));
+        w.add_observer(visit);
+        w.trigger_targets(Climb, a);
+        assert_eq!(logged(&w), ["a"], "a parent that is oneself");
+
+        let mut w = raw_world();
+        let a = raw(&mut w, "a", None);
+        let b = raw(&mut w, "b", Some(a));
+        w.insert_static(a, ChildOf(b));
+        w.add_observer(visit);
+        w.trigger_targets(Climb, a);
+        assert_eq!(logged(&w), ["a", "b", "a"], "two in a loop");
+
+        let mut w = raw_world();
+        let a = raw(&mut w, "a", None);
+        let b = raw(&mut w, "b", Some(a));
+        let c = raw(&mut w, "c", Some(b));
+        w.insert_static(a, ChildOf(c));
+        w.add_observer(visit);
+        w.trigger_targets(Climb, a);
+        assert_eq!(
+            logged(&w),
+            ["a", "c", "b", "a", "c", "b"],
+            "three in a loop"
+        );
+
+        let mut w = raw_world();
+        let a = raw(&mut w, "a", None);
+        let b = raw(&mut w, "b", Some(a));
+        w.insert_static(a, ChildOf(b));
+        let x = raw(&mut w, "x", Some(a));
+        w.add_observer(visit);
+        w.trigger_targets(Climb, x);
+        assert_eq!(logged(&w), ["x", "a", "b"], "a tail leading into a loop");
+    }
+
+    #[test]
+    fn a_panic_in_the_middle_of_a_climb_leaves_the_world_able_to_climb_again() {
+        fn boom_at_mid(on: On<Climb>, names: Res<Names>) {
+            if names.of(on.target()) == "mid" {
+                panic!("boom");
+            }
+        }
+        let (mut w, leaf, _mid, root) = chain();
+        w.observe(root, climb_scoped);
+        let boom = w.add_observer(boom_at_mid);
+        assert!(
+            std::panic::catch_unwind(AssertUnwindSafe(|| w.trigger_targets(Climb, leaf))).is_err()
+        );
+        assert!(logged(&w).is_empty(), "it never got to the root");
+        w.remove_observer(boom);
+        w.trigger_targets(Climb, leaf);
+        assert_eq!(logged(&w), ["s:root"]);
+    }
+
+    #[test]
+    fn climbs_match_a_model_on_random_forests() {
+        use std::collections::HashSet;
+
+        struct Lcg(u64);
+        impl Lcg {
+            fn below(&mut self, n: usize) -> usize {
+                self.0 = self
+                    .0
+                    .wrapping_mul(6364136223846793005)
+                    .wrapping_add(1442695040888963407);
+                ((self.0 >> 33) as usize) % n
+            }
+        }
+        #[derive(Default)]
+        struct Seen {
+            global: Vec<Entity>,
+            scoped: Vec<Entity>,
+        }
+        struct Stops(HashSet<Entity>);
+        fn record_global(on: On<Climb>, mut seen: ResMut<Seen>) {
+            seen.global.push(on.target().unwrap());
+        }
+        fn record_scoped(on: On<Climb>, mut seen: ResMut<Seen>) {
+            seen.scoped.push(on.target().unwrap());
+        }
+        fn stopper(mut on: On<Climb>, stops: Res<Stops>) {
+            if stops.0.contains(&on.target().unwrap()) {
+                on.propagate(false);
+            }
+        }
+
+        let (mut deep, mut stopped_early, mut scoped_hits) = (0, 0, 0);
+        for seed in 0..8u64 {
+            let mut rng = Lcg(seed * 7919 + 13);
+            let mut w = World::new();
+            w.insert_resource(Seen::default());
+            let n = 60;
+            let ents: Vec<Entity> = (0..n).map(|_| w.spawn()).collect();
+            let mut parent: Vec<Option<usize>> = vec![None; n];
+            for i in 1..n {
+                if rng.below(5) != 0 {
+                    let p = rng.below(i);
+                    w.set_parent(ents[i], ents[p]).unwrap();
+                    parent[i] = Some(p);
+                }
+            }
+            let stops: HashSet<usize> = (0..n).filter(|_| rng.below(5) == 0).collect();
+            let has_scoped: HashSet<usize> = (0..n).filter(|_| rng.below(4) == 0).collect();
+            w.insert_resource(Stops(stops.iter().map(|i| ents[*i]).collect()));
+            w.add_observer(record_global);
+            w.add_observer(stopper);
+            for i in &has_scoped {
+                w.observe(ents[*i], record_scoped);
+            }
+            for _ in 0..40 {
+                let start = rng.below(n);
+                let mut expected = vec![start];
+                let mut at = start;
+                while !stops.contains(&at) {
+                    let Some(p) = parent[at] else { break };
+                    expected.push(p);
+                    at = p;
+                }
+                *w.get_resource_mut::<Seen>().unwrap() = Seen::default();
+                w.trigger_targets(Climb, ents[start]);
+                let seen = w.get_resource::<Seen>().unwrap();
+                let want: Vec<Entity> = expected.iter().map(|i| ents[*i]).collect();
+                assert_eq!(seen.global, want, "seed {seed}, start {start}");
+                let want_scoped: Vec<Entity> = expected
+                    .iter()
+                    .filter(|i| has_scoped.contains(i))
+                    .map(|i| ents[*i])
+                    .collect();
+                assert_eq!(seen.scoped, want_scoped, "seed {seed}, start {start}");
+                deep += usize::from(want.len() >= 3);
+                stopped_early += usize::from(
+                    stops.contains(expected.last().unwrap())
+                        && parent[*expected.last().unwrap()].is_some(),
+                );
+                scoped_hits += want_scoped.len();
+            }
+        }
+        assert!(deep >= 60, "too few long climbs reached: {deep}");
+        assert!(
+            stopped_early >= 50,
+            "too few early stops reached: {stopped_early}"
+        );
+        assert!(
+            scoped_hits >= 80,
+            "too few scoped deliveries: {scoped_hits}"
+        );
     }
 }

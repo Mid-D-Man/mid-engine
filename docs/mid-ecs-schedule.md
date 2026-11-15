@@ -554,5 +554,5 @@ while it waits.
   labels, the fixed timestep and the trim call are in `docs/mid-app.md`, and
   `mid-app`'s closures are exclusive systems (they are `Send`; none of them held
   anything that was not).
-- **Open:** observer propagation and the rest listed in `docs/mid-ecs-events.md`
-  (phase 4 is built); no workflow runs the schedule or `mid-app` tests yet.
+- **Open:** what `docs/mid-ecs-events.md` lists as not built (phase 4 and observer
+  propagation are built); no workflow runs the schedule or `mid-app` tests yet.

@@ -9,9 +9,10 @@ on entering and leaving a value) and **observers** (callbacks that run at once w
 something is triggered or a component is added or removed). All three needed a frame
 owner to run their update in, which `mid-app` (phase 3) now is.
 
-Built: **messages** (phase 4a), **states** (phase 4b) and **observers** (phase 4c), all in
-this document. Not built: observer propagation through a hierarchy (the hierarchy now exists, see
-`docs/mid-ecs-hierarchy.md`; the propagation does not), and the rest of what each section below lists. Bevy 0.20-dev splits "message" (buffered, read by a system later) from
+Built: **messages** (phase 4a), **states** (phase 4b), **observers** (phase 4c) and
+**observer propagation** through `ChildOf` (an event bubbling up the hierarchy, see
+`docs/mid-ecs-hierarchy.md`), all in this document. Not built: the rest of what each section
+below lists. Bevy 0.20-dev splits "message" (buffered, read by a system later) from
 "event" (triggered, run by observers at once); this crate follows that split, so
 "event" is the word for what observers will take.
 
@@ -165,6 +166,61 @@ and the target. The observer is an ordinary system otherwise: queries, resources
   `insert_static` on a component the entity has does nothing and returns `false`. Only
   Sparse Shell `insert` overwrites.
 
+### Propagation: the design
+
+An event type opts in with `const PROPAGATE: bool = true` in its `Event` impl. Triggered at
+an entity (`World::trigger_targets`, `Commands::trigger_targets`, `EntityCommands::trigger`),
+it is delivered there first, then at that entity's `ChildOf` parent, then the grandparent,
+and so on up to a root. At every step the global observers of the event run and the ones
+added for that entity with `World::observe`, in the order they were added, so an observer
+scoped to a panel hears the clicks that happen on the buttons inside it. `On::target` is
+the entity of the step, `On::original_target` is the one the event was first triggered at,
+and the event value is the same one at every step. An observer ends the climb with
+`on.propagate(false)`.
+
+**The same as `bevy_ecs`** (read from `crates/bevy_ecs/src/event/trigger.rs`,
+`PropagateEntityTrigger`, and `observer/system_param.rs`): the event is delivered at the
+target before anything is looked up; each step runs every observer of that entity, global
+and scoped, whatever the flag says (the flag is read after they have all run); the climb
+ends at an entity with no parent, or when the entity is gone; `propagate` is one flag that
+the last writer in a step decides; the target an observer sees changes from step to step
+and the original one does not.
+
+**Different, on purpose:**
+- **Propagation is a property of the event type, and always follows `ChildOf`.** `bevy_ecs`
+  lets each event pick a `Traversal` (any query that yields the next entity) and a
+  non-automatic mode where an observer has to ask for each step. Here there is one
+  traversal, the hierarchy, and the flag starts `true`. Nothing in the repo needs another
+  route or the opt-in mode; both are additions to the trait if something does.
+- **The event is not mutated.** `bevy_ecs` writes the current entity into the event
+  (`set_event_target`). Here the event is shared and read only, and the world keeps the
+  current and original entities next to it, which is what `On` reads.
+- **The next entity is chosen after the observers of a step have run and their commands
+  have been applied.** An observer reaches the world through `Commands`, which `System::run`
+  applies as soon as the observer returns, so an observer that moves the current entity to
+  another parent sends the climb to that parent, and one that despawns the current entity
+  ends it (the entity has no parent any more). This is the same order difference as for
+  nested triggers, above. `bevy_ecs` walks the whole route before its deferred commands
+  run.
+- **The observers of a trigger are fixed when it starts,** as they already were for a
+  single delivery: an observer added by an observer during the climb does not hear the
+  rest of it, and one removed during it is skipped at the later steps.
+- **A trigger without a target does not climb,** and neither do the lifecycle events
+  (`Add<T>` and the others), which stay at the entity they happened to.
+- **A loop of `ChildOf` ends the climb.** `set_parent` and `add_children` refuse a loop,
+  and a raw `ChildOf` that makes one is removed once the operation finishes, but only in a
+  world that enabled the hierarchy. In a world that did not, raw inserts can make one, and a
+  climb around it would never end. The climb remembers an earlier entity of its path and
+  compares each next one with it (Brent's cycle detection: no allocation, nothing kept per
+  entity), moving the remembered entity forward at doubling intervals. Once a loop is
+  closed the climb ends within a lap or two, so each entity of a loop is delivered to once
+  or twice. A bound on the depth, as `World::ancestors` has, was the alternative, and
+  would have run a million observers around a two-entity loop first.
+- **The cost for an event that does not propagate** is a loop that runs once: the constant
+  is known when the delivery is compiled, so the compiler can drop the extra code (not
+  checked in the assembly). The slot an observer reads from is a little larger (the
+  original entity and the flag). Nothing was measured.
+
 ## Modules
 
 ### `message.rs`
@@ -233,9 +289,11 @@ second `insert_state`; the transition read as a message; `in_state` (alone, with
 
 ### `observer.rs`
 
-**What it does:** `Event`, the five lifecycle events, `On<E>`, `ObserverId`, the observer
-table and the trigger queue, and `World::add_observer`, `observe`, `remove_observer`,
-`observer_count`, `trigger`, `trigger_targets`.
+**What it does:** `Event` (with `PROPAGATE`), the five lifecycle events, `On<E>` (with
+`target`, `original_target` and `propagate`), `ObserverId`, the observer table and the
+trigger queue, and `World::add_observer`, `observe`, `remove_observer`, `observer_count`,
+`trigger`, `trigger_targets`. Propagation is the loop in `World::deliver`, which calls
+`run_observers` once per step.
 
 **Decisions:**
 - **`On<E>` is a read of a resource, `TriggerSlot<E>`,** that the world fills for the
@@ -252,9 +310,19 @@ table and the trigger queue, and `World::add_observer`, `observe`, `remove_obser
   propagates, so the world can deliver again. That observer is left disabled: its system
   was taken out and is not put back.
 - **The list of observers of an event is cloned per trigger.** One allocation per trigger
-  with observers, none without. Performance work is paused; this is where to start.
+  with observers, none without, and one for the whole climb of a propagating event, not one
+  per step. Performance work is paused; this is where to start.
+- **The delivery state is one struct in the slot** (`Delivery`: event, current entity,
+  original entity, the flag), replacing the pair the slot held. The flag is an `AtomicBool`
+  so that `On::propagate` can set it through the shared read of the slot resource that
+  `On` has, which keeps `On` a plain read parameter (no new access kind, nothing for the
+  executor to learn). Only one thread ever touches it; the atomic is for the type system,
+  not for sharing, and uses relaxed ordering.
+- **`run_observers` is the old loop body, unchanged,** split out so a propagating delivery
+  can call it for each entity. A scoped observer is matched against the entity of the step.
 
-**Tests:** 35 inside the file and a doctest: delivery order, one event only, no observers,
+**Tests:** 57 inside the file (35 before propagation, 22 for it) and two doctests (one for
+propagation). The 35 are: delivery order, one event only, no observers,
 queries and resources, commands applied after the observer, state across triggers, messages
 written by an observer; registration (exactly one `On`, conflicts, outside a trigger,
 removal, self-removal, no id left behind); entities (global and scoped observers, the
@@ -264,6 +332,25 @@ thousand, a panic leaves the world usable and drops the triggers that were waiti
 observers; lifecycle events (add, overwrite, remove, despawn, the entity's own observers,
 Sparse Shell, beside a component hook, nothing paid before the first, other component
 types, an observer reacting with commands, an `insert_static` of what is there).
+
+The 22 for propagation: an event that does not propagate stays at its target; a climb
+reaches every ancestor nearest first; global observers run at every step and see the
+original entity; within a step global and scoped observers run in the order added;
+`propagate(false)` ends the climb after its own step (the rest of that step still runs);
+the last observer of a step to set the flag wins, both ways round; the flag starts set
+for each trigger; `propagate` does nothing for an event that does not propagate; no target
+means no climb; a root has one step; a dead target is delivered to once; an observer that
+moves the current entity changes the route; one that despawns it ends the climb; a trigger
+made by an observer waits for the whole climb; an observer added during a climb misses the
+rest of it; lifecycle events do not climb; `Commands::trigger_targets` and
+`EntityCommands::trigger` climb; propagation needs only a `ChildOf`, not the hierarchy
+hooks; a 5,000 deep chain is a loop and not a recursion; loops of raw `ChildOf` end the
+climb (one, two and three entities, and a tail leading into a loop, with the exact visit
+order pinned); a panic in the middle of a climb leaves the world able to climb again; and
+eight seeds of random forests with random stop points and scoped observers, each climb
+compared with an independent model, which fails if it did not reach enough long climbs,
+early stops and scoped deliveries (the run reaches 112 long climbs, 105 early stops and 145
+scoped deliveries in 320 climbs; the minimums are 60, 50 and 80).
 
 ### `schedule/tests_messages.rs`
 
@@ -314,9 +401,11 @@ at one entry.
   component data has; decide it with the C surface for schedules, which does not exist.
 - **Deferred-world writes from hooks** (`DeferredWorld::write_message`). Hooks queue
   commands, and `Commands::write_message` is one.
-- **Propagation** (an event bubbling to an entity's parents): the hierarchy it needs is
-  built (`ChildOf`, `Children`; `docs/mid-ecs-hierarchy.md`). The propagation itself is the
-  next piece: an observer would walk `World::ancestors` after the event reaches the target.
+- **Other propagation routes and the opt-in mode** (see the propagation design above):
+  a traversal that is not `ChildOf`, a per-event choice of route, an event whose observers
+  must each ask for the next step, and propagation of the lifecycle events.
+- **Propagation from C.** Observers are not on the C surface (decided with hooks, in
+  `docs/mid-ecs.md`), so neither is their climb.
 - **Observers before the change** for `Discard`, `Remove` and `Despawn` (Bevy's
   `On<Remove, T>` runs with the value still there). Needs the observer to run inside the
   operation with a restricted world, as hooks do; use a hook for the value.
@@ -359,6 +448,17 @@ None yet; see `docs/mid-app.md`.
   queue came from that: it needs no re-entrancy and no recursion depth. The order
   difference from Bevy is in the design section.
 
+- **Propagation: a bound on the depth was the first plan for loops, and it was wrong.**
+  Reusing the hierarchy's walk limit (2^20) would have made a loop of two raw `ChildOf`
+  deliver a million events before it stopped, which is a hang for any observer that does
+  real work. Brent's check replaced it before anything was written; the loop tests pin the
+  exact visit order.
+- **Propagation: one test expectation was wrong, not the code.** The first version of the
+  three-entity loop test listed the visits in the direction the entities were made in
+  (`a, b, c`); the loop runs the other way (`a, c, b`), because each entity was made a child
+  of the one before it. The hand-worked Brent sequence for the other cases (`a, b, a`; `x,
+  a, b`) matched on the first run.
+
 ### `state.rs`
 
 - **Two of the first `mid-app` state tests were wrong, not the code.** They set a state
@@ -375,13 +475,13 @@ None yet; see `docs/mid-app.md`.
 Rustc 1.91 in the sandbox, one core, static reading plus the tests. Nothing was
 benchmarked.
 
-| | before 4a | after 4a | after 4b | after 4c |
-|---|---|---|---|---|
-| `mid-ecs` lib tests | 987 | 1033 (276 in `schedule`, 36 of them in `tests_messages`; 10 in `message`) | 1057 (24 in `state`) | 1092 (35 in `observer`) |
-| with `--features scratch-arena` | 992 | 1038 | 1062 | 1097 |
-| `mid-ecs` doctests | 33 | 34 | 35 | 36 |
-| `ffi::` | 103 | 103 | 103 | 103 |
-| `mid-app` tests | 26 | 35, plus one doctest | 41, plus one doctest | 43, plus one doctest |
+| | before 4a | after 4a | after 4b | after 4c | after propagation |
+|---|---|---|---|---|---|
+| `mid-ecs` lib tests | 987 | 1033 (276 in `schedule`, 36 of them in `tests_messages`; 10 in `message`) | 1057 (24 in `state`) | 1092 (35 in `observer`) | 1165 (57 in `observer`; 1143 on main before, the rest came with the hierarchy) |
+| with `--features scratch-arena` | 992 | 1038 | 1062 | 1097 | 1170 |
+| `mid-ecs` doctests | 33 | 34 | 35 | 36 | 39 (38 on main before, one new) |
+| `ffi::` | 103 | 103 | 103 | 103 | unchanged |
+| `mid-app` tests | 26 | 35, plus one doctest | 41, plus one doctest | 43, plus one doctest | 45, plus one doctest (unchanged by this work) |
 
 Mutation testing of everything new, 58 mutants in a copy of the tree and a neutral
 control (which survived, as it should): the log (`since`, `trim`, `check_ticks`, `clear`,
@@ -418,3 +518,27 @@ table's kind index at both ends, the queued lifecycle trigger, and each `Command
 survived: nothing checked that a panic drops the triggers that were waiting, so a stale
 trigger would have run on the next delivery. `a_panic_drops_the_triggers_that_were_waiting`
 covers it and kills it.
+
+Propagation was checked in a sandbox with rustc 1.97.1 on one core, applied to a fresh
+clone of main (`22df79d`). `cargo check` passes for `mid-ecs` and `mid-app` on
+`wasm32-unknown-unknown` and for `headless-server`, `rustfmt --check` is clean on
+`observer.rs`, and `cargo clippy --no-deps --all-targets` on `mid-ecs` reports 3,147
+warning lines both on main and on the changed tree (the five in `observer.rs` are the
+lifecycle macro's, as before).
+
+Mutation testing of propagation, 18 mutants of `observer.rs` and a clean baseline checked
+before every run (the harness restores the file after each mutant): the default of
+`PROPAGATE`, the check that stops an event that does not propagate, the initial flag, the
+flag being ignored or inverted, skipping ancestors, the current entity not being updated
+for `On`, the original entity not being recorded, the step not advancing, the loop check
+removed, the remembered entity never or wrongly moved (two ways), the counter, `propagate`
+ignoring its argument, `original_target` returning the current one, the slot not being
+cleared, the scope comparison inverted, and a dead scoped observer not being dropped. All
+18 were killed; two of them (the loop check removed, the window not doubled) by timing out,
+because the climb then never ends.
+
+**Not verified:** real CI has not run this; the cost of a propagating trigger (or of the
+larger slot on triggers that do not propagate) was not measured; Miri does not cover
+`observer::` (its workflow runs `world_cell::`, `system::` and `interior::`), and the
+change adds no `unsafe`; the wasm32 tests were type-checked, not run; the three bench
+crates were not rebuilt (nothing they use changed).

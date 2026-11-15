@@ -55,6 +55,11 @@ with the `Commands` side in `commands.rs`, the C surface in `ffi.rs`, and
 - **The hierarchy components are plain components.** Observers see their
   lifecycle (`Add`, `Remove` and `Despawn` of `ChildOf` and `Children`; tested).
   Change detection on them was not tested.
+- **Observer propagation follows `ChildOf`.** An event type with
+  `Event::PROPAGATE` set, triggered at an entity, is delivered at each ancestor in
+  turn (`docs/mid-ecs-events.md`, "Propagation: the design"). It reads only `ChildOf`
+  through `World::parent`, so it works in a world that never enabled the hierarchy,
+  and it stops at a loop made by raw inserts, which only such a world can have.
 
 ## API
 
@@ -132,8 +137,6 @@ and remove-parent reporting, recursive despawn through C, the counts returned by
 
 ## Not built yet
 
-- **Observer propagation**, the next piece (`docs/mid-ecs-events.md`): an event
-  bubbling to an entity's ancestors.
 - **`LocalTransform` composition** into `GlobalTransform` down the hierarchy
   (`docs/mid-ecs.md`, "Not yet decided"), and `mid-nodes` on top of it.
 - Query-side helpers (`iter_descendants`, `iter_ancestors` on `Query`): the
