@@ -1413,6 +1413,95 @@ int main(void) {
         mid_ecs_world_free(sw);
     }
 
+    // ---- Parent/child hierarchy ----
+    {
+        MidEcsWorld *hw = mid_ecs_world_new();
+        CHECK(mid_ecs_world_enable_hierarchy(NULL) == MID_ECS_NULL_POINTER
+                  && mid_ecs_world_enable_hierarchy(hw) == MID_ECS_OK
+                  && mid_ecs_world_enable_hierarchy(hw) == MID_ECS_OK,
+              "enable_hierarchy rejects NULL and is idempotent");
+
+        uint64_t root = mid_ecs_world_spawn(hw);
+        uint64_t k0 = mid_ecs_world_spawn(hw);
+        uint64_t k1 = mid_ecs_world_spawn(hw);
+        uint64_t k2 = mid_ecs_world_spawn(hw);
+        uint64_t grand = mid_ecs_world_spawn(hw);
+        CHECK(mid_ecs_world_set_parent(hw, k0, root) == MID_ECS_OK
+                  && mid_ecs_world_set_parent(hw, k1, root) == MID_ECS_OK
+                  && mid_ecs_world_set_parent(hw, k2, root) == MID_ECS_OK
+                  && mid_ecs_world_set_parent(hw, grand, k1) == MID_ECS_OK,
+              "set_parent builds a small tree");
+
+        uint64_t kids[8] = {0};
+        CHECK(mid_ecs_world_children(hw, root, NULL, 0) == 3
+                  && mid_ecs_world_children(hw, root, kids, 8) == 3
+                  && kids[0] == k0 && kids[1] == k1 && kids[2] == k2,
+              "children reports the count and the children in the order they were added");
+        uint64_t small[2] = {77, 77};
+        CHECK(mid_ecs_world_children(hw, root, small, 2) == MID_ECS_BUFFER_TOO_SMALL
+                  && small[0] == 77 && small[1] == 77,
+              "children with too small a buffer fails and writes nothing");
+
+        uint64_t got = 0;
+        CHECK(mid_ecs_world_parent(hw, grand, &got) == MID_ECS_OK && got == k1
+                  && mid_ecs_world_parent(hw, root, &got) == MID_ECS_NOT_FOUND && got == k1
+                  && mid_ecs_world_parent(hw, grand, NULL) == MID_ECS_NULL_POINTER,
+              "parent reads the parent, reports NOT_FOUND for a root and leaves the output alone");
+
+        CHECK(mid_ecs_world_set_parent(hw, root, root) == MID_ECS_INVALID_ARGUMENT
+                  && mid_ecs_world_set_parent(hw, root, grand) == MID_ECS_CYCLE
+                  && mid_ecs_world_set_parent(hw, k0, 0xFFFFFFFFFFFFFFFFull) == MID_ECS_NOT_ALIVE
+                  && mid_ecs_world_children(hw, root, NULL, 0) == 3,
+              "self parent, cycle and dead parent are refused with distinct codes and change nothing");
+
+        CHECK(mid_ecs_world_set_parent(hw, k2, k0) == MID_ECS_OK
+                  && mid_ecs_world_children(hw, root, kids, 8) == 2
+                  && kids[0] == k0 && kids[1] == k1
+                  && mid_ecs_world_children(hw, k0, kids, 8) == 1 && kids[0] == k2,
+              "set_parent moves a child to a new parent");
+
+        CHECK(mid_ecs_world_remove_parent(hw, k2) == MID_ECS_OK
+                  && mid_ecs_world_remove_parent(hw, k2) == MID_ECS_NOT_FOUND
+                  && mid_ecs_world_is_alive(hw, k2)
+                  && mid_ecs_world_children(hw, k0, NULL, 0) == 0,
+              "remove_parent detaches, then reports NOT_FOUND, and the child stays alive");
+
+        CHECK(mid_ecs_world_despawn(hw, root) == MID_ECS_OK
+                  && !mid_ecs_world_is_alive(hw, root)
+                  && !mid_ecs_world_is_alive(hw, k0)
+                  && !mid_ecs_world_is_alive(hw, k1)
+                  && !mid_ecs_world_is_alive(hw, grand)
+                  && mid_ecs_world_is_alive(hw, k2),
+              "despawning a parent despawns its whole subtree, and not the detached child");
+
+        uint64_t p2 = mid_ecs_world_spawn(hw);
+        uint64_t c2a = mid_ecs_world_spawn(hw);
+        uint64_t c2b = mid_ecs_world_spawn(hw);
+        uint64_t g2 = mid_ecs_world_spawn(hw);
+        mid_ecs_world_set_parent(hw, c2a, p2);
+        mid_ecs_world_set_parent(hw, c2b, p2);
+        mid_ecs_world_set_parent(hw, g2, c2b);
+        CHECK(mid_ecs_world_clear_children(hw, p2) == 2
+                  && mid_ecs_world_is_alive(hw, c2a) && mid_ecs_world_is_alive(hw, c2b)
+                  && mid_ecs_world_children(hw, p2, NULL, 0) == 0
+                  && mid_ecs_world_children(hw, c2b, NULL, 0) == 1,
+              "clear_children detaches the children (and keeps their own subtrees)");
+        mid_ecs_world_set_parent(hw, c2a, p2);
+        mid_ecs_world_set_parent(hw, c2b, p2);
+        CHECK(mid_ecs_world_despawn_children(hw, p2) == 3
+                  && mid_ecs_world_is_alive(hw, p2)
+                  && !mid_ecs_world_is_alive(hw, c2a) && !mid_ecs_world_is_alive(hw, g2)
+                  && mid_ecs_world_despawn_children(hw, p2) == 0,
+              "despawn_children returns the count, keeps the parent, and is then a no-op");
+
+        CHECK(mid_ecs_world_children(NULL, p2, NULL, 0) == MID_ECS_NULL_POINTER
+                  && mid_ecs_world_set_parent(NULL, c2a, p2) == MID_ECS_NULL_POINTER
+                  && mid_ecs_world_clear_children(hw, c2a) == MID_ECS_NOT_ALIVE
+                  && mid_ecs_world_despawn_children(hw, c2a) == MID_ECS_NOT_ALIVE,
+              "hierarchy functions reject a NULL world and a dead entity");
+        mid_ecs_world_free(hw);
+    }
+
     printf("\n=== %d check(s) failed ===\n", failures);
     return failures == 0 ? 0 : 1;
 }

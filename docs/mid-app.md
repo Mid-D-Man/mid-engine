@@ -72,7 +72,7 @@ impl in `mid-ecs`, so nothing more is needed.
 ### `app.rs`
 
 **What it does:** `App`, `Plugin`, the constants `DEFAULT_FIXED_HZ` (60.0) and
-`DEFAULT_MAX_FIXED_STEPS` (8), and `run_stages`, the one system of `Main`.
+`DEFAULT_MAX_FIXED_STEPS` (8), `HierarchyPlugin`, and `run_stages`, the one system of `Main`.
 
 `App::new` makes the world, inserts a `Clock` and a `FixedTimestep` as resources
 (so `Res<Clock>` gives a system the frame's time and `Res<FixedTimestep>` the
@@ -120,6 +120,11 @@ then `PostUpdate`.
   sleep. On `wasm32` the host drives `update`, so the method is not there.
 - **Plugins build at once**, as before and as Bevy does, so what a plugin adds is
   there when `add_plugin` returns. A plugin can add another plugin.
+- **`HierarchyPlugin` turns the entity hierarchy on** (`World::enable_hierarchy`; see
+  `docs/mid-ecs-hierarchy.md`). It is a plugin and not part of `App::new` because a world
+  with the hierarchy on checks its hook table on every structural change and one without
+  does not; an app that never parents anything should not pay for it. Adding it twice is
+  harmless.
 - **The trim runs after `Main` returns, not inside it.** `Main` is out of the
   schedule map while it runs, so from inside it the world cannot see its systems,
   and one of them could be the reader that still needs the log.
@@ -150,7 +155,7 @@ then `PostUpdate`.
 
 ### `tests.rs`
 
-43 tests and the doctest. Stage order whatever the order added; exclusive
+45 tests and the doctest (two of them for `HierarchyPlugin`: it turns the hierarchy on, and adding it twice is harmless). Stage order whatever the order added; exclusive
 closures as systems; an empty app; order inside a stage (`before`, `after`,
 `chain`, sets, conditions) reaching the schedule through the app; a system on
 `Main`; a multi-threaded stage; the fixed timestep (one step per step's worth,
@@ -174,8 +179,9 @@ lifecycle observer sees spawns made by systems).
 
 ## What is not built, on purpose
 
-- Observer propagation (needs a hierarchy), and the rest listed in
-  `docs/mid-ecs-events.md` (messages, states and observers are built).
+- Observer propagation (the hierarchy it needs is built, see `docs/mid-ecs-hierarchy.md`;
+  the propagation is not), and the rest listed in `docs/mid-ecs-events.md` (messages,
+  states and observers are built).
 - The 128 Hz network tick (see `labels.rs`).
 - A startup stage, a `Last` stage, schedule order as data. Add when something
   needs one.

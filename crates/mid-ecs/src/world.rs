@@ -220,6 +220,8 @@ pub struct World {
     pub(crate) observers: ObserverRegistry,
     /// Component hooks and the commands they have queued (`hooks.rs`).
     pub(crate) hooks: HookRegistry,
+    /// Whether the hierarchy hooks are registered (`hierarchy.rs`).
+    pub(crate) hierarchy_enabled: bool,
     storage_claims: StorageClaims,
     change_tick: Tick,
     /// The change tick at which every stored tick was last clamped
@@ -240,6 +242,7 @@ impl World {
             messages: MessageRegistry::default(),
             observers: ObserverRegistry::default(),
             hooks: HookRegistry::default(),
+            hierarchy_enabled: false,
             storage_claims: StorageClaims::default(),
             change_tick: Tick::new(1),
             last_check_tick: Tick::ZERO,
@@ -259,6 +262,7 @@ impl World {
             messages: MessageRegistry::default(),
             observers: ObserverRegistry::default(),
             hooks: HookRegistry::default(),
+            hierarchy_enabled: false,
             storage_claims: StorageClaims::default(),
             change_tick: Tick::new(1),
             last_check_tick: Tick::ZERO,

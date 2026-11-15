@@ -53,7 +53,7 @@ mod labels;
 #[cfg(test)]
 mod tests;
 
-pub use app::{App, Plugin, DEFAULT_FIXED_HZ, DEFAULT_MAX_FIXED_STEPS};
+pub use app::{App, HierarchyPlugin, Plugin, DEFAULT_FIXED_HZ, DEFAULT_MAX_FIXED_STEPS};
 pub use labels::{Main, Net, Physics, PostUpdate, PreUpdate, Update};
 pub use mid_ecs::observer::{Add, Despawn, Discard, Event, Insert, ObserverId, On, Remove};
 pub use mid_ecs::state::{

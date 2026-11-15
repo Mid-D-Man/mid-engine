@@ -352,9 +352,10 @@ Mid Engine completely avoids the traditional Object-Oriented memory traps by spl
 **Status: implemented.** `GlobalTransform` and `GlobalTransformLWC`
 are real, tested types in `crates/mid-ecs/src/transform.rs` — both
 usable with `World::insert_static`/`query_static` today. Not yet
-built: `LocalTransform`/hierarchy composition, and `mid-camera`'s own
-per-frame `to_view_relative` driver loop (see "Not yet decided" below
-— unchanged, still real, still not started).
+built: `LocalTransform` composition (the hierarchy it composes along,
+`ChildOf` and `Children`, is built: see `docs/mid-ecs-hierarchy.md`), and
+`mid-camera`'s own per-frame `to_view_relative` driver loop (see "Not yet
+decided" below, unchanged, still real, still not started).
 
 **The decision: two component types, `f32` default, `f64` opt-in —
 not one type, and not `f64` everywhere.**
@@ -406,9 +407,9 @@ storage precision an entity actually used. That narrow point (right
 before GPU upload) is the only place the two component types'
 consumers actually have to know both exist.
 
-**Not yet decided:** how `LocalTransform`/hierarchy (parent-relative,
-always small-magnitude, always `f32` regardless of world size)
-composes into either `GlobalTransform` variant — that's the actual
+**Not yet decided:** how `LocalTransform` (parent-relative,
+always small-magnitude, always `f32` regardless of world size), walked
+down the hierarchy that now exists, composes into either `GlobalTransform` variant — that's the actual
 "Integrating f64 global transform components into archetype storage
 tables" implementation work, not yet started. `mid-camera` (planned,
 not started — this engine's Cinemachine equivalent, sitting on top of

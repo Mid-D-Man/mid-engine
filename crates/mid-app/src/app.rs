@@ -32,6 +32,22 @@ pub trait Plugin {
     fn build(&self, app: &mut App);
 }
 
+/// Turns on the entity hierarchy: after `app.add_plugin(HierarchyPlugin)`,
+/// inserting a [`ChildOf`](mid_ecs::ChildOf) keeps the parent's
+/// [`Children`](mid_ecs::Children) in step and despawning a parent despawns
+/// what is below it. See `docs/mid-ecs-hierarchy.md`.
+///
+/// It is a plugin, not part of [`App::new`], because a world with the
+/// hierarchy on checks its hook table on every structural change and one
+/// without does not.
+pub struct HierarchyPlugin;
+
+impl Plugin for HierarchyPlugin {
+    fn build(&self, app: &mut App) {
+        app.world.enable_hierarchy();
+    }
+}
+
 /// A world and the schedules that run it.
 ///
 /// A new `App` has a schedule for each of the stages ([`PreUpdate`],

@@ -326,6 +326,35 @@ fn a_plugin_builds_at_once_and_its_systems_run() {
 }
 
 #[test]
+fn the_hierarchy_plugin_turns_the_hierarchy_on() {
+    use mid_ecs::{ChildOf, Children};
+
+    // Without the plugin a hand-inserted ChildOf has no hooks behind it.
+    let mut plain = App::new();
+    let (p, c) = (plain.world.spawn(), plain.world.spawn());
+    plain.world.insert_static(c, ChildOf(p));
+    assert!(plain.world.get_static::<Children>(p).is_none());
+
+    let mut app = App::new();
+    app.add_plugin(HierarchyPlugin);
+    let (p, c) = (app.world.spawn(), app.world.spawn());
+    app.world.insert_static(c, ChildOf(p));
+    assert_eq!(app.world.children(p), &[c]);
+    app.world.despawn(p);
+    assert!(!app.world.is_alive(c), "a despawned parent takes its children");
+}
+
+#[test]
+fn the_hierarchy_plugin_can_be_added_twice() {
+    let mut app = App::new();
+    app.add_plugin(HierarchyPlugin);
+    app.add_plugin(HierarchyPlugin);
+    let p = app.world.spawn();
+    let c = app.world.spawn_child(p).unwrap();
+    assert_eq!(app.world.children(p), &[c]);
+}
+
+#[test]
 fn a_plugin_can_add_another() {
     struct Inner;
     impl Plugin for Inner {

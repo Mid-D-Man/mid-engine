@@ -84,6 +84,9 @@ enum Command {
     /// A removal: a monomorphised function pointer, so no allocation.
     Remove(Target, fn(&mut World, Entity)),
     OnWorld(Box<dyn FnOnce(&mut World) + Send>),
+    /// [`World::set_parent`] between two targets, either of which may be a
+    /// queued spawn: the one command that has to resolve two.
+    Link { child: Target, parent: Target },
 }
 
 /// An ordered buffer of deferred [`World`] changes. See the module docs.
@@ -161,6 +164,9 @@ impl CommandQueue {
                 Command::OnEntity(target, run) => run(world, resolve(target, &spawned)),
                 Command::Remove(target, run) => run(world, resolve(target, &spawned)),
                 Command::OnWorld(run) => run(world),
+                Command::Link { child, parent } => {
+                    let _ = world.set_parent(resolve(child, &spawned), resolve(parent, &spawned));
+                }
             }
         }
         spawned
@@ -456,9 +462,114 @@ impl EntityCommands<'_> {
         self.queue(move |world, entity| world.trigger_targets(event, entity))
     }
 
+    /// Queues [`World::set_parent`] with this entity as the child. Refused
+    /// links (a dead entity, a cycle) do nothing, like every other command.
+    pub fn set_parent(&mut self, parent: Entity) -> &mut Self {
+        self.queue(move |world, child| {
+            let _ = world.set_parent(child, parent);
+        })
+    }
+
+    /// Queues [`World::add_child`] with this entity as the parent.
+    pub fn add_child(&mut self, child: Entity) -> &mut Self {
+        self.queue(move |world, parent| {
+            let _ = world.set_parent(child, parent);
+        })
+    }
+
+    /// Queues [`World::add_children`] with this entity as the parent: all
+    /// or none.
+    pub fn add_children(&mut self, children: &[Entity]) -> &mut Self {
+        let children = children.to_vec();
+        self.queue(move |world, parent| {
+            let _ = world.add_children(parent, &children);
+        })
+    }
+
+    /// Queues [`World::remove_parent`].
+    pub fn remove_parent(&mut self) -> &mut Self {
+        self.queue(|world, child| {
+            world.remove_parent(child);
+        })
+    }
+
+    /// Queues [`World::clear_children`]: detaches every child.
+    pub fn clear_children(&mut self) -> &mut Self {
+        self.queue(|world, parent| {
+            world.clear_children(parent);
+        })
+    }
+
+    /// Queues [`World::despawn_children`]: despawns everything below this
+    /// entity, keeping it.
+    pub fn despawn_children(&mut self) -> &mut Self {
+        self.queue(|world, parent| {
+            world.despawn_children(parent);
+        })
+    }
+
+    /// Spawns children of this entity: each entity `f` spawns through the
+    /// [`ChildSpawner`] becomes a child, in the order spawned. Works on an
+    /// entity that is itself a queued spawn.
+    ///
+    /// ```
+    /// use mid_ecs::{CommandQueue, World};
+    ///
+    /// let mut world = World::new();
+    /// let mut queue = CommandQueue::new();
+    /// queue.commands().spawn().with_children(|kids| {
+    ///     kids.spawn();
+    ///     kids.spawn();
+    /// });
+    /// let spawned = queue.apply(&mut world);
+    /// // spawned: the parent, then its two children.
+    /// assert_eq!(world.children(spawned[0]), &spawned[1..]);
+    /// ```
+    pub fn with_children(&mut self, f: impl FnOnce(&mut ChildSpawner<'_>)) -> &mut Self {
+        let mut spawner = ChildSpawner {
+            queue: &mut *self.queue,
+            parent: self.target,
+        };
+        f(&mut spawner);
+        self
+    }
+
     /// Queues [`World::despawn`] for this entity.
     pub fn despawn(self) {
         self.queue.push(Command::Despawn(self.target));
+    }
+}
+
+/// Spawns the children of one entity. See [`EntityCommands::with_children`].
+pub struct ChildSpawner<'q> {
+    queue: &'q mut CommandQueue,
+    parent: Target,
+}
+
+impl ChildSpawner<'_> {
+    /// Queues a spawn whose entity becomes the next child. The returned
+    /// [`EntityCommands`] targets it, so components can be chained on.
+    pub fn spawn(&mut self) -> EntityCommands<'_> {
+        let child = self.queue.push_spawn(Command::Spawn);
+        self.queue.push(Command::Link { child, parent: self.parent });
+        EntityCommands {
+            queue: &mut *self.queue,
+            target: child,
+        }
+    }
+
+    /// [`Self::spawn`] with `bundle` attached in the same step
+    /// ([`World::spawn_bundle`]).
+    #[allow(private_bounds)]
+    pub fn spawn_bundle<B: Bundle + Send>(&mut self, bundle: B) -> EntityCommands<'_> {
+        let child = self
+            .queue
+            .push_spawn(Command::SpawnWith(Box::new(move |world| world.spawn_bundle(bundle))));
+        self.queue.push(Command::Link { child, parent: self.parent });
+        EntityCommands {
+            queue: &mut *self.queue,
+            target: child,
+        }
     }
 }
 

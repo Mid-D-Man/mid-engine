@@ -10,8 +10,8 @@ something is triggered or a component is added or removed). All three needed a f
 owner to run their update in, which `mid-app` (phase 3) now is.
 
 Built: **messages** (phase 4a), **states** (phase 4b) and **observers** (phase 4c), all in
-this document. Not built: observer propagation through a hierarchy (there is no hierarchy
-yet), and the rest of what each section below lists. Bevy 0.20-dev splits "message" (buffered, read by a system later) from
+this document. Not built: observer propagation through a hierarchy (the hierarchy now exists, see
+`docs/mid-ecs-hierarchy.md`; the propagation does not), and the rest of what each section below lists. Bevy 0.20-dev splits "message" (buffered, read by a system later) from
 "event" (triggered, run by observers at once); this crate follows that split, so
 "event" is the word for what observers will take.
 
@@ -314,8 +314,9 @@ at one entry.
   component data has; decide it with the C surface for schedules, which does not exist.
 - **Deferred-world writes from hooks** (`DeferredWorld::write_message`). Hooks queue
   commands, and `Commands::write_message` is one.
-- **Propagation** (an event bubbling to an entity's parents): needs a hierarchy, which does
-  not exist yet. It is the first thing to add when `ChildOf` and `Children` land.
+- **Propagation** (an event bubbling to an entity's parents): the hierarchy it needs is
+  built (`ChildOf`, `Children`; `docs/mid-ecs-hierarchy.md`). The propagation itself is the
+  next piece: an observer would walk `World::ancestors` after the event reaches the target.
 - **Observers before the change** for `Discard`, `Remove` and `Despawn` (Bevy's
   `On<Remove, T>` runs with the value still there). Needs the observer to run inside the
   operation with a restricted world, as hooks do; use a hook for the value.

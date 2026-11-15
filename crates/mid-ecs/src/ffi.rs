@@ -130,6 +130,8 @@ pub enum MidEcsStatus {
     /// An argument combination that cannot mean anything: a filtered
     /// change query with no change term (nothing to read rows through).
     InvalidArgument = -11,
+    /// A parent link that would make an entity its own ancestor.
+    Cycle = -12,
 }
 
 fn ffi_guard(f: impl FnOnce() -> i32) -> i32 {
@@ -217,6 +219,10 @@ pub unsafe extern "C" fn mid_ecs_world_spawn(world: *mut MidEcsWorld) -> u64 {
 /// spawned, already despawned, or a stale handle) — both are safe,
 /// defined outcomes, never a panic.
 ///
+/// With the hierarchy enabled ([`mid_ecs_world_enable_hierarchy`], or any
+/// of the parent/child functions below) this also despawns everything
+/// below the entity.
+///
 /// # Safety
 /// `world` must be a valid, non-null handle from `mid_ecs_world_new`.
 #[no_mangle]
@@ -251,6 +257,206 @@ pub unsafe extern "C" fn mid_ecs_world_is_alive(world: *const MidEcsWorld, entit
         world.0.is_alive(Entity::from_ffi(entity))
     }));
     result.unwrap_or(false)
+}
+
+/// Turns on the entity hierarchy for `world`: from then on a parent link
+/// keeps the parent's child list in step, and despawning a parent despawns
+/// everything below it. Idempotent. The other parent/child functions call
+/// it themselves, so it only matters when links are made some other way.
+///
+/// Returns `MidEcsStatus::Ok`, or `NullPointer`.
+///
+/// # Safety
+/// `world` must be a valid, non-null handle from `mid_ecs_world_new`.
+#[no_mangle]
+pub unsafe extern "C" fn mid_ecs_world_enable_hierarchy(world: *mut MidEcsWorld) -> i32 {
+    ffi_guard(|| {
+        if world.is_null() {
+            return MidEcsStatus::NullPointer as i32;
+        }
+        unsafe { &mut *world }.0.enable_hierarchy();
+        MidEcsStatus::Ok as i32
+    })
+}
+
+/// Makes `parent` the parent of `child`, last in its child list. A child
+/// that already has a different parent is moved; one that already has this
+/// parent is left where it is. Enables the hierarchy.
+///
+/// Returns `MidEcsStatus::Ok`, or `NullPointer`, `NotAlive` (either entity
+/// is not alive), `InvalidArgument` (`child == parent`) or `Cycle` (`parent`
+/// is `child` or one of its descendants). Nothing changes on an error.
+///
+/// # Safety
+/// `world` must be a valid, non-null handle from `mid_ecs_world_new`.
+#[no_mangle]
+pub unsafe extern "C" fn mid_ecs_world_set_parent(
+    world: *mut MidEcsWorld,
+    child: u64,
+    parent: u64,
+) -> i32 {
+    ffi_guard(|| {
+        if world.is_null() {
+            return MidEcsStatus::NullPointer as i32;
+        }
+        let world = unsafe { &mut *world };
+        match world.0.set_parent(Entity::from_ffi(child), Entity::from_ffi(parent)) {
+            Ok(()) => MidEcsStatus::Ok as i32,
+            Err(crate::hierarchy::HierarchyError::NotAlive(_)) => MidEcsStatus::NotAlive as i32,
+            Err(crate::hierarchy::HierarchyError::SelfParent(_)) => MidEcsStatus::InvalidArgument as i32,
+            Err(crate::hierarchy::HierarchyError::Cycle { .. }) => MidEcsStatus::Cycle as i32,
+        }
+    })
+}
+
+/// Detaches `child` from its parent, leaving it alive.
+///
+/// Returns `MidEcsStatus::Ok`, or `NullPointer`, `NotAlive` (`child` is not
+/// alive) or `NotFound` (`child` has no parent).
+///
+/// # Safety
+/// `world` must be a valid, non-null handle from `mid_ecs_world_new`.
+#[no_mangle]
+pub unsafe extern "C" fn mid_ecs_world_remove_parent(world: *mut MidEcsWorld, child: u64) -> i32 {
+    ffi_guard(|| {
+        if world.is_null() {
+            return MidEcsStatus::NullPointer as i32;
+        }
+        let world = unsafe { &mut *world };
+        let child = Entity::from_ffi(child);
+        if !world.0.is_alive(child) {
+            return MidEcsStatus::NotAlive as i32;
+        }
+        if world.0.remove_parent(child) {
+            MidEcsStatus::Ok as i32
+        } else {
+            MidEcsStatus::NotFound as i32
+        }
+    })
+}
+
+/// Writes the parent of `child`, packed as `uint64_t`, to `*out_parent`.
+///
+/// Returns `MidEcsStatus::Ok`, or `NullPointer` (null `world` or
+/// `out_parent`), `NotAlive` (`child` is not alive) or `NotFound` (`child`
+/// has no parent; `*out_parent` is left untouched).
+///
+/// # Safety
+/// `world` must be a valid, non-null handle from `mid_ecs_world_new`, and
+/// `out_parent` valid for one `uint64_t`.
+#[no_mangle]
+pub unsafe extern "C" fn mid_ecs_world_parent(
+    world: *const MidEcsWorld,
+    child: u64,
+    out_parent: *mut u64,
+) -> i32 {
+    ffi_guard(|| {
+        if world.is_null() || out_parent.is_null() {
+            return MidEcsStatus::NullPointer as i32;
+        }
+        let world = unsafe { &*world };
+        let child = Entity::from_ffi(child);
+        if !world.0.is_alive(child) {
+            return MidEcsStatus::NotAlive as i32;
+        }
+        match world.0.parent(child) {
+            Some(parent) => {
+                unsafe { *out_parent = parent.as_ffi() };
+                MidEcsStatus::Ok as i32
+            }
+            None => MidEcsStatus::NotFound as i32,
+        }
+    })
+}
+
+/// Copies the children of `parent`, in order, into `out_buf` as
+/// `uint64_t`. Same "NULL buffer queries the count" idiom as
+/// [`mid_ecs_world_component_entity_ids`]: pass `out_buf = NULL` to learn
+/// the count from the return value, then call again with room for at least
+/// that many. `out_buf_capacity` counts **elements, not bytes**.
+///
+/// Returns the child count (`>= 0`), or a negative `MidEcsStatus`:
+/// `NullPointer` (null `world`), `NotAlive` (`parent` is not alive) or
+/// `BufferTooSmall` (non-null `out_buf` too small; nothing is written).
+///
+/// # Safety
+/// `world` must be a valid, non-null handle from `mid_ecs_world_new`. If
+/// `out_buf` is non-null it must be valid for `out_buf_capacity`
+/// `uint64_t` elements.
+#[no_mangle]
+pub unsafe extern "C" fn mid_ecs_world_children(
+    world: *const MidEcsWorld,
+    parent: u64,
+    out_buf: *mut u64,
+    out_buf_capacity: usize,
+) -> i32 {
+    ffi_guard(|| {
+        if world.is_null() {
+            return MidEcsStatus::NullPointer as i32;
+        }
+        let world = unsafe { &*world };
+        let parent = Entity::from_ffi(parent);
+        if !world.0.is_alive(parent) {
+            return MidEcsStatus::NotAlive as i32;
+        }
+        let children = world.0.children(parent);
+        if out_buf.is_null() {
+            return children.len() as i32;
+        }
+        if children.len() > out_buf_capacity {
+            return MidEcsStatus::BufferTooSmall as i32;
+        }
+        let out = unsafe { slice::from_raw_parts_mut(out_buf, out_buf_capacity) };
+        for (slot, child) in out.iter_mut().zip(children) {
+            *slot = child.as_ffi();
+        }
+        children.len() as i32
+    })
+}
+
+/// Detaches every child of `parent`, leaving them alive.
+///
+/// Returns how many children it detached (`>= 0`), or a negative
+/// `MidEcsStatus`: `NullPointer` or `NotAlive` (`parent` is not alive).
+///
+/// # Safety
+/// `world` must be a valid, non-null handle from `mid_ecs_world_new`.
+#[no_mangle]
+pub unsafe extern "C" fn mid_ecs_world_clear_children(world: *mut MidEcsWorld, parent: u64) -> i32 {
+    ffi_guard(|| {
+        if world.is_null() {
+            return MidEcsStatus::NullPointer as i32;
+        }
+        let world = unsafe { &mut *world };
+        let parent = Entity::from_ffi(parent);
+        if !world.0.is_alive(parent) {
+            return MidEcsStatus::NotAlive as i32;
+        }
+        world.0.clear_children(parent) as i32
+    })
+}
+
+/// Despawns everything below `parent` (children, their children, and so
+/// on), keeping `parent` itself.
+///
+/// Returns how many entities it despawned (`>= 0`), or a negative
+/// `MidEcsStatus`: `NullPointer` or `NotAlive` (`parent` is not alive).
+///
+/// # Safety
+/// `world` must be a valid, non-null handle from `mid_ecs_world_new`.
+#[no_mangle]
+pub unsafe extern "C" fn mid_ecs_world_despawn_children(world: *mut MidEcsWorld, parent: u64) -> i32 {
+    ffi_guard(|| {
+        if world.is_null() {
+            return MidEcsStatus::NullPointer as i32;
+        }
+        let world = unsafe { &mut *world };
+        let parent = Entity::from_ffi(parent);
+        if !world.0.is_alive(parent) {
+            return MidEcsStatus::NotAlive as i32;
+        }
+        world.0.despawn_children(parent) as i32
+    })
 }
 
 /// Number of currently-live entities. `0` on a null `world`.
@@ -8047,6 +8253,218 @@ mod tests {
             assert!(mid_ecs_world_resource_write(w, gravity, short.as_ptr(), 2) < 0);
             assert_eq!(mid_ecs_world_resource_changed_since(w, gravity, t3), 0);
             mid_ecs_world_free(w);
+        }
+    }
+
+    // ── hierarchy ───────────────────────────────────────────────────────
+
+    unsafe fn children_of(world: *const MidEcsWorld, parent: u64) -> Vec<u64> {
+        // SAFETY: the callers pass a live world.
+        unsafe {
+            let n = mid_ecs_world_children(world, parent, std::ptr::null_mut(), 0);
+            assert!(n >= 0, "children count failed: {n}");
+            let mut buf = vec![0u64; n as usize];
+            let got = mid_ecs_world_children(world, parent, buf.as_mut_ptr(), buf.len());
+            assert_eq!(got, n);
+            buf
+        }
+    }
+
+    #[test]
+    fn the_hierarchy_status_code_has_its_documented_value() {
+        assert_eq!(MidEcsStatus::Cycle as i32, -12);
+    }
+
+    #[test]
+    fn hierarchy_functions_reject_null_pointers() {
+        let null = std::ptr::null_mut::<MidEcsWorld>();
+        let mut out = 0u64;
+        // SAFETY: every call passes a null world, which each must reject.
+        unsafe {
+            let np = MidEcsStatus::NullPointer as i32;
+            assert_eq!(mid_ecs_world_enable_hierarchy(null), np);
+            assert_eq!(mid_ecs_world_set_parent(null, 1, 2), np);
+            assert_eq!(mid_ecs_world_remove_parent(null, 1), np);
+            assert_eq!(mid_ecs_world_parent(null, 1, &mut out), np);
+            assert_eq!(mid_ecs_world_children(null, 1, std::ptr::null_mut(), 0), np);
+            assert_eq!(mid_ecs_world_clear_children(null, 1), np);
+            assert_eq!(mid_ecs_world_despawn_children(null, 1), np);
+            let world = mid_ecs_world_new();
+            let e = mid_ecs_world_spawn(world);
+            assert_eq!(mid_ecs_world_parent(world, e, std::ptr::null_mut()), np, "null out pointer");
+            mid_ecs_world_free(world);
+        }
+    }
+
+    #[test]
+    fn set_parent_and_children_round_trip_in_order() {
+        let world = mid_ecs_world_new();
+        // SAFETY: `world` non-null and not freed until the end of the block.
+        unsafe {
+            let p = mid_ecs_world_spawn(world);
+            let kids: Vec<u64> = (0..3).map(|_| mid_ecs_world_spawn(world)).collect();
+            for &k in &kids {
+                assert_eq!(mid_ecs_world_set_parent(world, k, p), MidEcsStatus::Ok as i32);
+            }
+            assert_eq!(children_of(world, p), kids);
+            let mut out = 0u64;
+            assert_eq!(mid_ecs_world_parent(world, kids[1], &mut out), MidEcsStatus::Ok as i32);
+            assert_eq!(out, p);
+            mid_ecs_world_free(world);
+        }
+    }
+
+    #[test]
+    fn children_follows_the_null_buffer_and_too_small_conventions() {
+        let world = mid_ecs_world_new();
+        // SAFETY: `world` non-null and not freed until the end of the block.
+        unsafe {
+            let p = mid_ecs_world_spawn(world);
+            for _ in 0..4 {
+                let k = mid_ecs_world_spawn(world);
+                mid_ecs_world_set_parent(world, k, p);
+            }
+            assert_eq!(mid_ecs_world_children(world, p, std::ptr::null_mut(), 0), 4);
+            let mut small = [7u64; 3];
+            assert_eq!(
+                mid_ecs_world_children(world, p, small.as_mut_ptr(), small.len()),
+                MidEcsStatus::BufferTooSmall as i32
+            );
+            assert_eq!(small, [7, 7, 7], "nothing is written when the buffer is too small");
+            let mut exact = [0u64; 4];
+            assert_eq!(mid_ecs_world_children(world, p, exact.as_mut_ptr(), 4), 4);
+            let mut roomy = [9u64; 6];
+            assert_eq!(mid_ecs_world_children(world, p, roomy.as_mut_ptr(), 6), 4);
+            assert_eq!(&roomy[..4], &exact);
+            assert_eq!(&roomy[4..], &[9, 9], "elements past the count are untouched");
+            mid_ecs_world_free(world);
+        }
+    }
+
+    #[test]
+    fn a_childless_or_dead_parent_reports_correctly() {
+        let world = mid_ecs_world_new();
+        // SAFETY: `world` non-null and not freed until the end of the block.
+        unsafe {
+            let e = mid_ecs_world_spawn(world);
+            assert_eq!(mid_ecs_world_children(world, e, std::ptr::null_mut(), 0), 0);
+            let dead = mid_ecs_world_spawn(world);
+            mid_ecs_world_despawn(world, dead);
+            assert_eq!(
+                mid_ecs_world_children(world, dead, std::ptr::null_mut(), 0),
+                MidEcsStatus::NotAlive as i32
+            );
+            mid_ecs_world_free(world);
+        }
+    }
+
+    #[test]
+    fn set_parent_errors_map_to_distinct_codes_and_change_nothing() {
+        let world = mid_ecs_world_new();
+        // SAFETY: `world` non-null and not freed until the end of the block.
+        unsafe {
+            let a = mid_ecs_world_spawn(world);
+            let b = mid_ecs_world_spawn(world);
+            mid_ecs_world_set_parent(world, b, a);
+            let dead = mid_ecs_world_spawn(world);
+            mid_ecs_world_despawn(world, dead);
+
+            assert_eq!(mid_ecs_world_set_parent(world, a, a), MidEcsStatus::InvalidArgument as i32);
+            assert_eq!(mid_ecs_world_set_parent(world, a, b), MidEcsStatus::Cycle as i32);
+            assert_eq!(mid_ecs_world_set_parent(world, a, dead), MidEcsStatus::NotAlive as i32);
+            assert_eq!(mid_ecs_world_set_parent(world, dead, a), MidEcsStatus::NotAlive as i32);
+            assert_eq!(children_of(world, a), vec![b]);
+            let mut out = 0u64;
+            assert_eq!(mid_ecs_world_parent(world, a, &mut out), MidEcsStatus::NotFound as i32);
+            mid_ecs_world_free(world);
+        }
+    }
+
+    #[test]
+    fn parent_and_remove_parent_report_not_found_and_not_alive() {
+        let world = mid_ecs_world_new();
+        // SAFETY: `world` non-null and not freed until the end of the block.
+        unsafe {
+            let p = mid_ecs_world_spawn(world);
+            let c = mid_ecs_world_spawn(world);
+            let mut out = 0xDEAD_u64;
+            assert_eq!(mid_ecs_world_parent(world, c, &mut out), MidEcsStatus::NotFound as i32);
+            assert_eq!(out, 0xDEAD, "an unset parent leaves the output alone");
+            assert_eq!(mid_ecs_world_remove_parent(world, c), MidEcsStatus::NotFound as i32);
+
+            mid_ecs_world_set_parent(world, c, p);
+            assert_eq!(mid_ecs_world_remove_parent(world, c), MidEcsStatus::Ok as i32);
+            assert_eq!(mid_ecs_world_remove_parent(world, c), MidEcsStatus::NotFound as i32);
+            assert!(children_of(world, p).is_empty());
+
+            mid_ecs_world_despawn(world, c);
+            assert_eq!(mid_ecs_world_remove_parent(world, c), MidEcsStatus::NotAlive as i32);
+            assert_eq!(mid_ecs_world_parent(world, c, &mut out), MidEcsStatus::NotAlive as i32);
+            mid_ecs_world_free(world);
+        }
+    }
+
+    #[test]
+    fn despawning_a_parent_despawns_the_subtree_through_c() {
+        let world = mid_ecs_world_new();
+        // SAFETY: `world` non-null and not freed until the end of the block.
+        unsafe {
+            let root = mid_ecs_world_spawn(world);
+            let a = mid_ecs_world_spawn(world);
+            let a1 = mid_ecs_world_spawn(world);
+            let other = mid_ecs_world_spawn(world);
+            mid_ecs_world_set_parent(world, a, root);
+            mid_ecs_world_set_parent(world, a1, a);
+            assert_eq!(mid_ecs_world_despawn(world, root), MidEcsStatus::Ok as i32);
+            for dead in [root, a, a1] {
+                assert_eq!(mid_ecs_world_despawn(world, dead), MidEcsStatus::NotAlive as i32);
+            }
+            assert_eq!(mid_ecs_world_despawn(world, other), MidEcsStatus::Ok as i32);
+            mid_ecs_world_free(world);
+        }
+    }
+
+    #[test]
+    fn clear_and_despawn_children_return_counts() {
+        let world = mid_ecs_world_new();
+        // SAFETY: `world` non-null and not freed until the end of the block.
+        unsafe {
+            let p = mid_ecs_world_spawn(world);
+            let kids: Vec<u64> = (0..3).map(|_| mid_ecs_world_spawn(world)).collect();
+            for &k in &kids {
+                mid_ecs_world_set_parent(world, k, p);
+            }
+            assert_eq!(mid_ecs_world_clear_children(world, p), 3);
+            assert_eq!(mid_ecs_world_clear_children(world, p), 0);
+            assert_eq!(mid_ecs_world_despawn(world, kids[0]), MidEcsStatus::Ok as i32, "still alive");
+
+            let grand = mid_ecs_world_spawn(world);
+            mid_ecs_world_set_parent(world, kids[1], p);
+            mid_ecs_world_set_parent(world, grand, kids[1]);
+            assert_eq!(mid_ecs_world_despawn_children(world, p), 2);
+            assert_eq!(mid_ecs_world_despawn_children(world, p), 0);
+            assert_eq!(mid_ecs_world_despawn(world, p), MidEcsStatus::Ok as i32, "the parent survived");
+            let dead = mid_ecs_world_spawn(world);
+            mid_ecs_world_despawn(world, dead);
+            assert_eq!(mid_ecs_world_clear_children(world, dead), MidEcsStatus::NotAlive as i32);
+            assert_eq!(mid_ecs_world_despawn_children(world, dead), MidEcsStatus::NotAlive as i32);
+            mid_ecs_world_free(world);
+        }
+    }
+
+    #[test]
+    fn enable_hierarchy_is_idempotent_and_set_parent_works_after_it() {
+        let world = mid_ecs_world_new();
+        // SAFETY: `world` non-null and not freed until the end of the block.
+        unsafe {
+            for _ in 0..3 {
+                assert_eq!(mid_ecs_world_enable_hierarchy(world), MidEcsStatus::Ok as i32);
+            }
+            let p = mid_ecs_world_spawn(world);
+            let c = mid_ecs_world_spawn(world);
+            assert_eq!(mid_ecs_world_set_parent(world, c, p), MidEcsStatus::Ok as i32);
+            assert_eq!(children_of(world, p), vec![c]);
+            mid_ecs_world_free(world);
         }
     }
 }

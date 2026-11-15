@@ -41,6 +41,7 @@ extern "C" {
 #define MID_ECS_DUPLICATE       -9
 #define MID_ECS_NOT_TRACKED    -10
 #define MID_ECS_INVALID_ARGUMENT -11
+#define MID_ECS_CYCLE          -12
 
 // Sentinel component_id/archetype_id meaning "not found" -- returned by
 // the lookup_ffi_* functions below. Not 0: 0 is a real, valid id for
@@ -92,7 +93,8 @@ uint64_t mid_ecs_world_spawn(MidEcsWorld *world);
 // Despawns the entity packed in `entity`. Returns MID_ECS_OK if it was
 // actually alive, MID_ECS_NOT_ALIVE otherwise (never spawned, already
 // despawned, or a stale handle whose slot was reused) -- never a crash
-// either way, even for a bogus, never-issued entity value.
+// either way, even for a bogus, never-issued entity value. With the hierarchy
+// enabled (see below) this also despawns everything below the entity.
 int32_t mid_ecs_world_despawn(MidEcsWorld *world, uint64_t entity);
 
 // Whether the entity packed in `entity` is currently alive. false on a
@@ -101,6 +103,47 @@ bool mid_ecs_world_is_alive(const MidEcsWorld *world, uint64_t entity);
 
 // Number of currently-live entities. 0 on a null world.
 size_t mid_ecs_world_entity_count(const MidEcsWorld *world);
+
+// ---------------------------------------------------------------------------
+// Parent/child hierarchy. A parent link keeps the parent's child list in step,
+// and despawning a parent despawns everything below it.
+// ---------------------------------------------------------------------------
+
+// Turns the hierarchy on for `world`. Idempotent. The functions below call it
+// themselves, so it only matters when links are made some other way.
+// MID_ECS_OK, or MID_ECS_NULL_POINTER.
+int32_t mid_ecs_world_enable_hierarchy(MidEcsWorld *world);
+
+// Makes `parent` the parent of `child`, last in its child list. A child that
+// already has a different parent is moved; one that already has this parent
+// stays where it is. MID_ECS_OK, or MID_ECS_NULL_POINTER; MID_ECS_NOT_ALIVE
+// (either entity is dead); MID_ECS_INVALID_ARGUMENT (child == parent);
+// MID_ECS_CYCLE (parent is child or one of its descendants). Nothing changes
+// on an error.
+int32_t mid_ecs_world_set_parent(MidEcsWorld *world, uint64_t child, uint64_t parent);
+
+// Detaches `child` from its parent, leaving it alive. MID_ECS_OK;
+// MID_ECS_NOT_FOUND if it had no parent; MID_ECS_NOT_ALIVE; MID_ECS_NULL_POINTER.
+int32_t mid_ecs_world_remove_parent(MidEcsWorld *world, uint64_t child);
+
+// Writes the parent of `child` to *out_parent. MID_ECS_OK; MID_ECS_NOT_FOUND if
+// it has none (*out_parent is left alone); MID_ECS_NOT_ALIVE;
+// MID_ECS_NULL_POINTER (world or out_parent).
+int32_t mid_ecs_world_parent(const MidEcsWorld *world, uint64_t child, uint64_t *out_parent);
+
+// Copies the children of `parent`, in order, into `out_buf` (capacity counts
+// uint64_t elements, not bytes). Pass out_buf = NULL to learn the count first.
+// Returns the child count (>= 0), or MID_ECS_NULL_POINTER; MID_ECS_NOT_ALIVE;
+// MID_ECS_BUFFER_TOO_SMALL (nothing is written).
+int32_t mid_ecs_world_children(const MidEcsWorld *world, uint64_t parent, uint64_t *out_buf, size_t out_buf_capacity);
+
+// Detaches every child of `parent`, leaving them alive. Returns how many it
+// detached (>= 0), or MID_ECS_NULL_POINTER / MID_ECS_NOT_ALIVE.
+int32_t mid_ecs_world_clear_children(MidEcsWorld *world, uint64_t parent);
+
+// Despawns everything below `parent`, keeping `parent`. Returns how many
+// entities it despawned (>= 0), or MID_ECS_NULL_POINTER / MID_ECS_NOT_ALIVE.
+int32_t mid_ecs_world_despawn_children(MidEcsWorld *world, uint64_t parent);
 
 // --- Deferred changes (command queue) ---
 //
