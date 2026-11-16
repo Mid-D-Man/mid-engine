@@ -2,6 +2,9 @@
 
 Modular Anti-Engine — each crate is independently publishable.
 
+The Status column and the build order below are historical (last updated in August 2026).
+Current status, the build order and the plan are in `docs/roadmap.md`.
+
 ## Crates
 
 | Crate | Role | Status |

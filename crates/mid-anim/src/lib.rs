@@ -2,12 +2,12 @@
 //! mid-anim — animation clip sampling for Mid Engine.
 //!
 //! New this pass (`docs/roadmap.md`, "What can be built in parallel"):
-//! scoped to sampling only. Applying a sampled value to a skeleton joint
-//! or scene-graph node needs hierarchy, which doesn't exist yet —
-//! `docs/mid-ecs.md`'s "GlobalTransform" section calls the hierarchy-
-//! composition work "not yet started" (that's `mid-nodes`'s job, per
-//! `docs/roadmap.md`). This crate stops at [`Track::sample`]; wiring its
-//! output into a transform is later work, once `mid-nodes` exists.
+//! scoped to sampling only. The hierarchy and the composition of a
+//! `LocalTransform` down it now exist in `mid-ecs` (`docs/mid-ecs-hierarchy.md`,
+//! `docs/mid-ecs-transform.md`), so applying a sampled value to a
+//! `LocalTransform` no longer waits on `mid-nodes`. This crate still stops
+//! at [`Track::sample`]; wiring its output into a transform is later work
+//! (`docs/roadmap.md`, item C4).
 //!
 //! ## What's real in this pass
 //!
