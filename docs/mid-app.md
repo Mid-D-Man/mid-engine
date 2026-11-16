@@ -72,7 +72,7 @@ impl in `mid-ecs`, so nothing more is needed.
 ### `app.rs`
 
 **What it does:** `App`, `Plugin`, the constants `DEFAULT_FIXED_HZ` (60.0) and
-`DEFAULT_MAX_FIXED_STEPS` (8), `HierarchyPlugin`, and `run_stages`, the one system of `Main`.
+`DEFAULT_MAX_FIXED_STEPS` (8), `HierarchyPlugin`, `TransformPlugin`, and `run_stages`, the one system of `Main`.
 
 `App::new` makes the world, inserts a `Clock` and a `FixedTimestep` as resources
 (so `Res<Clock>` gives a system the frame's time and `Res<FixedTimestep>` the
@@ -125,6 +125,11 @@ then `PostUpdate`.
   with the hierarchy on checks its hook table on every structural change and one without
   does not; an app that never parents anything should not pay for it. Adding it twice is
   harmless.
+- **`TransformPlugin` composes `LocalTransform` down the hierarchy once a frame, in
+  `PostUpdate`** (`World::propagate_transforms`; see `docs/mid-ecs-transform.md`). After
+  `Update` and `Physics`, so what they wrote that frame is composed that frame. It turns the
+  hierarchy on, so it is a plugin for the reason `HierarchyPlugin` is. Adding it twice adds
+  the system once (a marker resource), since a second copy would only repeat the work.
 - **The trim runs after `Main` returns, not inside it.** `Main` is out of the
   schedule map while it runs, so from inside it the world cannot see its systems,
   and one of them could be the reader that still needs the log.
@@ -155,7 +160,7 @@ then `PostUpdate`.
 
 ### `tests.rs`
 
-45 tests and the doctest (two of them for `HierarchyPlugin`: it turns the hierarchy on, and adding it twice is harmless). Stage order whatever the order added; exclusive
+48 tests and the doctest (two of them for `HierarchyPlugin`: it turns the hierarchy on, and adding it twice is harmless; three for `TransformPlugin`: it composes each frame, it composes what `Update` and `Physics` wrote in the same frame, and it turns the hierarchy on and can be added twice). Stage order whatever the order added; exclusive
 closures as systems; an empty app; order inside a stage (`before`, `after`,
 `chain`, sets, conditions) reaching the schedule through the app; a system on
 `Main`; a multi-threaded stage; the fixed timestep (one step per step's worth,

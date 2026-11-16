@@ -48,6 +48,36 @@ impl Plugin for HierarchyPlugin {
     }
 }
 
+/// Composes every [`LocalTransform`](mid_ecs::LocalTransform) down the
+/// hierarchy once a frame, in [`PostUpdate`], so by the time anything reads a
+/// [`GlobalTransform`](mid_ecs::GlobalTransform) or
+/// [`GlobalTransformLWC`](mid_ecs::GlobalTransformLWC) it reflects what
+/// [`Update`] and [`Physics`] did to the local and driven ones that frame.
+/// See `docs/mid-ecs-transform.md`.
+///
+/// It turns the hierarchy on (it walks `Children`), so it carries the cost
+/// [`HierarchyPlugin`] describes. A plugin, not part of [`App::new`], for that
+/// reason. Adding it twice adds the system once.
+pub struct TransformPlugin;
+
+/// Marks that [`TransformPlugin`] has added its system.
+struct TransformPluginAdded;
+
+fn propagate_transforms(world: &mut World) {
+    world.propagate_transforms();
+}
+
+impl Plugin for TransformPlugin {
+    fn build(&self, app: &mut App) {
+        app.world.enable_hierarchy();
+        if app.world.get_resource::<TransformPluginAdded>().is_some() {
+            return;
+        }
+        app.world.insert_resource(TransformPluginAdded);
+        app.add_systems(PostUpdate, propagate_transforms);
+    }
+}
+
 /// A world and the schedules that run it.
 ///
 /// A new `App` has a schedule for each of the stages ([`PreUpdate`],

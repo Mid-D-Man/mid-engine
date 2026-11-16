@@ -137,8 +137,8 @@ and remove-parent reporting, recursive despawn through C, the counts returned by
 
 ## Not built yet
 
-- **`LocalTransform` composition** into `GlobalTransform` down the hierarchy
-  (`docs/mid-ecs.md`, "Not yet decided"), and `mid-nodes` on top of it.
+- `mid-nodes` on top of the hierarchy and of `LocalTransform` composition (the
+  composition is built: `docs/mid-ecs-transform.md`).
 - Query-side helpers (`iter_descendants`, `iter_ancestors` on `Query`): the
   traversal is on `World` only.
 - Inserting a child at an index, and reordering children.

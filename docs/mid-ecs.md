@@ -351,10 +351,11 @@ Mid Engine completely avoids the traditional Object-Oriented memory traps by spl
 
 **Status: implemented.** `GlobalTransform` and `GlobalTransformLWC`
 are real, tested types in `crates/mid-ecs/src/transform.rs` — both
-usable with `World::insert_static`/`query_static` today. Not yet
-built: `LocalTransform` composition (the hierarchy it composes along,
-`ChildOf` and `Children`, is built: see `docs/mid-ecs-hierarchy.md`), and
-`mid-camera`'s own per-frame `to_view_relative` driver loop (see "Not yet
+usable with `World::insert_static`/`query_static` today. Built since:
+`LocalTransform` and its composition down the hierarchy
+(`World::propagate_transforms`, `mid_app::TransformPlugin`; see
+`docs/mid-ecs-transform.md`, which also holds the decisions this section
+left open). Not yet built: `mid-camera`'s own per-frame `to_view_relative` driver loop (see "Not yet
 decided" below, unchanged, still real, still not started).
 
 **The decision: two component types, `f32` default, `f64` opt-in —
@@ -407,14 +408,14 @@ storage precision an entity actually used. That narrow point (right
 before GPU upload) is the only place the two component types'
 consumers actually have to know both exist.
 
-**Not yet decided:** how `LocalTransform` (parent-relative,
-always small-magnitude, always `f32` regardless of world size), walked
-down the hierarchy that now exists, composes into either `GlobalTransform` variant — that's the actual
-"Integrating f64 global transform components into archetype storage
-tables" implementation work, not yet started. `mid-camera` (planned,
-not started — this engine's Cinemachine equivalent, sitting on top of
-both this system and `mid-math`'s existing `camera/` module) is what
-will eventually own "which entity is the active camera" and drive the
+**Decided and built (`docs/mid-ecs-transform.md`):** how `LocalTransform` (parent-relative,
+always small-magnitude, always `f32` regardless of world size), walked down the hierarchy,
+composes into either `GlobalTransform` variant. Composition is in `f32` until an entity with
+a `GlobalTransformLWC` is reached and in `f64` from there down, so the `f64` components
+integrate into the archetype tables as ordinary components and nothing needed a
+tagged union. **Not yet decided, and not started:** `mid-camera` (planned,
+this engine's Cinemachine equivalent, sitting on top of both this system and `mid-math`'s
+existing `camera/` module), which will own "which entity is the active camera" and drive the
 per-frame `to_view_relative` call above.
 
 ## The Ubel Stratum Bridge (The OOP Illusion)

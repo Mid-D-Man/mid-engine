@@ -341,7 +341,10 @@ fn the_hierarchy_plugin_turns_the_hierarchy_on() {
     app.world.insert_static(c, ChildOf(p));
     assert_eq!(app.world.children(p), &[c]);
     app.world.despawn(p);
-    assert!(!app.world.is_alive(c), "a despawned parent takes its children");
+    assert!(
+        !app.world.is_alive(c),
+        "a despawned parent takes its children"
+    );
 }
 
 #[test]
@@ -839,4 +842,127 @@ fn a_lifecycle_observer_added_to_the_app_sees_spawns_made_by_systems() {
     app.update_with(ms(1));
     app.update_with(ms(1));
     assert_eq!(log(&app), ["made", "made"]);
+}
+
+// ── TransformPlugin ──────────────────────────────────────────────────
+
+fn moved(x: f32) -> mid_ecs::LocalTransform {
+    let mut local = mid_ecs::LocalTransform::IDENTITY;
+    local.translation.x = x;
+    local
+}
+
+#[test]
+fn the_transform_plugin_composes_locals_down_the_hierarchy_each_frame() {
+    use mid_ecs::{GlobalTransform, LocalTransform};
+
+    let mut app = App::new();
+    app.add_plugin(TransformPlugin);
+    let root = app.world.spawn();
+    app.world.insert_static(root, moved(1.0));
+    app.world.insert_static(root, GlobalTransform::IDENTITY);
+    let kid = app.world.spawn_child(root).unwrap();
+    app.world.insert_static(kid, moved(2.0));
+    app.world.insert_static(kid, GlobalTransform::IDENTITY);
+
+    app.update_with(ms(1));
+    assert_eq!(
+        app.world
+            .get_static::<GlobalTransform>(kid)
+            .unwrap()
+            .translation
+            .x,
+        3.0
+    );
+
+    app.world
+        .get_static_mut::<LocalTransform>(root)
+        .unwrap()
+        .translation
+        .x = 10.0;
+    app.update_with(ms(1));
+    assert_eq!(
+        app.world
+            .get_static::<GlobalTransform>(kid)
+            .unwrap()
+            .translation
+            .x,
+        12.0
+    );
+}
+
+#[test]
+fn what_update_and_physics_wrote_this_frame_is_composed_the_same_frame() {
+    use mid_ecs::{GlobalTransform, LocalTransform};
+
+    struct Ids(mid_ecs::Entity, mid_ecs::Entity);
+    // Update moves the local one, Physics drives the other's global.
+    fn gameplay(world: &mut World) {
+        let local_root = world.get_resource::<Ids>().unwrap().0;
+        world
+            .get_static_mut::<LocalTransform>(local_root)
+            .unwrap()
+            .translation
+            .x = 7.0;
+    }
+    fn physics(world: &mut World) {
+        let body = world.get_resource::<Ids>().unwrap().1;
+        world
+            .get_static_mut::<GlobalTransform>(body)
+            .unwrap()
+            .translation
+            .x = 100.0;
+    }
+
+    let mut app = App::new();
+    app.add_plugin(TransformPlugin);
+    let local_root = app.world.spawn();
+    app.world.insert_static(local_root, moved(0.0));
+    app.world
+        .insert_static(local_root, GlobalTransform::IDENTITY);
+    let body = app.world.spawn();
+    app.world.insert_static(body, GlobalTransform::IDENTITY);
+    let on_local = app.world.spawn_child(local_root).unwrap();
+    app.world.insert_static(on_local, moved(1.0));
+    app.world.insert_static(on_local, GlobalTransform::IDENTITY);
+    let on_body = app.world.spawn_child(body).unwrap();
+    app.world.insert_static(on_body, moved(1.0));
+    app.world.insert_static(on_body, GlobalTransform::IDENTITY);
+    app.insert_resource(Ids(local_root, body));
+    app.add_systems(Update, gameplay);
+    app.add_systems(Physics, physics);
+
+    app.update_with(one_step()); // Physics runs on the fixed timestep
+    let x = |e| {
+        app.world
+            .get_static::<GlobalTransform>(e)
+            .unwrap()
+            .translation
+            .x
+    };
+    assert_eq!(x(on_local), 8.0);
+    assert_eq!(x(on_body), 101.0, "Physics runs before PostUpdate");
+}
+
+#[test]
+fn the_transform_plugin_turns_the_hierarchy_on_and_can_be_added_twice() {
+    use mid_ecs::GlobalTransform;
+
+    let mut app = App::new();
+    app.add_plugin(TransformPlugin);
+    app.add_plugin(TransformPlugin);
+    let p = app.world.spawn();
+    let c = app.world.spawn_child(p).unwrap();
+    assert_eq!(app.world.children(p), &[c]);
+    app.world.insert_static(c, moved(1.0));
+    app.world.insert_static(c, GlobalTransform::IDENTITY);
+    app.update_with(ms(1));
+    assert_eq!(
+        app.world
+            .get_static::<GlobalTransform>(c)
+            .unwrap()
+            .translation
+            .x,
+        1.0
+    );
 }
