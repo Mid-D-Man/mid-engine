@@ -8,12 +8,13 @@ changes get made from now on. Grounded in `docs/bevy-comparison.md`'s
 analysis — read that first if the reasoning below needs the source
 data.
 
-## Current status (as of 2026-11-16, `mid-engine` @ `5dc9525`)
+## Current status (as of 2026-11-18, `mid-engine` @ `2cc1f04`, with the `mid-reflect` and `mid-cli` delivery applied)
 
 Checked by reading the repository (each crate's contents and doc), not by rebuilding
 everything. Real CI: the `mid-ecs` and `mid-ecs-ffi` workflows pass on main (reported by
 the maintainer on 2026-11-16, after the hierarchy, observer propagation and transform
-deliveries). Anything below marked "sandbox only" has not run on real CI.
+deliveries). Anything below marked "sandbox only" has not run on real CI; that includes
+`mid-reflect` and `mid-cli`.
 
 | Crate | Status |
 |---|---|
@@ -33,12 +34,14 @@ deliveries). Anything below marked "sandbox only" has not run on real CI.
 | `mid-log`, `mid-trace` | `mid-log` good (lock-free SPSC, tiered levels, an Android logcat sink behind a feature); `mid-trace` a feature-gated no-op by default |
 | `mid-ui` | Standalone UI core: widget tree (its own arena, not ECS), anchor/margin layout with row and column flow, hit testing, a draw list of `FillRect`, `PushClip`, `PopClip`. f32 and f64. No text, images, event dispatch, focus or animation. Sandbox only (62 tests) per its doc |
 | `mid-ui-mxui` | The `.mxui` loader (DixScript v1.0.0 documents describing a widget tree). With `web/mid-ui-wasm` and `web/ui` it forms a browser playground with a Canvas 2D backend |
+| `mid-reflect` | Built (`docs/mid-reflect.md`): a `Value` tree with JSON in and out, the `Reflect` trait, three declarative registration macros, `TypeRegistry` with type data, and an optional `math` feature. No dependencies; builds on 1.75. 69 integration tests with `math` and 4 doctests; sandbox only. Not built: the bridge to `mid-ecs` (reading an entity's components by name) |
+| `tools/mid-cli` | Built (`docs/mid-cli.md`): the `mid` binary with `doctor`, `check`, `test`, `docs lint`, `apply` and `deliver`; its own workspace; 92 tests; sandbox only. The world commands wait for the ECS bridge and the remote protocol |
 | `examples/`, `tools/` | `headless-server`, `custom-transport-demo`; `tools/mdix-compiler` |
 | `mid-nodes`, `mid-camera` | Not started. No crates, no design docs until this one (`docs/mid-nodes.md`) |
 
-**Does not exist at all yet:** reflection (a description of a component's name and fields),
-component serialization, assets, input, windowing, text and fonts, images, rendering, audio,
-scenes and nodes, a protocol for talking to a running world, a command line, and any app.
+**Does not exist at all yet:** the bridge between reflection and the ECS (and so component
+serialization), assets, input, windowing, text and fonts, images, rendering, audio, scenes and
+nodes, a protocol for talking to a running world, and any app.
 
 **Where that leaves us.** The ECS has reached the point where other crates can be built on
 it without waiting for it: everything a program needs from it to run headless is there. What
@@ -91,7 +94,7 @@ before what" from Bevy's own structure.
 |---|---|---|
 | 0 | `platform`, `ptr`, `math`, `macro_utils`, `android` | `mid-platform`, `mid-ptr`, `mid-math` built. `bevy_android` (platform glue for Android) has no equivalent yet |
 | 1 | `utils`, `tasks`, `curve`, `shape`, `derive`, `encase_derive` | `mid-common` (thin); tasks live in `mid-ecs`'s parallel executor; curves in `mid-math`. No proc-macros, by the dependency mandate |
-| 2 | `ecs`, **`reflect`**, `transform`, `color` | `mid-ecs` built, transform built, color in `mid-math`. **Reflection is missing** |
+| 2 | `ecs`, **`reflect`**, `transform`, `color` | `mid-ecs` built, transform built, color in `mid-math`. **Reflection is built** (`mid-reflect`), but not yet bridged to the ECS |
 | 3 | `app`, `state` | `mid-app` and states built |
 | 4 | `input`, `time`, `log`, `a11y` | `mid-time`, `mid-log` built. **Input is missing** |
 | 5 | `window`, `diagnostic`, `clipboard`, `gilrs`, settings | **Windowing is missing**; `mid-trace` partly covers diagnostics |
@@ -108,8 +111,9 @@ Four things this table settles:
 
 1. **Reflection sits next to the ECS in Bevy** (layer 2), and `asset`, `scene`,
    `world_serialization`, `remote`, `window`, `input`, `ui` and `picking` all depend on it,
-   some only optionally. It is the foundation under every tool. mid-engine has no equivalent,
-   and it is the biggest single gap between "an ECS" and "an engine you can look inside".
+   some only optionally. It is the foundation under every tool. mid-engine had no equivalent
+   until `mid-reflect`, which is built but not yet bridged to the ECS, and it was the biggest
+   single gap between "an ECS" and "an engine that can be looked inside".
 2. **The remote protocol is late in Bevy only by accident.** `bevy_remote` hard-depends on
    `app`, `ecs`, `reflect`, `tasks`, `log`, `color`, `platform`, `utils`, `derive` and, oddly,
    `dev_tools` (which drags in ui, animation, audio and more); rendering and assets are
@@ -359,14 +363,28 @@ on record.
 
 ---
 
-## Decisions 7 to 13: proposed on 2026-11-16, not yet confirmed
+## Decisions 7 to 13: proposed on 2026-11-16, revised on 2026-11-18
 
-These come from the plan below. Each says what it would unblock and what it costs. Decisions
-7 to 10 are the ones that need an answer before the first build; 11 to 13 can wait.
+On 2026-11-18 the maintainer said what "the app" is: a graphical editor on the lines of the Unity
+editor (a viewport, a hierarchy, an inspector, project panels), used on an Android phone because a
+laptop is not available, with its interface built on `mid-ui`. That replaced the first reading, a
+tools app with a console and no viewport. It also brought forward the triggers named for
+Decisions 12 and 13: a viewport needs a renderer, and a project panel and scene files need to
+read and write files. Decisions 10 to 13 are rewritten below. The maintainer also asked for
+`mid-reflect` and `mid-cli` to be started, so Decisions 7 and 9 are built and waiting for
+confirmation. Decision 8 keeps its shape but is no longer on the editor's critical path. Nothing
+here is confirmed unless it says so.
 
 ---
 
-### Decision 7 (proposed): Add a small `mid-reflect` crate: a registry that describes components
+### Decision 7 (proposed, built): Add a small `mid-reflect` crate: a registry that describes components
+
+**Status:** built as `crates/mid-reflect` (`docs/mid-reflect.md`) on the maintainer's instruction
+to start it. The crate name and the macro approach were not explicitly confirmed. Two parts of the
+recommendation changed in the build: there are no field offsets (`core::mem::offset_of!` needs
+Rust 1.77 and the floor is 1.75), and only unit-variant enums are supported. A `TypeInfo` records
+a stable name and a kind, not a size or an alignment. Still to build: the bridge to `mid-ecs`
+(T1b below).
 
 **Context:** `mid-ecs` knows a component by a dense `ComponentId` and can hand C a byte span
 of it (`ffi_span`). It knows no name and no fields, and cannot read a component as a value.
@@ -374,10 +392,10 @@ Everything that looks inside a running world needs that description: a protocol 
 edit it, a scene file, an inspector panel, and the component serialization that `docs/mid-ecs.md`'s
 "Network Sync" section assumes. Bevy puts `bevy_reflect` at layer 2 for this reason.
 
-**Recommendation:** a crate with a registry of `TypeInfo` (a stable name, size, alignment, a kind,
-and fields with a name, kind and offset), read and write through a small `Value` tree, and
-registration by declarative macro (`macro_rules!`), so no proc-macro dependency. Hand-written
-registration is fine for engine types. A derive can come later as an optional, separate crate.
+**Recommendation:** a crate with a registry of `TypeInfo` (a stable name, a kind, and fields
+with a name and a type), read and write through a small `Value` tree, and registration by
+declarative macro (`macro_rules!`), so no proc-macro dependency. Hand-written registration is fine
+for engine types. A derive can come later as an optional, separate crate.
 
 **Alternatives considered:** port `bevy_reflect` whole (trait objects, dynamic types, patching):
 large, and most of it unneeded here. Generate the description from DixScript schemas (the
@@ -385,11 +403,15 @@ large, and most of it unneeded here. Generate the description from DixScript sch
 DixScript a build dependency of the core, which the dependency mandate rules out. `serde`:
 ruled out by the same mandate.
 
-**Needs your call:** the crate name, and whether macro registration is acceptable.
+**Needs a decision:** the crate name, and whether macro registration is acceptable.
 
 ---
 
 ### Decision 8 (proposed): A JSON-RPC remote protocol modeled on the Bevy Remote Protocol, over stdio first
+
+**Revised 2026-11-18:** the editor embeds its world (Decision 10), so the protocol is not on the
+editor's critical path. It serves the command line's world commands and, later, an editor
+attached to an engine running elsewhere.
 
 **Context:** the Bevy Remote Protocol is JSON-RPC 2.0 with methods such as `world.query`,
 `world.get_components`, `world.insert_components`, `world.mutate_components`,
@@ -401,172 +423,247 @@ ruled out by the same mandate.
 **Recommendation:** `mid-remote`, the same shape and mostly the same method names, written with
 hand-made JSON (as `web/mid-ui-wasm` already does, with no `serde`), acting on `Value` through
 `mid-reflect`. Transports in order: lines over stdio (the command line and AI use it), then TCP,
-then WebSocket (the app uses it). No async runtime.
+then WebSocket (a remote editor would use it). No async runtime.
 
 **Alternatives considered:** carry it over `mid-net` (QUIC): too heavy for tooling, and its
 browser path needs certificates. A binary protocol: faster, but neither a person nor an AI can
 read it at a prompt.
 
-**Needs:** Decision 7.
+**Needs:** Decision 7 and the ECS bridge.
 
 ---
 
-### Decision 9 (proposed): One command-line binary, `mid`, in `tools/mid-cli`
+### Decision 9 (proposed, built): One command-line binary, `mid`, in `tools/mid-cli`
 
-The whole engine usable from a terminal, designed for scripts and AI first. Full proposal in
-`docs/mid-cli.md`: the same binary runs the development workflow (check, test, bench, docs,
-applying a delivery tarball) and, through Decision 8, inspects and edits a live world. Standard
-library only, `--json` on every command, no prompts when not a terminal.
+**Status:** phase 1 is built (`docs/mid-cli.md`). It depends on `mid-reflect` for `Value` and
+JSON output, which changes the first design's "standard library only".
+
+The whole engine usable from a terminal, designed for scripts and AI first. The same binary runs
+the development workflow (check, test, documentation lint, applying a delivery tarball, building
+one) and, through Decision 8, will inspect and edit a live world. `--json` on every command, no
+prompts when not a terminal.
 
 ---
 
-### Decision 10 (proposed): The app is shared UI logic plus a thin shell per platform
+### Decision 10 (proposed, revised): The editor is a platform-independent core plus a host per platform
 
-Full proposal in `docs/mid-engine-app.md`. The app's screens are `.mxui` files driven by
-`mid-ui`, whose draw list is already the only render seam, so the same screens run in a browser
-(Canvas 2D backend, exists), in an Android WebView shell, and later in a native shell, with only
-the shell and backend changing. Order: browser page installable as a PWA, then a WebView APK
-built by CI, then a native shell. Nothing Android-specific has been built or verified.
+**Context:** the app is an editor. Its viewport and a play mode need the world in the editor's
+own process, so the engine is embedded. The interface's only render seam is `mid-ui`'s draw list.
+The phone cannot build anything, so every change reaches it through a pushed commit and a
+workflow. Full proposal in `docs/mid-engine-app.md`.
+
+**Recommendation:** an editor core (the `mid-ui` tree and screens, the editor logic, the embedded
+world, and a builder that projects the world into a viewport draw list) that takes input messages
+and returns two draw lists, and a host for each platform that supplies events, text and files and
+paints the lists. Order: a web host first, because a pushed commit deploys the site and a reload
+shows the result, which is the fastest loop available on a phone; an Android APK spike in
+parallel, because the Android build chain is the largest unknown and only a workflow is needed
+to learn about it; then a native host. A WebView APK around the web host is the cheap way to an
+installable app if the native host is late.
+
+**Alternatives considered:** native only, which makes every try wait for an unverified APK
+pipeline; the editor as a client of a remote engine, which cannot give a responsive viewport or a
+play mode without streaming frames.
+
+**Needs a decision:** web host first with a parallel spike, or straight to native. Whether the
+engine runs inside wasm in a page is unverified.
 
 ---
 
 ### Decision 11 (proposed): Text enters `mid-ui` as a draw command and a measuring seam
 
-`DrawCmd` is already `#[non_exhaustive]`, so `Text` can be added without breaking anyone. The
-core would define a `TextMeasure` trait that the host implements (the browser backend uses the
-canvas, a native one its own font code) so layout can size text before any glyph is drawn.
-Shaping and a glyph atlas become their own crate later. Bevy's `text` needs `asset`, `image`
-and `clipboard` first; this order avoids that dependency for the app's first screens.
+Unchanged in shape. It is now needed by every panel, and by text entry (renaming an entity,
+editing a value). `DrawCmd` is already `#[non_exhaustive]`, so `Text` can be added without
+breaking anyone. The core defines a `TextMeasure` trait that the host implements (the web host
+uses the canvas for measuring and a DOM input for typing and the soft keyboard; a native host
+uses its own font code and the platform's keyboard), so layout can size text before any glyph is
+drawn. Shaping and a glyph atlas become their own crate later. Bevy's `text` needs `asset`,
+`image` and `clipboard` first; this order avoids that dependency for the editor's first screens.
 
 ---
 
-### Decision 12 (proposed, deferred): No renderer yet, and a named trigger
+### Decision 12 (proposed, revised): A draw-list viewport first, a GPU backend later
 
-A renderer is not on the path to the tools app, and it carries the largest unmade choices:
-GPU API (and `wgpu` against the dependency mandate), a software rasterizer, or `raylib` as a
-backend (`mid-ui` already names raylib as a supported host). **Trigger:** a `mid-nodes` scene
-that has to be seen, i.e. when the app needs a viewport. Then decide with a measured spike.
+**Context:** the trigger named on 2026-11-16, an app that needs a viewport, has fired. The
+constraints: the phone has an entry-level GPU (a Galaxy A13; see `docs/mid-engine-app.md`, "Facts
+checked"); core crates keep the dependency mandate, with hosts and backends one layer up; every
+build is a workflow; and the web host needs a backend that runs in a page. Bevy's own path is
+heavy. In the fork (checked at `f3b5346`), `bevy_render` has 26 non-optional Bevy dependencies
+(`asset`, `image`, `mesh`, `shader`, `material`, `camera` and `window` among them),
+`sprite_render` sits at layer 12 and `feathers` at layer 14.
+
+**Recommendation:** in two steps.
+
+1. **A viewport draw list.** A small set of screen-space primitives (lines, filled polygons,
+   circles, text through the host), a software backend for tests and as a fallback, and a Canvas
+   2D painter in the web host. A builder projects the 3D world on the CPU with `mid-math`'s camera
+   and `mid-geom`'s shapes into that list, so the scene shows as a grid, wireframe and flat
+   shapes, with picking by `mid-geom`'s raycasting and gizmos drawn as primitives. It needs no
+   asset, image, mesh, shader or material layer.
+2. **A GPU backend later,** when textured or lit 3D is wanted. The trigger: a scene whose look
+   cannot be judged from wireframe and flat shading. For the native Android host the candidates
+   are:
+
+| Option | For | Against |
+|---|---|---|
+| **raylib** as a host backend | A documented Android platform target and guide (NDK, `NativeActivity`); brings a window, a GLES context, input and text drawing; a Rust binding with an NDK path exists; the maintainer is building a game on it | An external C library (acceptable one layer up, not in a core crate); `raylib-rs` needs Rust 1.85; soft-keyboard text entry on Android is unchecked |
+| **An own GLES layer** | No dependency; shaped exactly for the engine | The largest option: context creation, an activity and glue by hand, and the same work again for the web |
+| **`wgpu`** | Portable, with a web path | Against the dependency mandate unless confined to a backend crate; heavy; the least suited to an entry-level GPU |
+| **Software only** | No dependency, deterministic, testable anywhere | Too slow for textured 3D on the phone's CPU; fine for the draw-list viewport |
+
+**Needs a decision:** the two-step shape; a 3D-capable viewport (a projected scene) or a true 2D
+view first; and, later, the GPU option. **Unverified:** the cost of the CPU-projected viewport on
+the phone, raylib's Android text input, and every Android build step.
 
 ---
 
-### Decision 13 (proposed, deferred): No asset system until something loads an asset
+### Decision 13 (proposed, revised): A byte seam now, asset loading when a loader needs it
 
-Bevy's `asset` sits at layer 6 and `scene`, `text`, `image` and `ui` depend on it. Here the
-first consumers (scene files, textures, fonts) do not exist yet. **Trigger:** the first
-feature that needs to load a file on a platform with no file system (a browser, Android's asset
-manager). The design then starts from "how does a wasm page load bytes", not from Bevy's `AssetServer`.
+**Context:** the trigger named on 2026-11-16, a feature that must load a file on a platform with
+no file system, has fired. The editor's project panel lists and opens files, scenes load and
+save, and the web host has only `fetch`. Bevy's `asset` sits at layer 6 and `image`, `scene`,
+`text`, `render` and `ui` depend on it.
+
+**Recommendation:** a small crate that is only a byte source: read and write bytes by path, with a
+backend for a directory, one for files bundled in the Android APK and one for `fetch` in a page,
+plus a table of path to type. No asset server, handles, dependency tracking, async loading or hot
+reload until a consumer needs one. Scene files are `mid-reflect` `Value` trees as JSON, so they
+need no loader (the scene format is open in `docs/mid-nodes.md`; DixScript is the mandate's named
+home for scene data, one layer up). Typed loaders (images, fonts, meshes) come with the first
+renderer step that needs one.
+
+**Open:** where a project lives on the phone, and how it moves in and out of the repository it is
+worked from (`docs/mid-engine-app.md`, "Project storage").
 
 ---
 
 ## The road to the engine app
 
-### What "the engine app" is taken to mean here
+### What "the engine app" is
 
-An application, on an Android phone, that controls the engine: a console, a tree of entities
-in a running world, an inspector to read and edit their components, and the status of the
-project, all drawn with `mid-ui`. This is an assumption, written down so it can be corrected.
-It is not a game and not (yet) a visual scene editor; a scene viewport comes at milestone M4.
+An editor on the lines of the Unity editor, on an Android phone, with its interface built on
+`mid-ui` (the maintainer, 2026-11-18): a viewport, a hierarchy, an inspector, project panels.
+Detail is in `docs/mid-engine-app.md`. It replaced the first reading, a tools app with no
+viewport, which is why the milestones below changed.
 
-Two facts about how the work is done shape the plan. Builds happen in CI, because the phone
-cannot build the engine, so everything the app needs must be buildable by a workflow. And
-the engine does not need to run on the phone for the app to be useful: the app can be a
-client of an engine running elsewhere (a CI job, a cloud shell, a desktop), which is exactly
-what a remote protocol is for.
+Three facts shape the plan. Builds happen in CI, because the phone cannot build the engine, so
+everything the app needs is built by a workflow. The engine is embedded in the editor, because a
+viewport and a play mode need the world local. And the phone's GPU is entry-level, so the first
+viewport is drawn from lists of lines and polygons projected on the CPU, with a GPU backend later.
 
 ### Milestones
 
 | | Milestone | Done when | Needs |
 |---|---|---|---|
-| M1 | **Terminal engine** | From a terminal, `mid` runs the development workflow with JSON output, starts a headless world, and lists, reads, edits and queries entities and components in it, with schema discovery | Decisions 7, 8, 9 |
-| M2 | **Tools UI in the browser** | Console, entity tree and inspector screens, written in `.mxui`, run at `/app/` against a live world; installable as a PWA on Android Chrome | M1, `mid-ui` text, events and widgets, a WebSocket transport reachable over HTTPS |
-| M3 | **Android app (WebView shell)** | An APK built by CI hosts the same page and screens and installs on the phone | M2, an Android shell project, a CI job |
-| M4 | **Content** | Scenes load and save, nodes exist, anim is wired to transforms, assets load, a 2D viewport draws | `mid-nodes`, scene format, minimal assets, input, a window or shell abstraction, a 2D renderer |
-| M5 | **Native Android** | A native shell (no WebView) runs the same screens | M4's backend work |
+| M1 | **Terminal engine** | `mid` runs the development workflow with JSON output (built, sandbox only), starts a headless world, and lists, reads, edits and queries entities and components in it | T1b, then T3 and T4 |
+| M2 | **Editor panels on the phone** | A web page on the phone shows the hierarchy, inspector and console over an embedded world, and edits go through undoable commands | T1b, U1 to U4, E1, H1, and a run of the engine inside wasm |
+| M3 | **Viewport v0** | The scene shows in the viewport (grid, wireframe and flat shapes), an orbit camera works by touch, a tap selects, a gizmo moves the selection, and hierarchy and inspector follow | M2, V1 to V4, C1 |
+| M4 | **Content** | Scenes load and save, the project panel lists files, play mode enters and leaves | C2, C3, C5, E2 |
+| M5 | **Android app** | A CI-built APK installs on the phone and runs the same editor natively, with files in app storage and a working soft keyboard | H2 (a spike, started early) and H3 |
+| M6 | **Rich rendering** | Textured and lit 3D, sprites, animation on transforms | The GPU backend step of Decision 12, typed loaders, C4 |
 
-M1 comes first because it has no unknown outside the ECS: reflection and the protocol are
-built and verified here, in the sandbox, with no device and no GPU, and the command line is
-useful to AI-driven work the day it exists.
+M1 is nearly in hand and has no unknown outside the ECS. M2 comes next because it puts the editor
+core in front of a real screen and a real touch loop without waiting for the Android build chain.
 
 ### What is needed before what
 
-Four tracks. An item can start when everything in its "needs first" column is done. Sizes are
+Seven tracks. An item can start when everything in its "needs first" column is done. Sizes are
 relative: S is about one delivery, M a few, L many.
 
 | Track | Item | Needs first | Size |
 |---|---|---|---|
-| Tools | T1 `mid-reflect` (Decision 7) | `mid-ecs` (done) | M |
-| | T2 `mid` command line v0: development-workflow commands | nothing new | S |
-| | T3 `mid-remote` core: methods on `Value`, stdio transport | T1 | M |
+| Tools | T1 `mid-reflect` (Decision 7) | `mid-ecs` (done) | built, sandbox only |
+| | T1b ECS bridge: enumerate an entity's components, then a component table on the registry | T1 | M |
+| | T2 `mid` command line, phase 1 | nothing | built, sandbox only |
+| | T3 `mid-remote` core: methods on `Value`, stdio transport | T1b | M |
 | | T4 `mid` world commands | T3 | S |
-| | T5 TCP, then WebSocket transport | T3 | M |
+| | T5 TCP, then WebSocket transport | T3 | M, for a remote editor only |
 | UI | U1 text seam in `mid-ui` (Decision 11) | `mid-ui` (done) | M |
-| | U2 events, focus, scrolling, text input | U1 | L |
-| | U3 widget kit: button, label, field, list, tabs, tree, property grid | U2 | M |
-| | U4 screens in `.mxui` and the `/app/` page | U3, T3, T5 | M |
-| | U5 Android WebView shell and a CI APK job | U4 | M |
+| | U2 events, focus, scrolling, touch gestures, text input | U1 | L |
+| | U3 widget kit: button, label, field, list, tabs, tree, property grid, splitter | U2 | M |
+| | U4 editor screens in `.mxui` | U3, T1b | M |
+| Viewport | V1 viewport draw list and software backend (Decision 12) | nothing | M |
+| | V2 viewport builder: camera, grid, shapes; a bench | V1 | M |
+| | V3 picking and selection | V2 (C1 for names) | S |
+| | V4 gizmos | V3, U2 | M |
+| Hosts | H1 web host: page, input messages, embedded world | U1, R1 | M |
+| | H2 Android APK spike: a CI-built APK that draws a `mid-ui` list and reports touch | nothing | M |
+| | H3 native Android host | H2, V1, U2 | L |
+| | H4 GPU backend (Decision 12, step 2) | H3 | L |
+| Editor | E1 edit commands, undo and redo | T1b | M |
+| | E2 scenes load and save; play mode | C2, C3 | M |
 | Content | C1 `mid-nodes` phase 1: names, path lookup, node bundles | hierarchy and transform (done) | S |
 | | C2 scene tree and instantiation | C1, T1 | M |
-| | C3 scene file loader (DixScript, optional crate) | C2 | M |
+| | C3 scene file | C2 | M |
 | | C4 wire `mid-anim` tracks to `LocalTransform` | transform (done) | S |
-| | C5 minimal `mid-asset` (Decision 13) | a consumer | M |
+| | C5 byte seam (Decision 13) | nothing | S |
 | Runtime | R1 input as messages (touch, keyboard, pointer) | `mid-ecs` (done) | M |
-| | R2 window or shell abstraction | R1 | M |
-| | R3 2D renderer (Decision 12) | R2, U1 | L |
 | | R4 physics: angular motion, collision | `mid-geom` gaps | L |
-| | R5 `mid-camera` | R3 | M |
+| | R5 `mid-camera` | C1 | M |
 
-**Critical path to the app (M3):** T1, T3, T5 in one line; U1, U2, U3 in another; then U4 and
-U5. The two lines are independent until U4. C4 and C1 are small and can be done whenever
-convenient; they do not block the app.
+**Critical path to M3:** T1b feeds the inspector and the hierarchy (U4, E1). The UI line U1, U2,
+U3 feeds U4. The viewport line V1 to V4 does not depend on the ECS and can start now. The host
+line H1 needs U1 and input messages. The lines meet at U4 and V3. H2, the Android spike, needs
+nothing and is the cheapest way to learn about the largest unknown. T3 to T5, the protocol, are
+not on this path.
 
 ### What to work on now, in order
 
-1. **Confirm Decisions 7 to 10** (or change them). Nothing below should start on an
-   unconfirmed answer.
-2. **T2, the command line's development-workflow commands.** Small, no dependencies, and the
-   first thing that makes AI-driven work cheaper.
-3. **T1, `mid-reflect`.** The single biggest unlock: the protocol, scenes, the inspector and
-   network sync all wait on it.
-4. **T3 and T4, the remote protocol and the world commands.** Completes M1.
-5. **U1, text in `mid-ui`,** in parallel with 3 and 4, since it is independent of the ECS.
-6. **C1, `mid-nodes` phase 1,** once reflection has settled what a node description looks like.
+1. **Confirm or change** Decision 10 (a web host first, with an Android spike in parallel),
+   Decision 12 (a draw-list viewport, then a GPU backend), Decision 13 (a byte seam), and the open
+   questions in `docs/mid-engine-app.md`: whether play mode is in the first version, a projected
+   3D viewport or a true 2D one, how a project moves in and out of the phone, and the phone's
+   exact model.
+2. **T1b, the ECS bridge.** An `mid-ecs` API to enumerate an entity's components, then
+   reflection's component table. It unblocks the inspector, the hierarchy, undo and the command
+   line's world commands.
+3. **U1, then U2.** Text, then events, touch and text input in `mid-ui`. Independent of the ECS.
+4. **V1 and V2.** The viewport draw list, a software backend, and the builder with a bench.
+   Independent of the ECS, and the bench settles the CPU cost early.
+5. **H2, the APK spike.** A workflow that builds an APK which draws a `mid-ui` list and reports
+   touch. The largest unknown in the plan.
+6. **C1, `mid-nodes` phase 1,** when convenient.
 
 ### What not to do yet, and why
 
-- **A renderer, GPU work, audio, a camera crate.** Not on the path to the tools app, and each
-  carries large unmade choices (Decision 12).
-- **Assets.** No consumer exists (Decision 13).
+- **A GPU renderer,** until the draw-list viewport has shown what it cannot do (Decision 12,
+  step 2). Audio and a camera crate stay deferred.
+- **An asset server.** A byte seam is enough (Decision 13).
 - **Physics collision.** `mid-geom`'s gaps are meant to be driven by `mid-physics`, and nothing
   needs it yet.
-- **A scene file format before reflection.** It would be written twice.
-- **A native Android shell.** It needs M4's backend work first, and the browser path reaches the
-  phone sooner with far less risk.
+- **A scene file format before nodes and reflection are settled.** It would be written twice.
+- **A native-only commitment** before the APK spike has run.
 - **ECS performance work.** Paused until the ECS is feature-complete, by decision.
 
 ### What is unverified
 
-Everything about Android is unverified: that the Android SDK and NDK are available on the CI
-runner (believed, not checked), that a WebView shell builds in a workflow, how a PWA reaches an
-engine over HTTPS (a page served over HTTPS cannot open an insecure WebSocket except to
-localhost, so the engine endpoint needs TLS or a tunnel), and whether a terminal on the phone
-(Termux) could run the `mid` binary. `mid-ecs` and `mid-app` pass `cargo check` for
-`wasm32-unknown-unknown`, so an engine inside the page is plausible, but it has not been run.
+Everything about Android is unverified. The runner images list an Android SDK and NDK in their
+release notes, but no workflow in this repository has used them. Whether raylib's Android route
+works with a Rust core, soft-keyboard text entry, file access on the phone's storage, and the cost
+of the viewport on the phone are all unchecked. `mid-ecs` and `mid-app` pass `cargo check` for
+`wasm32-unknown-unknown`, and the code splits so that parallel batches run one after another
+there, but the wasm32 tests were type-checked and not run, so whether a world runs in a page is
+open. A page served over HTTPS cannot open an insecure WebSocket except to localhost, which
+matters only for a remote engine. The public facts that were checked are listed in
+`docs/mid-engine-app.md`, "Facts checked".
 
 ## Updated build order
 
 ```
 math ✅ → common (thin) → geom ✅ → net ✅(core) → ecs ✅ → app ✅ → time ✅
-    → TOOLS:    reflect → remote → mid CLI                      (M1)
-    → UI:       text → events/focus → widgets → screens → shell (M2, M3)
-    → CONTENT:  nodes → scenes → assets → anim wiring           (M4)
-    → RUNTIME:  input → window → render2d → camera              (M4)
+    → TOOLS:     reflect ✅(core) → ECS bridge → remote → world commands; mid CLI ✅(phase 1)
+    → UI:        text → events and touch → widgets → editor screens              (M2)
+    → VIEWPORT:  draw list + software backend → projection → picking → gizmos     (M3)
+    → HOSTS:     web host → Android APK spike → native host                       (M2, M5)
+    → CONTENT:   nodes → scenes → byte seam → undo and play mode                  (M3, M4)
+    → RUNTIME:   input → GPU backend, typed loaders, camera → anim wiring         (M6)
     → physics (angular, collision) when something needs it
-    → (trigger-based) mid-platform extensions [Decision 3], mid-camera, native shell
+    → (trigger-based) mid-platform extensions [Decision 3]
 ```
 
 Replaces the order in `docs/architecture.md` (`math → common → geom → net → ecs → physics →
-anim → nodes`), which put `nodes` last and had nothing for tools. Bevy's own order (the
-layers above) is the reason reflection and input move up.
+anim → nodes`), which put `nodes` last and had nothing for tools. Bevy's own order (the layers
+above) is the reason reflection and input move up.
 
 ## Open items carried forward
 
@@ -581,7 +678,9 @@ layers above) is the reason reflection and input move up.
 - `Changed`/`Added` detection on `ChildOf`/`Children` is untested; the cost of a world with the
   hierarchy enabled and of despawning very large subtrees is unmeasured; the cost of a full
   transform pass is unmeasured.
-- Real CI has not run `mid-ui` (per its doc).
+- Real CI has not run `mid-ui` (per its doc), or `mid-reflect` and `mid-cli` (their workflows,
+  `mid-reflect-test.yml` and `mid-cli-test.yml`, are new).
+- The docs site also has no pages for `mid-reflect`, `mid-cli` or the engine app docs.
 
 ## Explicitly out of scope for this pass
 

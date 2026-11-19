@@ -10,9 +10,10 @@ Two audiences, in this order: **scripts and AI**, then people. Every design choi
 a program can rely on over output that reads nicely. A person at a prompt gets a readable form by
 default; `--json` gives the stable one.
 
-It is also the first half of the engine app. The app and the command line are two clients of the
-same remote protocol (`docs/roadmap.md`, Decision 8), so a screen in the app has a command-line
-twin, which keeps both honest and gives the app a way to be tested without a screen.
+The engine app is an editor with its own embedded world (`docs/mid-engine-app.md`), so it does not
+need the remote protocol. The command line and an editor attached to a remote engine would be the
+two clients of that protocol (`docs/roadmap.md`, Decision 8). Both rely on `mid-reflect` to read and
+write a world by name, which keeps what the command line can do close to what the editor can do.
 
 **Status.** Phase 1 is built: `doctor`, `check`, `test`, `docs lint`, `apply` and `deliver`. The
 world commands (phase 2 onward) wait for `mid-reflect`'s ECS bridge and for the remote protocol.
