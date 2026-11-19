@@ -1,0 +1,129 @@
+# .github/workflows/mid-cli-test.yml
+# Tests for tools/mid-cli. See docs/mid-cli.md, "CI and Workflows".
+name: mid-cli Tests
+
+on:
+  push:
+    branches: [main, master, develop]
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+
+  parse-trigger:
+    runs-on: ubuntu-latest
+    outputs:
+      run_tests: ${{ steps.decide.outputs.run_tests }}
+    steps:
+      - name: Decide whether to run
+        id: decide
+        env:
+          EVENT: ${{ github.event_name }}
+          COMMIT_MSG: ${{ github.event.head_commit.message }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          RUN=false
+          if [ "$EVENT" = "workflow_dispatch" ]; then
+            RUN=true
+          else
+            echo "$COMMIT_MSG $PR_TITLE" | grep -qiE '\-\-mid-cli\b|\-\-mid-all\b' && RUN=true || true
+          fi
+          echo "run_tests=$RUN" >> "$GITHUB_OUTPUT"
+          echo "Run mid-cli tests: $RUN"
+
+  # tools/mid-cli is its own workspace and depends on crates/mid-reflect by
+  # path, so every step runs inside tools/mid-cli. The tests need git and
+  # tar, which the runner has, and they run real cargo in a temporary
+  # workspace, which needs no network.
+  stable:
+    runs-on: ubuntu-latest
+    needs: parse-trigger
+    if: needs.parse-trigger.outputs.run_tests == 'true'
+    defaults:
+      run:
+        working-directory: tools/mid-cli
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Show toolchain
+        run: rustc --version && cargo --version && git --version && tar --version | head -1
+
+      - name: Cache cargo registry
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+          key: cargo-registry-cli-stable-${{ hashFiles('tools/mid-cli/Cargo.toml') }}
+          restore-keys: |
+            cargo-registry-cli-stable-
+
+      - name: Check formatting
+        run: cargo fmt --check
+        continue-on-error: true
+
+      - name: Clippy
+        run: cargo clippy --no-deps --all-targets -- -D warnings
+        continue-on-error: true
+
+      - name: Tests
+        run: cargo test --no-fail-fast
+
+  # The workspace floor: the command line promises to build and pass here.
+  msrv:
+    runs-on: ubuntu-latest
+    needs: parse-trigger
+    if: needs.parse-trigger.outputs.run_tests == 'true'
+    defaults:
+      run:
+        working-directory: tools/mid-cli
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust 1.75.0
+        uses: dtolnay/rust-toolchain@1.75.0
+
+      - name: Show toolchain
+        run: rustc --version && cargo --version
+
+      - name: Cache cargo registry
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+          key: cargo-registry-cli-msrv-${{ hashFiles('tools/mid-cli/Cargo.toml') }}
+          restore-keys: |
+            cargo-registry-cli-msrv-
+
+      - name: Tests
+        run: cargo test --no-fail-fast
+
+  summary:
+    runs-on: ubuntu-latest
+    needs: [parse-trigger, stable, msrv]
+    if: always()
+    steps:
+      - name: Print summary
+        env:
+          RUN_TESTS: ${{ needs.parse-trigger.outputs.run_tests }}
+          STABLE: ${{ needs.stable.result }}
+          MSRV: ${{ needs.msrv.result }}
+        run: |
+          echo "mid-cli: stable=$STABLE msrv=$MSRV"
+          if [ "$RUN_TESTS" != "true" ]; then
+            echo "Not triggered. Add --mid-cli or --mid-all to the commit message."
+          fi
