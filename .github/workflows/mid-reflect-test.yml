@@ -1,0 +1,128 @@
+# .github/workflows/mid-reflect-test.yml
+# Tests for crates/mid-reflect. See docs/mid-reflect.md, "CI and Workflows".
+name: mid-reflect Tests
+
+on:
+  push:
+    branches: [main, master, develop]
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+
+  parse-trigger:
+    runs-on: ubuntu-latest
+    outputs:
+      run_tests: ${{ steps.decide.outputs.run_tests }}
+    steps:
+      - name: Decide whether to run
+        id: decide
+        env:
+          EVENT: ${{ github.event_name }}
+          COMMIT_MSG: ${{ github.event.head_commit.message }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          RUN=false
+          if [ "$EVENT" = "workflow_dispatch" ]; then
+            RUN=true
+          else
+            echo "$COMMIT_MSG $PR_TITLE" | grep -qiE '\-\-mid-reflect\b|\-\-mid-all\b' && RUN=true || true
+          fi
+          echo "run_tests=$RUN" >> "$GITHUB_OUTPUT"
+          echo "Run mid-reflect tests: $RUN"
+
+  stable:
+    runs-on: ubuntu-latest
+    needs: parse-trigger
+    if: needs.parse-trigger.outputs.run_tests == 'true'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Show toolchain
+        run: rustc --version && cargo --version
+
+      # The registry only, never target/: a workspace's target/ is large
+      # enough to use up the Actions storage limit.
+      - name: Cache cargo registry
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+          key: cargo-registry-stable-${{ hashFiles('crates/mid-reflect/Cargo.toml', 'crates/mid-math/Cargo.toml') }}
+          restore-keys: |
+            cargo-registry-stable-
+
+      - name: Check formatting
+        run: cargo fmt -p mid-reflect --check
+        continue-on-error: true
+
+      - name: Clippy
+        run: cargo clippy -p mid-reflect --no-deps --all-targets --features math -- -D warnings
+        continue-on-error: true
+
+      - name: Tests (no features)
+        run: cargo test -p mid-reflect --no-fail-fast
+
+      - name: Tests (math feature)
+        run: cargo test -p mid-reflect --features math --no-fail-fast
+
+  # The workspace floor. mid-reflect has no dependencies of its own and
+  # promises to build here, with and without the math feature.
+  msrv:
+    runs-on: ubuntu-latest
+    needs: parse-trigger
+    if: needs.parse-trigger.outputs.run_tests == 'true'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust 1.75.0
+        uses: dtolnay/rust-toolchain@1.75.0
+
+      - name: Show toolchain
+        run: rustc --version && cargo --version
+
+      - name: Cache cargo registry
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+          key: cargo-registry-msrv-${{ hashFiles('crates/mid-reflect/Cargo.toml', 'crates/mid-math/Cargo.toml') }}
+          restore-keys: |
+            cargo-registry-msrv-
+
+      - name: Tests (no features)
+        run: cargo test -p mid-reflect --no-fail-fast
+
+      - name: Tests (math feature)
+        run: cargo test -p mid-reflect --features math --no-fail-fast
+
+  summary:
+    runs-on: ubuntu-latest
+    needs: [parse-trigger, stable, msrv]
+    if: always()
+    steps:
+      - name: Print summary
+        env:
+          RUN_TESTS: ${{ needs.parse-trigger.outputs.run_tests }}
+          STABLE: ${{ needs.stable.result }}
+          MSRV: ${{ needs.msrv.result }}
+        run: |
+          echo "mid-reflect: stable=$STABLE msrv=$MSRV"
+          if [ "$RUN_TESTS" != "true" ]; then
+            echo "Not triggered. Add --mid-reflect or --mid-all to the commit message."
+          fi
