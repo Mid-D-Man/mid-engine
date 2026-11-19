@@ -1,0 +1,20 @@
+[package]
+name        = "mid-reflect"
+version     = "0.1.0"
+edition     = "2021"
+description = "Runtime description of Rust types for Mid Engine: a type registry, a small Value tree, JSON in and out, and path-based edits. No external dependencies."
+
+[lib]
+name = "mid_reflect"
+crate-type = ["lib"]
+
+[features]
+default = []
+# Reflect implementations for mid-math's vectors, quaternions and affine transforms.
+math = ["dep:mid-math"]
+
+[dependencies]
+mid-math = { path = "../mid-math", optional = true }
+
+[lints]
+workspace = true

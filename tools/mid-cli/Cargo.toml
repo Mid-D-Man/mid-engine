@@ -1,0 +1,21 @@
+[package]
+name        = "mid-cli"
+version     = "0.1.0"
+edition     = "2021"
+description = "The `mid` command line for Mid Engine: development-workflow commands with stable JSON output, built for scripts and AI. Standard library plus mid-reflect for JSON."
+publish     = false
+
+[lib]
+name = "mid_cli"
+path = "src/lib.rs"
+
+[[bin]]
+name = "mid"
+path = "src/main.rs"
+
+[dependencies]
+mid-reflect = { path = "../../crates/mid-reflect" }
+
+# Standalone on purpose: its own workspace keeps the command line out of the
+# engine's workspace-wide builds and needs no change to the root Cargo.toml.
+[workspace]
