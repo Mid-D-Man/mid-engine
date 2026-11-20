@@ -51,6 +51,8 @@ pub enum BitError {
     BadVarint,
     /// A string that is not UTF-8, or longer than the limit the caller gave.
     BadString,
+    /// An enum tag or a message id that nothing is registered under (or that is not allowed to be sent).
+    UnknownTag,
 }
 
 impl fmt::Display for BitError {
@@ -61,6 +63,7 @@ impl fmt::Display for BitError {
             BitError::NotFinite => "float not finite, bad range or zero vector",
             BitError::BadVarint => "malformed varint",
             BitError::BadString => "malformed string",
+            BitError::UnknownTag => "unknown tag or message id",
         })
     }
 }

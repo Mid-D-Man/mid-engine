@@ -114,7 +114,7 @@ protocol layer.
 ```
 crates/mid-net/
   Cargo.toml, src/lib.rs, src/ffi.rs   — facade: re-exports everything, owns the FFI surface
-  wire/                                — mid-net-wire: packet.rs + sequence.rs + bits.rs (bit-packed writer/reader, quantisation) + stream.rs (NetSerialize / NetPod: a struct's wire form, one function for both directions; see mid-net-foundation.md). Zero deps.
+  wire/                                — mid-net-wire: packet.rs + sequence.rs + bits.rs (bit-packed writer/reader, quantisation) + stream.rs (NetSerialize / NetPod: a struct's wire form, one function for both directions) + poly.rs (an enum as a tag, or a message id with a decoder table: see mid-net-foundation.md). Zero deps.
   transport/                           — mid-net-transport: the Transport trait + LoopbackTransport. Zero deps.
   reliable/                            — mid-net-reliable: frame headers, RTT, retransmit buffer. Depends on mid-net-wire only.
   transport-quinn/                     — mid-net-transport-quinn: native Transport impl over web-transport-quinn. Written, unverified — see "Transport" below.
