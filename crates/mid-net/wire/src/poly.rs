@@ -226,7 +226,7 @@ impl MessageRegistry {
     }
 }
 
-type Handler<C> = Box<dyn FnMut(&mut C, &mut BitReader) -> Result<(), BitError>>;
+type Handler<C> = Box<dyn FnMut(&mut C, &mut BitReader, bool) -> Result<(), BitError>>;
 
 /// Message ids to typed handlers, with a context the handlers work on. Decoding is into a value on the
 /// stack (no allocation per message), and a handler is called only once its message has been read in full.
@@ -251,10 +251,12 @@ impl<C> Dispatcher<C> {
         check_id(self.id_bits, T::ID, self.handlers.contains_key(&T::ID))?;
         self.handlers.insert(
             T::ID,
-            Box::new(move |ctx, r| {
+            Box::new(move |ctx, r, deliver| {
                 let mut v = T::default();
                 v.net_serialize(r)?;
-                handler(ctx, v);
+                if deliver {
+                    handler(ctx, v);
+                }
                 Ok(())
             }),
         );
@@ -263,9 +265,20 @@ impl<C> Dispatcher<C> {
 
     /// Reads one message and runs its handler; returns the id handled. On `Err` no handler has run.
     pub fn dispatch(&mut self, ctx: &mut C, r: &mut BitReader) -> Result<u16, BitError> {
+        self.dispatch_if(ctx, r, true)
+    }
+
+    /// Like [`dispatch`](Self::dispatch), but with `deliver` false the message is still read to the end (the reader moves on, errors are
+    /// still errors) and the handler is **not** called: how a stale message of a sequenced channel is skipped.
+    pub fn dispatch_if(
+        &mut self,
+        ctx: &mut C,
+        r: &mut BitReader,
+        deliver: bool,
+    ) -> Result<u16, BitError> {
         let id = r.read_bits(self.id_bits)? as u16;
         let handler = self.handlers.get_mut(&id).ok_or(BitError::UnknownTag)?;
-        handler(ctx, r)?;
+        handler(ctx, r, deliver)?;
         Ok(id)
     }
 }

@@ -13,13 +13,23 @@
 //! without pulling in reliable.rs's retransmit machinery.
 
 pub mod bits;
+pub mod frame;
 pub mod packet;
 pub mod poly;
 pub mod sequence;
 pub mod stream;
 
 pub use bits::{quantization_step, BitError, BitReader, BitWriter};
+pub use frame::{
+    ChannelError, ChannelKind, ChannelTable, DatagramBuilder, DatagramReceiver, PushError,
+    ReceiveReport, StreamError, StreamReader, StreamWriter, MAX_MESSAGES_PER_DATAGRAM,
+};
+pub use packet::{
+    DecodeError, Packet, PacketKind, PlayerEvent, PlayerId, PlayerState, PLAYER_STATE_WIRE_SIZE,
+};
 pub use poly::{Dispatcher, MessageRegistry, NetMessage, NetMessageType, RegisterError};
-pub use stream::{net_read, net_round_trip, net_vec, net_write, net_write_ref, read_pod, write_pod, BitStream, BitStreamExt, NetPod, NetSerialize, SInt, UInt};
-pub use packet::{DecodeError, Packet, PacketKind, PlayerEvent, PlayerId, PlayerState, PLAYER_STATE_WIRE_SIZE};
 pub use sequence::{is_acked, AckTracker, Sequence};
+pub use stream::{
+    net_read, net_round_trip, net_vec, net_write, net_write_ref, read_pod, write_pod, BitStream,
+    BitStreamExt, NetPod, NetSerialize, SInt, UInt,
+};

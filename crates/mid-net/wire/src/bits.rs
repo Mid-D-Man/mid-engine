@@ -102,6 +102,29 @@ impl<'a> BitWriter<'a> {
         self.buf.len() * 8 - self.pos
     }
 
+    /// Takes back everything written after bit `bits` (a no-op if `bits` is at or past what was written). The bits above the new end in
+    /// the last byte are cleared, so what is written next lands on clean bits. This is how a packet builder tries a message and backs out
+    /// when it does not fit.
+    pub fn truncate_to(&mut self, bits: usize) {
+        if bits >= self.pos {
+            return;
+        }
+        self.pos = bits;
+        let off = bits % 8;
+        if off != 0 {
+            self.buf[bits / 8] &= (1u8 << off) - 1;
+        }
+    }
+
+    /// Overwrites a byte that has already been completely written (for a count written first and known last).
+    pub fn set_byte(&mut self, index: usize, value: u8) -> Result<(), BitError> {
+        if index >= self.pos / 8 {
+            return Err(BitError::OutOfRange);
+        }
+        self.buf[index] = value;
+        Ok(())
+    }
+
     /// The bytes written so far (the last one zero-padded).
     pub fn written(&self) -> &[u8] {
         &self.buf[..self.bytes_written()]
@@ -740,7 +763,10 @@ mod tests {
         let mut w = BitWriter::new(&mut b);
         w.write_bits(0b1010, 4).unwrap(); // 20 bits free: one component of a 16-bit vector fits, two do not
         let before = (w.bits_written(), w.written().to_vec());
-        assert_eq!(w.write_unit_vec3(0.0, 0.0, 1.0, 16), Err(BitError::Overflow));
+        assert_eq!(
+            w.write_unit_vec3(0.0, 0.0, 1.0, 16),
+            Err(BitError::Overflow)
+        );
         assert_eq!((w.bits_written(), w.written().to_vec()), before);
         let mut b = [0u8; 4];
         let mut w = BitWriter::new(&mut b);
@@ -973,6 +999,54 @@ mod tests {
         w.write_bits(1, 3).unwrap();
         w.align_to_byte().unwrap();
         assert_eq!(w.written(), &[0b0000_0001]);
+    }
+
+    #[test]
+    fn truncating_takes_back_bits_cleanly_and_set_byte_only_touches_finished_bytes() {
+        let mut b = [0xFFu8; 8];
+        let mut w = BitWriter::new(&mut b);
+        w.write_bits(0b1011, 4).unwrap();
+        let mark = w.bits_written();
+        w.write_bits(0xFFF, 12).unwrap(); // dirties the rest of byte 0 and all of byte 1
+        w.truncate_to(mark);
+        assert_eq!(
+            (w.bits_written(), w.written()),
+            (4, &[0b0000_1011][..]),
+            "the bits above the new end are cleared"
+        );
+        w.write_bits(0b01, 2).unwrap();
+        assert_eq!(
+            w.written(),
+            &[0b0001_1011],
+            "and what is written next lands on clean bits"
+        );
+        w.truncate_to(100); // at or past the end: nothing happens
+        assert_eq!(w.bits_written(), 6);
+        w.truncate_to(0);
+        assert_eq!((w.bits_written(), w.written().len()), (0, 0));
+        w.write_u16(0x1234).unwrap();
+        w.write_u8(0).unwrap();
+        w.set_byte(2, 9).unwrap();
+        assert_eq!(w.written(), &[0x34, 0x12, 9]);
+        assert_eq!(
+            w.set_byte(3, 1),
+            Err(BitError::OutOfRange),
+            "a byte not written yet"
+        );
+        w.write_bits(1, 3).unwrap();
+        assert_eq!(
+            w.set_byte(3, 1),
+            Err(BitError::OutOfRange),
+            "nor one only partly written"
+        );
+        // A write that fails halfway, rolled back, leaves the same bytes as one that never happened.
+        let mut c = [0u8; 4];
+        let mut v = BitWriter::new(&mut c);
+        v.write_bits(0b101, 3).unwrap();
+        let m = v.bits_written();
+        assert!(v.write_bits(u64::MAX, 40).is_err());
+        v.truncate_to(m);
+        assert_eq!(v.written(), &[0b101]);
     }
 
     // ---- hostile input -------------------------------------------------------------------------------------------
