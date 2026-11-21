@@ -26,8 +26,13 @@
 
 pub mod ffi;
 pub mod connection;
+pub mod session;
 
 pub use connection::{Connection, ConnectionEvent};
+pub use session::{
+    fnv1a64, ControlMsg, Delivery, DisconnectReason, EndReason, Outgoing, Role, SchemaHash, Session, SessionConfig, SessionEvent, SessionState,
+    CONTROL_MESSAGE_ID, SESSION_PROTOCOL_VERSION,
+};
 pub use mid_net_wire::{DecodeError, Packet, PacketKind, PlayerEvent, PlayerId, PlayerState, is_acked, AckTracker, Sequence};
 pub use mid_net_reliable::{
     decode_reliable_frame, decode_unreliable_frame, encode_reliable_frame, encode_unreliable_frame,
