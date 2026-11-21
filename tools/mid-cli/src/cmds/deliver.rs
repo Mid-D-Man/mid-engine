@@ -33,11 +33,11 @@ pub enum Class {
     Skip,
 }
 
-/// The delivery convention: workflow files and the root `Cargo.toml` go
-/// separately; a lockfile at any depth, the tarballs themselves and build
-/// output never.
+/// The delivery convention: workflow files, the root `Cargo.toml` and the
+/// root `.gitignore` go separately (the mdix tool places none of them); a
+/// lockfile at any depth, the tarballs themselves and build output never.
 pub fn classify(path: &str) -> Class {
-    if path.starts_with(".github/") || path == "Cargo.toml" {
+    if path.starts_with(".github/") || path == "Cargo.toml" || path == ".gitignore" {
         Class::Separate
     } else if path == "Cargo.lock"
         || path.ends_with("/Cargo.lock")
@@ -240,6 +240,8 @@ mod tests {
         assert_eq!(classify(".github/workflows/x.yml"), Class::Separate);
         assert_eq!(classify(".github/anything.html"), Class::Separate);
         assert_eq!(classify("Cargo.toml"), Class::Separate);
+        assert_eq!(classify(".gitignore"), Class::Separate);
+        assert_eq!(classify("crates/a/.gitignore"), Class::Deliver);
         assert_eq!(classify("Cargo.lock"), Class::Skip);
         assert_eq!(classify("tools/mid-cli/Cargo.lock"), Class::Skip);
         assert_eq!(classify("a/b/Cargo.lock"), Class::Skip);

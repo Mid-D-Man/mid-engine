@@ -1,0 +1,20 @@
+[package]
+name        = "mid-editor"
+version     = "0.1.0"
+edition     = "2021"
+description = "Platform-independent core of the Mid Engine editor: panels on mid-ui, an orbit viewport projected on the CPU, touch gestures, and a paint list for a host to draw. No renderer, no windowing, no unsafe."
+
+[lib]
+name = "mid_editor"
+crate-type = ["lib"]
+
+[dependencies]
+mid-math = { path = "../mid-math" }
+mid-ui   = { path = "../mid-ui" }
+
+[features]
+# Forces mid-math's scalar vector backend, which is the one 32-bit ARM uses.
+force-scalar = ["mid-math/force-scalar"]
+
+[lints]
+workspace = true

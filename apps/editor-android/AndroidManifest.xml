@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  ============================================================================
+  NOTICE: Full documentation, design decisions, and fix history for this file
+  live in docs/mid-editor.md, section "apps/editor-android/AndroidManifest.xml"
+  ============================================================================
+  @MIN_SDK@, @TARGET_SDK@, @VERSION_CODE@ and @VERSION_NAME@ are filled in by scripts/build_editor_android.sh.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="com.midmanstudio.mideditor"
+    android:versionCode="@VERSION_CODE@"
+    android:versionName="@VERSION_NAME@">
+
+    <uses-sdk
+        android:minSdkVersion="@MIN_SDK@"
+        android:targetSdkVersion="@TARGET_SDK@" />
+
+    <uses-feature android:glEsVersion="0x00020000" android:required="true" />
+
+    <!-- No permissions: the editor reads only its own assets, and a project folder comes later. -->
+
+    <application
+        android:label="Mid Editor"
+        android:hasCode="false"
+        android:extractNativeLibs="true">
+
+        <!-- Portrait only: raylib 6.0's Android backend ignores APP_CMD_CONFIG_CHANGED, so a rotation would leave the
+             window size stale. The core lays out landscape too; it is the host that cannot follow a rotation yet. -->
+        <activity
+            android:name="android.app.NativeActivity"
+            android:label="Mid Editor"
+            android:exported="true"
+            android:launchMode="singleTask"
+            android:screenOrientation="portrait"
+            android:configChanges="orientation|keyboardHidden|screenSize|screenLayout|smallestScreenSize|uiMode">
+
+            <meta-data android:name="android.app.lib_name" android:value="main" />
+
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>

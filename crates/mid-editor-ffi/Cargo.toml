@@ -1,0 +1,19 @@
+[package]
+name        = "mid-editor-ffi"
+version     = "0.1.0"
+edition     = "2021"
+description = "C ABI over mid-editor, for a native host. Kept out of mid-editor so the core stays free of unsafe."
+
+# No [lints] table on purpose: this crate is the unsafe boundary, as in the
+# other FFI crates in the workspace.
+
+[lib]
+name = "mid_editor_ffi"
+crate-type = ["lib", "staticlib"]
+
+[dependencies]
+mid-editor = { path = "../mid-editor" }
+
+[features]
+# Forces mid-math's scalar vector backend, which is the one 32-bit ARM uses.
+force-scalar = ["mid-editor/force-scalar"]

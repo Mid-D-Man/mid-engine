@@ -1,10 +1,11 @@
 # The engine app: a phone-first editor
 
-**Status: design only. Nothing here is built or verified, apart from what `mid-ui` and its web
-playground already do and the public facts listed under "Facts checked".** First written on
-2026-11-16 as a tools app (a console, an entity tree, an inspector). Rewritten on 2026-11-18,
-after the maintainer said what the app is. "The engine app" is a working title; no crate,
-directory or name exists yet.
+**Status: the first version is built and tested in the sandbox and has not run on a phone.** It is
+described in `docs/mid-editor.md`. This document is the design around it. First written on 2026-11-16
+as a tools app (a console, an entity tree, an inspector). Rewritten on 2026-11-18, after the maintainer
+said what the app is, and again on 2026-11-19, after the maintainer answered the open questions and
+pointed at the Android build in the `Tower-of-Babylon` repository. "The engine app" is a working
+title; the crates are `mid-editor` and `mid-editor-ffi` and the host is `apps/editor-android`.
 
 ## Overview
 
@@ -14,12 +15,19 @@ The app is an editor in the sense of the Unity editor: a **viewport** that shows
 interface is built on `mid-ui`. These three points come from the maintainer. Everything else in
 this document is a proposal.
 
-Assumptions that are written down so they can be corrected:
+Answered by the maintainer on 2026-11-19:
 
-- The editor edits scenes and can also run them (a play mode, as in Unity). Whether play mode is
-  in the first version is open.
-- The viewport shows a 3D scene, because the transform and geometry crates are 3D. A 2D scene is
-  shown through the same view, from above. Real 2D nodes wait, as `docs/mid-nodes.md` proposes.
+- The editor has an **edit mode and a play mode**, as in Unity.
+- The viewport is **3D, with a 2D mode**, as in Unity.
+- It goes **straight to native Android**. The web comes later.
+- It reaches the phone as a **workflow-built download**, "GitHub workflows all the way", with
+  scripts where needed.
+- The phone is a **Samsung Galaxy A13, the 4G model**.
+
+Still assumptions:
+
+- The 2D mode is, for now, a top-down orthographic view of the same scene. Real 2D nodes wait, as
+  `docs/mid-nodes.md` proposes.
 - The first version is usable when a project opens, the scene shows in the viewport, a tap in the
   viewport or the hierarchy selects an entity, the inspector edits its components, a gizmo moves
   it, undo works, and the scene saves.
@@ -29,8 +37,9 @@ Constraints that shape it:
 - The interface is `mid-ui`, not a borrowed toolkit.
 - The phone cannot build the engine, so everything the app needs is built by a workflow, and a
   change reaches the phone through a pushed commit.
-- The phone is a Galaxy A13. The 4G model has an Exynos 850 with a Mali-G52 GPU, an entry-level
-  part (see "Facts checked"; the exact model is not recorded). The viewport has to be cheap.
+- The phone is a Galaxy A13 4G: an Exynos 850 with a Mali-G52 GPU, an entry-level part, and a
+  32-bit ARM userspace (it installs `armeabi-v7a` APKs only, per the maintainer's repositories). The
+  viewport has to be cheap, and every Rust crate in the editor path has to be right on 32 bits.
 - Core crates keep the dependency mandate (`docs/architecture.md`, "Technical Mandates"). A host
   or a backend is one layer up and may use external code, as `tools/mdix-compiler` does.
 - As much as possible must be testable without the phone.
@@ -129,26 +138,39 @@ then widgets, then an editor kit.
 
 ## Hosts
 
-| | Host | What it needs | Trade-offs |
-|---|---|---|---|
-| A | **A web page** | A wasm build of the core, the existing Canvas 2D backend for the UI list, a Canvas 2D painter for the viewport list, DOM input for events and the soft keyboard, `fetch` for files | The fastest loop available on a phone: push, the site deploys, reload. No Android build chain. The engine must run inside wasm (below). A page served over HTTPS cannot open an insecure WebSocket except to localhost |
-| B | **An Android WebView app** | A small Android project that hosts the page, and a CI job that builds the APK | Installable and offline. Adds the Android build chain. A viewport inside a WebView is as fast as the WebView allows |
-| C | **A native Android app** | The core as a native library built with the NDK, an activity, a surface, input and text entry from the platform, a backend that paints the two lists, file access | Best fit eventually. Needs the most unverified work (below) |
+**Native Android first, by the maintainer's decision.** The host is a C file with raylib 6.0 and the
+Rust core behind a C API (`docs/mid-editor.md`, `docs/mid-editor-ffi.md`). It follows the build the
+maintainer already uses in `Tower-of-Babylon` (and `TerminalViscosity`): the NDK's `clang`, raylib built
+from source for `armeabi-v7a`, a `NativeActivity` with no Java, `aapt`, `zipalign` and a debug key,
+all in a workflow that is run by hand and leaves the APK as a downloadable artifact. A Tauri app
+(`midnote`) already installs and runs on the phone, which is the evidence that a 32-bit ARM APK
+built this way works there.
 
-**Proposal:** A first, because it gives the editor core a real screen and a real touch loop
-soonest, and a spike for C in parallel, because the Android build chain is the largest unknown
-and only a workflow is needed to find out. B is the cheap way to an installable app if C is late.
-The core and the screens do not change between hosts.
+What was learned from those repositories and from raylib 6.0's source:
 
-**Engine in wasm.** `mid-ecs` and `mid-app` pass `cargo check` for `wasm32-unknown-unknown`, and
-the code splits so that on wasm32 the parallel batches run one after another on the calling
-thread (`docs/mid-ecs.md`, "Parallel iteration"). The wasm32 tests have been type-checked, not
-run, so whether a world runs in a page is unverified.
+- **`InitWindow(0, 0)`** gives the display's native resolution, with no letterbox bars.
+- **Rotation is not handled.** raylib 6.0's Android backend ignores `APP_CMD_CONFIG_CHANGED`, so the
+  manifest locks portrait. The core lays out landscape (tested); following a rotation needs a
+  change to raylib's Android backend or another native glue.
+- **The default ES2 shader is `mediump`**, which put geometry a pixel or two off on this phone's GPU
+  (`Tower-of-Babylon/docs/phone-rendering.md`). The host loads a highp copy.
+- **Touch** arrives as the set of points that are down (`GetTouchPointCount`, `GetTouchPointId`,
+  `GetTouchPosition`), and the host turns that into down, move and up events for the core.
+- **raylib's `fopen` is redirected to the APK's assets** for reading, so the font and, later, project
+  files bundled in the APK open with ordinary paths.
 
-**Native Android.** Decision 12 covers what paints. The documented route for raylib is its
-Android platform target, built with the NDK and a `NativeActivity`. For a Rust core, the binding
-`raylib-sys` has an Android path in its build script. Soft-keyboard text entry on that route has not
-been checked.
+**Later hosts.** A web page (the existing Canvas 2D backend for the interface, a Canvas 2D painter
+for the paint list, DOM input for the soft keyboard) and, if wanted, a WebView app. They consume the
+same paint list, so the core does not change.
+
+**Engine in wasm.** `mid-ecs` and `mid-app` pass `cargo check` for `wasm32-unknown-unknown`, and the
+code splits so that on wasm32 the parallel batches run one after another on the calling thread
+(`docs/mid-ecs.md`, "Parallel iteration"). The wasm32 tests have been type-checked, not run. It
+matters for the web host only.
+
+**32-bit ARM.** `mid-math` picks its scalar backend there (no SIMD backend exists for 32-bit ARM),
+which the workflow's scalar-backend test job also exercises. `mid-ecs` has not been built or run for
+a 32-bit target. That is the next thing to check before the ECS joins the editor.
 
 ## Where the engine runs
 
@@ -167,11 +189,17 @@ shell, a desktop). If it is exposed over a network:
 
 ## Project storage
 
-A project is a directory of scene files and assets. Where it lives on the phone is open.
-App-private storage is the simplest. Shared storage goes through Android's storage access
-framework, which a native app reaches through the platform. Getting a project in and out of the
-phone, and of the GitHub repository it is worked from, is a real question: see "Open questions".
-The file access itself is the byte seam in Decision 13.
+The maintainer's direction is GitHub workflows for everything that reaches the phone, with scripts
+where a workflow is not enough. For a project, that suggests:
+
+- **Reading.** A project folder in the repository is bundled into the APK as assets by the build
+  script, the way the font is, and opens with ordinary paths. This needs no storage permission.
+- **Writing.** raylib's Android backend writes files to the app's private internal storage, so a
+  saved scene lands there.
+- **Getting edits back into the repository** is not designed. It is the open question below: a script
+  that pulls the files off the phone, an in-app export that triggers a workflow, or something else.
+
+The byte seam in `docs/roadmap.md`, Decision 13, is where reading and writing meet.
 
 ## Edits, undo and play mode
 
@@ -195,23 +223,24 @@ produces, the cost on the phone, and anything about Android.
 
 ## Phases
 
-The identifiers match `docs/roadmap.md`.
+The identifiers match `docs/roadmap.md`. "Built" means built and tested in the sandbox, not run on a
+phone.
 
-| Phase | What | Needs | Done when |
-|---|---|---|---|
-| T1b | The ECS bridge for `mid-reflect` | an `mid-ecs` API to enumerate an entity's components | An entity's components are read and written by name from the registry |
-| U1 | Text in `mid-ui` | `mid-ui` | A `.mxui` screen with text lays out and draws in the browser |
-| U2 | Events, focus, scrolling, touch gestures, text input | U1 | A screen can be tapped, dragged, scrolled and typed into |
-| U3 | Widget kit, including tree, property grid, tabs and a splitter | U2 | The panels' widgets exist |
-| V1 | The viewport draw list and a software backend | nothing | A list of primitives paints into a buffer that a test compares |
-| V2 | The viewport builder: camera, grid, shapes | V1, `mid-math`, `mid-geom` | A scene projects to a list; a bench says what it costs |
-| V3 | Picking and selection | V2, `mid-nodes` phase 1 | A tap selects an entity, and hierarchy and inspector follow |
-| V4 | Gizmos | V3, U2 | A drag on a handle moves the selected entity |
-| H1 | The web host | U1, input messages | The editor page runs on the phone with an embedded world |
-| H2 | An Android APK spike | nothing from the engine | A CI-built APK shows a `mid-ui` draw list and reports touch |
-| H3 | The native host | H2, V1, U2 | The same editor runs natively |
-| E1 | Edit commands, undo and redo | T1b | Every inspector edit can be undone |
-| E2 | Scenes load and save; play mode | `mid-nodes`, scene format | The scene round-trips; play mode enters and leaves |
+| Phase | What | Status |
+|---|---|---|
+| T1b | The ECS bridge for `mid-reflect` | Not built. Needs an `mid-ecs` API to enumerate an entity's components |
+| U1 | Text | Built as a seam: the core asks the host to measure text, and the host draws it with a bundled font |
+| U2 | Events, focus, scrolling, touch gestures, text input | Partly built: tap, drag and pinch. No scrolling, focus or text entry |
+| U3 | Widget kit | Not built as widgets. The panels draw their own buttons and rows |
+| V1 | The viewport draw list | Built (the paint list). The host paints it with raylib; there is no separate software backend |
+| V2 | The viewport builder | Built: grid, wireframe cubes, culling, 2D view. A bench exists (the 5000-cube chip), unrun on the phone |
+| V3 | Picking and selection | Built, with the hierarchy and viewport selection in step |
+| V4 | Gizmos | Not built |
+| H1 | The web host | Not started, by decision |
+| H2 | An Android APK spike | Built: the script and the workflow, unrun on GitHub |
+| H3 | The native host | Built as the same host; unrun on a phone |
+| E1 | Edit commands, undo and redo | Not built |
+| E2 | Scenes load and save; play mode | Play mode is a demo (the cubes bob and turn). No scenes |
 
 ## Facts checked
 
@@ -224,6 +253,9 @@ Public facts, looked up on 2026-11-18. None was run by this project.
 | `raylib-rs` 6.0.0-rc.2 binds raylib 6.0 and states a minimum Rust of 1.85 | its README on docs.rs |
 | GitHub's Ubuntu 24.04 runner image (20250720) lists an Android SDK and NDKs 26.3, 27.3 (default) and 28.2, with `ANDROID_NDK_ROOT` set; `sdkmanager` is preinstalled | the `actions/runner-images` release notes and issue 13467. The versions change, so the current image list is the thing to check |
 | The Galaxy A13 4G (SM-A135F) has an Exynos 850 with a Mali-G52 (single-core configuration in the benchmark listings), a 1080 by 2408 panel, and 3 to 6 GB of memory. A device report for the same chip in the Galaxy M13 shows OpenGL ES 3.2. The A13 5G is a different chip (Dimensity 700, Mali-G57 MP2) | GSMArena, NotebookCheck, UL Benchmarks and AIDA64 listings. The maintainer's exact model is not recorded |
+| The Galaxy A13 installs only `armeabi-v7a` (32-bit ARM) APKs; the build that runs there uses NDK r26d, API 29, build-tools 34.0.0 and no Gradle | `Tower-of-Babylon/docs/android.md` and `scripts/build_android.sh`, and `TerminalViscosity/docs/ANDROID.md`; `midnote` (Tauri) is the app known to install and run |
+| raylib 6.0 on Android: `InitWindow(0, 0)` uses the display size; `APP_CMD_CONFIG_CHANGED` does nothing; touch points are readable by index and id | raylib 6.0 `src/platforms/rcore_android.c` (read, not run) |
+| raylib's default ES2 vertex shader is `mediump`, and that misplaced geometry on this phone's GPU | `Tower-of-Babylon/docs/phone-rendering.md` |
 | Android's accessibility guidance recommends touch targets of at least 48 by 48 dp (about 9 mm), 8 dp apart | Android Accessibility Help, "Touch target size", and the developer guide "Make apps more accessible" |
 | In the Bevy fork at `f3b5346`, `bevy_render` has 26 non-optional Bevy dependencies; `bevy_android` has none | the fork's `Cargo.toml` files, computed the same way as `docs/roadmap.md`'s layer table |
 
@@ -235,21 +267,18 @@ editing, a plugin system for the editor, and accessibility beyond what `mid-ui` 
 
 ## Open questions for the maintainer
 
-1. Is play mode part of the first version, or is the first version an editor that only edits
-   and saves?
-2. Is a 3D-capable viewport right (a projected 3D scene, wireframe and flat shapes first), or
-   should the first viewport be a true 2D view?
-3. Web host first with an Android spike in parallel (proposed), or straight to the native app?
-4. How should a project get in and out of the phone, and into the repository it is worked from:
-   exported archives, files in app storage that a workflow pulls, or something else?
-5. Which exact model is the phone, 4G or 5G? The GPU differs.
-6. Text: let the host draw and measure text (proposed, through the measuring seam), or build text
-   from the start?
-7. One shared set of draw primitives for the interface and the viewport, or two lists?
-8. A name for the app. Nothing is called anything yet.
+1. How do edits get from the phone back into the repository (see "Project storage")?
+2. Rotation: patch raylib's Android backend, use another native glue, or stay portrait?
+3. Does the first real scene format use `mid-reflect`'s JSON, or DixScript (`docs/mid-nodes.md`)?
+4. One shared set of draw primitives for `mid-ui`'s `DrawCmd` and the editor's paint list, or two?
+   Today the editor converts `mid-ui`'s rectangles into its own list.
+5. A name for the app. Nothing is called anything yet; the Android package is
+   `com.midmanstudio.mideditor` and the label is "Mid Editor".
 
 ## Verification status
 
-None. This is a design document. No code, no tests, no CI. The sandbox can build and test the
-core, the screens, the viewport builder and a software backend; it cannot test Android, a
-WebView, a native host or a phone's GPU.
+- Built and tested in the sandbox: `mid-editor` (77 tests), `mid-editor-ffi` (8), the C host on a desktop
+  software renderer (eight screenshots, looked at), and the packaging half of the Android script (30
+  checks with the real `aapt`, `zipalign` and `apksigner`). Details are in `docs/mid-editor.md`.
+- Not verified: the NDK build, raylib's Android build, the armv7 Rust build, the APK on the phone,
+  frame time and cost of the CPU-projected viewport on the phone, and `mid-ecs` on a 32-bit target.

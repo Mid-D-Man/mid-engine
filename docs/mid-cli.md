@@ -113,8 +113,8 @@ All proposed, for the maintainer to confirm or change.
   instead of carrying a second writer. The cost is that `tools/mid-cli` no longer builds without
   `crates/mid-reflect` beside it.
 - **`mid deliver` encodes the current delivery convention** rather than inventing one: one
-  tarball of the files that differ from the base; `.github/` files and the root `Cargo.toml`
-  listed as separate; lockfiles, tarballs and `target/` never included. If the convention
+  tarball of the files that differ from the base; `.github/` files, the root `Cargo.toml` and the root
+  `.gitignore` listed as separate; lockfiles, tarballs and `target/` never included. If the convention
   changes, the command changes with it.
 - **`mid apply` verifies by bytes.** It trusts the mdix tool to place files and then compares
   every member of the tarball with the repository.
@@ -345,8 +345,8 @@ tarball's members are exactly those files. `--dry-run` reports without writing. 
 files to deliver by hand, the files skipped, and the deleted files, because a tarball cannot
 delete.
 
-**Decisions:** the convention is `classify`: `.github/` and the root `Cargo.toml` are
-**separate**; a `Cargo.lock` at any depth, anything under `.mdix/replacements/`, `.tar.gz` files
+**Decisions:** the convention is `classify`: `.github/`, the root `Cargo.toml` and the root `.gitignore`
+are **separate**; a `Cargo.lock` at any depth, anything under `.mdix/replacements/`, `.tar.gz` files
 and `target/` directories are **skipped**; everything else is delivered.
 
 **Tests:** `tests/deliver.rs` (11 tests, real temporary repositories and real `tar`).
@@ -379,6 +379,12 @@ and `target/` directories are **skipped**; everything else is delivered.
   `tools/mid-cli/Cargo.lock` in the tarball, because only a root `Cargo.lock` was skipped. The
   repository commits no lockfile, and one written by a newer cargo (version 4) breaks the 1.75
   build. `classify` now skips a `Cargo.lock` at any depth.
+
+- **The mdix tool does not place `.gitignore`.** The first real delivery that changed it ended with
+  `mid apply` reporting "not placed by mdix: .gitignore" and a failed comparison, which is what the
+  comparison is for. `mid deliver` had put it in the tarball. The root `.gitignore` is now listed as
+  separate, like the workflow files and the root `Cargo.toml`. Only the root file is covered, because
+  that is the only one observed.
 
 ### `cmds/check.rs`
 
