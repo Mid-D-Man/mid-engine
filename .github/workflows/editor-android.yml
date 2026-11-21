@@ -1,0 +1,179 @@
+# .github/workflows/editor-android.yml
+# The Mid Engine editor as an Android APK, plus the tests that guard it. See docs/mid-editor.md, "CI and Workflows".
+#
+# Run it from the Actions tab (Run workflow). When it finishes, open the run and download the artifact
+# "mid-editor-armv7-debug-apk" from the bottom of the summary page; it is a zip with the APK inside. Install the APK on the phone
+# (allow "install unknown apps" for the browser or file manager once). Later runs are signed with the same debug key, so they update the
+# installed app in place.
+name: Editor Android APK
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_tests:
+        description: "Run the Rust tests (host, 32-bit, scalar math) and the desktop host self-test before building"
+        type: choice
+        default: "on"
+        options: ["on", "off"]
+      raylib_tag:
+        description: "raylib tag to build from"
+        type: string
+        default: "6.0"
+
+permissions:
+  contents: read
+
+jobs:
+
+  # The phone runs 32-bit ARM. These jobs run the editor's tests where a mistake about 32 bits can show, and the one thing that cannot be
+  # run on a hosted runner (the NDK build) is the next job.
+  rust-tests:
+    if: inputs.run_tests == 'on'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust (stable, with the 32-bit x86 target)
+        run: |
+          rustup toolchain install stable --profile minimal --target i686-unknown-linux-gnu
+          rustup default stable
+          rustc --version
+          cargo --version
+
+      - name: Install the 32-bit C toolchain
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq gcc-multilib
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+          key: cargo-registry-editor-${{ hashFiles('crates/mid-editor/Cargo.toml', 'crates/mid-editor-ffi/Cargo.toml', 'crates/mid-ui/Cargo.toml', 'crates/mid-math/Cargo.toml') }}
+          restore-keys: |
+            cargo-registry-editor-
+
+      - name: Tests (host, default math backend)
+        run: cargo test -p mid-ui -p mid-editor -p mid-editor-ffi --no-fail-fast
+
+      - name: Tests (host, scalar math backend, the one 32-bit ARM uses)
+        run: cargo test -p mid-editor -p mid-editor-ffi --features mid-editor/force-scalar,mid-editor-ffi/force-scalar --no-fail-fast
+
+      - name: Tests (32-bit x86, so a pointer-width mistake shows)
+        run: cargo test -p mid-ui -p mid-editor -p mid-editor-ffi --target i686-unknown-linux-gnu --no-fail-fast
+
+  # Builds the real host with the real Rust library and raylib's desktop backend, runs a scripted session on a software renderer, and keeps
+  # the screenshots. If this passes and the APK job fails, the fault is in the Android part (NDK, GLES, packaging).
+  host-selftest:
+    if: inputs.run_tests == 'on'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+
+      - name: Install X11, GL and a software renderer
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq xvfb libgl1-mesa-dri libgl-dev libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev
+
+      - name: Run the self-test
+        run: bash scripts/editor_host_selftest.sh
+        env:
+          EDITOR_RAYLIB_TAG: ${{ inputs.raylib_tag }}
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: editor-host-selftest-screenshots
+          path: build/editor-selftest/shots/*.png
+          if-no-files-found: ignore
+
+  apk:
+    needs: [rust-tests, host-selftest]
+    # Run even when the tests were skipped, but not when they failed.
+    if: ${{ !cancelled() && !failure() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          packages: "platform-tools build-tools;34.0.0 platforms;android-34"
+
+      - name: Setup Android NDK
+        id: setup-ndk
+        uses: nttld/setup-ndk@v1
+        with:
+          ndk-version: r26d
+          link-to-sdk: true
+
+      - name: Setup Rust (armv7 Android target)
+        run: |
+          rustup toolchain install stable --profile minimal --target armv7-linux-androideabi
+          rustup default stable
+          rustc --version
+          cargo --version
+
+      - name: Restore the Rust build cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            build/editor-android/target
+          key: editor-android-v1-${{ hashFiles('crates/mid-editor/**/*.rs', 'crates/mid-editor-ffi/**/*.rs', 'crates/mid-ui/**/*.rs', 'crates/mid-math/**/*.rs', 'crates/mid-*/Cargo.toml') }}
+          restore-keys: |
+            editor-android-v1-
+
+      - name: Restore the debug key
+        uses: actions/cache@v4
+        with:
+          path: build/editor-android/debug.keystore
+          key: mid-editor-debug-keystore-v1
+
+      - name: Versions
+        run: |
+          java -version
+          echo "ANDROID_HOME=$ANDROID_HOME"
+          echo "ANDROID_NDK_HOME=$ANDROID_NDK_HOME"
+          echo "commit: $(git rev-parse --short HEAD)"
+        env:
+          ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
+
+      - name: Build the APK
+        env:
+          ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
+          EDITOR_VERSION_CODE: ${{ github.run_number }}
+          EDITOR_VERSION_NAME: 0.1.${{ github.run_number }}
+          EDITOR_RAYLIB_TAG: ${{ inputs.raylib_tag }}
+        run: bash scripts/build_editor_android.sh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mid-editor-armv7-debug-apk
+          path: build/editor-android/mid-editor-armv7-debug.apk
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: editor-build-logs
+          path: |
+            build/editor-android/editor.log
+            build/editor-android/link.log
+            build/editor-android/editor-nm.log
+          if-no-files-found: ignore
