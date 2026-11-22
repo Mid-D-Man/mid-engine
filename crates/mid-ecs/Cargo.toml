@@ -40,6 +40,12 @@ zerocopy = { version = "0.8.56", default-features = false, features = ["derive"]
 # no transitive deps of its own).
 bumpalo = { version = "3.20.3", features = ["boxed"], optional = true }
 
+# Optional, feature-gated: the reflection bridge in `reflect.rs` (see
+# docs/mid-ecs-reflect.md). With the `math` feature because the transform
+# components hold mid-math types. Not target-gated: wasm32 builds the bridge
+# too (unlike rayon below).
+mid-reflect = { path = "../mid-reflect", features = ["math"], optional = true }
+
 # rayon and its whole transitive tree (crossbeam-deque/epoch/utils, either,
 # rayon-core) depend on real OS threads, which wasm32-unknown-unknown
 # doesn't provide the way rayon needs -- confirmed directly via
@@ -52,11 +58,6 @@ bumpalo = { version = "3.20.3", features = ["boxed"], optional = true }
 # batches run one after another on the calling thread on wasm32.
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 rayon = "1.8"
-
-# Optional, feature-gated: the reflection bridge in `reflect.rs` (see
-# docs/mid-ecs-reflect.md). With the `math` feature because the transform
-# components hold mid-math types.
-mid-reflect = { path = "../mid-reflect", features = ["math"], optional = true }
 
 [dev-dependencies]
 # Same version/feature choice as mid-collections's and mid-math's own

@@ -114,12 +114,12 @@ Sparse Shell component not listed, and a stale handle whose slot was reused.
   value; `apply` does not return the old one yet.
 - **Reflection for the rest of the engine's components,** as they appear (`mid-nodes` names, the
   physics components, `mid-anim` players).
-- **A 32-bit result.** The new workflow runs the tests on 32-bit x86 and checks the build for
-  `armv7-linux-androideabi`; it has not run yet (see below).
 
 ## Verification status
 
-Sandbox, rustc 1.97.1, x86_64. Real CI has not run this.
+Sandbox, rustc 1.97.1, x86_64. Real CI: the maintainer reported the `mid-ecs 32-bit` workflow
+(i686 tests and the `armv7-linux-androideabi` check) passing, and the `mid-ecs` test workflow
+failing on its `wasm32` check, which the fix below addresses.
 
 | | before | after |
 |---|---|---|
@@ -144,8 +144,12 @@ Sandbox, rustc 1.97.1, x86_64. Real CI has not run this.
 - `mid-reflect` builds and passes on Rust 1.75 (74 tests with `math`, checked directly). `mid-ecs`
   does not build on 1.75 for the two reasons under "Decisions", before and after this change, so the
   floor check for the bridge itself is rustc 1.97 only.
-- Not run in the sandbox: `wasm32` (no target installed here), the C smoke test (no C surface
-  changed), the three benchmark crates (nothing they use changed), and anything on 32 bits.
+- `cargo check --target wasm32-unknown-unknown` passes for `mid-collections`, `mid-ecs`, `mid-ecs`
+  with `reflect`, `mid-reflect` with `math`, and `mid-app` with the feature. `cargo tree` for that
+  target still shows no `rayon`, and shows `mid-reflect` when `reflect` is on. The first delivery
+  was never checked on `wasm32`; see "Fixes and Problems".
+- Not run in the sandbox: the C smoke test (no C surface changed) and the three benchmark crates
+  (nothing they use changed).
 
 ## CI and Workflows
 
@@ -160,6 +164,15 @@ Sandbox, rustc 1.97.1, x86_64. Real CI has not run this.
   should not stop an APK build.
 
 ## Fixes and Problems
+
+### The bridge's dependency was gated out of wasm32
+The first delivery added `mid-reflect` to `crates/mid-ecs/Cargo.toml` just above
+`[dev-dependencies]`. That position is inside the `[target.'cfg(not(target_arch = "wasm32"))'.dependencies]`
+table that holds `rayon`, so the dependency existed on every target except wasm32, while the
+`reflect` feature and `reflect.rs` still compiled there. Native and 32-bit builds passed; the
+`wasm32` step of `mid-ecs-test.yml` failed with `unresolved import mid_reflect`. The sandbox had no
+`wasm32` target when the change was built, so the check was never run. The dependency now sits in
+the main `[dependencies]` table, and the `wasm32` checks above were run before delivering the fix.
 
 ### A mutation detector that counted failures as compile errors
 The first mutation run printed "compile error" for eight of ten mutants. The detector matched
