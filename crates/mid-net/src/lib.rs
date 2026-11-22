@@ -26,7 +26,14 @@
 
 pub mod ffi;
 pub mod connection;
+pub mod driver;
+pub mod driver_ffi;
 pub mod session;
+pub mod sim;
+pub mod threaded;
+
+#[cfg(test)]
+mod driver_tests;
 
 pub use connection::{Connection, ConnectionEvent};
 pub use session::{

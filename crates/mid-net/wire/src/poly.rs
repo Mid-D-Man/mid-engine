@@ -122,6 +122,21 @@ impl dyn NetMessage {
     pub fn downcast_mut<T: NetMessageType>(&mut self) -> Option<&mut T> {
         self.as_any_mut().downcast_mut::<T>()
     }
+    /// The message as opaque bytes, if it was registered with [`MessageRegistry::register_raw`].
+    pub fn as_raw(&self) -> Option<&RawMessage> {
+        self.as_any().downcast_ref::<RawMessage>()
+    }
+    /// The same, owned; the box back if it is not a raw message.
+    pub fn into_raw(self: Box<Self>) -> Result<Box<RawMessage>, Box<dyn NetMessage>> {
+        if self.as_any().is::<RawMessage>() {
+            Ok(self
+                .into_any()
+                .downcast::<RawMessage>()
+                .expect("checked with is::<RawMessage>()"))
+        } else {
+            Err(self)
+        }
+    }
     /// The message as an owned `T`; the box back if it is another type.
     pub fn downcast<T: NetMessageType>(self: Box<Self>) -> Result<Box<T>, Box<dyn NetMessage>> {
         if self.as_any().is::<T>() {
@@ -169,7 +184,66 @@ fn check_id(id_bits: u32, id: u16, taken: bool) -> Result<(), RegisterError> {
     Ok(())
 }
 
-type Decoder = fn(&mut BitReader) -> Result<Box<dyn NetMessage>, BitError>;
+type TypedDecoder = fn(&mut BitReader) -> Result<Box<dyn NetMessage>, BitError>;
+
+/// How one message id is read: into its Rust type, or as opaque bytes ([`RawMessage`]).
+#[derive(Clone, Copy)]
+enum Decoder {
+    Typed(TypedDecoder),
+    Raw,
+}
+
+/// The most bytes a [`RawMessage`] may carry.
+pub const RAW_MESSAGE_MAX: usize = 65_535;
+
+/// A message whose fields are bytes this crate does not look into: an id, then a length, then the bytes
+/// (byte-aligned). It is how a program that has no Rust types for its messages (a C game with its own
+/// packing) sends and receives them through the same registry, framing and driver as typed messages. The
+/// price against a typed message is the length (one to three bytes) and up to seven bits of padding; the
+/// gain is that the receiver can find the end of the message without knowing what is in it.
+/// Register an id for it with [`MessageRegistry::register_raw`].
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct RawMessage {
+    pub id: u16,
+    pub data: Vec<u8>,
+}
+
+impl RawMessage {
+    pub fn new(id: u16, data: Vec<u8>) -> Self {
+        RawMessage { id, data }
+    }
+}
+
+impl NetMessage for RawMessage {
+    fn id(&self) -> u16 {
+        self.id
+    }
+    fn write_fields(&mut self, w: &mut BitWriter) -> Result<(), BitError> {
+        if self.data.len() > RAW_MESSAGE_MAX {
+            return Err(BitError::OutOfRange);
+        }
+        w.write_varint(self.data.len() as u64)?;
+        w.write_bytes(&self.data)
+    }
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
+    fn into_any(self: Box<Self>) -> Box<dyn Any> {
+        self
+    }
+}
+
+fn read_raw_fields(r: &mut BitReader) -> Result<Vec<u8>, BitError> {
+    let len = r.read_varint()?;
+    if len > RAW_MESSAGE_MAX as u64 {
+        return Err(BitError::OutOfRange);
+    }
+    // read_bytes checks the bytes are really there before anything is allocated
+    Ok(r.read_bytes(len as usize)?.to_vec())
+}
 
 /// Message ids to decoders. A message on the wire is its id (`id_bits` bits) then its fields.
 pub struct MessageRegistry {
@@ -200,12 +274,27 @@ impl MessageRegistry {
 
     pub fn register<T: NetMessageType>(&mut self) -> Result<(), RegisterError> {
         check_id(self.id_bits, T::ID, self.decoders.contains_key(&T::ID))?;
-        self.decoders.insert(T::ID, |r| {
-            let mut v = T::default();
-            v.net_serialize(r)?;
-            Ok(Box::new(v))
-        });
+        self.decoders.insert(
+            T::ID,
+            Decoder::Typed(|r| {
+                let mut v = T::default();
+                v.net_serialize(r)?;
+                Ok(Box::new(v))
+            }),
+        );
         Ok(())
+    }
+
+    /// Registers `id` as opaque bytes: a message with this id is read as a [`RawMessage`].
+    pub fn register_raw(&mut self, id: u16) -> Result<(), RegisterError> {
+        check_id(self.id_bits, id, self.decoders.contains_key(&id))?;
+        self.decoders.insert(id, Decoder::Raw);
+        Ok(())
+    }
+
+    /// Whether a message with this id can be written and read.
+    pub fn is_registered(&self, id: u16) -> bool {
+        self.decoders.contains_key(&id)
     }
 
     /// Writes the id then the fields. A message whose id is not registered is refused (`UnknownTag`): the other end could not read it.
@@ -221,8 +310,13 @@ impl MessageRegistry {
     /// Reads an id and then that type's fields.
     pub fn read(&self, r: &mut BitReader) -> Result<Box<dyn NetMessage>, BitError> {
         let id = r.read_bits(self.id_bits)? as u16;
-        let decode = self.decoders.get(&id).ok_or(BitError::UnknownTag)?;
-        decode(r)
+        match self.decoders.get(&id).ok_or(BitError::UnknownTag)? {
+            Decoder::Typed(decode) => decode(r),
+            Decoder::Raw => Ok(Box::new(RawMessage {
+                id,
+                data: read_raw_fields(r)?,
+            })),
+        }
     }
 }
 
@@ -808,5 +902,134 @@ mod tests {
             );
         }
         assert!(accepted > 0);
+    }
+}
+
+#[cfg(test)]
+mod raw_tests {
+    use super::*;
+    use crate::impl_net_serialize;
+
+    #[derive(Debug, Default, Clone, PartialEq)]
+    struct Typed {
+        a: u16,
+    }
+    impl_net_serialize!(Typed { a: raw() });
+    impl NetMessageType for Typed {
+        const ID: u16 = 3;
+    }
+
+    fn registry() -> MessageRegistry {
+        let mut reg = MessageRegistry::new(8);
+        reg.register::<Typed>().unwrap();
+        reg.register_raw(9).unwrap();
+        reg
+    }
+
+    fn write(reg: &MessageRegistry, msg: &mut dyn NetMessage, prefix_bits: u32) -> Vec<u8> {
+        let mut buf = vec![0u8; 70_000];
+        let mut w = BitWriter::new(&mut buf);
+        if prefix_bits > 0 {
+            w.write_bits(1, prefix_bits).unwrap();
+        }
+        reg.write(msg, &mut w).unwrap();
+        let n = w.bytes_written();
+        buf.truncate(n);
+        buf
+    }
+
+    fn read(reg: &MessageRegistry, bytes: &[u8], prefix_bits: u32) -> Result<Box<dyn NetMessage>, BitError> {
+        let mut r = BitReader::new(bytes);
+        if prefix_bits > 0 {
+            r.read_bits(prefix_bits)?;
+        }
+        reg.read(&mut r)
+    }
+
+    #[test]
+    fn a_raw_message_round_trips_with_its_id_and_bytes() {
+        let reg = registry();
+        for data in [vec![], vec![7], vec![1, 2, 3, 4, 5], (0..=255u8).collect::<Vec<_>>()] {
+            let mut m = RawMessage::new(9, data.clone());
+            let bytes = write(&reg, &mut m, 0);
+            let back = read(&reg, &bytes, 0).unwrap();
+            assert_eq!(back.as_raw().unwrap(), &RawMessage::new(9, data));
+        }
+    }
+
+    #[test]
+    fn a_raw_message_works_at_any_bit_offset() {
+        let reg = registry();
+        for prefix in 0..8u32 {
+            let mut m = RawMessage::new(9, vec![0xAB, 0xCD, 0xEF]);
+            let bytes = write(&reg, &mut m, prefix);
+            let back = read(&reg, &bytes, prefix).unwrap();
+            assert_eq!(back.as_raw().unwrap().data, vec![0xAB, 0xCD, 0xEF], "prefix {prefix}");
+        }
+    }
+
+    #[test]
+    fn raw_and_typed_messages_share_one_registry() {
+        let reg = registry();
+        let mut t = Typed { a: 513 };
+        let bytes = write(&reg, &mut t, 0);
+        assert_eq!(read(&reg, &bytes, 0).unwrap().downcast_ref::<Typed>().unwrap().a, 513);
+        assert!(reg.is_registered(3) && reg.is_registered(9) && !reg.is_registered(4));
+        assert_eq!(reg.len(), 2);
+    }
+
+    #[test]
+    fn an_unregistered_raw_id_cannot_be_written_or_read() {
+        let reg = registry();
+        let mut buf = [0u8; 16];
+        let mut w = BitWriter::new(&mut buf);
+        assert_eq!(reg.write(&mut RawMessage::new(10, vec![1]), &mut w), Err(BitError::UnknownTag));
+        assert_eq!(read(&reg, &[10, 1, 1], 0).err(), Some(BitError::UnknownTag));
+    }
+
+    #[test]
+    fn register_raw_checks_the_id_like_register() {
+        let mut reg = MessageRegistry::new(4);
+        reg.register::<Typed>().unwrap();
+        assert_eq!(reg.register_raw(3), Err(RegisterError::Duplicate));
+        assert_eq!(reg.register_raw(16), Err(RegisterError::IdTooLarge));
+        assert_eq!(reg.register_raw(15), Ok(()));
+        assert_eq!(reg.register_raw(15), Err(RegisterError::Duplicate));
+        assert_eq!(MessageRegistry::new(0).register_raw(0), Err(RegisterError::BadIdBits));
+    }
+
+    #[test]
+    fn a_raw_message_over_the_limit_is_refused_and_the_limit_itself_is_fine() {
+        let reg = registry();
+        let mut buf = vec![0u8; 70_000];
+        let mut w = BitWriter::new(&mut buf);
+        assert_eq!(
+            reg.write(&mut RawMessage::new(9, vec![0; RAW_MESSAGE_MAX + 1]), &mut w),
+            Err(BitError::OutOfRange)
+        );
+        let mut m = RawMessage::new(9, vec![5; RAW_MESSAGE_MAX]);
+        let bytes = write(&reg, &mut m, 0);
+        assert_eq!(read(&reg, &bytes, 0).unwrap().as_raw().unwrap().data.len(), RAW_MESSAGE_MAX);
+    }
+
+    #[test]
+    fn a_length_that_claims_more_than_the_packet_holds_is_an_error_not_an_allocation() {
+        let reg = registry();
+        // id 9, varint 1000 (0xE8 0x07), then only two bytes
+        assert_eq!(read(&reg, &[9, 0xE8, 0x07, 1, 2], 0).err(), Some(BitError::Overflow));
+        // a length over the limit: 65536 = 0x80 0x80 0x04
+        assert_eq!(read(&reg, &[9, 0x80, 0x80, 0x04], 0).err(), Some(BitError::OutOfRange));
+        // a varint that never ends
+        assert!(read(&reg, &[9, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF], 0).is_err());
+    }
+
+    #[test]
+    fn a_raw_message_cut_anywhere_never_panics_and_never_reads() {
+        let reg = registry();
+        let mut m = RawMessage::new(9, (0..40u8).collect());
+        let bytes = write(&reg, &mut m, 0);
+        for cut in 0..bytes.len() {
+            assert!(read(&reg, &bytes[..cut], 0).is_err(), "cut at {cut}");
+        }
     }
 }
