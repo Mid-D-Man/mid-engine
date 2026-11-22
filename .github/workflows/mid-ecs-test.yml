@@ -118,6 +118,9 @@ jobs:
                "development couldn't compile this crate at all for that reason) ==="
           cargo build -p mid-collections -p mid-ecs
           echo ""
+          echo "=== mid-ecs with the reflect feature (docs/mid-ecs-reflect.md) ==="
+          cargo check -p mid-ecs --features reflect
+          echo ""
           echo "=== Produced mid-ecs libraries ==="
           find target/debug -maxdepth 1 \
             \( -name "libmid_ecs.so"    \
@@ -148,6 +151,7 @@ jobs:
           rustup target add wasm32-unknown-unknown
           cargo check -p mid-collections --target wasm32-unknown-unknown
           cargo check -p mid-ecs --target wasm32-unknown-unknown
+          cargo check -p mid-ecs --features reflect --target wasm32-unknown-unknown
 
       - name: Run unit tests
         continue-on-error: true
@@ -161,7 +165,7 @@ jobs:
           # fail the job either way, but the step's own reported status
           # should still reflect reality, not tee's.
           set -o pipefail
-          cargo test -p mid-collections -p mid-ecs \
+          cargo test -p mid-collections -p mid-ecs --features mid-ecs/reflect \
             --color=never \
             --no-fail-fast \
             -- --show-output 2>&1 | tee mid-ecs-test-raw.txt
