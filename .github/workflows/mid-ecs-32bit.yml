@@ -1,0 +1,116 @@
+# .github/workflows/mid-ecs-32bit.yml
+# Runs mid-ecs, mid-app and mid-reflect where a 32-bit mistake can show: the
+# tests on 32-bit x86, and a build check for 32-bit ARM Android (the phone's
+# architecture). See docs/mid-ecs-reflect.md, "CI and Workflows".
+name: mid-ecs 32-bit
+
+on:
+  push:
+    branches: [main, master, develop]
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+
+  parse-trigger:
+    runs-on: ubuntu-latest
+    outputs:
+      run_tests: ${{ steps.decide.outputs.run_tests }}
+    steps:
+      - name: Decide whether to run
+        id: decide
+        env:
+          EVENT: ${{ github.event_name }}
+          COMMIT_MSG: ${{ github.event.head_commit.message }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          RUN=false
+          if [ "$EVENT" = "workflow_dispatch" ]; then
+            RUN=true
+          else
+            echo "$COMMIT_MSG $PR_TITLE" | grep -qiE '\-\-mid-ecs-32bit\b|\-\-mid-all\b' && RUN=true || true
+          fi
+          echo "run_tests=$RUN" >> "$GITHUB_OUTPUT"
+          echo "Run mid-ecs 32-bit checks: $RUN"
+
+  # The tests on 32-bit x86. A usize/u64 mix-up, a pointer-width assumption in
+  # the FFI spans or a layout assumption shows here, not on the 64-bit runner.
+  i686-tests:
+    runs-on: ubuntu-latest
+    needs: parse-trigger
+    if: needs.parse-trigger.outputs.run_tests == 'true'
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust (stable, with the 32-bit x86 target)
+        run: |
+          rustup toolchain install stable --profile minimal --target i686-unknown-linux-gnu
+          rustup default stable
+          rustc --version
+          cargo --version
+
+      - name: Install the 32-bit C toolchain
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq gcc-multilib
+
+      # The registry only, never target/. A key scoped to this workflow, so a
+      # restore cannot pull in another workflow's archive.
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+          key: cargo-registry-mid-ecs-32bit-${{ hashFiles('crates/mid-ecs/Cargo.toml', 'crates/mid-app/Cargo.toml', 'crates/mid-reflect/Cargo.toml', 'crates/mid-collections/Cargo.toml', 'crates/mid-math/Cargo.toml') }}
+          restore-keys: |
+            cargo-registry-mid-ecs-32bit-
+
+      - name: Tests on 32-bit x86 (mid-ecs with reflect, mid-app, mid-reflect)
+        run: |
+          set -o pipefail
+          cargo test -p mid-ecs -p mid-app -p mid-reflect --features mid-ecs/reflect,mid-reflect/math \
+            --target i686-unknown-linux-gnu --color=never --no-fail-fast 2>&1 | tee i686-raw.txt
+
+      - name: Keep the raw log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mid-ecs-i686-raw
+          path: i686-raw.txt
+          if-no-files-found: ignore
+
+  # A build check, not a run: it proves the crates compile for the phone's
+  # architecture without the NDK (nothing is linked).
+  armv7-check:
+    runs-on: ubuntu-latest
+    needs: parse-trigger
+    if: needs.parse-trigger.outputs.run_tests == 'true'
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust (stable, with the 32-bit ARM Android target)
+        run: |
+          rustup toolchain install stable --profile minimal --target armv7-linux-androideabi
+          rustup default stable
+          rustc --version
+          cargo --version
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+          key: cargo-registry-mid-ecs-32bit-${{ hashFiles('crates/mid-ecs/Cargo.toml', 'crates/mid-app/Cargo.toml', 'crates/mid-reflect/Cargo.toml', 'crates/mid-collections/Cargo.toml', 'crates/mid-math/Cargo.toml') }}
+          restore-keys: |
+            cargo-registry-mid-ecs-32bit-
+
+      - name: Check mid-ecs, mid-app and mid-reflect for armv7 Android
+        run: |
+          cargo check -p mid-ecs -p mid-app -p mid-reflect --features mid-ecs/reflect,mid-reflect/math \
+            --target armv7-linux-androideabi --color=never
