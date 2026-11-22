@@ -78,7 +78,7 @@ All proposals, for the maintainer to confirm or change.
   host measures text for the core through a callback, which is the text seam of
   `docs/roadmap.md`, Decision 11.
 - **A demo scene, not the ECS.** The scene is a flat list of boxes in the core. Connecting the real
-  world waits for the ECS bridge (`docs/roadmap.md`, T1b).
+  world is next: the ECS bridge exists (`docs/mid-ecs-reflect.md`), the editor does not use it yet.
 - **2D is a top-down orthographic view of the ground plane.** There are no 2D nodes yet.
 - **No Gradle, no Java.** `android:hasCode="false"`, a `NativeActivity`, and the APK assembled with
   `aapt`, `zipalign` and `apksigner`.
@@ -285,7 +285,8 @@ that is not 32-bit ARM).
 
 ## Not built yet
 
-- The real world: the ECS bridge (T1b), so the hierarchy and inspector show and edit the ECS.
+- The real world: the editor reading and editing a `World` through the ECS bridge (T1b, built in
+  `docs/mid-ecs-reflect.md`), so the hierarchy and inspector show and edit the ECS.
 - Editing: edit commands, undo and redo, gizmos, text entry.
 - Scenes and project files; the project panel is a placeholder.
 - Rotation (a patch to raylib's Android backend, or a different native glue).

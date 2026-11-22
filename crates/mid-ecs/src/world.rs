@@ -1,3 +1,7 @@
+// ============================================================================
+// NOTICE: Full documentation, design decisions, and fix history for this file
+// live in docs/mid-ecs.md, section "world.rs"
+// ============================================================================
 //! The ECS world — entity allocator + component storage.
 //!
 //! `World::spawn`/`despawn`/`is_alive` are a thin wrapper over
@@ -989,6 +993,23 @@ impl World {
             return false;
         };
         self.is_alive(entity) && self.archetypes.has(entity, id)
+    }
+
+    /// The `TypeId` of every archetype-tracked component `entity` currently
+    /// holds, in the order of its archetype's signature. Empty if `entity`
+    /// is dead or holds none. Sparse Shell components are not listed.
+    ///
+    /// The enumeration the reflection bridge (`docs/mid-ecs-reflect.md`)
+    /// builds on: it says which components exist on an entity without
+    /// knowing their types.
+    pub fn static_component_types(&self, entity: Entity) -> impl Iterator<Item = TypeId> + '_ {
+        let ids: &[ComponentId] = if self.is_alive(entity) {
+            self.archetypes.components_of(entity)
+        } else {
+            &[]
+        };
+        ids.iter()
+            .filter_map(move |&id| self.archetypes.type_id_of(id))
     }
 
     /// Opts `T` into FFI span exposure under `name`, for the Archetype
@@ -3175,5 +3196,71 @@ mod tests {
             1,
             "without a scan the wrapped age looks new: the bug"
         );
+    }
+
+    #[test]
+    fn static_component_types_lists_the_entitys_archetype_components() {
+        struct P(u8);
+        struct Q(u8);
+        let mut w = World::new();
+        let e = w.spawn();
+        assert_eq!(w.static_component_types(e).count(), 0);
+        w.insert_static(e, P(1));
+        w.insert_static(e, Q(2));
+        let types: Vec<TypeId> = w.static_component_types(e).collect();
+        assert_eq!(types.len(), 2);
+        assert!(types.contains(&TypeId::of::<P>()));
+        assert!(types.contains(&TypeId::of::<Q>()));
+    }
+
+    #[test]
+    fn static_component_types_follows_removal_and_ignores_other_entities() {
+        struct P(u8);
+        struct Q(u8);
+        let mut w = World::new();
+        let a = w.spawn();
+        let b = w.spawn();
+        w.insert_static(a, P(1));
+        w.insert_static(a, Q(2));
+        w.insert_static(b, Q(3));
+        w.remove_static::<P>(a);
+        let types: Vec<TypeId> = w.static_component_types(a).collect();
+        assert_eq!(types, vec![TypeId::of::<Q>()]);
+        assert_eq!(w.static_component_types(b).count(), 1);
+    }
+
+    #[test]
+    fn static_component_types_is_empty_for_a_dead_entity() {
+        struct P(u8);
+        let mut w = World::new();
+        let e = w.spawn();
+        w.insert_static(e, P(1));
+        w.despawn(e);
+        assert_eq!(w.static_component_types(e).count(), 0);
+    }
+
+    #[test]
+    fn static_component_types_does_not_list_sparse_shell_components() {
+        struct P(u8);
+        struct Q(u8);
+        let mut w = World::new();
+        let e = w.spawn();
+        w.insert(e, P(1));
+        w.insert_static(e, Q(2));
+        let types: Vec<TypeId> = w.static_component_types(e).collect();
+        assert_eq!(types, vec![TypeId::of::<Q>()]);
+    }
+
+    #[test]
+    fn static_component_types_ignores_a_stale_handle_whose_slot_was_reused() {
+        struct P(u8);
+        let mut w = World::new();
+        let old = w.spawn();
+        w.despawn(old);
+        let new = w.spawn();
+        w.insert_static(new, P(1));
+        assert_ne!(old, new);
+        assert_eq!(w.static_component_types(old).count(), 0);
+        assert_eq!(w.static_component_types(new).count(), 1);
     }
 }

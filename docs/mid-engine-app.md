@@ -228,7 +228,7 @@ phone.
 
 | Phase | What | Status |
 |---|---|---|
-| T1b | The ECS bridge for `mid-reflect` | Not built. Needs an `mid-ecs` API to enumerate an entity's components |
+| T1b | The ECS bridge for `mid-reflect` | Built (`docs/mid-ecs-reflect.md`), sandbox only. The editor does not use it yet |
 | U1 | Text | Built as a seam: the core asks the host to measure text, and the host draws it with a bundled font |
 | U2 | Events, focus, scrolling, touch gestures, text input | Partly built: tap, drag and pinch. No scrolling, focus or text entry |
 | U3 | Widget kit | Not built as widgets. The panels draw their own buttons and rows |

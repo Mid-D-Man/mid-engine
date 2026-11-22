@@ -53,6 +53,11 @@ bumpalo = { version = "3.20.3", features = ["boxed"], optional = true }
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 rayon = "1.8"
 
+# Optional, feature-gated: the reflection bridge in `reflect.rs` (see
+# docs/mid-ecs-reflect.md). With the `math` feature because the transform
+# components hold mid-math types.
+mid-reflect = { path = "../mid-reflect", features = ["math"], optional = true }
+
 [dev-dependencies]
 # Same version/feature choice as mid-collections's and mid-math's own
 # criterion dev-dependency — html_reports for the local
@@ -79,3 +84,6 @@ default = []
 # reason to pull bumpalo into a normal build until there's a real call
 # site depending on it.
 scratch-arena = ["dep:bumpalo"]
+# `reflect.rs`: `ReflectComponent` type data, reflected access to an entity's
+# components by name, and Reflect for the transform and hierarchy components.
+reflect = ["dep:mid-reflect"]

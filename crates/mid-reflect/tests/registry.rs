@@ -3,8 +3,8 @@
 use std::any::Any;
 
 use mid_reflect::{
-    impl_reflect_enum, impl_reflect_newtype, impl_reflect_struct, ErrorKind, RegistryError,
-    TypeRegistry, Value,
+    impl_reflect_enum, impl_reflect_newtype, impl_reflect_struct, ErrorKind, ReflectError,
+    RegistryError, TypeRegistry, Value,
 };
 
 #[derive(Debug, PartialEq, Clone, Copy)]
@@ -313,4 +313,10 @@ fn the_schema_lists_every_type_in_registration_order() {
         )
     );
     assert_eq!(TypeRegistry::new().schema(), Value::Map(vec![]));
+}
+
+#[test]
+fn unsupported_error_displays_its_message() {
+    let error = ReflectError::new(ErrorKind::Unsupported("read only".to_string()));
+    assert_eq!(error.to_string(), "not supported: read only");
 }

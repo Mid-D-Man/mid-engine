@@ -1,3 +1,7 @@
+// ============================================================================
+// NOTICE: Full documentation, design decisions, and fix history for this file
+// live in docs/mid-ecs.md, section "lib.rs"
+// ============================================================================
 //! mid-ecs — Data-oriented ECS (Structure of Arrays layout)
 //!
 //! Target: 100 000+ entities per core at 60 Hz physics frequency.
@@ -23,6 +27,8 @@ pub mod message;
 pub mod observer;
 pub mod query;
 pub mod query_data;
+#[cfg(feature = "reflect")]
+pub mod reflect;
 mod removal;
 pub mod resource;
 pub mod schedule;
@@ -58,6 +64,8 @@ pub use observer::{Event, ObserverId, On};
 pub use query_data::{
     Added, Changed, Has, QueryData, QueryEntityError, QuerySingleError, ReadOnlyQueryData,
 };
+#[cfg(feature = "reflect")]
+pub use reflect::{ComponentReflectError, EntityReflection, ReflectComponent};
 pub use resource::{ResourceFfiError, ResourceId};
 pub use state::{NextState, State, States};
 pub use system::{

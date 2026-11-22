@@ -458,6 +458,25 @@ This is the Multiplayer-First mandate in practice: networking is baked into the 
 
 ## Modules
 
+### `lib.rs`
+
+**What it does:** the module list and the re-exports. The `reflect` module and its re-exports
+(`ComponentReflectError`, `EntityReflection`, `ReflectComponent`) exist only with the `reflect`
+feature (`docs/mid-ecs-reflect.md`).
+
+### `world.rs`
+
+**What it does:** `World`, `Entity` and the structural operations, with the typed access to both
+storages. `World::static_component_types(entity)` lists the `TypeId`s of an entity's Archetype Core
+components, and is always compiled; it is what the reflection bridge builds on
+(`docs/mid-ecs-reflect.md`, section "`world.rs`: `static_component_types`").
+
+### `reflect.rs`
+
+**What it does:** the reflection bridge (feature `reflect`): reading, replacing, adding and removing
+an entity's Archetype Core components by registered name, through `mid-reflect` values. Full
+documentation, decisions and verification status are in `docs/mid-ecs-reflect.md`.
+
 ### `diag_query2_unchecked.rs`
 
 Temporary diagnostic module, delete once the investigation it exists

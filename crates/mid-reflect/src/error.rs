@@ -58,6 +58,9 @@ pub enum ErrorKind {
     UnknownType(String),
     /// A value of a different Rust type was passed than the one registered.
     WrongType(String),
+    /// The operation is not available for this type, for example building a
+    /// value of a type that only its owner may construct.
+    Unsupported(String),
 }
 
 impl fmt::Display for ErrorKind {
@@ -80,6 +83,7 @@ impl fmt::Display for ErrorKind {
             ErrorKind::BadPath(message) => write!(f, "bad path: {message}"),
             ErrorKind::UnknownType(name) => write!(f, "no type registered as `{name}`"),
             ErrorKind::WrongType(name) => write!(f, "value is not a {name}"),
+            ErrorKind::Unsupported(message) => write!(f, "not supported: {message}"),
         }
     }
 }

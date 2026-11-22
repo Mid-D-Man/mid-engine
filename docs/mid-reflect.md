@@ -25,7 +25,8 @@ There are no external dependencies. The crate builds on the workspace floor, Rus
 current stable.
 
 **Status.** The core crate is complete and tested. The bridge to `mid-ecs` (reading and writing an
-entity's components by name) is not built; see "Not built yet". Decision 7 in the roadmap is a
+entity's components by name) is built, in `mid-ecs` behind its `reflect` feature
+(`docs/mid-ecs-reflect.md`). Decision 7 in the roadmap is a
 proposal, and the crate name and the macro approach were adopted on the maintainer's word, not
 through an explicit confirmation.
 
@@ -121,7 +122,8 @@ round-trips random structs.
 and `PathSeg` (a field name or a list index). The kinds are `TypeMismatch`, `OutOfRange`,
 `MissingField`, `UnknownField`, `UnknownVariant`, `BadLength` (a fixed-size array given the wrong
 number of elements), `BadPath`, `UnknownType` and `WrongType` (a value of a different Rust type
-than the one registered).
+than the one registered) and `Unsupported` (an operation a type does not offer, for example building
+a value of a type only its owner may construct; `mid-ecs` uses it for `Children`).
 
 **Decisions:**
 - The path is built as the error travels out of nested values (`at_field`, `at_index`), so the
@@ -129,7 +131,8 @@ than the one registered).
 - JSON syntax errors are a separate type, `JsonError`, which carries a byte offset in the text
   instead of a path.
 
-**Tests:** `tests/reflect_types.rs`, in particular `errors_name_the_path_into_nested_values`.
+**Tests:** `tests/reflect_types.rs`, in particular `errors_name_the_path_into_nested_values`, and
+`unsupported_error_displays_its_message` in `tests/registry.rs`.
 
 ### `ty.rs`
 
@@ -183,7 +186,7 @@ strict reads).
 `get_by_type_id` find a registration. `to_value`, `apply`, `construct` and `mutate` work by name
 on a `&dyn Any`. `insert_data`, `data_of` and `data_by_name` attach and read "type data": a table
 of any `Send + Sync` type keyed by its own type, which lets another crate hang its own behaviour
-on a registered type (the ECS bridge will store a component accessor table this way). `schema`
+on a registered type (the ECS bridge stores a component accessor table this way). `schema`
 returns every registered type as a `Value`.
 
 **Decisions:**
@@ -192,7 +195,7 @@ returns every registered type as a `Value`.
 - Asking for the wrong Rust type, or an unknown name, is an error and never a panic.
 - Registration order is kept, so a schema is stable between runs.
 
-**Tests:** `tests/registry.rs` (13 tests).
+**Tests:** `tests/registry.rs` (14 tests).
 
 ### `math.rs`
 
@@ -206,18 +209,15 @@ returns every registered type as a `Value`.
 
 ## Not built yet
 
-- **The ECS bridge.** `mid-ecs` has no way to enumerate an entity's archetype-core components. That
-  API comes first. Then a `ReflectComponent` table (get, apply, insert, remove and has, by name)
-  would be attached as type data, behind a feature of `mid-ecs`, and `LocalTransform`,
-  `GlobalTransform`, `GlobalTransformLWC`, `ChildOf` and `Children` registered.
 - Enums with data in their variants.
 - A derive macro.
 - Field offsets.
 
 ## Verification status
 
-- 69 integration tests with the `math` feature and 63 without, plus 4 doctests. All pass on rustc
-  1.97.1 and on rustc 1.75.0, with and without the feature.
+- 70 integration tests with the `math` feature and 64 without, plus 4 doctests (one test was added
+  with `ErrorKind::Unsupported`). All pass on rustc 1.97.1; the 74 with the feature were rerun on
+  rustc 1.75.0 after that change, and the run without the feature on 1.75.0 predates it.
 - `clippy --no-deps --all-targets` and `rustfmt` are clean.
 - 42 mutants over `json`, `value`, `reflect`, `registry`, `error`, `macros` and `ty` were all
   killed by the tests. The mutation run was done when the crate was written; it has not been rerun

@@ -16,7 +16,8 @@ two clients of that protocol (`docs/roadmap.md`, Decision 8). Both rely on `mid-
 write a world by name, which keeps what the command line can do close to what the editor can do.
 
 **Status.** Phase 1 is built: `doctor`, `check`, `test`, `docs lint`, `apply` and `deliver`. The
-world commands (phase 2 onward) wait for `mid-reflect`'s ECS bridge and for the remote protocol.
+world commands (phase 2 onward) wait for the remote protocol; the ECS bridge they need is built
+(`docs/mid-ecs-reflect.md`).
 The crate lives in `tools/mid-cli` as its own workspace, so it adds nothing to the engine's root
 `Cargo.toml`.
 
@@ -125,7 +126,7 @@ All proposed, for the maintainer to confirm or change.
 | Phase | What | Needs | Done when |
 |---|---|---|---|
 | 1 | Skeleton, argument parsing, JSON output; `doctor`, `check`, `test`, `docs lint`, `apply`, `deliver` | `mid-reflect` | Each command has tests, and `mid apply` reproduces the byte-identical check done by hand. **Done.** |
-| 2 | `rpc` and the `world` commands over stdio | the ECS bridge, `mid-remote` | `mid world start` plus `get` and `set` round-trip a component in a headless world |
+| 2 | `rpc` and the `world` commands over stdio | `mid-remote` (the ECS bridge is built) | `mid world start` plus `get` and `set` round-trip a component in a headless world |
 | 3 | TCP, and `watch` | phase 2 | A second process drives a running world |
 | 4 | `ci`, `bench`, `scene`, `new`, `explain` | their dependencies | One at a time, as each dependency lands |
 

@@ -34,14 +34,14 @@ deliveries). Anything below marked "sandbox only" has not run on real CI; that i
 | `mid-log`, `mid-trace` | `mid-log` good (lock-free SPSC, tiered levels, an Android logcat sink behind a feature); `mid-trace` a feature-gated no-op by default |
 | `mid-ui` | Standalone UI core: widget tree (its own arena, not ECS), anchor/margin layout with row and column flow, hit testing, a draw list of `FillRect`, `PushClip`, `PopClip`. f32 and f64. No text, images, event dispatch, focus or animation. Sandbox only (62 tests) per its doc |
 | `mid-ui-mxui` | The `.mxui` loader (DixScript v1.0.0 documents describing a widget tree). With `web/mid-ui-wasm` and `web/ui` it forms a browser playground with a Canvas 2D backend |
-| `mid-reflect` | Built (`docs/mid-reflect.md`): a `Value` tree with JSON in and out, the `Reflect` trait, three declarative registration macros, `TypeRegistry` with type data, and an optional `math` feature. No dependencies; builds on 1.75. 69 integration tests with `math` and 4 doctests; sandbox only. Not built: the bridge to `mid-ecs` (reading an entity's components by name) |
+| `mid-reflect` | Built (`docs/mid-reflect.md`): a `Value` tree with JSON in and out, the `Reflect` trait, three declarative registration macros, `TypeRegistry` with type data, and an optional `math` feature. No dependencies; builds on 1.75. 70 integration tests with `math` and 4 doctests; sandbox only. The bridge to `mid-ecs` is built (`docs/mid-ecs-reflect.md`, feature `reflect` of `mid-ecs`; sandbox only) |
 | `tools/mid-cli` | Built (`docs/mid-cli.md`): the `mid` binary with `doctor`, `check`, `test`, `docs lint`, `apply` and `deliver`; its own workspace; 92 tests; sandbox only. The world commands wait for the ECS bridge and the remote protocol |
 | `mid-editor`, `mid-editor-ffi`, `apps/editor-android` | Built (`docs/mid-editor.md`, `docs/mid-editor-ffi.md`): the editor core (panels on `mid-ui`, a CPU-projected 3D and 2D viewport, touch gestures, edit and play modes, a demo scene), its C API, and a raylib 6.0 host with the Android build script and workflow. 85 Rust tests, 30 script checks and an eight-screenshot desktop session; sandbox only, never run on a phone. Not built: the ECS connection, scenes, undo, gizmos |
 | `examples/`, `tools/` | `headless-server`, `custom-transport-demo`; `tools/mdix-compiler` |
 | `mid-nodes`, `mid-camera` | Not started. No crates, no design docs until this one (`docs/mid-nodes.md`) |
 
-**Does not exist at all yet:** the bridge between reflection and the ECS (and so component
-serialization), assets, input, windowing, text and fonts, images, rendering, audio, scenes and
+**Does not exist at all yet:** scene files (reflection is bridged to the ECS, `docs/mid-ecs-reflect.md`,
+but nothing saves or loads a world), assets, input, windowing, text and fonts, images, rendering, audio, scenes and
 nodes, a protocol for talking to a running world, and any app.
 
 **Where that leaves us.** The ECS has reached the point where other crates can be built on
@@ -95,7 +95,7 @@ before what" from Bevy's own structure.
 |---|---|---|
 | 0 | `platform`, `ptr`, `math`, `macro_utils`, `android` | `mid-platform`, `mid-ptr`, `mid-math` built. `bevy_android` (platform glue for Android) has no equivalent yet |
 | 1 | `utils`, `tasks`, `curve`, `shape`, `derive`, `encase_derive` | `mid-common` (thin); tasks live in `mid-ecs`'s parallel executor; curves in `mid-math`. No proc-macros, by the dependency mandate |
-| 2 | `ecs`, **`reflect`**, `transform`, `color` | `mid-ecs` built, transform built, color in `mid-math`. **Reflection is built** (`mid-reflect`), but not yet bridged to the ECS |
+| 2 | `ecs`, **`reflect`**, `transform`, `color` | `mid-ecs` built, transform built, color in `mid-math`. **Reflection is built** (`mid-reflect`) and bridged to the ECS behind the `reflect` feature of `mid-ecs` |
 | 3 | `app`, `state` | `mid-app` and states built |
 | 4 | `input`, `time`, `log`, `a11y` | `mid-time`, `mid-log` built. **Input is missing** |
 | 5 | `window`, `diagnostic`, `clipboard`, `gilrs`, settings | **Windowing is missing**; `mid-trace` partly covers diagnostics |
@@ -113,7 +113,7 @@ Four things this table settles:
 1. **Reflection sits next to the ECS in Bevy** (layer 2), and `asset`, `scene`,
    `world_serialization`, `remote`, `window`, `input`, `ui` and `picking` all depend on it,
    some only optionally. It is the foundation under every tool. mid-engine had no equivalent
-   until `mid-reflect`, which is built but not yet bridged to the ECS, and it was the biggest
+   until `mid-reflect`, which is built and now bridged to the ECS (`docs/mid-ecs-reflect.md`), and it was the biggest
    single gap between "an ECS" and "an engine that can be looked inside".
 2. **The remote protocol is late in Bevy only by accident.** `bevy_remote` hard-depends on
    `app`, `ecs`, `reflect`, `tasks`, `log`, `color`, `platform`, `utils`, `derive` and, oddly,
@@ -390,8 +390,7 @@ updated for that, and the first version of the editor was built (`docs/mid-edito
 to start it. The crate name and the macro approach were not explicitly confirmed. Two parts of the
 recommendation changed in the build: there are no field offsets (`core::mem::offset_of!` needs
 Rust 1.77 and the floor is 1.75), and only unit-variant enums are supported. A `TypeInfo` records
-a stable name and a kind, not a size or an alignment. Still to build: the bridge to `mid-ecs`
-(T1b below).
+a stable name and a kind, not a size or an alignment. The bridge to `mid-ecs` (T1b) is built: `docs/mid-ecs-reflect.md`.
 
 **Context:** `mid-ecs` knows a component by a dense `ComponentId` and can hand C a byte span
 of it (`ffi_span`). It knows no name and no fields, and cannot read a component as a value.
@@ -436,7 +435,7 @@ then WebSocket (a remote editor would use it). No async runtime.
 browser path needs certificates. A binary protocol: faster, but neither a person nor an AI can
 read it at a prompt.
 
-**Needs:** Decision 7 and the ECS bridge.
+**Needs:** Decision 7 and the ECS bridge (both built).
 
 ---
 
@@ -560,8 +559,8 @@ viewport is drawn from lists of lines and polygons projected on the CPU, with a 
 
 | | Milestone | Done when | Needs |
 |---|---|---|---|
-| M1 | **Terminal engine** | `mid` runs the development workflow with JSON output (built, sandbox only), starts a headless world, and lists, reads, edits and queries entities and components in it | T1b, then T3 and T4 |
-| M2 | **Editor panels on the phone** | A native app on the phone shows the hierarchy, inspector and console over an embedded world, and edits go through undoable commands. **Built as a shell over a demo scene (sandbox only), not the ECS** | T1b, U3, E1, and the app running on the phone |
+| M1 | **Terminal engine** | `mid` runs the development workflow with JSON output (built, sandbox only), starts a headless world, and lists, reads, edits and queries entities and components in it | T1b (built), then T3 and T4 |
+| M2 | **Editor panels on the phone** | A native app on the phone shows the hierarchy, inspector and console over an embedded world, and edits go through undoable commands. **Built as a shell over a demo scene (sandbox only), not the ECS** | T1b (built), U3, E1, and the app running on the phone |
 | M3 | **Viewport v0** | The scene shows in the viewport (grid, wireframe and flat shapes), an orbit camera works by touch, a tap selects, a gizmo moves the selection, and hierarchy and inspector follow. **Built except the gizmo** | M2, V4, C1 |
 | M4 | **Content** | Scenes load and save, the project panel lists files, play mode enters and leaves | C2, C3, C5, E2 |
 | M5 | **Android app** | A CI-built APK installs on the phone and runs the editor natively, with files in app storage and a working soft keyboard. **The build exists and has not been run** | The first workflow run, then text entry |
@@ -578,7 +577,7 @@ relative: S is about one delivery, M a few, L many.
 | Track | Item | Needs first | Size |
 |---|---|---|---|
 | Tools | T1 `mid-reflect` (Decision 7) | `mid-ecs` (done) | built, sandbox only |
-| | T1b ECS bridge: enumerate an entity's components, then a component table on the registry | T1 | M |
+| | T1b ECS bridge: enumerate an entity's components, then a component table on the registry | T1 | built, sandbox only (`docs/mid-ecs-reflect.md`) |
 | | T2 `mid` command line, phase 1 | nothing | built, sandbox only |
 | | T3 `mid-remote` core: methods on `Value`, stdio transport | T1b | M |
 | | T4 `mid` world commands | T3 | S |
@@ -619,8 +618,10 @@ not on this path.
    the NDK, raylib or ARM part; the workflow keeps the logs. Then send the Console tab's numbers (frame
    time, core time, paint items), at 12, 1000 and 5000 cubes. That is the cost of the CPU-projected
    viewport on the real GPU and CPU.
-2. **T1b, the ECS bridge,** and a check that `mid-ecs` builds and passes on a 32-bit target. It unblocks
-   the real hierarchy and inspector, undo, and the command line's world commands.
+2. **Connect the editor to a real world.** T1b, the ECS bridge, is built (`docs/mid-ecs-reflect.md`).
+   Run the `mid-ecs 32-bit` workflow once: it is the check that `mid-ecs` passes on 32-bit x86 and
+   builds for the phone's architecture. Then the hierarchy and inspector read from a `World`, and
+   the command line's world commands can start.
 3. **E1 and V4:** edit commands with undo, and gizmos, so the editor can change something.
 4. **U2 and U3:** focus, scrolling and text entry, then the widget kit, so the panels stop drawing their
    own buttons.
