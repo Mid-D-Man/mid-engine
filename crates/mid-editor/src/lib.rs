@@ -14,13 +14,16 @@
 #![forbid(unsafe_code)]
 
 pub mod camera;
+pub mod components;
 pub mod editor;
 pub mod input;
+pub mod inspect;
 pub mod paint;
 pub mod scene;
 pub mod stats;
 pub mod text;
 pub mod viewport;
+pub mod world;
 
 pub use editor::{Editor, Mode, Tab};
 pub use input::Phase;

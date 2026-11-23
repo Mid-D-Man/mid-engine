@@ -1,3 +1,7 @@
+// ============================================================================
+// NOTICE: Full documentation, design decisions, and fix history for this file
+// live in docs/mid-ecs.md, section "archetype.rs"
+// ============================================================================
 //! The Archetype Core — dense, SoA table storage with real dynamic
 //! migration between archetypes as an entity's component set changes.
 //!
@@ -642,6 +646,15 @@ impl Archetypes {
     /// The type `id` was assigned to, if this registry issued it.
     pub(crate) fn type_id_of(&self, id: ComponentId) -> Option<TypeId> {
         self.type_ids.get(id.as_u32() as usize).copied()
+    }
+
+    /// Every entity this registry holds, archetype by archetype and row by
+    /// row. Every spawned entity is in exactly one table (the empty one
+    /// until it gets a component), so this lists each live entity once.
+    pub(crate) fn entities(&self) -> impl Iterator<Item = Entity> + '_ {
+        self.archetypes
+            .values()
+            .flat_map(|archetype| archetype.table.entities.iter().copied())
     }
 
     /// The component ids `entity` currently has (its archetype's

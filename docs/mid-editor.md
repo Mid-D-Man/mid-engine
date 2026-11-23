@@ -9,8 +9,9 @@ console, built to run on an Android phone and to be tested without one.
 It has four parts:
 
 - **`crates/mid-editor`**, the core. Safe Rust (`#![forbid(unsafe_code)]`), no windowing and no
-  renderer. It lays the screen out with `mid-ui`, projects a scene on the CPU with `mid-math`,
-  turns touch events into taps, drags and pinches, and produces one flat paint list per frame.
+  renderer. It holds the scene as a real `mid-ecs` world, lays the screen out with `mid-ui`,
+  projects the world's boxes on the CPU with `mid-math`, turns touch events into taps, drags and
+  pinches, and produces one flat paint list per frame.
 - **`crates/mid-editor-ffi`**, a C API over the core (`include/mid_editor.h`), documented in
   `docs/mid-editor-ffi.md`. It is the only unsafe code, and every entry point catches panics.
 - **`apps/editor-android`**, the host: a C file that opens a raylib window, feeds touches to the
@@ -19,10 +20,10 @@ It has four parts:
 - **`scripts/build_editor_android.sh` and `.github/workflows/editor-android.yml`**, which build the
   APK with no Gradle and no Java, the way the maintainer's other repositories already do.
 
-**Status.** Built and tested in the sandbox: the core, the C API, the host on a desktop software
-renderer, and the packaging half of the Android script. **Not run:** anything with the Android NDK,
-raylib's Android build, the Rust build for 32-bit ARM, the APK on a phone. The first workflow run
-is the first time those steps happen. See "Verification status".
+**Status.** The first version of the app was built, packaged by the workflow and run on the
+maintainer's phone (a Galaxy A13 4G, 60 fps with 12 cubes). Since then the core was connected to a
+real world (see "`world.rs`"); that change is built and tested in the sandbox only, so the phone
+has not seen it. See "Verification status".
 
 ### How to get the app
 
@@ -43,11 +44,14 @@ Set `run_tests` to `off` to go straight to the APK.
 - The viewport. 3D: a perspective grid and twelve colored wireframe cubes; one finger orbits, two
   fingers zoom and pan, a tap selects a cube (yellow outline). 2D: a top-down orthographic view of
   the same scene. Frame statistics sit in the corner.
-- A tab strip and a panel: **Hierarchy** (tap a row to select), **Inspector** (the selected cube's
-  position, rotation and size), **Project** (placeholder), **Console** (frame time, the time the core
-  itself spent, paint item count, screen size, the last touch, the log, and chips that change the
-  scene to 12, 200, 1000 or 5000 cubes).
-- **Play** makes the cubes bob and turn; **Edit** puts them back and holds still.
+- A tab strip and a panel: **Hierarchy** (the world's entity tree, children indented under their
+  parent; tap a row to select; drag up or down in the panel to scroll), **Inspector** (the selected
+  entity's name and number, then each of its components and their fields, read through reflection;
+  drag to scroll), **Project** (placeholder), **Console** (frame time, the time the core itself
+  spent, paint item count, screen size, the last touch, the log, and chips that change the scene to
+  12, 200, 1000 or 5000 cubes).
+- **Play** runs the world's systems, which make the cubes bob and turn, and children move with
+  their parent; **Edit** puts the world back as it was and holds still.
 
 The 5000-cube chip is the bench that was missing: it shows what the CPU-projected viewport costs on
 the phone (`docs/mid-engine-app.md`, "The viewport").
@@ -77,8 +81,46 @@ All proposals, for the maintainer to confirm or change.
 - **DejaVu Sans is bundled** for text, with its license (`apps/editor-android/assets/fonts`). The
   host measures text for the core through a callback, which is the text seam of
   `docs/roadmap.md`, Decision 11.
-- **A demo scene, not the ECS.** The scene is a flat list of boxes in the core. Connecting the real
-  world is next: the ECS bridge exists (`docs/mid-ecs-reflect.md`), the editor does not use it yet.
+- **The scene is a `mid-ecs` world.** `EditorWorld` owns a `mid-app` `App` with `TransformPlugin`, so
+  the hierarchy, the transform composition and the schedule are the engine's own, not a copy. The
+  core's own code stays safe Rust; the dependencies are `mid-ecs` (feature `reflect`), `mid-app` and
+  `mid-reflect`. The cost is that the editor path now includes the ECS on 32-bit ARM, which the
+  `mid-ecs 32-bit` workflow checks and which the phone has not run.
+- **Three editor components.** `Name`, `BoxShape` (half size and outline color) and `Bob` (the play
+  animation) live in the editor, registered as `mid_editor::*`. `Name` stands in for the one
+  `mid-nodes` will define (`docs/mid-nodes.md`, N3) and is replaced by it then.
+- **Selection is an `Entity`.** It is cleared when the entity dies, and an inspector never draws a
+  dead one.
+- **The hierarchy is always fully expanded,** roots in the order they were created, each followed by
+  its children in the order of its `Children`. It scrolls in whole rows. There are no folds yet.
+- **The inspector reads through reflection and does not edit.** Every registered component an
+  entity holds becomes a header line and one line per field; a struct of plain numbers (a vector, a
+  quaternion) is one line; an entity reference shows as the entity's name; a color shows as hex.
+  The two derived transforms (`GlobalTransform`, `GlobalTransformLWC`) show as one line with their
+  position, because their matrices are large, read only and would fill the few rows a phone panel
+  has. Components that are not registered are counted on a last line. Editing waits for E1.
+- **Play keeps a snapshot, and Edit restores it.** Entering play records every registered component
+  of every entity except the two transform results (recomputed afterwards). Leaving play puts back
+  each value, removes components play added, despawns entities play spawned, then re-attaches
+  parents child by child in each parent's original order, after detaching every parent first so a
+  half-restored tree cannot look like a cycle. An entity despawned during play is counted as lost
+  and not brought back: that needs entity remapping (`docs/mid-ecs-reflect.md`, "Not built yet").
+- **Design direction.** The maintainer sent a screenshot of the flecs explorer and asked for that
+  combined with the Unity editor. What it shows, and where this editor stands:
+
+  | In the flecs explorer | Here |
+  |---|---|
+  | An entity tree with a dropdown and a search field | The tree is there; no search, no dropdown |
+  | A selected entity with its name and number | The inspector title, `name  #n` |
+  | Components grouped by module, each group folding | Components listed flat, with no module groups or folds |
+  | Editable numeric fields per component | Read-only text |
+  | An Add Component button | Not built |
+  | A left icon rail for tools (entities, query, charts, tables) | Not built |
+  | A status bar with the version | The version is in the top bar |
+
+  The Unity half (scene and game views, play controls, component foldouts) points the same way:
+  folds, editing and a rail are the next steps for the panels, and they wait for `mid-ui` to have
+  text, events and widgets (roadmap U1 to U3) rather than being hand-drawn here.
 - **2D is a top-down orthographic view of the ground plane.** There are no 2D nodes yet.
 - **No Gradle, no Java.** `android:hasCode="false"`, a `NativeActivity`, and the APK assembled with
   `aapt`, `zipalign` and `apksigner`.
@@ -89,8 +131,10 @@ The C API (`crates/mid-editor-ffi` and its header) is in `docs/mid-editor-ffi.md
 
 ### `lib.rs`
 
-**What it does:** the crate documentation, the module list and the re-exports (`Editor`, `Mode`,
-`Tab`, `Phase`, `PaintItem`, `PaintList`, `TextMeasure`, `FixedWidth`). It forbids `unsafe`.
+**What it does:** the crate documentation, the module list (`camera`, `components`, `editor`,
+`input`, `inspect`, `paint`, `scene`, `stats`, `text`, `viewport`, `world`) and the re-exports
+(`Editor`, `Mode`, `Tab`, `Phase`, `PaintItem`, `PaintList`, `TextMeasure`, `FixedWidth`). It
+forbids `unsafe`.
 
 **Tests:** through the other modules.
 
@@ -125,13 +169,69 @@ second, so one stall does not wreck the display.
 
 ### `scene.rs`
 
-**What it does:** the demo scene. `Scene::demo(n)` lays `n` cubes on a square grid, `Scene::pose(t)`
-bobs and turns them for play-mode time `t` (and puts them back at `t == 0`), `Scene::corners` gives a
-box's eight corners after its yaw, and `EDGES` lists the twelve edges.
+**What it does:** the demo scene. `spawn_demo(world, n)` spawns `n` cubes on a square grid, 2.5
+units apart, each with a name, a local and a composed transform, a `BoxShape` and a `Bob`. The first
+cubes form a small hierarchy: `Cube.001` and `Cube.002` hang under `Cube`, and `Cube.003` under
+`Cube.002`, so the tree and the composition have something to show. A child's local position is its
+grid position minus its parent's, so building the hierarchy moves nothing. `PALETTE` and `EDGES`
+(the twelve edges of a box, as pairs of corner indices) are here too.
 
 **Decisions:** the cube palette must never contain the selection color (see "Fixes and Problems").
+Only the first four cubes are nested, so the 200, 1000 and 5000 cube scenes cost what a flat scene
+does apart from the world itself.
 
-**Tests:** 7 unit tests.
+**Tests:** 7 unit tests: the grid, the names, the nesting, small counts, composition onto the grid,
+the palette and the edges.
+
+### `components.rs`
+
+**What it does:** `Name`, `Rgba`, `BoxShape` and `Bob`, with their reflection, and `registry()`,
+which returns a registry that knows the engine's components (`register_core_components`) and these.
+
+**Decisions:** the names are `mid_editor::Name` and so on, so a scene file written later does not
+clash with `mid-nodes`. `Rgba` is its own type so the inspector can show a color as hex without
+guessing from a number.
+
+**Tests:** 2 unit tests: every component is registered with type data, and each round-trips through
+a value.
+
+### `world.rs`
+
+**What it does:** `EditorWorld`, the world the editor shows. It owns the `App`, the registry, the
+boxes to draw, the hierarchy rows and the play-mode snapshot.
+- `Drawable` is one box read from the world: the entity, its composed transform, its half size, its
+  half extents in world units, and its color. `center`, `radius` and `corners` serve the viewport.
+- `refresh` composes transforms and rebuilds the boxes and the root list only when something
+  changed, so an Edit frame with nothing happening costs a flag test. `world_mut` marks everything
+  stale.
+- `hierarchy_rows(first, count)` walks the tree in order without building a full list, so a window
+  of a 5000-entity scene is cheap to ask for.
+- `enter_play`, `step(dt)` and `exit_play` run play mode. `step` runs one `App` update, which moves
+  every `Bob` entity and composes transforms. `exit_play` returns a `RestoreReport` (restored,
+  removed, lost, failed).
+- `inspect(entity)` gives the inspector rows.
+
+**Decisions:** those under "Decisions" above. Also: a mismatch of handles is possible because every
+`World` allocates entity numbers from zero, so an `Entity` from one world can equal one in another;
+nothing here mixes worlds, and the viewport tests use handles with a number the demo does not use.
+
+**Tests:** 21 unit tests: rows, paging, tree order, drawables and their scale, play, restore in each
+of its cases (values, spawned entities, added and removed components, a reparented tree, a despawned
+child), the snapshot being taken once, and the inspector's rows.
+
+### `inspect.rs`
+
+**What it does:** `rows(world, registry, entity)` reads an entity through `World::reflect_entity` and
+turns each component into `Row`s: a header line, then the fields at one more level of indent. It
+follows the registered type information (`Kind`, `Ty`), so a new component shows up with no code
+here. A value is one line when it is a number, text, a boolean, a list of such, an entity, a color,
+or a struct of at most four plain numbers; anything else gets a line of its own and its fields
+below it, to a depth of six.
+
+**Tests:** 12 unit tests: dead entities, headers and fields, parents shown by name, children listed,
+vectors on one line, nested structs, a derived transform on one line, colors, an unregistered
+component counted, a dead reference shown as `dead`, long lists cut with a count, and the depth
+bound.
 
 ### `camera.rs`
 
@@ -148,15 +248,17 @@ cutting a line at the near plane. `Area` is a screen rectangle.
 ### `viewport.rs`
 
 **What it does:** `Viewport` holds the view (3D or 2D) and both cameras. `paint` draws the grid, the
-cubes and the selection into a paint list; `pick` finds the nearest cube under a touch; `drag` and
-`pinch` move the active camera.
+boxes and the selection into a paint list; `pick` finds the nearest box under a touch and returns
+its `Entity`; `drag` and `pinch` move the active camera. It reads `Drawable`s from the world, so a
+box is drawn with its full composed transform (scale and turn included); the 2D view draws each box
+as an axis-aligned rectangle of its world extents.
 
 **Decisions:**
 - Cubes behind the camera, past 300 units or off screen are skipped, and a cube smaller than a few
   pixels is drawn as a dot, so a large scene stays cheap.
 - Picking uses a touch radius of 20 units at least, so a finger can hit a small cube.
 
-**Tests:** 13 unit tests.
+**Tests:** 14 unit tests, including a scaled box picked by its scaled extent.
 
 ### `input.rs`
 
@@ -176,19 +278,28 @@ gestures: `Tap`, `Drag` (with where it started), `Pinch` (a ratio and the midpoi
 **What it does:** `Editor`, the whole core. It builds the `mid-ui` tree for portrait or landscape,
 paints the top bar, viewport, tab strip and panel, keeps the hotspots for the buttons and rows, and
 routes gestures: a tap on a button or row acts, a tap in the viewport picks, a drag that began in the
-viewport orbits or pans, a pinch there zooms. `frame` advances time, steps play mode and rebuilds the
-paint list, and times its own work.
+viewport orbits or pans, a drag that began in the panel scrolls the list, a pinch in the viewport
+zooms. `frame` advances time, steps the world in play mode (or refreshes it in edit mode) and
+rebuilds the paint list, and times its own work. Switching to Play snapshots the world; switching
+to Edit restores it and logs what was restored.
 
 **Decisions:**
 - All text is ASCII, because the bundled font is loaded with the ASCII set.
 - A drag keeps controlling the viewport after the finger leaves it.
 - `cancel_pointers` exists because a lost touch-up would otherwise leave a phantom finger.
+- The panel scrolls in pixels internally and shows whole rows. Dragging in the viewport still
+  orbits and a drag in the panel never does. Changing tab, or changing the cube count, puts the
+  scroll back at the top. A tap on a row after scrolling selects that row.
+- Changing the cube count while playing builds the new world already playing, so Edit still
+  restores it.
 
-**Tests:** `tests/editor.rs`, 23 tests through the public interface: the layouts, every tab, selection
-from the hierarchy and from the viewport, orbit, pinch, 2D, play and edit, the cube-count chips, the
-statistics, text that must fit the screen at several sizes, and a randomized run (400 events and
-frames at five screen sizes) checking every paint value is finite, clips are balanced and text is
-valid.
+**Tests:** `tests/editor.rs`, 33 tests through the public interface: the layouts, every tab,
+selection from the hierarchy and from the viewport, orbit, pinch, 2D, play and edit, the cube-count
+chips, the statistics, text that must fit the screen at several sizes, indentation, scrolling to the
+end and back, selecting after a scroll, the inspector's components and scroll, play and restore with
+the selection kept, and a randomized run (400 events and frames at five screen sizes) checking every
+paint value is finite, clips are balanced and text is valid. Three unit tests in `editor.rs` cover a
+selection whose entity dies, which the public interface cannot cause.
 
 ### `apps/editor-android/main.c`
 
@@ -262,16 +373,59 @@ that is not 32-bit ARM).
 
 ## Verification status
 
-- `mid-editor`: 77 tests (54 unit, 23 integration). `mid-editor-ffi`: 8 tests. `mid-ui` with them: 147
-  tests pass on rustc 1.97.1 and on 1.75.0, and on the default and the scalar `mid-math` backend.
-  `clippy --no-deps --all-targets` and `rustfmt` are clean.
-- The desktop self-test ran: raylib 6.0 (desktop), the Rust core through the C header, the C host, a
-  scripted session, eight screenshots, all looked at.
-- The script check: 30 of 30, with the real packaging tools.
-- **Not verified:** the NDK build of raylib; the armv7 Rust build and link; the highp shader and
-  OpenGL ES 2 rendering; touch on the phone; the APK installing; frame time on the phone; the 32-bit
-  x86 test job and the workflow itself (parsed as YAML, with its commands run locally, but never run
-  on GitHub).
+Sandbox, rustc 1.97.1, x86_64.
+
+- `mid-editor`: 127 tests (94 unit, 33 integration), `mid-editor-ffi` 8 and `mid-ui` 62, all passing
+  with the default and the scalar `mid-math` backend. `mid-ecs` passes 1,240 tests (1,276 with
+  `reflect`, including the two new `World::entities` tests), `mid-app` 49.
+- Mutation checks over the new code: 20 hand-made mutants (restore skipping its detach pass, extras
+  not despawned, added components kept, paging that never counts, children reversed, extents
+  ignoring scale, corners ignoring the transform, play entered twice, the panel not scrolling, scroll
+  kept across tabs, a count change not entering play, a dead selection kept, play that never steps,
+  Edit that does not restore, selecting a dead entity, an inspector drawing one, a wrong dead-entity
+  label, a derived transform expanded, and picking by the unscaled extent). All are caught. The first run missed four, which got
+  tests; one more (an unclamped scroll value) cannot be seen from outside and was left.
+- Cost, measured in the sandbox in release mode on x86_64, not on the phone, with the default
+  camera, so only cubes in view cost anything to draw (milliseconds per call):
+
+  | Cubes | Edit frame, old / new | Play frame, old / new | Enter play | Exit play |
+  |---|---|---|---|---|
+  | 200 | 0.009 / 0.009 | 0.011 / 0.028 | 0.56 | 0.27 |
+  | 1000 | 0.023 / 0.023 | 0.031 / 0.114 | 2.5 | 1.9 |
+  | 5000 | 0.082 / 0.083 | 0.116 / 0.616 | 12.5 | 10.8 |
+
+  "Old" is the flat scene. The edit frame is unchanged because the boxes are cached. A play frame
+  costs more, mainly the schedule, the transform composition and the rebuild of the box list; the
+  phone's earlier numbers say the host's drawing, not the core, was what limited it. Entering and
+  leaving play at 5000 cubes is a one-time pause that will be several times longer on the phone.
+  Each of those timings includes two frames of the tap that triggers them.
+- **On the phone, the earlier flat-scene version** (Galaxy A13 4G, screen reported as 1080 by 2338,
+  one unit 2.63 pixels, shader line `highp ES2`): the first workflow run built an APK that installed
+  and ran, and tap, drag and pinch worked. Measured from the maintainer's screenshots, in 3D play
+  mode:
+
+  | Scene | fps | Frame ms | Core ms | Paint items |
+  |---|---|---|---|---|
+  | 12 cubes (also in edit) | 60 | 16.7 | 0.23 | 213 |
+  | 200 | 58.8 | 17.0 | 0.54 | 2,457 |
+  | 1000 | 37.1 | 26.9 | 1.59 | 11,877 |
+  | 5000, zoomed out | 8.9 | 112.0 | 7.91 | 56,073 |
+  | 5000, zoomed in | 55.8 | 17.9 | 1.5 | 5,175 |
+  | 5000 in 2D | 11.3 | 88.5 | 1.39 | 25,123 |
+
+  The core costs about 0.14 microseconds per paint item; the rest of the frame is the host drawing,
+  about 2 microseconds per item (3.5 in 2D, with five items per cube). So raylib's line and
+  rectangle submission is the limit, not the projection and not the ECS. The usual fixes, when they
+  are needed: batch the lines into one vertex buffer, merge distant cubes, or the GPU backend step
+  (`docs/roadmap.md`, Decision 12).
+- The desktop self-test ran again against the world-backed core (raylib 6.0 on a software renderer,
+  the real C host and header, eight screenshots written, three looked at: the hierarchy with
+  indentation and a selection, the inspector, and play mode at 1000 cubes with turning boxes). The
+  script check of the Android packaging was not rerun; the host and the C API did not change.
+- **Not verified:** any of the world-backed editor on the phone, including the Rust build and link
+  for 32-bit ARM with `mid-ecs` and `rayon` in the editor's static library; how the new panels look
+  on the screen; the 32-bit x86 job of `editor-android.yml` with the new dependencies; frame time on
+  the phone in play mode at 1000 and 5000 cubes.
 
 ## CI and Workflows
 
@@ -285,9 +439,15 @@ that is not 32-bit ARM).
 
 ## Not built yet
 
-- The real world: the editor reading and editing a `World` through the ECS bridge (T1b, built in
-  `docs/mid-ecs-reflect.md`), so the hierarchy and inspector show and edit the ECS.
-- Editing: edit commands, undo and redo, gizmos, text entry.
+- Editing the world: edit commands, undo and redo, gizmos, text entry. The inspector only reads.
+- Folds in the hierarchy, a search field, component groups, an Add Component button and a tool
+  rail (see "Design direction").
+- Fixes for what the phone showed: a black band about 70 pixels high above the top bar (the status
+  bar's area is not drawn) and the navigation bar covering the bottom of the console (the host needs
+  a bottom inset or immersive mode). Only the Console tab was seen on the phone; the others have not
+  been. Portrait only, because raylib 6.0's Android backend ignores a configuration change.
+- Restoring an entity that play despawned (needs entity remapping in the ECS bridge).
+- A real `Name` from `mid-nodes`, and components for something other than cubes.
 - Scenes and project files; the project panel is a placeholder.
 - Rotation (a patch to raylib's Android backend, or a different native glue).
 - Textures and lighting (the GPU backend step, `docs/roadmap.md`, Decision 12).
@@ -300,6 +460,18 @@ that is not 32-bit ARM).
   selection outline, so that cube would have looked selected all the time. A unit test that counted
   selection-colored lines caught it. The palette now has an orange there, and a test checks that no
   palette color equals the selection color.
+
+### `viewport.rs` and `world.rs`
+
+- **Handles from two worlds collide.** The first test of a selection that is not among the boxes
+  used `World::new().spawn()` for a stranger. That handle is the same as the demo world's first
+  cube, because every world numbers its entities from zero, so the cube was drawn as selected and the
+  test failed. The test now takes a handle with a number the demo does not use.
+- **A test premise about the panel.** Three of the first integration tests for scrolling assumed
+  twelve rows fit the panel, that `Name` is the first inspector row, and that a cube count chip does
+  not step the world. On the phone-sized screen about five rows fit, `LocalTransform` comes first,
+  and a new world already plays when the chip is tapped. The code was right and the tests were
+  changed.
 
 ### `camera.rs`
 

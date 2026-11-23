@@ -7,7 +7,10 @@
 
 use crate::camera::{Area, Orbit, Ortho, Perspective};
 use crate::paint::{rgba, PaintList};
-use crate::scene::{Entity, Scene, EDGES};
+use mid_ecs::Entity;
+
+use crate::scene::EDGES;
+use crate::world::Drawable;
 
 const GRID_HALF: i32 = 10;
 const FAR: f32 = 300.0;
@@ -18,7 +21,7 @@ const AXIS_Z: u32 = rgba(100, 181, 246, 200);
 pub const SELECTED: u32 = rgba(255, 213, 79, 255);
 
 /// True when `value` beats the best candidate so far, or there is none yet.
-fn is_better(best: Option<(usize, f32)>, value: f32) -> bool {
+fn is_better(best: Option<(Entity, f32)>, value: f32) -> bool {
     match best {
         Some((_, b)) => value < b,
         None => true,
@@ -62,25 +65,25 @@ impl Viewport {
     /// `unit` scales line widths with the screen.
     pub fn paint(
         &self,
-        scene: &Scene,
+        drawables: &[Drawable],
         area: Area,
-        selected: Option<usize>,
+        selected: Option<Entity>,
         unit: f32,
         out: &mut PaintList,
     ) {
         let lw = (unit * 0.5).max(1.0);
         if self.mode2d {
-            self.paint_2d(scene, area, selected, lw, out);
+            self.paint_2d(drawables, area, selected, lw, out);
         } else {
-            self.paint_3d(scene, area, selected, lw, out);
+            self.paint_3d(drawables, area, selected, lw, out);
         }
     }
 
     fn paint_3d(
         &self,
-        scene: &Scene,
+        drawables: &[Drawable],
         area: Area,
-        selected: Option<usize>,
+        selected: Option<Entity>,
         lw: f32,
         out: &mut PaintList,
     ) {
@@ -100,14 +103,14 @@ impl Viewport {
                 out.line(a[0], a[1], b[0], b[1], lw, cz);
             }
         }
-        for (i, e) in scene.entities.iter().enumerate() {
-            if selected == Some(i) {
+        for d in drawables {
+            if selected == Some(d.entity) {
                 continue;
             }
-            self.draw_box_3d(&cam, area, e, e.color, lw, out);
+            self.draw_box_3d(&cam, area, d, d.color, lw, out);
         }
-        if let Some(e) = selected.and_then(|i| scene.entities.get(i)) {
-            self.draw_box_3d(&cam, area, e, SELECTED, lw * 2.0, out);
+        if let Some(d) = selected.and_then(|s| drawables.iter().find(|d| d.entity == s)) {
+            self.draw_box_3d(&cam, area, d, SELECTED, lw * 2.0, out);
         }
     }
 
@@ -115,18 +118,18 @@ impl Viewport {
         &self,
         cam: &Perspective,
         area: Area,
-        e: &Entity,
+        e: &Drawable,
         color: u32,
         lw: f32,
         out: &mut PaintList,
     ) {
-        let Some((c, depth)) = cam.project(e.pos) else {
+        let Some((c, depth)) = cam.project(e.center()) else {
             return;
         };
         if depth > FAR {
             return;
         }
-        let r = cam.pixels(e.half[0].max(e.half[1]).max(e.half[2]) * 1.8, depth);
+        let r = cam.pixels(e.radius() * 1.8, depth);
         if c[0] + r < area.x
             || c[0] - r > area.x + area.w
             || c[1] + r < area.y
@@ -138,7 +141,7 @@ impl Viewport {
             out.rect(c[0] - 1.0, c[1] - 1.0, 2.0, 2.0, color, 0.0);
             return;
         }
-        let corners = Scene::corners(e);
+        let corners = e.corners();
         for (a, b) in EDGES {
             if let Some((p, q)) = cam.line(corners[a], corners[b]) {
                 out.line(p[0], p[1], q[0], q[1], lw, color);
@@ -148,9 +151,9 @@ impl Viewport {
 
     fn paint_2d(
         &self,
-        scene: &Scene,
+        drawables: &[Drawable],
         area: Area,
-        selected: Option<usize>,
+        selected: Option<Entity>,
         lw: f32,
         out: &mut PaintList,
     ) {
@@ -189,9 +192,9 @@ impl Viewport {
             );
             j += 1;
         }
-        for (k, e) in scene.entities.iter().enumerate() {
-            let c = cam.project(area, e.pos);
-            let (rx, rz) = (e.half[0] * cam.scale, e.half[2] * cam.scale);
+        for e in drawables {
+            let c = cam.project(area, e.center());
+            let (rx, rz) = (e.ext[0] * cam.scale, e.ext[2] * cam.scale);
             if c[0] + rx < area.x
                 || c[0] - rx > area.x + area.w
                 || c[1] + rz < area.y
@@ -199,7 +202,7 @@ impl Viewport {
             {
                 continue;
             }
-            let sel = selected == Some(k);
+            let sel = selected == Some(e.entity);
             if rx.max(rz) < 1.5 {
                 out.rect(c[0] - 1.0, c[1] - 1.0, 2.0, 2.0, e.color, 0.0);
                 continue;
@@ -218,40 +221,45 @@ impl Viewport {
 
     /// The entity under a touch at `(x, y)`, within `slop` pixels, nearest the
     /// camera when several qualify.
-    pub fn pick(&self, scene: &Scene, area: Area, x: f32, y: f32, slop: f32) -> Option<usize> {
-        let mut best: Option<(usize, f32)> = None;
+    pub fn pick(
+        &self,
+        drawables: &[Drawable],
+        area: Area,
+        x: f32,
+        y: f32,
+        slop: f32,
+    ) -> Option<Entity> {
+        let mut best: Option<(Entity, f32)> = None;
         if self.mode2d {
-            for (k, e) in scene.entities.iter().enumerate() {
-                let c = self.ortho.project(area, e.pos);
+            for e in drawables {
+                let c = self.ortho.project(area, e.center());
                 let (rx, rz) = (
-                    e.half[0] * self.ortho.scale + slop,
-                    e.half[2] * self.ortho.scale + slop,
+                    e.ext[0] * self.ortho.scale + slop,
+                    e.ext[2] * self.ortho.scale + slop,
                 );
                 if (x - c[0]).abs() <= rx && (y - c[1]).abs() <= rz {
                     let d = (x - c[0]).powi(2) + (y - c[1]).powi(2);
                     if is_better(best, d) {
-                        best = Some((k, d));
+                        best = Some((e.entity, d));
                     }
                 }
             }
         } else {
             let cam = Perspective::new(&self.orbit, area);
-            for (k, e) in scene.entities.iter().enumerate() {
-                let Some((c, depth)) = cam.project(e.pos) else {
+            for e in drawables {
+                let Some((c, depth)) = cam.project(e.center()) else {
                     continue;
                 };
                 if depth > FAR {
                     continue;
                 }
-                let r = cam
-                    .pixels(e.half[0].max(e.half[1]).max(e.half[2]), depth)
-                    .max(slop);
+                let r = cam.pixels(e.radius(), depth).max(slop);
                 if (x - c[0]).powi(2) + (y - c[1]).powi(2) <= r * r && is_better(best, depth) {
-                    best = Some((k, depth));
+                    best = Some((e.entity, depth));
                 }
             }
         }
-        best.map(|(k, _)| k)
+        best.map(|(e, _)| e)
     }
 }
 
@@ -259,6 +267,9 @@ impl Viewport {
 mod tests {
     use super::*;
     use crate::paint::{KIND_LINE, KIND_RECT};
+    use crate::world::EditorWorld;
+    use mid_ecs::World;
+    use mid_math::{Affine3, Vec3};
 
     const AREA: Area = Area {
         x: 0.0,
@@ -271,24 +282,40 @@ mod tests {
         p.items.iter().filter(|i| i.kind == kind).count()
     }
 
+    fn cubes(n: usize) -> Vec<Drawable> {
+        EditorWorld::demo(n).drawables().to_vec()
+    }
+
+    /// A unit box at `pos` standing for a fresh entity.
+    fn boxed(world: &mut World, pos: [f32; 3]) -> Drawable {
+        Drawable {
+            entity: world.spawn(),
+            xf: Affine3::from_translation(Vec3::new(pos[0], pos[1], pos[2])),
+            half: [0.5; 3],
+            ext: [0.5; 3],
+            color: 0xFF00_00FF,
+        }
+    }
+
     #[test]
     fn an_empty_3d_scene_still_draws_the_grid() {
         let mut out = PaintList::new();
-        Viewport::default().paint(&Scene::default(), AREA, None, 2.0, &mut out);
+        Viewport::default().paint(&[], AREA, None, 2.0, &mut out);
         assert_eq!(count(&out, KIND_LINE), 42, "21 lines each way");
     }
 
     #[test]
     fn each_visible_cube_adds_twelve_edges() {
         let mut out = PaintList::new();
-        Viewport::default().paint(&Scene::demo(1), AREA, None, 2.0, &mut out);
+        Viewport::default().paint(&cubes(1), AREA, None, 2.0, &mut out);
         assert_eq!(count(&out, KIND_LINE), 42 + 12);
     }
 
     #[test]
     fn the_selected_cube_is_drawn_last_in_the_selection_color_and_thicker() {
         let mut out = PaintList::new();
-        Viewport::default().paint(&Scene::demo(4), AREA, Some(2), 2.0, &mut out);
+        let boxes = cubes(4);
+        Viewport::default().paint(&boxes, AREA, Some(boxes[2].entity), 2.0, &mut out);
         let last = out.items.last().unwrap();
         assert_eq!(last.color, SELECTED);
         let first_cube_line = out
@@ -303,6 +330,16 @@ mod tests {
     }
 
     #[test]
+    fn a_selection_that_is_not_among_the_boxes_draws_nothing_extra() {
+        // Handles from another world: an index the two demo cubes do not use.
+        let mut world = World::new();
+        let stranger = (0..5).map(|_| world.spawn()).last().unwrap();
+        let mut out = PaintList::new();
+        Viewport::default().paint(&cubes(2), AREA, Some(stranger), 2.0, &mut out);
+        assert_eq!(out.items.iter().filter(|i| i.color == SELECTED).count(), 0);
+    }
+
+    #[test]
     fn tiny_far_cubes_become_dots() {
         let mut out = PaintList::new();
         let v = Viewport {
@@ -312,7 +349,7 @@ mod tests {
             },
             ..Viewport::default()
         };
-        v.paint(&Scene::demo(1), AREA, None, 2.0, &mut out);
+        v.paint(&cubes(1), AREA, None, 2.0, &mut out);
         assert_eq!(count(&out, KIND_RECT), 1);
         assert_eq!(count(&out, KIND_LINE), 42);
     }
@@ -328,7 +365,7 @@ mod tests {
             ..Viewport::default()
         };
         let mut out = PaintList::new();
-        v.paint(&Scene::demo(9), AREA, None, 2.0, &mut out);
+        v.paint(&cubes(9), AREA, None, 2.0, &mut out);
         assert!(out.items.iter().all(|i| i.a.is_finite() && i.b.is_finite()));
         assert_eq!(count(&out, KIND_RECT), 0);
         assert!(
@@ -346,7 +383,7 @@ mod tests {
             ..Viewport::default()
         };
         let mut out = PaintList::new();
-        v.paint(&Scene::demo(2), AREA, None, 2.0, &mut out);
+        v.paint(&cubes(2), AREA, None, 2.0, &mut out);
         assert!(count(&out, KIND_LINE) > 20 + 8);
         assert_eq!(count(&out, KIND_RECT), 2);
     }
@@ -362,7 +399,7 @@ mod tests {
             ..Viewport::default()
         };
         let mut out = PaintList::new();
-        v.paint(&Scene::default(), AREA, None, 2.0, &mut out);
+        v.paint(&[], AREA, None, 2.0, &mut out);
         assert!(count(&out, KIND_LINE) < 100, "{}", count(&out, KIND_LINE));
     }
 
@@ -393,18 +430,21 @@ mod tests {
     #[test]
     fn picking_finds_the_cube_under_a_touch_and_nothing_elsewhere() {
         let v = Viewport::default();
-        let scene = Scene::demo(1);
+        let boxes = cubes(1);
         let cam = Perspective::new(&v.orbit, AREA);
-        let (c, _) = cam.project(scene.entities[0].pos).unwrap();
-        assert_eq!(v.pick(&scene, AREA, c[0], c[1], 10.0), Some(0));
-        assert_eq!(v.pick(&scene, AREA, 5.0, 5.0, 10.0), None);
+        let (c, _) = cam.project(boxes[0].center()).unwrap();
+        assert_eq!(
+            v.pick(&boxes, AREA, c[0], c[1], 10.0),
+            Some(boxes[0].entity)
+        );
+        assert_eq!(v.pick(&boxes, AREA, 5.0, 5.0, 10.0), None);
     }
 
     #[test]
     fn picking_prefers_the_nearer_cube_when_two_overlap() {
-        let mut scene = Scene::demo(2);
-        scene.entities[0].pos = [0.0, 0.5, 0.0];
-        scene.entities[1].pos = [0.0, 0.5, 6.0];
+        let mut world = World::new();
+        let far = boxed(&mut world, [0.0, 0.5, 0.0]);
+        let near = boxed(&mut world, [0.0, 0.5, 6.0]);
         let v = Viewport {
             orbit: Orbit {
                 yaw: 0.0,
@@ -415,11 +455,11 @@ mod tests {
             ..Viewport::default()
         };
         let cam = Perspective::new(&v.orbit, AREA);
-        let (c, _) = cam.project(scene.entities[0].pos).unwrap();
+        let (c, _) = cam.project(far.center()).unwrap();
         assert_eq!(
-            v.pick(&scene, AREA, c[0], c[1], 30.0),
-            Some(1),
-            "entity 1 is nearer the camera"
+            v.pick(&[far, near], AREA, c[0], c[1], 30.0),
+            Some(near.entity),
+            "the second box is nearer the camera"
         );
     }
 
@@ -429,9 +469,32 @@ mod tests {
             mode2d: true,
             ..Viewport::default()
         };
-        let scene = Scene::demo(1);
-        let c = v.ortho.project(AREA, scene.entities[0].pos);
-        assert_eq!(v.pick(&scene, AREA, c[0] + 10.0, c[1] - 10.0, 0.0), Some(0));
-        assert_eq!(v.pick(&scene, AREA, c[0] + 100.0, c[1], 0.0), None);
+        let boxes = cubes(1);
+        let c = v.ortho.project(AREA, boxes[0].center());
+        assert_eq!(
+            v.pick(&boxes, AREA, c[0] + 10.0, c[1] - 10.0, 0.0),
+            Some(boxes[0].entity)
+        );
+        assert_eq!(v.pick(&boxes, AREA, c[0] + 100.0, c[1], 0.0), None);
+    }
+
+    #[test]
+    fn a_scaled_box_is_picked_by_its_scaled_extent() {
+        let mut world = World::new();
+        let mut big = boxed(&mut world, [0.0, 0.5, 0.0]);
+        big.ext = [3.0, 0.5, 3.0];
+        let v = Viewport {
+            mode2d: true,
+            ..Viewport::default()
+        };
+        let c = v.ortho.project(AREA, big.center());
+        let reach = 2.5 * v.ortho.scale;
+        assert_eq!(
+            v.pick(&[big], AREA, c[0] + reach, c[1], 0.0),
+            Some(big.entity)
+        );
+        let mut small = big;
+        small.ext = [0.5, 0.5, 0.5];
+        assert_eq!(v.pick(&[small], AREA, c[0] + reach, c[1], 0.0), None);
     }
 }

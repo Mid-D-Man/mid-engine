@@ -464,12 +464,25 @@ This is the Multiplayer-First mandate in practice: networking is baked into the 
 (`ComponentReflectError`, `EntityReflection`, `ReflectComponent`) exist only with the `reflect`
 feature (`docs/mid-ecs-reflect.md`).
 
+### `archetype.rs`
+
+**What it does:** the Archetype Core's storage: tables of components grouped by the set of types an
+entity holds, the registry of those archetypes, and the moves of an entity between them. It also
+backs `World::static_component_types` and `World::entities()` (`Archetypes::entities` walks every
+table), which the reflection bridge and the editor's play-mode snapshot use. Its other behavior is
+described in the sections of the features that use it; this file's section holds only what changed
+after those sections were written.
+
 ### `world.rs`
 
 **What it does:** `World`, `Entity` and the structural operations, with the typed access to both
 storages. `World::static_component_types(entity)` lists the `TypeId`s of an entity's Archetype Core
 components, and is always compiled; it is what the reflection bridge builds on
-(`docs/mid-ecs-reflect.md`, section "`world.rs`: `static_component_types`").
+(`docs/mid-ecs-reflect.md`, section "`world.rs`: `static_component_types`"). `World::entities()`
+yields every live entity once, archetype by archetype and row by row, so its order changes as entities
+move between archetypes. It lists entities with no components and entities with only Sparse Shell
+components, because every spawned entity sits in a table. The editor uses it to snapshot and restore
+a world; two tests cover it (every live entity once, and the despawned ones forgotten).
 
 ### `reflect.rs`
 

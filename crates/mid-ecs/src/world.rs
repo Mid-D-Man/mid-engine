@@ -344,6 +344,13 @@ impl World {
         self.entities.is_alive(entity.0)
     }
 
+    /// Every live entity, once each. The order is by archetype and row, so
+    /// it is not stable: it changes whenever an entity moves between
+    /// archetypes. Collect first to change the world while walking it.
+    pub fn entities(&self) -> impl Iterator<Item = Entity> + '_ {
+        self.archetypes.entities()
+    }
+
     /// Number of currently-live entities.
     #[inline]
     pub fn entity_count(&self) -> usize {
@@ -3262,5 +3269,47 @@ mod tests {
         assert_ne!(old, new);
         assert_eq!(w.static_component_types(old).count(), 0);
         assert_eq!(w.static_component_types(new).count(), 1);
+    }
+
+    #[test]
+    fn entities_lists_every_live_entity_once() {
+        struct P(u8);
+        struct Q(u8);
+        struct S(u8);
+        let mut w = World::new();
+        let bare = w.spawn();
+        let a = w.spawn();
+        let b = w.spawn();
+        let shell_only = w.spawn();
+        w.insert_static(a, P(1));
+        w.insert_static(b, P(2));
+        w.insert_static(b, Q(3));
+        w.insert(shell_only, S(4));
+        let mut listed: Vec<Entity> = w.entities().collect();
+        assert_eq!(listed.len(), w.entity_count());
+        listed.sort_by_key(|e| e.as_ffi());
+        let mut expected = vec![bare, a, b, shell_only];
+        expected.sort_by_key(|e| e.as_ffi());
+        assert_eq!(listed, expected);
+    }
+
+    #[test]
+    fn entities_forgets_the_despawned_and_follows_structural_changes() {
+        struct P(u8);
+        let mut w = World::new();
+        let a = w.spawn();
+        let b = w.spawn();
+        let c = w.spawn();
+        w.insert_static(a, P(1));
+        w.insert_static(c, P(3));
+        w.despawn(b);
+        w.remove_static::<P>(a);
+        let mut listed: Vec<Entity> = w.entities().collect();
+        listed.sort_by_key(|e| e.as_ffi());
+        let mut expected = vec![a, c];
+        expected.sort_by_key(|e| e.as_ffi());
+        assert_eq!(listed, expected);
+        assert!(w.entities().all(|e| w.is_alive(e)));
+        assert_eq!(World::new().entities().count(), 0);
     }
 }

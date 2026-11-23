@@ -36,7 +36,7 @@ deliveries). Anything below marked "sandbox only" has not run on real CI; that i
 | `mid-ui-mxui` | The `.mxui` loader (DixScript v1.0.0 documents describing a widget tree). With `web/mid-ui-wasm` and `web/ui` it forms a browser playground with a Canvas 2D backend |
 | `mid-reflect` | Built (`docs/mid-reflect.md`): a `Value` tree with JSON in and out, the `Reflect` trait, three declarative registration macros, `TypeRegistry` with type data, and an optional `math` feature. No dependencies; builds on 1.75. 70 integration tests with `math` and 4 doctests; sandbox only. The bridge to `mid-ecs` is built (`docs/mid-ecs-reflect.md`, feature `reflect` of `mid-ecs`; sandbox only) |
 | `tools/mid-cli` | Built (`docs/mid-cli.md`): the `mid` binary with `doctor`, `check`, `test`, `docs lint`, `apply` and `deliver`; its own workspace; 92 tests; sandbox only. The world commands wait for the ECS bridge and the remote protocol |
-| `mid-editor`, `mid-editor-ffi`, `apps/editor-android` | Built (`docs/mid-editor.md`, `docs/mid-editor-ffi.md`): the editor core (panels on `mid-ui`, a CPU-projected 3D and 2D viewport, touch gestures, edit and play modes, a demo scene), its C API, and a raylib 6.0 host with the Android build script and workflow. 85 Rust tests, 30 script checks and an eight-screenshot desktop session; sandbox only, never run on a phone. Not built: the ECS connection, scenes, undo, gizmos |
+| `mid-editor`, `mid-editor-ffi`, `apps/editor-android` | Built (`docs/mid-editor.md`, `docs/mid-editor-ffi.md`): the editor core (panels on `mid-ui`, a CPU-projected 3D and 2D viewport, touch gestures, edit and play modes, a demo scene held as a real `mid-ecs` world), its C API, and a raylib 6.0 host with the Android build script and workflow. 127 core tests plus the C API's, 30 script checks and an eight-screenshot desktop session; the first version ran on the phone, the world-backed one is sandbox only. Not built: scene files, editing and undo, gizmos |
 | `examples/`, `tools/` | `headless-server`, `custom-transport-demo`; `tools/mdix-compiler` |
 | `mid-nodes`, `mid-camera` | Not started. No crates, no design docs until this one (`docs/mid-nodes.md`) |
 
@@ -560,7 +560,7 @@ viewport is drawn from lists of lines and polygons projected on the CPU, with a 
 | | Milestone | Done when | Needs |
 |---|---|---|---|
 | M1 | **Terminal engine** | `mid` runs the development workflow with JSON output (built, sandbox only), starts a headless world, and lists, reads, edits and queries entities and components in it | T1b (built), then T3 and T4 |
-| M2 | **Editor panels on the phone** | A native app on the phone shows the hierarchy, inspector and console over an embedded world, and edits go through undoable commands. **Built as a shell over a demo scene (sandbox only), not the ECS** | T1b (built), U3, E1, and the app running on the phone |
+| M2 | **Editor panels on the phone** | A native app on the phone shows the hierarchy, inspector and console over an embedded world, and edits go through undoable commands. **Built over a real `mid-ecs` world (sandbox only; the phone ran the earlier flat-scene version): hierarchy, inspector through reflection, selection by entity, play with restore. Not built: edits and undo** | T1b (built), U3, E1, and the app running on the phone |
 | M3 | **Viewport v0** | The scene shows in the viewport (grid, wireframe and flat shapes), an orbit camera works by touch, a tap selects, a gizmo moves the selection, and hierarchy and inspector follow. **Built except the gizmo** | M2, V4, C1 |
 | M4 | **Content** | Scenes load and save, the project panel lists files, play mode enters and leaves | C2, C3, C5, E2 |
 | M5 | **Android app** | A CI-built APK installs on the phone and runs the editor natively, with files in app storage and a working soft keyboard. **The build exists and has not been run** | The first workflow run, then text entry |
@@ -613,15 +613,15 @@ not on this path.
 
 ### What to work on now, in order
 
-1. **Run the `Editor Android APK` workflow and install the app.** It is the largest unknown in the plan
-   and the only step that needs the maintainer's phone. The first run will probably find something in
-   the NDK, raylib or ARM part; the workflow keeps the logs. Then send the Console tab's numbers (frame
-   time, core time, paint items), at 12, 1000 and 5000 cubes. That is the cost of the CPU-projected
-   viewport on the real GPU and CPU.
-2. **Connect the editor to a real world.** T1b, the ECS bridge, is built (`docs/mid-ecs-reflect.md`).
-   Run the `mid-ecs 32-bit` workflow once: it is the check that `mid-ecs` passes on 32-bit x86 and
-   builds for the phone's architecture. Then the hierarchy and inspector read from a `World`, and
-   the command line's world commands can start.
+1. **Done: the `Editor Android APK` workflow built an app that installed and ran on the phone**
+   (version name 0.1.1, a Galaxy A13 4G, `armeabi-v7a`). The numbers and the observed problems are in
+   `docs/mid-editor.md`, "Verification status" and "Not built yet". What is left is the phone's view of
+   the world-backed editor, which is item 2.
+2. **Run the editor workflow again and look at it on the phone.** The editor now holds a real
+   `mid-ecs` world (`docs/mid-editor.md`), which puts the ECS and `rayon` into the 32-bit ARM build
+   for the first time. Check that the APK builds, that the hierarchy and inspector draw properly, and
+   send the Console numbers in play mode at 1000 and 5000 cubes. The command line's world commands
+   can start once the remote protocol exists.
 3. **E1 and V4:** edit commands with undo, and gizmos, so the editor can change something.
 4. **U2 and U3:** focus, scrolling and text entry, then the widget kit, so the panels stop drawing their
    own buttons.

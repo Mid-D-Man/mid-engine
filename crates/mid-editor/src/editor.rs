@@ -12,10 +12,11 @@ use mid_ui::{draw, layout, Color32, DrawCmd, Flow, NodeId, Size, Sizing, Style, 
 use crate::camera::Area;
 use crate::input::{Gesture, Phase, Tracker};
 use crate::paint::{rgba, PaintList};
-use crate::scene::Scene;
 use crate::stats::Stats;
 use crate::text::{fit, TextMeasure};
 use crate::viewport::{Viewport, SELECTED};
+use crate::world::{EditorWorld, HierarchyRow};
+use mid_ecs::Entity;
 
 const BG: u32 = rgba(0x1B, 0x1B, 0x1F, 0xFF);
 const BAR: u32 = rgba(0x26, 0x26, 0x2C, 0xFF);
@@ -75,7 +76,7 @@ enum Action {
     SetMode(Mode),
     Set2D(bool),
     SetTab(Tab),
-    Select(usize),
+    Select(Entity),
     SetCount(usize),
 }
 
@@ -144,19 +145,6 @@ impl Ui<'_> {
     }
 }
 
-/// How many parents an entity has, up to a limit that guards a cycle.
-fn depth_of(scene: &Scene, mut i: usize) -> usize {
-    let mut d = 0;
-    while let Some(p) = scene.entities.get(i).and_then(|e| e.parent) {
-        d += 1;
-        i = p;
-        if d >= 8 {
-            break;
-        }
-    }
-    d
-}
-
 fn area_of(tree: &Tree<f32>, id: NodeId) -> Area {
     tree.rect(id)
         .map(|r| Area {
@@ -193,12 +181,15 @@ pub struct Editor {
     unit: f32,
     mode: Mode,
     tab: Tab,
-    scene: Scene,
-    selected: Option<usize>,
+    world: EditorWorld,
+    selected: Option<Entity>,
+    /// How far the panel's list is scrolled, in pixels, and how far it can go.
+    scroll: f32,
+    scroll_max: f32,
+    rows: Vec<HierarchyRow>,
     viewport: Viewport,
     tracker: Tracker,
     stats: Stats,
-    play_time: f32,
     time: f32,
     paint: PaintList,
     hot: Vec<(Area, Action)>,
@@ -228,12 +219,14 @@ impl Editor {
             unit,
             mode: Mode::Edit,
             tab: Tab::Hierarchy,
-            scene: Scene::demo(CUBE_COUNTS[0]),
+            world: EditorWorld::demo(CUBE_COUNTS[0]),
             selected: None,
+            scroll: 0.0,
+            scroll_max: 0.0,
+            rows: Vec::new(),
             viewport: Viewport::default(),
             tracker: Tracker::new(10.0 * unit),
             stats: Stats::default(),
-            play_time: 0.0,
             time: 0.0,
             paint: PaintList::new(),
             hot: Vec::new(),
@@ -422,10 +415,15 @@ impl Editor {
                 if let Some(action) = action {
                     self.perform(action);
                 } else if vp.contains(x, y) {
-                    let hit = self.viewport.pick(&self.scene, vp, x, y, 20.0 * self.unit);
+                    let hit =
+                        self.viewport
+                            .pick(self.world.drawables(), vp, x, y, 20.0 * self.unit);
                     self.selected = hit;
-                    match hit.and_then(|i| self.scene.entities.get(i)) {
-                        Some(e) => self.log(format!("selected {}", e.name)),
+                    match hit {
+                        Some(e) => {
+                            let line = format!("selected {}", self.world.name_of(e));
+                            self.log(line);
+                        }
                         None => self.log("selection cleared".to_string()),
                     }
                 }
@@ -440,6 +438,9 @@ impl Editor {
                 self.last_touch = "drag".to_string();
                 if vp.contains(start_x, start_y) {
                     self.viewport.drag(dx, dy, vp.h);
+                } else if area_of(&self.tree, self.ids.panel).contains(start_x, start_y) {
+                    // A finger moving up moves the list up.
+                    self.scroll = (self.scroll - dy).clamp(0.0, self.scroll_max);
                 }
             }
             Gesture::Pinch {
@@ -462,9 +463,20 @@ impl Editor {
         match action {
             Action::SetMode(m) => {
                 self.mode = m;
-                if m == Mode::Edit {
-                    self.play_time = 0.0;
-                    self.scene.pose(0.0);
+                match m {
+                    Mode::Play => self.world.enter_play(),
+                    Mode::Edit => {
+                        if let Some(report) = self.world.exit_play() {
+                            let mut line = format!("restored {} entities", report.restored);
+                            if report.removed + report.lost + report.failed > 0 {
+                                line.push_str(&format!(
+                                    " ({} removed, {} lost, {} failed)",
+                                    report.removed, report.lost, report.failed
+                                ));
+                            }
+                            self.log(line);
+                        }
+                    }
                 }
                 self.log(format!("mode {m:?}"));
             }
@@ -472,16 +484,22 @@ impl Editor {
                 self.viewport.mode2d = on;
                 self.log(format!("view {}", if on { "2D" } else { "3D" }));
             }
-            Action::SetTab(t) => self.tab = t,
-            Action::Select(i) => {
-                if i < self.scene.len() {
-                    self.selected = Some(i);
+            Action::SetTab(t) => {
+                self.tab = t;
+                self.scroll = 0.0;
+            }
+            Action::Select(e) => {
+                if self.world.world().is_alive(e) {
+                    self.selected = Some(e);
                 }
             }
             Action::SetCount(n) => {
-                self.scene = Scene::demo(n);
+                self.world = EditorWorld::demo(n);
+                if self.mode == Mode::Play {
+                    self.world.enter_play();
+                }
                 self.selected = None;
-                self.play_time = 0.0;
+                self.scroll = 0.0;
                 self.log(format!("scene of {n} cubes"));
             }
         }
@@ -498,8 +516,15 @@ impl Editor {
         self.time += dt;
         let started = now();
         if self.mode == Mode::Play {
-            self.play_time += dt;
-            self.scene.pose(self.play_time);
+            self.world.step(dt);
+        } else {
+            self.world.refresh();
+        }
+        if self
+            .selected
+            .is_some_and(|e| !self.world.world().is_alive(e))
+        {
+            self.selected = None;
         }
         self.build_paint();
         if let Some(t) = started {
@@ -533,13 +558,13 @@ impl Editor {
     }
 
     /// The selected entity, if any.
-    pub fn selected(&self) -> Option<usize> {
+    pub fn selected(&self) -> Option<Entity> {
         self.selected
     }
 
-    /// The scene.
-    pub fn scene(&self) -> &Scene {
-        &self.scene
+    /// The world being edited.
+    pub fn world(&self) -> &EditorWorld {
+        &self.world
     }
 
     /// The viewport state.
@@ -564,6 +589,7 @@ impl Editor {
 
     fn build_paint(&mut self) {
         let u = self.unit;
+        self.world.refresh();
         self.paint.clear();
         self.hot.clear();
 
@@ -594,8 +620,13 @@ impl Editor {
         // The viewport, clipped to its own rectangle.
         let vp = areas.viewport;
         self.paint.push_clip(vp.x, vp.y, vp.w, vp.h);
-        self.viewport
-            .paint(&self.scene, vp, self.selected, u, &mut self.paint);
+        self.viewport.paint(
+            self.world.drawables(),
+            vp,
+            self.selected,
+            u,
+            &mut self.paint,
+        );
         let hud = format!(
             "{:.0} fps  {:.1} ms  core {:.1} ms",
             self.stats.fps(),
@@ -606,7 +637,7 @@ impl Editor {
             "{:?} | {} | {} cubes",
             self.mode,
             if self.viewport.mode2d { "2D" } else { "3D" },
-            self.scene.len()
+            self.world.box_count()
         );
         let measure: &dyn TextMeasure = &*self.measure;
         let size = 12.0 * u;
@@ -702,94 +733,110 @@ impl Editor {
             h: (p.h - 2.0 * pad).max(0.0),
         };
         ui.out.push_clip(p.x, p.y, p.w, p.h);
+        if !matches!(self.tab, Tab::Hierarchy | Tab::Inspector) {
+            self.scroll_max = 0.0;
+            self.scroll = 0.0;
+        }
         match self.tab {
             Tab::Hierarchy => {
                 let (ts, rh) = (16.0 * u, 48.0 * u);
                 ui.text(inner.x, inner.y, 13.0 * u, DIM, "SCENE");
                 let top = inner.y + 24.0 * u;
                 let cap = (((inner.y + inner.h) - top) / rh).floor().max(0.0) as usize;
-                let n = self.scene.len();
-                let shown = if n > cap && cap > 0 {
+                let total = self.world.row_count();
+                // The list scrolls a whole row at a time.
+                let max_first = total.saturating_sub(cap);
+                self.scroll_max = max_first as f32 * rh;
+                self.scroll = self.scroll.clamp(0.0, self.scroll_max);
+                let first = ((self.scroll / rh).round() as usize).min(max_first);
+                let rest = total - first;
+                let shown = if rest > cap && cap > 0 {
                     cap - 1
                 } else {
-                    n.min(cap)
+                    rest.min(cap)
                 };
-                for i in 0..shown {
+                self.world.hierarchy_rows(first, shown, &mut self.rows);
+                for (i, r) in self.rows.iter().enumerate() {
                     let row = Area {
                         x: p.x + u,
                         y: top + rh * i as f32,
                         w: p.w - 2.0 * u,
                         h: rh,
                     };
-                    if self.selected == Some(i) {
+                    if self.selected == Some(r.entity) {
                         ui.out
                             .rect(row.x, row.y, row.w, row.h, ROW_SELECTED, 6.0 * u);
                     }
-                    let indent = 16.0 * u * depth_of(&self.scene, i) as f32;
-                    let name = &self.scene.entities[i].name;
+                    let indent = 16.0 * u * r.depth.min(8) as f32;
                     ui.text_fit(
                         inner.x + indent,
                         row.y + (rh - ts) * 0.5,
                         ts,
                         TEXT,
                         inner.w - indent,
-                        name,
+                        &self.world.name_of(r.entity),
                     );
-                    ui.hot.push((row, Action::Select(i)));
+                    ui.hot.push((row, Action::Select(r.entity)));
                 }
-                if shown < n {
+                if first + shown < total {
                     ui.text(
                         inner.x,
                         top + rh * shown as f32 + (rh - 14.0 * u) * 0.5,
                         14.0 * u,
                         DIM,
-                        &format!("+ {} more", n - shown),
+                        &format!("+ {} more", total - first - shown),
                     );
                 }
             }
             Tab::Inspector => {
-                let (ts, rh) = (16.0 * u, 40.0 * u);
-                match self.selected.and_then(|i| self.scene.entities.get(i)) {
+                let (ts, rh) = (15.0 * u, 34.0 * u);
+                let selected = self.selected.filter(|e| self.world.world().is_alive(*e));
+                match selected {
                     Some(e) => {
-                        let rows = [
-                            e.name.clone(),
-                            format!(
-                                "Position  {:.2}  {:.2}  {:.2}",
-                                e.pos[0], e.pos[1], e.pos[2]
-                            ),
-                            format!(
-                                "Rotation Y  {:.0} deg",
-                                e.yaw.to_degrees().rem_euclid(360.0)
-                            ),
-                            format!(
-                                "Size  {:.2} x {:.2} x {:.2}",
-                                e.half[0] * 2.0,
-                                e.half[1] * 2.0,
-                                e.half[2] * 2.0
-                            ),
-                            format!(
-                                "Parent  {}",
-                                e.parent
-                                    .and_then(|p| self.scene.entities.get(p))
-                                    .map_or("Scene", |p| p.name.as_str())
-                            ),
-                        ];
-                        for (i, r) in rows.iter().enumerate() {
-                            ui.text_fit(
-                                inner.x,
-                                inner.y + rh * i as f32,
-                                ts,
-                                if i == 0 { TEXT } else { DIM },
-                                inner.w,
-                                r,
-                            );
+                        let title =
+                            format!("{}  #{}", self.world.name_of(e), e.as_ffi() & 0xFFFF_FFFF);
+                        ui.text_fit(inner.x, inner.y, 17.0 * u, TEXT, inner.w, &title);
+                        let top = inner.y + 36.0 * u;
+                        let rows = self.world.inspect(e);
+                        let visible = (((inner.y + inner.h) - top) / rh).floor().max(0.0) as usize;
+                        let max_first = rows.len().saturating_sub(visible);
+                        self.scroll_max = max_first as f32 * rh;
+                        self.scroll = self.scroll.clamp(0.0, self.scroll_max);
+                        let first = ((self.scroll / rh).round() as usize).min(max_first);
+                        let value_x = inner.x + inner.w * 0.42;
+                        for (i, row) in rows.iter().enumerate().skip(first).take(visible) {
+                            let y = top + rh * (i - first) as f32;
+                            if row.header {
+                                ui.out.rect(p.x + u, y, p.w - 2.0 * u, rh, BUTTON, 4.0 * u);
+                            }
+                            let x = inner.x + 14.0 * u * f32::from(row.indent);
+                            let ty = y + (rh - ts) * 0.5;
+                            let label_w = if row.text.is_empty() {
+                                inner.x + inner.w - x
+                            } else {
+                                (value_x - x - 6.0 * u).max(0.0)
+                            };
+                            let label_color = if row.header { TEXT } else { DIM };
+                            ui.text_fit(x, ty, ts, label_color, label_w, &row.label);
+                            if !row.text.is_empty() {
+                                let w = inner.x + inner.w - value_x;
+                                ui.text_fit(value_x, ty, ts, TEXT, w, &row.text);
+                            }
                         }
                     }
                     None => {
-                        ui.text_fit(inner.x, inner.y, ts, TEXT, inner.w, "Nothing selected.");
+                        self.scroll_max = 0.0;
                         ui.text_fit(
                             inner.x,
-                            inner.y + rh,
+                            inner.y,
+                            16.0 * u,
+                            TEXT,
+                            inner.w,
+                            "Nothing selected.",
+                        );
+                        ui.text_fit(
+                            inner.x,
+                            inner.y + 40.0 * u,
                             14.0 * u,
                             DIM,
                             inner.w,
@@ -797,7 +844,7 @@ impl Editor {
                         );
                         ui.text_fit(
                             inner.x,
-                            inner.y + rh * 1.6,
+                            inner.y + 64.0 * u,
                             14.0 * u,
                             DIM,
                             inner.w,
@@ -856,7 +903,7 @@ impl Editor {
                     ui.button(
                         a,
                         &n.to_string(),
-                        self.scene.len() == *n,
+                        self.world.box_count() == *n,
                         Action::SetCount(*n),
                     );
                 }
@@ -874,5 +921,49 @@ impl Editor {
 
         // The selection color is part of the legend of the viewport.
         let _ = SELECTED;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::text::FixedWidth;
+
+    fn editor() -> Editor {
+        Editor::new(1080.0, 2408.0, Box::new(FixedWidth(0.5)))
+    }
+
+    #[test]
+    fn a_selection_whose_entity_dies_is_cleared_at_the_next_frame() {
+        let mut e = editor();
+        let victim = e.world.find("Cube.002").unwrap();
+        e.selected = Some(victim);
+        e.world.world_mut().despawn(victim);
+        e.frame(0.016);
+        assert_eq!(e.selected, None);
+    }
+
+    #[test]
+    fn selecting_a_dead_entity_does_nothing() {
+        let mut e = editor();
+        let victim = e.world.find("Cube.002").unwrap();
+        e.world.world_mut().despawn(victim);
+        e.perform(Action::Select(victim));
+        assert_eq!(e.selected, None);
+    }
+
+    #[test]
+    fn the_inspector_ignores_a_selection_that_died_before_the_frame() {
+        let mut e = editor();
+        let victim = e.world.find("Cube.002").unwrap();
+        e.selected = Some(victim);
+        e.perform(Action::SetTab(Tab::Inspector));
+        e.world.world_mut().despawn(victim);
+        e.build_paint();
+        let p = e.paint();
+        assert!(p
+            .items
+            .iter()
+            .any(|i| p.text_of(i) == Some("Nothing selected.")));
     }
 }

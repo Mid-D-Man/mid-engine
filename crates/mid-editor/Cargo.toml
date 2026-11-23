@@ -11,6 +11,12 @@ crate-type = ["lib"]
 [dependencies]
 mid-math = { path = "../mid-math" }
 mid-ui   = { path = "../mid-ui" }
+# The scene is a real world (docs/mid-editor.md, "world.rs"): the ECS, the
+# app that steps it in play mode, and reflection for the inspector and the
+# play-mode snapshot.
+mid-ecs     = { path = "../mid-ecs", features = ["reflect"] }
+mid-app     = { path = "../mid-app" }
+mid-reflect = { path = "../mid-reflect", features = ["math"] }
 
 [features]
 # Forces mid-math's scalar vector backend, which is the one 32-bit ARM uses.

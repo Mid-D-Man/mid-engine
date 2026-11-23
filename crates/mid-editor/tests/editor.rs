@@ -52,6 +52,37 @@ fn drag(e: &mut Editor, from: (f32, f32), to: (f32, f32)) {
     e.frame(0.016);
 }
 
+/// Every box's world position, in a fixed order.
+fn positions(e: &Editor) -> Vec<(u64, [f32; 3])> {
+    let mut v: Vec<(u64, [f32; 3])> = e
+        .world()
+        .drawables()
+        .iter()
+        .map(|d| (d.entity.as_ffi(), d.center()))
+        .collect();
+    v.sort_by_key(|(id, _)| *id);
+    v
+}
+
+/// The numbers of the `Cube.NNN` rows on screen.
+fn visible_cube_numbers(e: &Editor) -> Vec<usize> {
+    texts(e)
+        .iter()
+        .filter_map(|s| s.strip_prefix("Cube."))
+        .filter_map(|n| n.parse().ok())
+        .collect()
+}
+
+/// Drags up (or down) in the panel `times` times, hard enough to cross many rows.
+fn scroll_panel(e: &mut Editor, up: bool, times: usize) {
+    let panel = e.areas().panel;
+    let (a, b) = (panel.y + panel.h - 60.0, panel.y + 60.0);
+    let (from, to) = if up { (a, b) } else { (b, a) };
+    for _ in 0..times {
+        drag(e, (panel.x + 200.0, from), (panel.x + 200.0, to));
+    }
+}
+
 fn texts(e: &Editor) -> Vec<String> {
     let p = e.paint();
     p.items
@@ -153,12 +184,13 @@ fn the_hierarchy_lists_the_cubes_and_a_tap_on_a_row_selects_it() {
     let mut e = editor(W, H);
     assert!(texts(&e).iter().any(|s| s == "Cube.002"));
     tap_text(&mut e, "Cube.002");
-    assert_eq!(e.selected(), Some(2));
+    assert_eq!(e.selected(), e.world().find("Cube.002"));
     tap_text(&mut e, "Inspector");
     let t = texts(&e);
-    assert!(t.iter().any(|s| s == "Cube.002"), "{t:?}");
-    assert!(t.iter().any(|s| s.starts_with("Position")));
-    assert!(t.iter().any(|s| s.starts_with("Size")));
+    assert!(t.iter().any(|s| s.starts_with("Cube.002  #")), "{t:?}");
+    for want in ["LocalTransform", "translation", "rotation", "scale"] {
+        assert!(t.iter().any(|s| s == want), "{want} in {t:?}");
+    }
 }
 
 #[test]
@@ -166,7 +198,7 @@ fn a_long_hierarchy_ends_with_a_count_of_the_rest() {
     let mut e = editor(W, H);
     tap_text(&mut e, "Console");
     tap_text(&mut e, "1000");
-    assert_eq!(e.scene().len(), 1000);
+    assert_eq!(e.world().box_count(), 1000);
     tap_text(&mut e, "Hierarchy");
     let more = texts(&e).into_iter().find(|s| s.starts_with("+ "));
     assert!(more.is_some_and(|s| s.ends_with(" more")));
@@ -177,7 +209,8 @@ fn tapping_a_cube_in_the_viewport_selects_it_and_tapping_empty_space_clears_it()
     let mut e = editor(W, H);
     let vp = e.areas().viewport;
     let cam = Perspective::new(&e.viewport().orbit, vp);
-    let (c, _) = cam.project(e.scene().entities[5].pos).unwrap();
+    let target = e.world().find("Cube.005").unwrap();
+    let (c, _) = cam.project(e.world().position_of(target).unwrap()).unwrap();
     tap(&mut e, c[0], c[1]);
     assert!(e.selected().is_some(), "a cube was under the finger");
     tap(&mut e, vp.x + 3.0, vp.y + vp.h - 3.0);
@@ -257,20 +290,20 @@ fn the_2d_button_switches_to_a_top_down_view_and_3d_switches_back() {
 #[test]
 fn play_mode_moves_the_world_and_edit_mode_puts_it_back() {
     let mut e = editor(W, H);
-    let rest: Vec<[f32; 3]> = e.scene().entities.iter().map(|x| x.pos).collect();
+    let rest = positions(&e);
     tap_text(&mut e, "Play");
     assert_eq!(e.mode(), Mode::Play);
     for _ in 0..30 {
         e.frame(0.033);
     }
-    let moved: Vec<[f32; 3]> = e.scene().entities.iter().map(|x| x.pos).collect();
+    let moved = positions(&e);
     assert_ne!(rest, moved);
     tap_text(&mut e, "Edit");
     assert_eq!(e.mode(), Mode::Edit);
-    let back: Vec<[f32; 3]> = e.scene().entities.iter().map(|x| x.pos).collect();
+    let back = positions(&e);
     assert_eq!(rest, back);
     e.frame(0.5);
-    let still: Vec<[f32; 3]> = e.scene().entities.iter().map(|x| x.pos).collect();
+    let still = positions(&e);
     assert_eq!(rest, still, "edit mode does not step the world");
 }
 
@@ -278,11 +311,11 @@ fn play_mode_moves_the_world_and_edit_mode_puts_it_back() {
 fn the_console_chips_change_the_cube_count_and_clear_the_selection() {
     let mut e = editor(W, H);
     tap_text(&mut e, "Cube.001");
-    assert_eq!(e.selected(), Some(1));
+    assert_eq!(e.selected(), e.world().find("Cube.001"));
     tap_text(&mut e, "Console");
     for n in [200usize, 5000, 12] {
         tap_text(&mut e, &n.to_string());
-        assert_eq!(e.scene().len(), n);
+        assert_eq!(e.world().box_count(), n);
         assert_eq!(e.selected(), None);
     }
 }
@@ -423,11 +456,9 @@ fn odd_frame_times_do_not_break_anything() {
         .items
         .iter()
         .all(|i| i.a.is_finite() && i.b.is_finite()));
-    assert!(e
-        .scene()
-        .entities
+    assert!(positions(&e)
         .iter()
-        .all(|x| x.pos.iter().all(|v| v.is_finite())));
+        .all(|(_, p)| p.iter().all(|v| v.is_finite())));
 }
 
 #[test]
@@ -452,4 +483,182 @@ fn the_area_helper_matches_what_the_editor_reports() {
         h: a.viewport.h,
     };
     assert!(a.viewport.contains(a.viewport.x + 1.0, a.viewport.y + 1.0));
+}
+
+#[test]
+fn children_are_indented_under_their_parent_in_the_hierarchy() {
+    let e = editor(W, H);
+    let root = find_text(&e, "Cube").expect("the root row");
+    let child = find_text(&e, "Cube.001").expect("a child row");
+    let grandchild = find_text(&e, "Cube.003").expect("a grandchild row");
+    assert!(child.0 > root.0, "{child:?} vs {root:?}");
+    assert!(grandchild.0 > child.0, "{grandchild:?} vs {child:?}");
+}
+
+#[test]
+fn dragging_in_the_hierarchy_scrolls_it_and_dragging_back_returns() {
+    let mut e = editor(W, H);
+    tap_text(&mut e, "Console");
+    tap_text(&mut e, "1000");
+    tap_text(&mut e, "Hierarchy");
+    assert!(find_text(&e, "Cube").is_some());
+    assert!(visible_cube_numbers(&e).iter().all(|n| *n < 20));
+    let yaw = e.viewport().orbit.yaw;
+
+    scroll_panel(&mut e, true, 12);
+    assert!(
+        find_text(&e, "Cube").is_none(),
+        "the first row scrolled away"
+    );
+    assert!(
+        visible_cube_numbers(&e).iter().any(|n| *n >= 30),
+        "{:?}",
+        visible_cube_numbers(&e)
+    );
+    assert_eq!(e.viewport().orbit.yaw, yaw, "a panel drag never orbits");
+    let more = texts(&e).into_iter().find(|s| s.starts_with("+ "));
+    assert!(more.is_some(), "rows remain below");
+
+    scroll_panel(&mut e, false, 12);
+    assert!(find_text(&e, "Cube").is_some(), "back at the top");
+}
+
+#[test]
+fn the_hierarchy_stops_scrolling_at_the_last_row() {
+    let mut e = editor(W, H);
+    tap_text(&mut e, "Console");
+    tap_text(&mut e, "200");
+    tap_text(&mut e, "Hierarchy");
+    scroll_panel(&mut e, true, 80);
+    assert!(
+        find_text(&e, "Cube.199").is_some(),
+        "the last row is reachable"
+    );
+    assert!(
+        texts(&e).iter().all(|s| !s.starts_with("+ ")),
+        "nothing is left below the last row"
+    );
+    scroll_panel(&mut e, true, 5);
+    assert!(
+        find_text(&e, "Cube.199").is_some(),
+        "scrolling further stays put"
+    );
+}
+
+#[test]
+fn tapping_a_row_after_scrolling_selects_that_row() {
+    let mut e = editor(W, H);
+    tap_text(&mut e, "Console");
+    tap_text(&mut e, "200");
+    tap_text(&mut e, "Hierarchy");
+    scroll_panel(&mut e, true, 10);
+    let n = *visible_cube_numbers(&e).iter().max().unwrap();
+    let name = format!("Cube.{n:03}");
+    tap_text(&mut e, &name);
+    assert_eq!(e.selected(), e.world().find(&name));
+}
+
+#[test]
+fn the_inspector_shows_the_selected_entitys_components_and_scrolls() {
+    let mut e = editor(W, H);
+    tap_text(&mut e, "Cube.003");
+    tap_text(&mut e, "Inspector");
+    let t = texts(&e);
+    assert!(t.iter().any(|s| s == "LocalTransform"), "{t:?}");
+    assert!(
+        t.iter().all(|s| s != "Bob"),
+        "the last component starts off screen"
+    );
+    // Cube.003 hangs under Cube.002 and the inspector says so by name.
+    scroll_panel(&mut e, true, 4);
+    let t = texts(&e);
+    assert!(t.iter().any(|s| s == "Name"), "{t:?}");
+    assert!(t.iter().any(|s| s == "Cube.002"), "{t:?}");
+    assert!(t.iter().any(|s| s == "Bob"), "{t:?}");
+    scroll_panel(&mut e, false, 4);
+    assert!(texts(&e).iter().any(|s| s == "LocalTransform"));
+}
+
+#[test]
+fn switching_tabs_puts_the_scroll_back_at_the_top() {
+    let mut e = editor(W, H);
+    tap_text(&mut e, "Console");
+    tap_text(&mut e, "200");
+    tap_text(&mut e, "Hierarchy");
+    scroll_panel(&mut e, true, 10);
+    assert!(find_text(&e, "Cube").is_none());
+    tap_text(&mut e, "Project");
+    tap_text(&mut e, "Hierarchy");
+    assert!(find_text(&e, "Cube").is_some());
+}
+
+#[test]
+fn the_selection_survives_play_and_the_console_says_what_was_restored() {
+    let mut e = editor(W, H);
+    tap_text(&mut e, "Cube.002");
+    let chosen = e.selected();
+    assert!(chosen.is_some());
+    tap_text(&mut e, "Play");
+    for _ in 0..20 {
+        e.frame(0.033);
+    }
+    tap_text(&mut e, "Edit");
+    assert_eq!(e.selected(), chosen);
+    tap_text(&mut e, "Console");
+    let t = texts(&e);
+    assert!(
+        t.iter().any(|s| s.starts_with("restored 12 entities")),
+        "{t:?}"
+    );
+}
+
+#[test]
+fn changing_the_cube_count_while_playing_keeps_playing_and_edit_still_restores() {
+    let mut rest: Vec<(u64, [f32; 3])> = mid_editor::world::EditorWorld::demo(200)
+        .drawables()
+        .iter()
+        .map(|d| (d.entity.as_ffi(), d.center()))
+        .collect();
+    rest.sort_by_key(|(id, _)| *id);
+    let mut e = editor(W, H);
+    tap_text(&mut e, "Play");
+    tap_text(&mut e, "Console");
+    tap_text(&mut e, "200");
+    assert!(e.world().is_playing());
+    for _ in 0..20 {
+        e.frame(0.033);
+    }
+    assert_ne!(rest, positions(&e), "the new world is being played");
+    tap_text(&mut e, "Edit");
+    assert!(!e.world().is_playing());
+    assert_eq!(rest, positions(&e));
+}
+
+#[test]
+fn an_empty_inspector_and_hierarchy_never_scroll_or_panic() {
+    let mut e = editor(W, H);
+    tap_text(&mut e, "Inspector");
+    scroll_panel(&mut e, true, 3);
+    assert!(texts(&e).iter().any(|s| s == "Nothing selected."));
+    tap_text(&mut e, "Hierarchy");
+    scroll_panel(&mut e, true, 3);
+    scroll_panel(&mut e, false, 3);
+    assert!(find_text(&e, "Cube").is_some(), "back at the top");
+}
+
+#[test]
+fn a_scroll_in_the_inspector_does_not_carry_over_to_the_hierarchy() {
+    let mut e = editor(W, H);
+    tap_text(&mut e, "Console");
+    tap_text(&mut e, "200");
+    tap_text(&mut e, "Hierarchy");
+    tap_text(&mut e, "Cube.003");
+    tap_text(&mut e, "Inspector");
+    scroll_panel(&mut e, true, 4);
+    assert!(texts(&e).iter().any(|s| s == "Bob"), "scrolled to the end");
+    tap_text(&mut e, "Hierarchy");
+    assert!(
+        find_text(&e, "Cube").is_some(),
+        "the hierarchy starts at its top"
+    );
 }
