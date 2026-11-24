@@ -539,6 +539,43 @@ renderer step that needs one.
 **Open:** where a project lives on the phone, and how it moves in and out of the repository it is
 worked from (`docs/mid-engine-app.md`, "Project storage").
 
+
+### Decision 14 (decided on 2026-11-24): `mid-ui` is painted by backend crates this repository owns
+
+**Context:** `docs/research-ui-comparison.md` compared `mid-ui` with Slint, Iced, Dioxus Native
+(Blitz), egui, msx and the canvas app by reading, and ended with nine questions. The maintainer
+answered them on 2026-11-24.
+
+**Decided:**
+
+1. Backend crates in this repository paint `mid-ui`, one layer above the core crates, and use
+   `mid-math` for the math (vectors, `Affine2`, `Mat3`, `Color32` and its color spaces, curves).
+   The `mid-ui` core stays free of any renderer and window.
+2. A CPU backend is implemented first. In a shipped build the GPU backend takes priority. The reason
+   given is the hardware the maintainer has.
+3. Two draw vocabularies stay: `DrawCmd` in `mid-ui` and the editor's paint list.
+4. Text: read the text stacks of the candidates, take what is needed, and write an own stack. Which
+   repositories are read first is open.
+5. `.mxui` grows expressions and bindings, in the role HTML and CSS have for a web page, for the
+   engine and for anything else that uses `mid-ui`.
+6. Android soft keyboard: both a native helper and an in-UI keypad. The helper's language, Java or
+   Kotlin, is open.
+7. An immediate-mode authoring layer for tools sits on top of the retained tree.
+8. The whole of `mid-engine` is open source with MidManStudio keeping ownership of it, on terms the
+   maintainer sets. Working rule that follows from answer 4: the candidates are read and
+   re-implemented, and vendoring any of their code needs its own decision.
+
+**Evidence added with the answers:** the canvas app (egui with `wgpu`, Vulkan, on `android-activity`)
+runs smoothly on the phone, by the maintainer's report; the adapter and the frame time are not
+known. The reason this roadmap gave for a GPU backend later was an entry-level GPU, so the report is
+new evidence for Decision 12, step 2, which stays as written until it is revised.
+
+**Open:** the helper language; the text sources to read first; which draw vocabulary the CPU backend
+consumes first; the expression language (its scope, and whether DixScript 2.0 or an own evaluator
+supplies it, given the dependency mandate for core crates); crate names and layout. On the phone
+`mid-math` appears to run its scalar backend: SIMD is selected for x86, x86_64, aarch64 and wasm32
+with `simd128`, and the `armv7` target is in none of those lists (`crates/mid-math/src/lib.rs`).
+
 ---
 
 ## The road to the engine app

@@ -323,6 +323,43 @@ with an existing backend without touching the core.
 9. Is an immediate-mode authoring layer wanted for tools (egui style, generated from reflection)
    on top of the retained tree, or is one retained model enough?
 
+
+## Answers and consequences (2026-11-24)
+
+The maintainer answered the nine questions. They are recorded as Decision 14 in `docs/roadmap.md`.
+
+| # | Answer | What follows |
+|---|---|---|
+| 1 | Backend crates owned here, using `mid-math` | The core stays renderer-free; backends sit one layer up; vectors, `Affine2`, `Mat3`, `Color32` and curves come from `mid-math` |
+| 2 | CPU backend implemented first; in a shipped build the GPU backend takes priority | The backend seam has to fit both; the CPU output is the reference the GPU output is compared with |
+| 3 | Two draw vocabularies | Which one the CPU backend consumes first is open; the editor converts today |
+| 4 | Read the candidates' repositories, take what is needed, write an own stack | Gap 1 becomes a reading task: font parsing, shaping, line breaking, glyph coverage or atlas; no third-party shaper by default |
+| 5 | `.mxui` grows expressions and bindings, as HTML and CSS are for a page, for any user of `mid-ui` | Needs an expression language spec; the evaluator lives outside the core crate (dependency mandate); the link to DixScript 2.0 is open |
+| 6 | Both a native helper and an in-UI keypad; asked why not Kotlin | See below |
+| 7 | The canvas app runs smoothly on the phone; details not remembered | `wgpu` with Vulkan is known to run there; adapter, limits and frame time are unknown, and a status line in the app would record them |
+| 8 | Open source, with MidManStudio keeping ownership | Read and re-implement; vendoring is a separate decision; Slint's GPLv3 and royalty-free terms (see Licensing) are a reason to read its code only |
+| 9 | An immediate-mode authoring layer is wanted | Needs stable node identity across frames (egui's `Id`, the binding keys of `.mxui`) and a diff of the emitted nodes into the retained tree; the Dioxus mutation stream is the same mechanism and could serve bindings too (proposal, not read in code) |
+
+### Checks made for the answers
+
+- **Slint's helper route** [src, `internal/backends/android-activity/javahelper.rs`]: the dex bytes are
+  embedded in the native library with `include_bytes!` and loaded at run time through
+  `InMemoryDexClassLoader`, with a `DexClassLoader` fallback that writes the dex to the code cache.
+  This path needs no `classes.dex` in the APK, so `android:hasCode="false"` in the editor's manifest
+  does not have to change by this route. It was not tried in this repository.
+- **Java or Kotlin.** Both go through the same dexer. For Java: a JDK is already a stated
+  requirement of `scripts/build_editor_android.sh` [src], and the only precedent read, Slint's, is one
+  Java file compiled by its build script [src]. For Kotlin: a Kotlin compiler is an extra build
+  tool, and the compiler's null-check helper classes have to be dexed in or switched off by flags
+  [gap, not verified here]. The runner-image release notes that were reachable list Java versions and
+  Android build-tools but showed no Kotlin line [gap, partial notes]. The lean: Java for a helper that
+  only does text input, Kotlin if the helper grows to cover more of the Android API surface. The
+  Rust or C side should call a small interface so that the language can change.
+- **`mid-math` on the phone.** SIMD is selected for x86, x86_64, aarch64 and wasm32 with `simd128`;
+  `armv7` is in none of those lists, so the 32-bit ARM phone appears to run the scalar backend
+  [src, `crates/mid-math/src/lib.rs`, cfg lists]. A CPU backend there is scalar until an `armv7`
+  backend exists.
+
 ## Sources
 
 - Slint: `LICENSE.md`; `docs/astro/src/content/docs/guide/backends-and-renderers/backends_and_renderers.mdx`,
