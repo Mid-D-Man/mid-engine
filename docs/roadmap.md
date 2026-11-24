@@ -627,6 +627,10 @@ not on this path.
    own buttons.
 5. **Decide the project path** (`docs/mid-engine-app.md`, "Project storage") and a rotation plan.
 6. **C1, `mid-nodes` phase 1,** when convenient.
+7. **Research.** The ECS comparison is written (`docs/research-ecs-comparison.md`: mid-ecs, bevy_ecs
+   and flecs, thirteen gaps ranked, a three-way benchmark designed and not built). The UI research
+   comes next: Slint, Iced, Dioxus Native, egui and the reference repos the maintainer named, with
+   `mid-ui` as the subject.
 
 ### What not to do yet, and why
 
