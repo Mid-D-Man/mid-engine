@@ -47,6 +47,12 @@ use std::time::Duration;
 
 use mid_net_transport::Transport;
 use mid_net_transport_quinn::QuinnTransport;
+
+// The driver and server C ABI of the `mid-net` facade (handshake, keepalive, NO SIGNAL, channels,
+// priorities, a multi-client server; opaque messages: see `mid-net/src/driver_ffi.rs` and
+// `mid-net/ffi-smoke-test/mid_net_driver.h`) is exported from this library too, so that a program links ONE
+// Rust static library: two would each carry their own copy of std. Nothing in it uses quinn or tokio.
+pub use mid_net::driver_ffi::*;
 use tokio::runtime::{Builder, Handle, Runtime};
 use tokio::sync::mpsc;
 use web_transport_quinn::proto::{ConnectRequest, ConnectResponse};

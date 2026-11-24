@@ -6,6 +6,10 @@ edition = "2021"
 # C ABI over the native QUIC/WebTransport transport. Kept out of the `mid-net`
 # facade on purpose: the facade stays free of quinn/tokio (see docs/mid-net.md,
 # "Crate Structure"). A native game that wants QUIC from C links this crate.
+# It also carries the facade's driver and server C ABI (`mid_net_driver_*`,
+# `mid_net_server_*`, `mid_net_schema_*`: see src/driver_ffi.rs of `mid-net`), because two
+# Rust static libraries cannot be linked into one program (each brings its own copy of
+# std and the linker meets every symbol twice): a game links this one library and has both.
 [lib]
 name = "mid_net_quic"
 crate-type = ["lib", "cdylib", "staticlib"]
@@ -18,6 +22,7 @@ aws-lc-rs = ["mid-net-transport-quinn/aws-lc-rs", "web-transport-quinn/aws-lc-rs
 ring = ["mid-net-transport-quinn/ring", "web-transport-quinn/ring", "rcgen/ring"]
 
 [dependencies]
+mid-net = { path = ".." }
 mid-net-transport = { path = "../transport" }
 mid-net-transport-quinn = { path = "../transport-quinn", default-features = false }
 web-transport-quinn = { version = "0.11", default-features = false }
