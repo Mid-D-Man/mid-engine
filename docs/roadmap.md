@@ -700,6 +700,8 @@ not on this path.
    fontdue and the egui text code sized by stage, five tiers of script support, eleven gaps ranked,
    a Latin glyph probe designed and not built, seven questions). All three are reading, not
    measuring.
+   A fourth note, `docs/research-ecs-from-a-c-game.md`, lists what a C game needs from an ECS (Tower
+   of Babylon chose flecs on 2026-11-25) and where `mid-ecs` stands against each item.
 
 ### What not to do yet, and why
 
