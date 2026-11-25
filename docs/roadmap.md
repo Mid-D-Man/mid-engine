@@ -570,7 +570,7 @@ runs smoothly on the phone, by the maintainer's report; the adapter and the fram
 known. The reason this roadmap gave for a GPU backend later was an entry-level GPU, so the report is
 new evidence for Decision 12, step 2, which stays as written until it is revised.
 
-**Open:** the helper language; the text sources to read first; which draw vocabulary the CPU backend
+**Open:** the helper language; the script scope for text (the sources are read in `docs/research-ui-text.md`); which draw vocabulary the CPU backend
 consumes first; the expression language (its scope, and whether DixScript 2.0 or an own evaluator
 supplies it, given the dependency mandate for core crates); crate names and layout. On the phone
 `mid-math` appears to run its scalar backend: SIMD is selected for x86, x86_64, aarch64 and wasm32
@@ -667,8 +667,11 @@ not on this path.
 7. **Research.** The ECS comparison is written (`docs/research-ecs-comparison.md`: mid-ecs, bevy_ecs
    and flecs, thirteen gaps ranked, a three-way benchmark designed and not built). The UI comparison
    is written too (`docs/research-ui-comparison.md`: Slint, Iced, Dioxus Native, egui, msx and the
-   canvas app, thirteen gaps ranked, a phone probe designed and not built, nine questions). Both
-   are reading, not measuring.
+   canvas app, thirteen gaps ranked, a phone probe designed and not built, nine questions). The text
+   comparison follows (`docs/research-ui-text.md`: Parley, HarfRust, Skrifa, cosmic-text, swash,
+   fontdue and the egui text code sized by stage, five tiers of script support, eleven gaps ranked,
+   a Latin glyph probe designed and not built, seven questions). All three are reading, not
+   measuring.
 
 ### What not to do yet, and why
 
