@@ -598,11 +598,24 @@ The maintainer answered some of them on 2026-11-25.
    symbols) and the wasm workflows `mid-ui-wasm-test.yml` and `mid-math-test-wasm.yml`. The exact
    shape per crate is still to be agreed when the crate exists.
 
-**Open:** the script scope for text (the question was not clear and is asked again in plain terms);
-where the text code lives; whether the CPU backend's shape rasterizer and the glyph rasterizer are one
+**Open:** where the text code lives; whether the CPU backend's shape rasterizer and the glyph rasterizer are one
 piece of code; where the editing model lives; how hinting is done, since Skrifa's TrueType interpreter
 (`glyf`, 11,989 lines) and automatic hinter (10,805 lines) show that this is a large piece
 (`docs/research-ui-text.md`).
+
+
+### Decision 16 (decided on 2026-11-25): text is Latin first and built for every script
+
+**Context:** the script-scope question of `docs/research-ui-text.md` was asked again in plain terms.
+
+**Decided:** the first text support is Latin. Every script will be handled eventually, because games
+need localization and `mid-ui` is meant primarily for a game engine. The text types are therefore
+designed from the first line for more than Latin: glyphs and clusters, not characters or bytes; a
+direction and a script on every run of text; no assumption of one glyph per character, left to right,
+or ASCII. What ships first is tier T1 of `docs/research-ui-text.md`; the tiers above it are added
+behind the same interfaces.
+
+**Open:** the order in which the later tiers come, which a real localization need will set.
 
 ---
 
@@ -698,9 +711,14 @@ not on this path.
    canvas app, thirteen gaps ranked, a phone probe designed and not built, nine questions). The text
    comparison follows (`docs/research-ui-text.md`: Parley, HarfRust, Skrifa, cosmic-text, swash,
    fontdue and the egui text code sized by stage, five tiers of script support, eleven gaps ranked,
-   a Latin glyph probe designed and not built, seven questions). All three are reading, not
-   measuring.
-   A fourth note, `docs/research-ecs-from-a-c-game.md`, lists what a C game needs from an ECS (Tower
+   a Latin glyph probe designed and not built, seven questions). Two more follow:
+   `docs/research-ui-hinting.md` (Skrifa's two hinting engines sized, the bundled font, the editor's
+   pixel sizes, one FreeType measurement, four options, four questions) and
+   `docs/research-ui-raster.md` (tiny-skia, Vello CPU, zeno, fontdue, font-rs and
+   `ab_glyph_rasterizer` against the editor's paint list, a first-crates sketch, a three-part probe,
+   five questions). The research documents are reading, not measuring, apart from the one hinting
+   measurement. Addenda cover `blaze-ecs` (in the ECS comparison) and the harness UI stack of the same
+   repository (in the UI comparison). A further note, `docs/research-ecs-from-a-c-game.md`, lists what a C game needs from an ECS (Tower
    of Babylon chose flecs on 2026-11-25) and where `mid-ecs` stands against each item.
 
 ### What not to do yet, and why

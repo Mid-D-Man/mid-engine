@@ -225,7 +225,7 @@ Recorded as Decision 15 in `docs/roadmap.md`.
 
 | # | Answer | What follows |
 |---|---|---|
-| 1 | The question was not clear to the maintainer | Asked again in plain terms: what must the UI display, and when |
+| 1 | The question was not clear to the maintainer; asked again in plain terms, the answer was Latin first, and every script eventually because of localization, `mid-ui` being meant primarily for a game engine | Decision 16: tier T1 ships first; the text types carry glyphs, clusters, direction and script from the start, so the higher tiers are added behind the same interfaces |
 | 2 | Tests may use dependencies as oracles | The probe's oracle plan stands (Skrifa for outlines and advances, fontdue and zeno for coverage); they are dev-dependencies, so no oracle crate appears in a core crate's `[dependencies]` |
 | 3 | Hinting is wanted | Hinting becomes a work item, not an option. Skrifa's `glyf` outline code with the TrueType interpreter is 11,989 lines and the automatic hinter 10,805 [src]; a first step is a scoping reading of those two, and the probe gains a hinted run checked against Skrifa |
 | 4 | Both bundled and system fonts | A fallback chain and Android font discovery are needed; Fontique's 218-line backend is the reference. System fonts widen what the reader must handle: Skrifa's README lists collections, CFF, CFF2 and variations among the formats it reads [doc] |

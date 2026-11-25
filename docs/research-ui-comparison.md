@@ -360,6 +360,61 @@ The maintainer answered the nine questions. They are recorded as Decision 14 in 
   [src, `crates/mid-math/src/lib.rs`, cfg lists]. A CPU backend there is scalar until an `armv7`
   backend exists.
 
+
+## Addendum: the harness UI stack in the blaze repository (2026-11-25, first pass)
+
+Found while reading `blaze-ecs` (see the addendum in `docs/research-ecs-comparison.md`).
+`crates/harness/` in `indexable-inc/blaze` (`2bbf1bc8`) holds a native macOS app and its UI stack,
+described as copied from `github.com/andrewgazelka/den` [doc, crate descriptions]. This pass read the
+crate descriptions, sizes, the doc comment of the layout crate and the head of `prims.flecs`. The
+`den` repository was not cloned [gap], and the renderer, shaders, text shaper, scroll physics and
+motion code were not read.
+
+| Crate | Role | Rust lines |
+|---|---|---|
+| `harness-native` | The app: AppKit and Metal, Slang shaders, a Flecs world of devices and objects | 40,816 |
+| `harness-native-render` | The Metal renderer, a text shaper and glyph atlas | 19,816 |
+| `harness-native-scroll-physics` | macOS scroll physics, said to match a default `NSScrollView` | 2,505 |
+| `harness-native-shaders` | The renderer's shaders in Rust | 2,421 |
+| `harness-native-ui-view` | Views as trees of entities, built from prefabs | 1,986 |
+| `harness-native-ui-layout` | One flex layout pass, "the Clay model", over node trees | 1,939 |
+| `harness-native-ecs` | A typed store over a vendored Flecs fork; builds for wasm32 | 1,887 |
+| `harness-native-ui-motion`, `-timeline` | Springs over components and relationships; timeline cues applied through reflection | 626, 92 |
+| `harness-native-ui-text-api`, `-input`, `-draw`, `-state-api` | Text and picture content, hit testing, the draw pass, one-of state relations | 445, 386, 285, 43 |
+
+What it shows [src unless marked]:
+
+- **UI as ECS.** A node is an entity. The primitives (`ui.Row`, `ui.Column`, `ui.Words` and others) are
+  Flecs prefabs declared in script files, `prims.flecs` being 758 lines. An instance states only what
+  differs from its prefab, as `title : ui.Words { Text: {s: "Hello"} }`, and the prefabs are made of
+  small components. This is the closest analogue read to `.mxui` as the HTML and CSS of the UI.
+- **Passes as systems.** Layout reads `Flex`, `Size`, `Padding`, `Aspect` and `Intrinsic` and writes
+  `Laid`. Draw reads the looks (`Fill`, `Edge`, `Shape`, `Lift`, `Frost`, `TextStyle`) and the content
+  (`Text`, `Icon`, `Picture`). Input reads `Pressable`, `Focusable`, `Editable` and `Cursor`, sets
+  `Hovered`, `Pressed` and `Focused`, and emits `Activated`. A layout root whose inputs are unchanged
+  since its last solve is left as it is.
+- **A size model with intrinsic sizes.** An axis is `Fit`, `Grow`, `Fixed` or `Percent`, with a value,
+  a minimum and a maximum. Text sizes arrive as an `Intrinsic` component that the host's typesetter
+  writes, which is the text measuring seam of Decision 11 expressed as data in the world.
+- **Motion and scripting through reflection.** Springs run over components and relationships, and a
+  timeline sets members of nodes through Flecs reflection, which is what the reflect bridge of this
+  project offers [doc, crate descriptions].
+- **Scope.** The stack is macOS only (AppKit, Metal), builds only with blaze, and sits on a vendored C
+  Flecs fork [doc]. It is a reference for architecture, not a candidate to depend on. Nothing in it
+  targets Android or 32-bit ARM.
+
+Relation to the decisions. `docs/mid-ui.md` keeps `mid-ui`'s tree off the ECS until it is
+benchmarked. This stack is the first example read of the other choice: nodes as entities, passes as
+systems, prefabs in a declarative script. Reasoning, not a finding: following that route in
+`mid-ecs` would need what the ECS comparison ranks as missing (names and paths, templates, run-time
+queries), and it fits the immediate-mode authoring layer and the bindings of Decision 14 less
+directly than a retained tree does.
+
+Questions for the maintainer from this addendum:
+
+1. Should `mid-ui` nodes stay outside the ECS, or become entities with the passes as systems?
+2. Should `.mxui` have prefabs with inheritance, so that an instance states only what differs?
+
 ## Sources
 
 - Slint: `LICENSE.md`; `docs/astro/src/content/docs/guide/backends-and-renderers/backends_and_renderers.mdx`,

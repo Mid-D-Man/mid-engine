@@ -379,6 +379,57 @@ existing `benches/ecs-vs-bevy-ecs`.
    should a query be allowed to see only the Archetype Core at first?
 6. Build the three-way harness now, or after the next ECS feature work?
 
+
+## Addendum: blaze-ecs (2026-11-25)
+
+The maintainer found `blaze-ecs` as a further reference. It was read once and in less depth than the
+three libraries above. It has no benchmark (the crate has no `benches` directory and no benchmark
+dependency [src]), so the finding "Performance evidence" stands unchanged.
+
+| Source | Commit | What was read |
+|---|---|---|
+| `indexable-inc/blaze` | `2bbf1bc8`, 2026-11-25 | `crates/blaze-ecs` (17,558 lines of Rust in `src`, of which `ui` is 2,697), `crates/blaze-ecs-wasm` (1,005), the manifests, the public API list of `world.rs`, the headers of `id.rs`, `query.rs`, `pipeline.rs`, `reactive.rs`, `explorer.rs`, `ui/mod.rs` |
+
+What it is: a Flecs-4.2-equivalent archetype ECS in Rust, `#![no_std]`, `#![forbid(unsafe_code)]` and
+"sans-IO" (no sockets, no ambient I/O), with an allocator type parameter on its types [src]. An entity
+is a 64-bit handle of a 32-bit slot and a 32-bit generation, with generation 0 meaning null [src].
+Tables are archetypes of safe structure-of-arrays columns with cached add and remove edges between
+tables [doc]. `DontFragment` tags and pairs are stored sparsely, with no table moves [src]. The crate
+cannot be used as a dependency of this project: its collections crate `blaze-own` turns on many unstable
+features, `blaze-ecs` uses `register_tool`, its rust-version is 1.101, and it depends on six crates of
+the blaze workspace (data, int, json, math, own, tab) [src]. Its license is MIT OR Apache-2.0 [src,
+workspace manifest]. It can be read and its ideas taken.
+
+What it shows for each of the gaps ranked above:
+
+| Gap | In blaze-ecs |
+|---|---|
+| 1 Run-time query by names | `QuerySpec` holds `With` and `Without` terms over ids (components, tags, exact and wildcard pairs), prefab filtering and a cascade order, built at run time; the Explorer endpoint `/api/query` takes `with` and `without` [src] |
+| 2 Statistics | `live_count`, `table_count`, `component_count`, and a `stats` map in the world snapshot [src]; system timing not found in the API list read [gap] |
+| 3 Remote protocol | A pure function `handle_request(world, method, path, body)` over a REST route set: `/api/world`, `/api/world.tab`, `/api/entity`, `/api/entity/{slot}` with component, tag and parent sub-routes, `/api/query` [src]; the routes follow the Flecs Explorer API in spirit [doc], entities are addressed by slot, not by path |
+| 4 Names and paths | `spawn_named`, `entity_by_name`, `set_name` [src]; a path syntax was not seen in the API list [gap] |
+| 5 Reserved ids in commands | No deferred command queue found: no `defer` or `Commands` match in `world.rs`, `pipeline.rs` or `fetch.rs` [gap] |
+| 6 Disabling | Not found in `world.rs` [gap] |
+| 7 Cloning and remapping | No clone found [gap]; `instantiate(prefab)` exists [src] |
+| 8 Relationships | First-class `(Rel, Target)` pairs, with `ChildOf` cascade, and the traits `Exclusive`, `Transitive`, `Symmetric`, `OnDeleteCascade`, `Traversable`, `Acyclic`, `OrderedChildren`; a typed `Relation` trait with `relate` and `unrelate` [src] |
+| 9 Required components and templates | Prefabs with `IsA` inheritance, `instantiate` and `get_inherited` [src]; required components in the Bevy sense not seen [gap] |
+| 10 Queries across both storages | `DontFragment` exists [src]; whether queries match it was not checked [gap] |
+| 11 Run-time components | `register_component(name)` and a variant with a schema, still tied to a Rust type [src] |
+| 12 Observer propagation | `OnAdd`, `OnSet` and `OnRemove` observers with exact and wildcard pair filters, a capped event buffer and callbacks [src]; propagation and replay of existing matches not seen [gap] |
+| 13 Table-level change counter | Each column keeps a changed tick per row and a `max_tick`, which lets a query skip a whole table in constant time; the world has `changed_since` and `each_changed` [src] |
+
+Also relevant to the UI work. `reactive.rs` (886 lines) holds `Signal`, `Memo` and effects with
+glitch-free push-pull propagation, written as the runtime target for UI components in the style of Solid
+and Svelte runes, plus incremental collection helpers [src, doc]. The crate's own Explorer UI mirrors a
+remote world into a client-side world and renders it from Rust compiled to wasm [doc]; see the addendum
+in `docs/research-ui-comparison.md`.
+
+Ideas to take, as proposals: per-row change ticks with a column maximum (gap 13); the shape of a pure
+request handler over the world for the remote protocol decision; deterministic world summaries and an
+invariant check as test oracles (`snapshot_tab` and `verify_invariants` exist [src]); signals for the
+`.mxui` bindings. Not read: the table move code, how `DontFragment` interacts with queries, and
+pipeline execution beyond its header.
+
 ## Sources
 
 - flecs: `docs/Queries.md` (caching, change detection), `docs/Relationships.md`,
