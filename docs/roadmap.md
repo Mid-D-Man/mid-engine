@@ -576,6 +576,34 @@ supplies it, given the dependency mandate for core crates); crate names and layo
 `mid-math` appears to run its scalar backend: SIMD is selected for x86, x86_64, aarch64 and wasm32
 with `simd128`, and the `armv7` target is in none of those lists (`crates/mid-math/src/lib.rs`).
 
+
+### Decision 15 (decided on 2026-11-25): text answers, `mid-math` on 32-bit ARM, FFI and wasm for the UI crates
+
+**Context:** `docs/research-ui-text.md` ended with seven questions and a side finding on `mid-math`.
+The maintainer answered some of them on 2026-11-25.
+
+**Decided:**
+
+1. Tests may use external crates as oracles (Skrifa, `ttf-parser`, HarfRust) as dev-dependencies. Core
+   crates keep zero dependencies in `[dependencies]`.
+2. Hinting is wanted.
+3. Android fonts: both bundled fonts and system fonts, with a fallback chain.
+4. `mid-math` stays scalar on 32-bit ARM for now. A hand-written armv7 backend will be built later; it
+   needs a nightly toolchain, because the NEON intrinsics and the `neon` target feature are unstable
+   on 32-bit ARM.
+5. The `.mxui` syntax is worked on alongside the backend and text work, not as a separate phase.
+6. The FFI surface and wasm testing of the new UI crates are handled as they are written. The
+   existing shape to follow: `mid-editor-ffi` (a `staticlib`, `unsafe` only in the FFI crate, every
+   entry point in `catch_unwind`, NULL-tolerant, a hand-written header checked against the exported
+   symbols) and the wasm workflows `mid-ui-wasm-test.yml` and `mid-math-test-wasm.yml`. The exact
+   shape per crate is still to be agreed when the crate exists.
+
+**Open:** the script scope for text (the question was not clear and is asked again in plain terms);
+where the text code lives; whether the CPU backend's shape rasterizer and the glyph rasterizer are one
+piece of code; where the editing model lives; how hinting is done, since Skrifa's TrueType interpreter
+(`glyf`, 11,989 lines) and automatic hinter (10,805 lines) show that this is a large piece
+(`docs/research-ui-text.md`).
+
 ---
 
 ## The road to the engine app

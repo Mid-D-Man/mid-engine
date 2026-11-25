@@ -218,6 +218,22 @@ The Latin glyph probe answers whether T1 is as small as fontdue suggests and how
 6. Should the CPU backend's shape rasterizer and the glyph rasterizer be one piece of code?
 7. Should the editing model (caret, selection, composition) be in the text crate or in the UI layer?
 
+
+## Answers and consequences (2026-11-25)
+
+Recorded as Decision 15 in `docs/roadmap.md`.
+
+| # | Answer | What follows |
+|---|---|---|
+| 1 | The question was not clear to the maintainer | Asked again in plain terms: what must the UI display, and when |
+| 2 | Tests may use dependencies as oracles | The probe's oracle plan stands (Skrifa for outlines and advances, fontdue and zeno for coverage); they are dev-dependencies, so no oracle crate appears in a core crate's `[dependencies]` |
+| 3 | Hinting is wanted | Hinting becomes a work item, not an option. Skrifa's `glyf` outline code with the TrueType interpreter is 11,989 lines and the automatic hinter 10,805 [src]; a first step is a scoping reading of those two, and the probe gains a hinted run checked against Skrifa |
+| 4 | Both bundled and system fonts | A fallback chain and Android font discovery are needed; Fontique's 218-line backend is the reference. System fonts widen what the reader must handle: Skrifa's README lists collections, CFF, CFF2 and variations among the formats it reads [doc] |
+| 5 to 7 | Not answered | Open: where the text code lives, whether the two rasterizers are one piece of code, where the editing model lives |
+
+The `mid-math` side finding is answered in the same decision: scalar for now, a hand-written armv7
+backend later on nightly.
+
 ## Side finding: `mid-math` on 32-bit ARM
 
 Asked on 2026-11-24 whether platform optimization for Android is possible in `mid-math`. It is, with
