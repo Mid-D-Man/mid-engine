@@ -1,6 +1,6 @@
 # mid-ui: where it stands, and the road to an editor on its own UI
 
-Status: **kept current**. First written 2026-11-25, at the end of the research phase. The plan is in
+Status: **kept current**. First written 2026-11-25, at the end of the research phase; last updated 2026-11-26 (B1 written). The plan is in
 `docs/mid-ui-roadmap.md`; this document says what exists, what does not, and what to do next. Evidence tags
 as in the roadmap: **[src]**, **[doc]**, **[gap]**, **[run]**, *reasoned*.
 
@@ -34,7 +34,7 @@ phone, has not been collected.
 
 | Need | State | Slice |
 |---|---|---|
-| Written contracts: pixel format, paint list, text types, measure | not started | B1 |
+| Written contracts: pixel format, paint list, text types, measure | written 2026-11-26 as `docs/mid-ui-contracts.md`, proposed, five open points for the maintainer | B1 |
 | Intrinsic, minimum and maximum sizes, wrap, lazy rows in the solver | not started | A1 |
 | A coverage rasterizer and blending | not started | A2 |
 | A CPU backend with a C API and a wasm export | not started | A3 |
@@ -96,8 +96,9 @@ the roadmap, section "Decisions needed from the maintainer".
 1. **P3: run the Editor Android APK workflow** with the world-backed editor on the phone and send the Console
    numbers. It tests the 32-bit ARM link with `mid-ecs` and `rayon` for the first time and gives the baseline
    that A3 and A9 are compared with.
-2. **B1: write the contracts** (`docs/mid-ui-contracts.md`): pixel format, paint list relation, text types,
-   measure contract.
+2. **B1: review the contracts** (`docs/mid-ui-contracts.md`, written 2026-11-26): pixel format, paint list
+   relation, text types, measure contract. Section 5 of that document lists five open points with defaults;
+   A2 to A4 wait on its answers.
 3. **A1: the solver's size model,** with a fake measure, pure and test-first. It does not wait on the node-model
    decision.
 4. **A2: the coverage rasterizer** skeleton with the `tiny-skia` oracle in dev-dependencies, once the pixel
