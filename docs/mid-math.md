@@ -338,3 +338,65 @@ not run under `force-scalar`, because the crate's test build does not compile
 there: `tests/wide_tests.rs` has type mismatches (`E0308`) under
 `--features force-scalar`, on unpatched main too and with no `mint` involved.
 Left alone.
+
+### `color/color32.rs`, rounding variants of the `Color32` helpers
+
+The helpers `premultiply`, `blend_over` and `scale_alpha` divide by 255 with
+truncation, so each result is up to one level darker than the nearest level, and
+every composite loses a little. They are unchanged. Next to each one there is now
+a `_rounded` variant, `premultiply_rounded`, `blend_over_rounded` and
+`scale_alpha_rounded`, that divides with rounding to the nearest level, ties up.
+All three use one function, `Color32::div255_round(x)`, which is
+`(x + 128 + ((x + 128) >> 8)) >> 8` and is exact for `x` in `0..=65025`.
+
+The reason is the UI renderer. `docs/mid-ui-contracts.md` (section 1) fixes
+that renderer on rounded division so its output can be compared byte for byte
+across architectures, and the maintainer asked on 2026-11-26 for the same choice
+to be available in mid-math. The default stays truncating because changing it
+would change results and benchmark numbers that other code already depends on.
+`blend_over_rounded` keeps the shape of `blend_over`: it is right for an opaque
+destination and is not a general over operator for translucent layers.
+
+The file also got a NOTICE header, which it did not have.
+
+Checked: 9 new tests in `src/tests/color32_rounded.rs` (see its own entry below). `div255_round` is compared with the
+exact rational `(2x + 255) / 510` for all 65,026 inputs; `premultiply_rounded` and
+`scale_alpha_rounded` for all 65,536 channel and alpha pairs; `blend_over_rounded`
+on a grid of 254 alphas by 52 by 52 gray levels; the rounded premultiply is never
+below the truncating one and at most one level above it; the endpoints
+(alpha 0 and 255) are kept; and the alpha sum in `blend_over_rounded` never
+exceeds 255, so its saturating add never clamps.
+
+### `ffi/color.rs`, the three rounded exports
+
+`mid_color32_premultiply_rounded`, `mid_color32_blend_over_rounded` and
+`mid_color32_scale_alpha_rounded` wrap the methods above, one line each, with
+the same argument and return types as the truncating exports beside them. The
+file got a NOTICE header, which it did not have. No new test: each export is a
+single call to a method the tests above cover.
+
+### `tests/color32_rounded.rs`, new
+
+The 9 tests for the rounded `Color32` helpers live in their own file, declared
+in `src/tests/mod.rs`, and not in `src/tests/color.rs`, because that file is not
+compiled (see the next entry). They use `crate::color::Color32` and the exact
+rational `(2x + 255) / 510` as the reference, so a wrong constant in
+`div255_round` shows up on the first mismatching input.
+
+### `tests/mod.rs`, nine test files are not declared and never run (found, not fixed)
+
+`src/tests/mod.rs` declares `mod color32_rounded;` now, and it did not declare
+`color.rs` (366 lines), `curves_bezier.rs` (214), `curves_bspline.rs` (171),
+`curves_cardinal.rs` (129), `curves_catmull_rom.rs` (172), `curves_hermite.rs`
+(147), `curves_kochanek_bartels.rs` (149), `prng.rs` (305) and `string_id.rs`
+(207) before this pass either. That is 1,860 lines of `#[test]` code that
+`cargo test -p mid-math` does not compile, in the same way `mid_vec.rs` was
+dead until the fix recorded above. There is no `crates/mid-math/tests`
+directory and no `#[path]` in `src/tests` that would pick them up elsewhere.
+`color.rs` starts with `use mid_math::{Rgb, Rgba, Color32};`, a path that does
+not resolve from inside the crate, which suggests the files once were
+integration tests and were moved without being wired in.
+
+Not checked: whether any of the nine compile or pass today. Declaring them is a
+separate change because failures in old code would then be mixed into this one.
+The file also got a NOTICE header, which it did not have.

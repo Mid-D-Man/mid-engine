@@ -1,7 +1,7 @@
 # mid-ui contracts: pixel format, paint list, text types, measure
 
-Status: **proposed**, for review by the maintainer. Written 2026-11-26 as slice B1 of
-`docs/mid-ui-roadmap.md`. Evidence tags as in the roadmap: **[src]** read in the source of this repository
+Status: **proposed**, with the maintainer's answers to its five open points applied (2026-11-26, section 5).
+Written 2026-11-26 as slice B1 of `docs/mid-ui-roadmap.md`. Evidence tags as in the roadmap: **[src]** read in the source of this repository
 (the file is named), **[doc]** stated in documentation, **[run]** measured in the sandbox, *reasoned*
 follows from what was read but was not tested. *Proposed* marks a rule that this document introduces and
 the maintainer has not yet confirmed. The provisional defaults of D3, D4, D9 and D14 in the roadmap's table
@@ -14,7 +14,8 @@ Four contracts, each small enough to test:
 1. **Pixels.** Surfaces are premultiplied `RGBA8`. Colors in the paint list stay straight sRGB and are
    converted once, at the edge. One integer rounding function, `div255`, is used everywhere, and every
    float coordinate becomes fixed point before any pixel work, so the output is the same bytes on every
-   architecture (D4, D14).
+   architecture (D4, D14). Blending runs on the encoded sRGB numbers by default, and a backend option
+   switches it to linear light.
 2. **The paint list.** `PaintItem` (36 bytes, five kinds) and `DrawCmd` stay two vocabularies. The CPU
    backend reads `PaintItem` first (D3). Two kinds are added, a positioned-glyph run and a slot for
    host-drawn content, and every consumer skips and counts a kind it does not know.
@@ -23,7 +24,8 @@ Four contracts, each small enough to test:
 4. **Measure.** A trait of four methods, the three of the harness stack plus the minimum content width. The
    measure returns what the renderer draws (D9).
 
-Nothing here needs code outside tests to settle. The open points are in section 5.
+Nothing here needs more code than the mid-math helpers of section 1.2 to settle. The maintainer's answers to
+the five open points are in section 5.
 
 ## 1. Pixel format and color
 
@@ -45,21 +47,58 @@ Nothing here needs code outside tests to settle. The open points are in section 
 | Surface | `RGBA8`, 4 bytes per pixel, bytes in the order R, G, B, A, origin top left, rows `stride` bytes apart. The stride is always passed explicitly and is never assumed to be `width * 4`. |
 | Alpha in surfaces | Premultiplied. The window surface is opaque in practice, where premultiplied and straight alpha agree. |
 | Colors in the paint list | Straight sRGB `Color32` or `0xRRGGBBAA`. Converted to premultiplied once, when the backend reads an item. |
-| Rounding | One function, `div255(x) = (x + 128 + ((x + 128) >> 8)) >> 8`, for `x` in `0..=65025`. It equals round-half-up of `x / 255`; all 65,026 inputs were compared against the exact rational in the sandbox [run]. |
+| Rounding | One function, `div255(x) = (x + 128 + ((x + 128) >> 8)) >> 8`, for `x` in `0..=65025`. It equals round-half-up of `x / 255`; all 65,026 inputs were compared against the exact rational in the sandbox [run]. It is `Color32::div255_round` in `mid-math`. |
 | Premultiply | `c' = div255(c * a)` per color channel; alpha unchanged. |
-| Over | Premultiplied source `s` on premultiplied destination `d`: `d' = s + div255(d * (255 - s.a))` per channel, alpha included. |
-| Coverage | An 8-bit value, 255 meaning fully covered. Applied to a premultiplied color as `div255(c * k)` per channel. |
-| Blend space | The encoded sRGB numbers are blended directly, with no conversion to linear light. Open, see section 5, question 1. |
+| Over, opaque destination (the framebuffer) | From the straight source `s` with alpha `a`: `d' = div255(s * a + d * (255 - a))` per color channel, destination alpha stays 255. One rounding, no premultiply step. This is `Color32::blend_over_rounded`. |
+| Over, translucent destination (layers, A12) | Premultiplied source `p = premultiply(s)` on premultiplied destination `d`: `d' = p + div255(d * (255 - s.a))` per channel, alpha included. Not used before A12. |
+| Coverage | An 8-bit value, 255 meaning fully covered. Over an opaque destination it scales the source alpha first, `a' = div255(a * k)`, and the over above then uses `a'`. This is `Color32::scale_alpha_rounded`. |
+| Blend space | A backend option, `BlendSpace::Srgb` (the default) or `BlendSpace::Linear`, fixed for a frame. Storage is the same sRGB-encoded `RGBA8` in both. Section 1.3 defines the linear mode. |
 | Pixel geometry | Pixel `(i, j)` covers `[i, i + 1)` by `[j, j + 1)`, y down. A rectangle with integer edges covers whole pixels at coverage 255 and adds no blending beyond its own alpha. |
 | Fixed point | Item coordinates are `f32`. Each is converted by `round(x * 256.0)` (ties away from zero) to a 24.8 fixed-point integer, saturating. A non-finite coordinate makes the item draw nothing. After that conversion only integer arithmetic is used. |
 | Float operations before the conversion | Add, subtract, multiply, divide, square root and comparison only. Their results are defined by IEEE 754 and agree on every target; sine, cosine, exponential, logarithm and power are library-defined and are not used before the conversion (*reasoned*). |
 | Golden images | Stored as raw `RGBA8` bytes with a hash. The bytes must be equal on x86_64, aarch64, armv7 and wasm32. This applies to the CPU backend only; the raylib host draws with its own float code and is not integer-exact. |
 
-The backend has its own `div255` and does not call `Color32::premultiply` or `Color32::blend_over`. Those
-keep truncating, because changing them changes mid-math results and benchmark numbers. For the same
-quotient, truncation and rounding differ by at most one level (*reasoned*), so the two agree on every value
-that is a multiple of 255 and are one level apart on some others. Whether mid-math should round too is
-question 2 in section 5.
+The backend calls `Color32::div255_round`. The truncating `Color32::premultiply`, `Color32::blend_over` and
+`Color32::scale_alpha` keep truncating, because changing them would change mid-math results and benchmark
+numbers. The maintainer asked on 2026-11-26 for rounding as an option in mid-math too, so `Color32` now has
+`premultiply_rounded`, `blend_over_rounded` and `scale_alpha_rounded` beside them, all on `div255_round`, with
+the C exports `mid_color32_premultiply_rounded`, `mid_color32_blend_over_rounded` and
+`mid_color32_scale_alpha_rounded` [src, `crates/mid-math/src/color/color32.rs` and `ffi/color.rs`, added with
+this document]. For the same quotient, truncation and rounding differ by at most one level (*reasoned*, and
+checked for `premultiply` over all 65,536 pairs by the new tests), so the two families agree on every value
+that is a multiple of 255 and are one level apart on some others.
+
+### 1.3 The linear-light option
+
+The maintainer asked on 2026-11-26 to have both blend spaces. The option changes only the arithmetic of the
+over. Surfaces, paint items and colors stay as in 1.2. The rules (proposed):
+
+- **Scope.** Opaque destinations only, the framebuffer case. A translucent destination in linear mode needs
+  premultiplied linear storage and is left to A12.
+- **Decode, `L(v)`.** A table of 256 `u16` entries: the sRGB transfer function (IEC 61966-2-1, with
+  `c = v / 255`, `c / 12.92` up to 0.04045 and `((c + 0.055) / 1.055)^2.4` above), scaled by 65535 and rounded
+  half up. The table is generated outside the crate in exact decimal arithmetic and checked in as constant
+  data, because power and exponential functions are not allowed in the pixel path (section 1.2). SHA-256 of
+  the 256 entries as little-endian `u16`:
+  `fdb7af3c01815a2118db8e50aac3c2304205ccc3f381f8976c588642c1aa60b6`. Checked [run]: `L(0) = 0`,
+  `L(255) = 65535`, strictly increasing, `L(1) = 20`, `L(2) = 40`, `L(128) = 14146`.
+- **Encode, `E(l)`.** The sRGB level nearest to `l` in the linear domain, ties to the lower level, through 255
+  thresholds `T[v] = (L[v] + L[v + 1]) / 2` (integer division) and a binary search of eight comparisons.
+  SHA-256 of the thresholds as little-endian `u16`:
+  `c094f907c4217d7ab90eb3ad0cc86caf2a04077855a5cce354562b3d7acce9c3`. Checked [run]: `E(L(v)) = v` for all
+  256 levels, and `E` equals a brute-force nearest search for all 65,536 inputs.
+- **Over.** Per color channel, `l = (L(s) * a + L(d) * (255 - a) + 127) / 255` in `u32` (the numerator is at
+  most 16,711,425), then `d' = E(l)`. Destination alpha stays 255. The division `(x + 127) / 255` is
+  round-half-up of `x / 255` for every integer `x`: the two could differ only if a multiple of 255 lay in
+  the half-open interval from `x + 127` to `x + 127.5`, and none does. A sampled comparison agreed on every
+  7th `x` up to 16,711,425 [run].
+- **Coverage.** As in 1.2: scale the source alpha, then the over.
+- **Difference in practice.** A source at 50 percent white (alpha 128) over black gives 188 in linear mode
+  and 128 in sRGB mode [run].
+- **Cost.** Two table reads and a binary search per channel against none in sRGB mode. Not measured
+  (*reasoned*).
+- **Tests and goldens.** The generator ships with A2, with the two checksums above as a test. One set of
+  golden images per mode.
 
 Not in scope: images, gradients, shadows and layers with their own alpha (A12).
 
@@ -104,9 +143,10 @@ The CPU backend reads `PaintItem` first. It is flat and C-compatible, already ha
 host speaks it. A new draw kind therefore lands in `PaintItem` first and in `DrawCmd` when `mid-ui`
 produces it.
 
-### 2.4 Kinds added (proposed)
+### 2.4 Kinds added (decided 2026-11-26)
 
-The item stays 36 bytes and kinds 0 to 4 keep their meaning.
+The maintainer answered yes to both kinds on 2026-11-26. The item stays 36 bytes and kinds 0 to 4 keep their
+meaning.
 
 | Kind | Value | Fields |
 |---|---|---|
@@ -185,6 +225,12 @@ Rules:
    advance, so a width stays honest (*reasoned*).
 6. A run has one font. Fallback to another font splits the run. Where the fallback logic lives is open.
 
+### 3.3 Where editing lives (decided 2026-11-26)
+
+The caret, the selection and composition (the text an input method is still building) live in the widget
+layer above the text crate. The text crate supplies the shaped runs and clusters of section 3.2 and holds no
+editing state.
+
 ## 4. The measure contract
 
 ### 4.1 The trait (proposed)
@@ -192,7 +238,7 @@ Rules:
 The harness stack's typesetter side is three methods: the width of a string on one line, the height of a
 string wrapped at a width, and the first and last baselines [src, `docs/research-ui-harness.md`]. The size
 model of A1 also asks for minimum sizes, and the width of the widest unbreakable piece of text cannot be
-derived from those three, so this contract adds a fourth.
+derived from those three, so this contract adds a fourth, as the maintainer confirmed on 2026-11-26.
 
 ```rust
 pub trait TextMeasure {
@@ -235,22 +281,24 @@ The single-method callback stays for hosts at tier T0. A second form is a struct
 with a version field first. A host that supplies only the old callback gets the other three methods
 estimated from its width. Existing hosts keep working (*reasoned*).
 
-## 5. Open points for the maintainer
+## 5. The maintainer's answers (2026-11-26)
 
-| # | Question, in plain words | Default taken here |
-|---|---|---|
-| 1 | Blend colors as the plain numbers stored in the image (sRGB), or convert to linear light and back? | Plain numbers. Exact, cheap, and no tables. Revisit if small text looks thin |
-| 2 | The backend rounds when it divides by 255, the mid-math color helpers truncate. Keep both, or change mid-math to round? | Keep both. The backend has its own function |
-| 3 | Add the glyph run and the custom slot as new paint kinds now? | Yes |
-| 4 | A fourth measure method, `min_content_width`? | Yes |
-| 5 | Where do the caret, the selection and composition (IME) live: the text crate, or the widget layer above it? | Not decided here. Nothing in sections 1 to 4 blocks either answer |
+| # | Question | Answer | Effect here |
+|---|---|---|---|
+| 1 | Blend in sRGB or in linear light | Both, as options | Section 1.3 defines the linear option; sRGB stays the default |
+| 2 | Rounding next to mid-math's truncating helpers | Add rounding options to mid-math too | `_rounded` helpers and C exports, section 1.2; the truncating ones are unchanged |
+| 3 | Glyph run and custom slot as new paint kinds | Yes | Section 2.4 |
+| 4 | A fourth measure method, `min_content_width` | Yes | Section 4.1 |
+| 5 | Where the caret, selection and composition live | The widget layer. The Android native parts are Kotlin, not Java, and are not reached yet | Section 3.3; D11 of the roadmap is Kotlin |
 
-D3, D4, D9 and D14 are used as the roadmap's provisional defaults. D5 and D6 do not change anything in this
-document.
+D3, the surface format of D4, D9 and D14 remain the roadmap's provisional defaults; no answer changed them.
+D5 and D6 do not change anything in this document.
 
 ## 6. What later slices check
 
-- **A2:** `div255` over all 65,026 inputs against the exact rational; coverage of an integer-edged
+- **A2:** `div255` over all 65,026 inputs against the exact rational; for the linear option, the two tables
+  against their checksums, `E(L(v)) = v`, equality with the brute-force nearest search, and 188 for the 50
+  percent white example, with golden images per mode; coverage of an integer-edged
   rectangle is 255 on its pixels and 0 outside; the fixed-point conversion at ties, saturation and
   non-finite input; equal bytes on x86_64, aarch64, armv7 and wasm32.
 - **A3:** `DrawCmd` to `PaintItem` conversion on all three kinds; bad lists as in section 2.5; unknown

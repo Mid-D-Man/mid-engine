@@ -76,6 +76,9 @@ Four small written contracts, each a page, each with the types spelled out.
 *Deliverable:* `docs/mid-ui-contracts.md`, reviewed by the maintainer. *Blocks:* A1 (the `Intrinsic` shape
 only), A2, A3, A4.
 
+*Status:* written and answered on 2026-11-26. The measure has four methods, not three (the minimum content
+width was added); the blend space is an option; `mid-math` gained rounded color helpers for it.
+
 ### B2. The node model, settled by a benchmark
 
 Three shapes: a standalone tree, nodes as entities with a pure solver, a pure solver with an ECS adapter
@@ -259,14 +262,14 @@ rasterizer.
 | D1 | The node model: standalone tree, nodes as entities with a pure solver, or a pure solver with an ECS adapter | A8, A6's shape | Leaning ECS (maintainer, 2026-11-25). Build the pure solver first; run the B2 benchmark; decide on its result |
 | D2 | `.mxui` prefabs with inheritance | B3 | DECIDED yes (2026-11-25) |
 | D3 | Which draw vocabulary the CPU backend consumes first | A3 | The editor's `PaintItem`, because it is flat, has lines and text, and the hosts already speak it |
-| D4 | Pixel format and color mapping | A2, A3 | Premultiplied `RGBA8`; `Color32` converted at the edge |
+| D4 | Pixel format and color mapping | A2, A3 | Premultiplied `RGBA8`; `Color32` converted at the edge. Blend space: both, sRGB by default and linear light as an option (answered 2026-11-26) |
 | D5 | The first hinting step | A10 | H1, a light vertical-only hinter for Latin, after the unhinted pipeline |
 | D6 | One coverage rasterizer for shapes and glyphs, or two | A2, A4 | One |
 | D7 | Where the text code lives, and the crate names | A4 | A crate of its own, depending on `mid-math` only; names open |
 | D8 | Hover, press, focus as relations on one entity or as fields of a UI state resource | B4, A5 | A UI state resource first; relations when `mid-ecs` has them |
 | D9 | Hinted against unhinted advances in the measure contract | B1, A1, A4 | The measure returns what the renderer draws |
 | D10 | The six ECS questions (relationships, names and paths, protocol shape, entity numbers on the wire, first run-time query scope, three-way benchmark) | B5, P2 | Needs the maintainer's call; the UI does not depend on all six |
-| D11 | The soft keyboard helper language | A10 | Java first; Kotlin if the helper grows |
+| D11 | The soft keyboard helper language | A10 | DECIDED Kotlin, not Java (2026-11-26); the work is not reached yet |
 | D12 | The primitive vocabulary: the explorer's needs alone, or also the harness stack's list | B3 | The explorer's needs, checked against that list |
 | D13 | The expression language: scope, where the evaluator lives, relation to DixScript 2.0 | B3, A7 | Small, outside the core crates, with a clean seam so DixScript 2.0 can supply it later |
 | D14 | Integer-exact output on every architecture | A2, golden images | Yes |

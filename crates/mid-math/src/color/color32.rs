@@ -1,4 +1,7 @@
-// crates/mid-math/src/color/color32.rs
+// ============================================================================
+// NOTICE: Full documentation, design decisions, and fix history for this file
+// live in docs/mid-math.md, section "color/color32.rs"
+// ============================================================================
 //! Packed sRGB u8 color — 4 bytes, the standard GPU upload format.
 
 use core::fmt;
@@ -135,6 +138,54 @@ impl Color32 {
             b: ((self.b as u32 * a) / 255) as u8,
             a: self.a,
         }
+    }
+
+    /// Divides `x` by 255, rounding to the nearest integer with ties going up.
+    ///
+    /// Exact for every `x` in `0..=65025`, which covers a product of two `u8`
+    /// values and a sum of two such products whose weights add up to 255.
+    /// Equal to `(2 * x + 255) / 510`, without the wide division.
+    #[inline]
+    pub const fn div255_round(x: u32) -> u32 {
+        (x + 128 + ((x + 128) >> 8)) >> 8
+    }
+
+    /// Same as [`Color32::premultiply`], but each channel is rounded to the
+    /// nearest level instead of truncated. Never darker than `premultiply`
+    /// and at most one level brighter.
+    #[inline]
+    pub fn premultiply_rounded(self) -> Self {
+        let a = self.a as u32;
+        Self {
+            r: Self::div255_round(self.r as u32 * a) as u8,
+            g: Self::div255_round(self.g as u32 * a) as u8,
+            b: Self::div255_round(self.b as u32 * a) as u8,
+            a: self.a,
+        }
+    }
+
+    /// Same as [`Color32::blend_over`], but each division by 255 rounds to the
+    /// nearest level instead of truncating. Like `blend_over` it treats `self`
+    /// as an opaque destination for the color channels.
+    #[inline]
+    pub fn blend_over_rounded(self, src: Self) -> Self {
+        if src.a == 255 { return src; }
+        if src.a == 0   { return self; }
+        let a  = src.a as u32;
+        let ia = 255 - a;
+        Self {
+            r: Self::div255_round(src.r as u32 * a + self.r as u32 * ia) as u8,
+            g: Self::div255_round(src.g as u32 * a + self.g as u32 * ia) as u8,
+            b: Self::div255_round(src.b as u32 * a + self.b as u32 * ia) as u8,
+            a: src.a.saturating_add(Self::div255_round(self.a as u32 * ia) as u8),
+        }
+    }
+
+    /// Same as [`Color32::scale_alpha`], but the alpha is rounded to the
+    /// nearest level instead of truncated.
+    #[inline]
+    pub fn scale_alpha_rounded(self, factor: u8) -> Self {
+        Self { a: Self::div255_round(self.a as u32 * factor as u32) as u8, ..self }
     }
 
     #[inline] pub fn with_alpha(self, a: u8) -> Self { Self { a, ..self } }

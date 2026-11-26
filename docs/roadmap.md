@@ -639,6 +639,26 @@ solver first and puts a benchmark of the three shapes ahead of the decision (D1 
 
 ---
 
+### Decision 18 (decided on 2026-11-26): answers on the UI contracts, B1
+
+**Context:** `docs/mid-ui-contracts.md` (pixel format, paint list, text types, measure) put five points to the
+maintainer.
+
+**Decided:**
+
+1. Blending has both spaces as options: sRGB by default, linear light as a backend setting. Both are
+   integer-exact (section 1.3 of the contracts).
+2. `mid-math` gets rounding options for its `Color32` helpers beside the truncating ones, which stay as they
+   are.
+3. The paint list gains a positioned-glyph kind and a custom-content kind.
+4. The measure has four methods: line width, wrapped height, baselines and the minimum content width.
+5. The caret, the selection and composition live in the widget layer above the text crate. The Android native
+   helper is written in Kotlin, not Java; that work is not reached yet.
+
+**Open:** the other decisions in the table of `docs/mid-ui-roadmap.md`.
+
+---
+
 ## The road to the engine app
 
 ### What "the engine app" is

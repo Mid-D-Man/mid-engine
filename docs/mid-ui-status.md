@@ -1,6 +1,6 @@
 # mid-ui: where it stands, and the road to an editor on its own UI
 
-Status: **kept current**. First written 2026-11-25, at the end of the research phase; last updated 2026-11-26 (B1 written). The plan is in
+Status: **kept current**. First written 2026-11-25, at the end of the research phase; last updated 2026-11-26 (B1 answered). The plan is in
 `docs/mid-ui-roadmap.md`; this document says what exists, what does not, and what to do next. Evidence tags
 as in the roadmap: **[src]**, **[doc]**, **[gap]**, **[run]**, *reasoned*.
 
@@ -26,6 +26,7 @@ phone, has not been collected.
 | The C host | `apps/editor-android/main.c`, raylib 6.0, one font atlas loaded at 64 pixels and scaled at draw time [src] |
 | On the phone | Only the earlier flat-scene editor ran on the Galaxy A13 4G (`armeabi-v7a`); at 5,000 cubes zoomed out it ran at 8.9 frames per second, and the host's rectangle submission, not the core, was the limit [doc]. The world-backed editor has not been built into an APK or run there |
 | `mid-math` on 32-bit ARM | Scalar. NEON is aarch64 only [src] |
+| `Color32` rounding | `div255_round`, `premultiply_rounded`, `blend_over_rounded`, `scale_alpha_rounded` and three C exports, added 2026-11-26 beside the truncating helpers; 9 tests (exhaustive where the input space is small) and 6 hand-made mutants caught [run] |
 | The canvas app | A separate paint app on egui and `wgpu` (Vulkan) over `android-activity`, which runs smoothly on the phone by the maintainer's report; adapter and frame time unknown |
 | Research | Six documents in `docs/research-ui-*.md` and the addenda in the ECS and UI comparisons |
 | Decisions | 14 (backend crates, order of work), 15 (oracles, hinting, fonts, FFI and wasm), 16 (script scope), 17 (prefabs, node-model leaning) in `docs/roadmap.md` |
@@ -34,7 +35,7 @@ phone, has not been collected.
 
 | Need | State | Slice |
 |---|---|---|
-| Written contracts: pixel format, paint list, text types, measure | written 2026-11-26 as `docs/mid-ui-contracts.md`, proposed, five open points for the maintainer | B1 |
+| Written contracts: pixel format, paint list, text types, measure | written and answered 2026-11-26 as `docs/mid-ui-contracts.md`; proposed, with the five open points settled | B1 |
 | Intrinsic, minimum and maximum sizes, wrap, lazy rows in the solver | not started | A1 |
 | A coverage rasterizer and blending | not started | A2 |
 | A CPU backend with a C API and a wasm export | not started | A3 |
@@ -84,11 +85,13 @@ collecting the phone baseline (P3).
 build; two draw vocabularies; text read from the candidates and written here; Latin first and built for every
 script; hinting wanted; bundled and system fonts; dev-dependency oracles in tests; `.mxui` as the HTML and CSS of
 the UI with prefabs and inheritance; FFI and wasm testing for every new UI crate; `mid-math` scalar on 32-bit ARM
-for now.
+for now. Answered 2026-11-26 (B1): blending runs in sRGB by default with linear light as an option; `mid-math`
+gets rounding options for its color helpers; a glyph-run and a custom-slot paint kind; a fourth measure method,
+the minimum content width; caret, selection and composition live in the widget layer; the Android native
+helper is Kotlin, not Java.
 
-**Open.** The node model (leaning ECS, to be settled by a benchmark); the pixel format and color mapping; which
-vocabulary the CPU backend consumes first; where the text code lives; how hinting starts; the soft keyboard helper's
-language; the expression language and its relation to DixScript 2.0; the six ECS questions. The full table is in
+**Open.** The node model (leaning ECS, to be settled by a benchmark); the surface format of the pixel contract; which
+vocabulary the CPU backend consumes first; where the text code lives; how hinting starts; the expression language and its relation to DixScript 2.0; the six ECS questions. The full table is in
 the roadmap, section "Decisions needed from the maintainer".
 
 ## 7. Next five actions
@@ -96,14 +99,13 @@ the roadmap, section "Decisions needed from the maintainer".
 1. **P3: run the Editor Android APK workflow** with the world-backed editor on the phone and send the Console
    numbers. It tests the 32-bit ARM link with `mid-ecs` and `rayon` for the first time and gives the baseline
    that A3 and A9 are compared with.
-2. **B1: review the contracts** (`docs/mid-ui-contracts.md`, written 2026-11-26): pixel format, paint list
-   relation, text types, measure contract. Section 5 of that document lists five open points with defaults;
-   A2 to A4 wait on its answers.
-3. **A1: the solver's size model,** with a fake measure, pure and test-first. It does not wait on the node-model
-   decision.
-4. **A2: the coverage rasterizer** skeleton with the `tiny-skia` oracle in dev-dependencies, once the pixel
-   format is written.
-5. **B2: the node-model benchmark** crate, once A1 gives it a solver to run in three shapes.
+2. **A1: the solver's size model,** with a fake measure, pure and test-first, against the four-method
+   measure of `docs/mid-ui-contracts.md` (B1, answered 2026-11-26). It does not wait on the node-model decision.
+3. **A2: the coverage rasterizer** skeleton with the `tiny-skia` oracle in dev-dependencies. The pixel contract
+   is written, including the linear-light option and its two tables.
+4. **B2: the node-model benchmark** crate, once A1 gives it a solver to run in three shapes.
+5. **mid-math: the nine test files that `tests/mod.rs` does not declare** (1,860 lines, found 2026-11-26, see
+   `docs/mid-math.md`): declare them and fix what fails. Not UI work, and in no plan before this.
 
 ## 8. How this was measured, and what was not
 

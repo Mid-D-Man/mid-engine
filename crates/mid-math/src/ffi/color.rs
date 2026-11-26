@@ -1,4 +1,7 @@
-// crates/mid-math/src/ffi/color.rs
+// ============================================================================
+// NOTICE: Full documentation, design decisions, and fix history for this file
+// live in docs/mid-math.md, section "ffi/color.rs"
+// ============================================================================
 //! C-ABI types and #[no_mangle] exports for color types.
 //!
 //! All color types that are already #[repr(C)] map directly to their
@@ -127,6 +130,15 @@ impl From<CYCbCr> for YCbCr {
 }
 #[no_mangle] pub extern "C" fn mid_color32_premultiply(c: CColor32) -> CColor32 {
     Color32::from(c).premultiply().into()
+}
+#[no_mangle] pub extern "C" fn mid_color32_blend_over_rounded(dst: CColor32, src: CColor32) -> CColor32 {
+    Color32::from(dst).blend_over_rounded(Color32::from(src)).into()
+}
+#[no_mangle] pub extern "C" fn mid_color32_scale_alpha_rounded(c: CColor32, factor: u8) -> CColor32 {
+    Color32::from(c).scale_alpha_rounded(factor).into()
+}
+#[no_mangle] pub extern "C" fn mid_color32_premultiply_rounded(c: CColor32) -> CColor32 {
+    Color32::from(c).premultiply_rounded().into()
 }
 #[no_mangle] pub extern "C" fn mid_color32_with_alpha(c: CColor32, a: u8) -> CColor32 {
     Color32::from(c).with_alpha(a).into()

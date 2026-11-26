@@ -1,4 +1,7 @@
-// crates/mid-math/src/tests/mod.rs
+// ============================================================================
+// NOTICE: Full documentation, design decisions, and fix history for this file
+// live in docs/mid-math.md, section "tests/mod.rs"
+// ============================================================================
 
 mod vec_tests;
 mod quat_tests;
@@ -15,3 +18,4 @@ mod geom;
 mod mid_vec;
 #[cfg(feature = "mint")]
 mod mint_tests;
+mod color32_rounded;
