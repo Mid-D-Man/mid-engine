@@ -617,6 +617,26 @@ behind the same interfaces.
 
 **Open:** the order in which the later tiers come, which a real localization need will set.
 
+
+### Decision 17 (decided on 2026-11-25): `.mxui` has prefabs with inheritance; the node model leans toward ECS
+
+**Context:** `docs/research-ui-harness.md` read the one UI stack in this series that keeps nodes in an ECS,
+and asked two questions.
+
+**Decided:**
+
+1. `.mxui` has prefabs with inheritance: an instance states only what differs from its prefab.
+2. The research phase of the UI is finished. The plan is `docs/mid-ui-roadmap.md` (tracks, order, decisions
+   needed) with `docs/mid-ui-status.md` kept current, arranged as the `ubel_stratum` roadmap and status
+   documents are: what must be covered before what, with the decisions that block each step.
+
+**Leaning (maintainer, not final):** nodes in the ECS, on the expectation that the ECS performs better. The
+reading does not settle it: the layout arithmetic runs on a flat array in every shape, and the project's CI
+currently records `mid-ecs` behind `bevy_ecs` on dense iteration on most runners. The roadmap builds the pure
+solver first and puts a benchmark of the three shapes ahead of the decision (D1 and D15 there).
+
+**Open:** the other decisions in the table of `docs/mid-ui-roadmap.md`.
+
 ---
 
 ## The road to the engine app
@@ -716,9 +736,11 @@ not on this path.
    pixel sizes, one FreeType measurement, four options, four questions) and
    `docs/research-ui-raster.md` (tiny-skia, Vello CPU, zeno, fontdue, font-rs and
    `ab_glyph_rasterizer` against the editor's paint list, a first-crates sketch, a three-part probe,
-   five questions). The research documents are reading, not measuring, apart from the one hinting
-   measurement. Addenda cover `blaze-ecs` (in the ECS comparison) and the harness UI stack of the same
-   repository (in the UI comparison). A further note, `docs/research-ecs-from-a-c-game.md`, lists what a C game needs from an ECS (Tower
+   five questions). `docs/research-ui-harness.md` reads the one UI stack with nodes as entities (the harness
+   of the blaze repository). The research documents are reading, not measuring, apart from the one hinting
+   measurement. Addenda cover `blaze-ecs` (in the ECS comparison) and the harness UI stack (in the UI
+   comparison). The plan that follows from all of it is `docs/mid-ui-roadmap.md`, with
+   `docs/mid-ui-status.md` kept current (Decision 17). A further note, `docs/research-ecs-from-a-c-game.md`, lists what a C game needs from an ECS (Tower
    of Babylon chose flecs on 2026-11-25) and where `mid-ecs` stands against each item.
 
 ### What not to do yet, and why

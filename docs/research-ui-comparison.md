@@ -365,7 +365,8 @@ The maintainer answered the nine questions. They are recorded as Decision 14 in 
 
 Found while reading `blaze-ecs` (see the addendum in `docs/research-ecs-comparison.md`).
 `crates/harness/` in `indexable-inc/blaze` (`2bbf1bc8`) holds a native macOS app and its UI stack,
-described as copied from `github.com/andrewgazelka/den` [doc, crate descriptions]. This pass read the
+described as copied from `github.com/andrewgazelka/den` [doc, crate descriptions]. A deeper read followed
+in `docs/research-ui-harness.md`; this pass read the
 crate descriptions, sizes, the doc comment of the layout crate and the head of `prims.flecs`. The
 `den` repository was not cloned [gap], and the renderer, shaders, text shaper, scroll physics and
 motion code were not read.
