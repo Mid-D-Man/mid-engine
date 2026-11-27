@@ -134,6 +134,13 @@ and `f64`, without recursion, and `wasm32`-clean, as today. *Done when* the text
 width, solve, repeat until no height moves) is tested with a fake measure, and the existing 62 tests and 12
 mutants still hold.
 
+*Status:* built on 2026-11-26. Two differences from the wording above. The text loop is not needed as a loop:
+the solver asks the `Measure` of `docs/mid-ui-contracts.md` directly, widths before heights, so one pass already
+ends where the loop would; the loop's stopping condition is what the tests check. `Percent` sizes and layout
+priority were left out, and the lazy row ranges are a pure function (`LazyRows`), not yet a node in the tree.
+The 62 earlier tests pass unchanged, and six mutants of the rewritten layout code are caught by those
+older tests alone; there are now 111 tests and 21 more mutants, all caught.
+
 ### A2. The coverage rasterizer
 
 Needs the pixel format from B1. A new pure crate depending on `mid-math` only: closed-form coverage for

@@ -36,7 +36,7 @@ phone, has not been collected.
 | Need | State | Slice |
 |---|---|---|
 | Written contracts: pixel format, paint list, text types, measure | written and answered 2026-11-26 as `docs/mid-ui-contracts.md`; proposed, with the five open points settled | B1 |
-| Intrinsic, minimum and maximum sizes, wrap, lazy rows in the solver | not started | A1 |
+| Intrinsic, minimum and maximum sizes, wrap, lazy rows in the solver | built 2026-11-26 in `mid-ui`: `Fit`, limits, shrinking, aspect, text-driven sizes through a `Measure`, `LazyRows` as a pure function; 111 tests, 21 mutants caught [run]; not run on CI or the phone | A1 |
 | A coverage rasterizer and blending | not started | A2 |
 | A CPU backend with a C API and a wasm export | not started | A3 |
 | Text: font reader, outlines, glyph masks, cache, measure | not started | A4 |
@@ -70,7 +70,7 @@ collecting the phone baseline (P3).
 
 | Area | Built | Partly | Not started |
 |---|---|---|---|
-| Layout core | anchors, flow, fill weights, hit test | | size model, lazy rows |
+| Layout core | anchors, flow, fill weights, hit test, the size model (`Fit`, limits, shrinking, aspect, measure) | lazy rows (a function, not yet attached to a scroller) | percent sizes, layout priority, grids, baselines |
 | Draw and paint | a draw list; a paint list; a host | | an own rasterizer, an own backend |
 | Text | a measure callback, a bundled font | | everything in tiers T1 to T4 |
 | Input | tap, drag, pinch | | focus, scroll, keyboard |
@@ -99,11 +99,11 @@ the roadmap, section "Decisions needed from the maintainer".
 1. **P3: run the Editor Android APK workflow** with the world-backed editor on the phone and send the Console
    numbers. It tests the 32-bit ARM link with `mid-ecs` and `rayon` for the first time and gives the baseline
    that A3 and A9 are compared with.
-2. **A1: the solver's size model,** with a fake measure, pure and test-first, against the four-method
-   measure of `docs/mid-ui-contracts.md` (B1, answered 2026-11-26). It does not wait on the node-model decision.
-3. **A2: the coverage rasterizer** skeleton with the `tiny-skia` oracle in dev-dependencies. The pixel contract
+2. **A2: the coverage rasterizer** skeleton with the `tiny-skia` oracle in dev-dependencies. The pixel contract
    is written, including the linear-light option and its two tables.
-4. **B2: the node-model benchmark** crate, once A1 gives it a solver to run in three shapes.
+3. **B2: the node-model benchmark** crate. A1 now gives it the pure solver (`solve.rs`, a flat breadth-first
+   list in, rectangles out) to run in the three node shapes.
+4. **B3 and B4:** the `.mxui` v1 vocabulary now that the size model exists (B3), then input (B4) before A5.
 5. **mid-math: the nine test files that `tests/mod.rs` does not declare** (1,860 lines, found 2026-11-26, see
    `docs/mid-math.md`): declare them and fix what fails. Not UI work, and in no plan before this.
 

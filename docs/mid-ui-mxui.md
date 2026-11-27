@@ -222,3 +222,13 @@ loader's own comments describe it. Fixed by decoding integers through the
 file's declared enums (`EnumTables`, `build_with`, `parse_str`), keeping real
 enum values working, adding tests for both forms, and making the e2e and
 playground failures print what the parser returned.
+
+### `dixscript_e2e`: `missing_root_and_broken_source_are_distinct_errors` fails (found 2026-11-26, not fixed)
+
+On an untouched clone of `main`, in the sandbox (rustc 1.97.1, the `dixscript`
+version `Cargo.lock` resolves there), `cargo test -p mid-ui-mxui --test
+dixscript_e2e` passes 9 tests and fails this one. The assertion at line 121
+expects the source `@DATA(` to come back as `MxErrorKind::Source(_)` and gets
+another kind. The cause was not investigated: it may be a change in what the
+`dixscript` parser reports for that input, or the loader mapping an error to the
+wrong kind. The other nine e2e tests and all 94 other `mid-ui-mxui` tests pass.

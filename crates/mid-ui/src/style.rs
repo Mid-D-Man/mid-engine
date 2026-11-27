@@ -73,10 +73,16 @@ pub enum Sizing<R: Real = f32> {
     /// An exact size. Negative values are treated as zero.
     Fixed(R),
     /// Take the available space. On a row's or column's main axis the
-    /// available space left after fixed-size siblings is shared between
-    /// `Fill` siblings in proportion to their weights; on every other axis
+    /// available space left after fixed-size and fit siblings is shared
+    /// between `Fill` siblings in proportion to their weights, with each
+    /// share held inside the node's minimum and maximum; on every other axis
     /// the weight is ignored and the node takes all the available space.
     Fill(R),
+    /// Size to the content: the widest line of a leaf's text, the children of
+    /// a container, plus padding. When the space is short the node gives up
+    /// room down to its minimum content width (a height never shrinks below
+    /// its content) and no further.
+    Fit,
 }
 
 impl<R: Real> Sizing<R> {
@@ -115,6 +121,19 @@ pub struct Style<R: Real = f32> {
     pub background: Color32,
     /// Corner radius of the background fill.
     pub radius: R,
+    /// Smallest width, whatever the width rule says. Wins over `max_width`.
+    pub min_width: R,
+    /// Smallest height, whatever the height rule says. Wins over `max_height`.
+    pub min_height: R,
+    /// Largest width; `None` for no limit.
+    pub max_width: Option<R>,
+    /// Largest height; `None` for no limit.
+    pub max_height: Option<R>,
+    /// Width divided by height. With `height: Fit` the height becomes the
+    /// width over this ratio; with `width: Fit` and a fixed height the width
+    /// becomes the height times it. Zero, negative and non-finite values are
+    /// ignored.
+    pub aspect: Option<R>,
 }
 
 impl<R: Real> Default for Style<R> {
@@ -132,6 +151,11 @@ impl<R: Real> Default for Style<R> {
             clip: false,
             background: Color32::TRANSPARENT,
             radius: R::ZERO,
+            min_width: R::ZERO,
+            min_height: R::ZERO,
+            max_width: None,
+            max_height: None,
+            aspect: None,
         }
     }
 }
@@ -167,5 +191,7 @@ mod tests {
         assert!(s.visible && !s.interactive && !s.clip);
         assert_eq!(s.flow, Flow::Stack);
         assert!(s.background.is_transparent());
+        assert_eq!((s.min_width, s.min_height), (0.0, 0.0));
+        assert_eq!((s.max_width, s.max_height, s.aspect), (None, None, None));
     }
 }

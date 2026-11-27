@@ -4,6 +4,7 @@
 // ============================================================================
 //! The widget tree: an arena of nodes addressed by generational ids.
 
+use crate::measure::ContentKey;
 use crate::geom::Rect;
 use crate::real::Real;
 use crate::style::Style;
@@ -21,6 +22,7 @@ struct Node<R: Real> {
     children: Vec<NodeId>,
     style: Style<R>,
     rect: Rect<R>,
+    content: Option<ContentKey>,
 }
 
 struct Slot<R: Real> {
@@ -43,7 +45,7 @@ impl<R: Real> Tree<R> {
     /// Creates a tree containing only a root node with the given style.
     pub fn new(root_style: Style<R>) -> Self {
         let root = NodeId { index: 0, generation: 0 };
-        let node = Node { parent: None, children: Vec::new(), style: root_style, rect: Rect::ZERO };
+        let node = Node { parent: None, children: Vec::new(), style: root_style, rect: Rect::ZERO, content: None };
         Self { slots: vec![Slot { generation: 0, node: Some(node) }], free: Vec::new(), root, len: 1 }
     }
 
@@ -70,7 +72,7 @@ impl<R: Real> Tree<R> {
         if !self.contains(parent) {
             return None;
         }
-        let node = Node { parent: Some(parent), children: Vec::new(), style, rect: Rect::ZERO };
+        let node = Node { parent: Some(parent), children: Vec::new(), style, rect: Rect::ZERO, content: None };
         let id = match self.free.pop() {
             Some(index) => {
                 let slot = &mut self.slots[index as usize];
@@ -139,6 +141,24 @@ impl<R: Real> Tree<R> {
     /// first pass. Hidden nodes keep whatever they had before they were hidden.
     pub fn rect(&self, id: NodeId) -> Option<Rect<R>> {
         self.node(id).map(|n| n.rect)
+    }
+
+    /// What a [`Measure`](crate::measure::Measure) is asked about for this
+    /// node, if anything. Only used while the node has no visible children.
+    pub fn content(&self, id: NodeId) -> Option<ContentKey> {
+        self.node(id).and_then(|n| n.content)
+    }
+
+    /// Sets or clears the node's content key. Returns `false` for a stale id,
+    /// in which case nothing changes.
+    pub fn set_content(&mut self, id: NodeId, content: Option<ContentKey>) -> bool {
+        match self.node_mut(id) {
+            Some(n) => {
+                n.content = content;
+                true
+            }
+            None => false,
+        }
     }
 
     pub(crate) fn set_rect(&mut self, id: NodeId, rect: Rect<R>) {

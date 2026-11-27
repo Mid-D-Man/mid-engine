@@ -36,12 +36,17 @@ pub mod draw;
 pub mod geom;
 pub mod hit;
 pub mod layout;
+pub mod lazy;
+pub mod measure;
 pub mod real;
+mod solve;
 pub mod style;
 pub mod tree;
 
 pub use draw::DrawCmd;
 pub use geom::{Insets, Point, Rect, Size};
+pub use lazy::LazyRows;
+pub use measure::{ContentKey, Measure, NoMeasure};
 pub use mid_math::Color32;
 pub use real::Real;
 pub use style::{Anchor, Flow, Sizing, Style};
