@@ -1,0 +1,133 @@
+# .github/workflows/mid-raster-test.yml
+#
+# workflow_dispatch only, per docs/RUST_AND_CRATE_GUIDELINES.md section 7.
+# Cache keys are scoped to this crate and the runner OS, and ~/.cargo/bin/ is
+# not cached (same failure documented there for mid-ptr-test.yml).
+
+name: mid-raster — Tests
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  run-tests:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # mid-raster depends on mid-math, which needs a toolchain newer than the
+      # workspace's rustc-1.75 floor; @stable is always past that.
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Toolchain check
+        run: |
+          rustc --version
+          cargo --version
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+          key: cargo-registry-mid-raster-${{ runner.os }}-${{ hashFiles('crates/mid-raster/Cargo.toml') }}
+          restore-keys: |
+            cargo-registry-mid-raster-${{ runner.os }}-
+
+      - name: Check formatting
+        run: cargo fmt -p mid-raster --check
+        continue-on-error: true
+
+      - name: Clippy
+        run: cargo clippy -p mid-raster --all-targets --no-deps -- -D warnings
+        continue-on-error: true
+
+      - name: Build
+        run: cargo build -p mid-raster
+
+      - name: Run unit, integration and doc tests
+        run: |
+          set -o pipefail
+          cargo test -p mid-raster --color=never --no-fail-fast 2>&1 | tee mid-raster-test-raw.txt
+
+      - name: Summary
+        if: always()
+        run: |
+          read passed failed < <(awk '/^test result:/ { p += $4; f += $6 } END { print p + 0, f + 0 }' mid-raster-test-raw.txt)
+          {
+            echo "## mid-raster tests"
+            echo ""
+            echo "- Toolchain: $(rustc --version)"
+            echo "- Passed: ${passed}"
+            echo "- Failed: ${failed}"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  wasm32-check:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+          key: cargo-registry-mid-raster-wasm-${{ runner.os }}-${{ hashFiles('crates/mid-raster/Cargo.toml') }}
+          restore-keys: |
+            cargo-registry-mid-raster-wasm-${{ runner.os }}-
+
+      - name: Check wasm32 build
+        run: cargo check -p mid-raster --target wasm32-unknown-unknown
+
+  wasm32-hashes:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+          key: cargo-registry-mid-raster-wasm-hash-${{ runner.os }}-${{ hashFiles('crates/mid-raster/tools/wasm-hash/Cargo.toml') }}
+          restore-keys: |
+            cargo-registry-mid-raster-wasm-hash-${{ runner.os }}-
+
+      # The golden hashes pinned in tests/golden/scenes.rs came from x86_64.
+      # This builds the same scenes into a wasm32 module and compares.
+      - name: Build the hash module
+        run: >
+          cargo build --release --target wasm32-unknown-unknown
+          --manifest-path crates/mid-raster/tools/wasm-hash/Cargo.toml
+
+      - name: Compare the hashes under node
+        run: >
+          node crates/mid-raster/tools/wasm-hash/check.mjs
+          crates/mid-raster/tools/wasm-hash/target/wasm32-unknown-unknown/release/mid_raster_wasm_hash.wasm
