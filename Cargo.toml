@@ -46,6 +46,7 @@ members = [
     "crates/mid-app",
     "crates/mid-ui",
     "crates/mid-ui-mxui",
+    "crates/mid-raster",
     "crates/mid-reflect",
     "crates/mid-editor",
     "crates/mid-editor-ffi",
