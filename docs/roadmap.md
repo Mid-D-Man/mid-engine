@@ -659,6 +659,23 @@ maintainer.
 
 ---
 
+### Decision 19 (decided on 2026-11-27): a raylib shaped way to use mid-engine is a goal
+
+**Context:** the maintainer asked whether `mid-engine`, as structured, could be used the way raylib is used,
+as pure code to make a project, and not only as an app or a command line. It can for the logic side (math,
+ECS, app schedule, networking) and cannot for a whole game, because there is no window, input, rendering or
+audio crate and no umbrella crate. `docs/goal-raylib-shape.md` reads raylib's actual shape and sets the gap
+against the repository.
+
+**Decided:** the raylib shape is a goal alongside the editor and the command line: a program owns `main` and
+its loop, opens a window with one call, draws, reads input and plays sound as a library user.
+
+**Open:** the five questions at the end of `docs/goal-raylib-shape.md` (an umbrella crate and its name, the
+window and input layer, whether immediate draw calls share the UI's paint list, when 3D comes, audio). Nothing
+is built for the goal yet.
+
+---
+
 ## The road to the engine app
 
 ### What "the engine app" is

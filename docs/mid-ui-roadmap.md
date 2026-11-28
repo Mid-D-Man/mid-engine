@@ -149,6 +149,12 @@ clip stack, blending into premultiplied `RGBA8`, scalar first (Decision 15). *Do
 `tiny-skia` within a stated tolerance on a fixed shape set (the oracle is a dev-dependency, Decision 15) and
 is integer-exact across x86_64 and wasm32.
 
+*Status:* first slice built on 2026-11-27 as the crate `mid-raster` (`docs/mid-raster.md`). Rounded rectangles
+and thick lines go through the path rasterizer instead of getting separate closed forms; rectangles have the
+closed form. The oracle differences are stated per shape in the crate doc. Integer exactness was shown between
+x86_64 and wasm32 (same hashes for the golden scene in both blend spaces and for 300 random curved paths); ARM
+was not run. The linear-light option of B1 is in.
+
 ### A3. The CPU backend, first pixels (backend crates are new, Decision 14)
 
 Needs A2 and the paint list from B1. Draws the editor's paint list into a framebuffer, with a C API shaped

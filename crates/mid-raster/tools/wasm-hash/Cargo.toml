@@ -1,0 +1,17 @@
+[package]
+name    = "mid-raster-wasm-hash"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+# Hashes the golden scenes of crates/mid-raster/tests/golden/scenes.rs from
+# inside a wasm32 module, so node can compare them with the pinned values.
+# Standalone on purpose, like web/mid-ui-wasm: it has its own workspace.
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+mid-math   = { path = "../../../mid-math" }
+mid-raster = { path = "../.." }
+
+[workspace]

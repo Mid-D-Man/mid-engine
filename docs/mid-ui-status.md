@@ -37,7 +37,7 @@ phone, has not been collected.
 |---|---|---|
 | Written contracts: pixel format, paint list, text types, measure | written and answered 2026-11-26 as `docs/mid-ui-contracts.md`; proposed, with the five open points settled | B1 |
 | Intrinsic, minimum and maximum sizes, wrap, lazy rows in the solver | built 2026-11-26 in `mid-ui`: `Fit`, limits, shrinking, aspect, text-driven sizes through a `Measure`, `LazyRows` as a pure function; 111 tests, 21 mutants caught [run]; not run on CI or the phone | A1 |
-| A coverage rasterizer and blending | not started | A2 |
+| A coverage rasterizer and blending | first slice built 2026-11-27 as the crate `mid-raster` (`docs/mid-raster.md`): path rasterizer with both fill rules, closed-form rectangles, rounded rectangles and lines as paths, a clip stack, sRGB and linear blending; 69 tests, 24 of 25 mutants caught (1 equivalent), `tiny-skia` oracle, same golden hashes on x86_64 and wasm32 [run]; not run on CI, ARM or the phone, speed not measured | A2 |
 | A CPU backend with a C API and a wasm export | not started | A3 |
 | Text: font reader, outlines, glyph masks, cache, measure | not started | A4 |
 | Events, focus, scroll physics, touch inertia | tap, drag and pinch exist in the editor; the rest not started | A5 |
@@ -71,7 +71,7 @@ collecting the phone baseline (P3).
 | Area | Built | Partly | Not started |
 |---|---|---|---|
 | Layout core | anchors, flow, fill weights, hit test, the size model (`Fit`, limits, shrinking, aspect, measure) | lazy rows (a function, not yet attached to a scroller) | percent sizes, layout priority, grids, baselines |
-| Draw and paint | a draw list; a paint list; a host | | an own rasterizer, an own backend |
+| Draw and paint | a draw list; a paint list; a host; an own rasterizer (`mid-raster`) | | an own backend that reads the paint list (A3) |
 | Text | a measure callback, a bundled font | | everything in tiers T1 to T4 |
 | Input | tap, drag, pinch | | focus, scroll, keyboard |
 | Widgets | | editor rows and buttons drawn by the editor core | a kit |
@@ -99,8 +99,8 @@ the roadmap, section "Decisions needed from the maintainer".
 1. **P3: run the Editor Android APK workflow** with the world-backed editor on the phone and send the Console
    numbers. It tests the 32-bit ARM link with `mid-ecs` and `rayon` for the first time and gives the baseline
    that A3 and A9 are compared with.
-2. **A2: the coverage rasterizer** skeleton with the `tiny-skia` oracle in dev-dependencies. The pixel contract
-   is written, including the linear-light option and its two tables.
+2. **A3: the CPU backend** that reads the paint list with `mid-raster`, with a C API and a wasm export; and the
+   rest of A2 (glyph outlines come with A4). The rasterizer exists, the paint list kinds of B1 do not yet.
 3. **B2: the node-model benchmark** crate. A1 now gives it the pure solver (`solve.rs`, a flat breadth-first
    list in, rectangles out) to run in the three node shapes.
 4. **B3 and B4:** the `.mxui` v1 vocabulary now that the size model exists (B3), then input (B4) before A5.

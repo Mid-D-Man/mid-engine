@@ -1,0 +1,20 @@
+[package]
+name        = "mid-raster"
+version     = "0.1.0"
+edition     = "2021"
+description = "Integer-exact CPU coverage rasterizer for Mid Engine: rectangles, rounded rectangles, thick lines and filled paths into premultiplied RGBA8, with an axis-aligned clip stack. Depends on mid-math only."
+
+[lib]
+name = "mid_raster"
+crate-type = ["lib"]
+
+[dependencies]
+mid-math = { path = "../mid-math" }
+
+# The oracle of docs/mid-raster.md: tiny-skia draws the same shapes and the
+# tests compare the coverage within a stated tolerance. Test-only (Decision 15).
+[dev-dependencies]
+tiny-skia = "0.11"
+
+[lints]
+workspace = true
